@@ -1,0 +1,11 @@
+node_modules/
+main.js
+main.js.map
+data.json
+.DS_Store
+Thumbs.db
+*.log
+coverage/
+.env
+.env.*
+!.env.example
