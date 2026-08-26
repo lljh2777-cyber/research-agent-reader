@@ -63,4 +63,3 @@ All third-party names, product names, project names, logos, and trademarks are
 the property of their respective owners. Their use here identifies compatible
 software and services and does not imply affiliation, sponsorship, endorsement,
 or official support. Research Agent Reader is an independent community project.
-
