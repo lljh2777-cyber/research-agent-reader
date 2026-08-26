@@ -2,6 +2,7 @@ import { normalizePath, type App, type TFile } from "obsidian";
 
 import { ACTIONS } from "../actions";
 import type { PluginHost, VaultRecord } from "../types/contracts";
+import { isExcludedVaultHealthPath, isVaultHealthScopePath } from "./vault-lint";
 
 export interface DashboardVaultChange {
 	type: "upsert" | "delete";
@@ -119,8 +120,8 @@ export class DashboardDataService {
 		const coverage = this.computeCoverage(methodRecords, synthesisRecords, knowledgeGaps);
 		const okf = this.computeOkfReadiness(records, linkReport, missingFrontmatter, coverage);
 		const lintStatus = this.plugin.getLintStatus();
-		const latestWikiMtime = records
-			.filter((record) => record.path.startsWith("wiki/"))
+		const latestHealthScopeMtime = records
+			.filter((record) => isVaultHealthScopePath(record.path))
 			.reduce((latest, record) => Math.max(latest, record.mtime || 0), 0);
 		const lintGeneratedAt = lintStatus.latest ? new Date(lintStatus.latest.generated_at).getTime() : 0;
 		const lintSummary = lintStatus.latest?.summary || null;
@@ -131,7 +132,7 @@ export class DashboardDataService {
 		const lintStale = Boolean(
 			lintSummary
 			&& Number.isFinite(lintGeneratedAt)
-			&& lintGeneratedAt < latestWikiMtime,
+			&& lintGeneratedAt < latestHealthScopeMtime,
 		);
 		const now = new Date();
 
@@ -189,7 +190,7 @@ export class DashboardDataService {
 	}
 
 	isExcludedMaintenancePath(value: string): boolean {
-		return normalizePath(value).startsWith("papers/");
+		return isExcludedVaultHealthPath(value);
 	}
 
 	async readRecord(file: TFile): Promise<VaultRecord> {

@@ -15,7 +15,7 @@ channel without including exploit details.
 
 ## Trust boundaries
 
-Agent Dashboard is a desktop plugin and inherits the filesystem and network
+Research Agent Reader is a desktop plugin and inherits the filesystem and network
 permissions of Obsidian. It can launch only explicitly supported local programs,
 using argument arrays rather than shell command strings. Optional workflow
 actions may modify vault files and therefore use bounded paths, task history,

@@ -1,6 +1,6 @@
-# Agent Dashboard
+# Research Agent Reader
 
-Agent Dashboard is a desktop-only Obsidian plugin for reading research Markdown,
+Research Agent Reader is a desktop-only Obsidian plugin for reading research Markdown,
 reviewing validated MinerU document packages, annotating selected text, and
 connecting optional local AI-agent workflows.
 
@@ -32,6 +32,11 @@ is planned before the first stable community release.
 The document reader and local annotations do not require an AI account or the
 Research Vault Toolkit. Every external backend is optional.
 
+Core features use the active Vault through Obsidian APIs. On a clean install,
+the plugin does not infer an arbitrary parent folder as a toolkit workspace.
+Advanced actions remain unavailable until the user explicitly configures a
+compatible toolkit project and executable paths.
+
 ## Installation
 
 ### Development install
@@ -44,10 +49,10 @@ pnpm verify
 Copy the generated `main.js`, `manifest.json`, and `styles.css` into:
 
 ```text
-<vault>/.obsidian/plugins/agent-dashboard/
+<vault>/.obsidian/plugins/research-agent-reader/
 ```
 
-Then enable **Agent Dashboard** under **Settings → Community plugins**.
+Then enable **Research Agent Reader** under **Settings → Community plugins**.
 
 ### Beta install
 
@@ -58,9 +63,16 @@ the repository through BRAT. Release tags must exactly match the version in
 ## Reader setup
 
 The default reader folders are `papers` and `Clippings`. Change them under
-**Settings → Agent Dashboard → 文献阅读器**. Markdown source files are never
+**Settings → Research Agent Reader → 文献阅读器**. Markdown source files are never
 rewritten merely to support the two-pane reader; inferred figure labels exist
 only in the reading view.
+
+`papers/`, `wiki/`, and `Clippings/` are isolated content roots. Do not create
+Obsidian wikilinks or Markdown links from one of these roots into another. The
+built-in vault health check audits `wiki/` plus top-level Markdown files;
+`papers/` and `Clippings/` are excluded from ordinary broken-link, orphan,
+frontmatter, and content findings and receive only a lightweight cross-root
+link-boundary check.
 
 A validated MinerU package uses this layout:
 
@@ -84,9 +96,15 @@ and do not prevent the reader from loading.
 See [Optional Research Vault Toolkit](docs/companion-toolkit.md) for the current
 filesystem contract and backend responsibilities.
 
+The optional toolkit is discovered only when a candidate directory contains
+both `AGENTS.md` and `tool-library/scripts/run_vault_action.py`, or when the user
+selects a project directory in settings. Missing dependencies produce an
+actionable availability message and never disable the reader, local annotations,
+or the built-in read-only health check.
+
 ## Privacy and permissions
 
-Agent Dashboard contains no client-side telemetry and does not load advertising.
+Research Agent Reader contains no client-side telemetry and does not load advertising.
 
 Depending on features the user explicitly configures or starts, the plugin can:
 
@@ -114,6 +132,7 @@ pnpm install --frozen-lockfile
 pnpm typecheck
 pnpm build
 pnpm test
+pnpm verify:public
 ```
 
 `main.js` is generated and intentionally excluded from source control. GitHub
@@ -131,6 +150,12 @@ For Obsidian CLI QA, set `OBSIDIAN_VAULT_NAME` and optionally
 fixed diagnostic command set and does not expose `eval`, restart, restore, or
 delete operations.
 
+To prepare a disposable clean Vault containing the built plugin and public test
+fixtures, run `pnpm test-vault:prepare`. The command never launches or restarts
+Obsidian; it prints the generated Vault path and a manual smoke-test checklist.
+See [Public release checklist](docs/release-checklist.md) for the remaining
+desktop QA and screenshot requirements.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
@@ -139,7 +164,7 @@ MIT. See [LICENSE](LICENSE).
 
 ## 简体中文说明
 
-Agent Dashboard 是桌面版 Obsidian 科研阅读与本地智能体工作流插件。核心阅读器
+Research Agent Reader 是桌面版 Obsidian 科研阅读与本地智能体工作流插件。核心阅读器
 可直接阅读普通 Markdown、Obsidian Web Clipper 文档和经过验证的 MinerU 文献包；
 高级文献入库、全文深读、代码分析、知识库体检及 OKF 导出需要另行配置 Research
 Vault Toolkit。插件不会自行安装外部程序，也不会包含客户端遥测。

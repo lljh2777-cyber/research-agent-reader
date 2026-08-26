@@ -22,4 +22,4 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm verify
+      - run: pnpm verify:public

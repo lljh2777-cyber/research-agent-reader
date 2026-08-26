@@ -1,9 +1,9 @@
 {
-  "name": "agent-dashboard",
+	"name": "research-agent-reader",
 	"version": "0.29.0",
   "private": true,
   "description": "Desktop research reader and optional local-agent dashboard for Obsidian",
-  "author": "Jason",
+  "author": "Liao Li",
   "license": "MIT",
   "scripts": {
     "build": "node esbuild.config.mjs",
@@ -12,6 +12,9 @@
     "typecheck": "tsc --noEmit",
 		"test": "node tests/run_dashboard_tests.js",
 		"verify": "pnpm typecheck && pnpm build && pnpm test",
+		"release:check": "node scripts/release-audit.mjs",
+		"test-vault:prepare": "node scripts/prepare-test-vault.mjs",
+		"verify:public": "pnpm verify && pnpm release:check && pnpm test-vault:prepare",
 		"version": "node scripts/sync-version.mjs",
 		"obsidian:check": "node scripts/obsidian-cli.mjs check",
 		"obsidian:reload": "node scripts/obsidian-cli.mjs reload",

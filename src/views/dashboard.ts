@@ -180,7 +180,7 @@ export class DashboardView extends ItemView {
 			this.renderDashboard();
 		} catch (error) {
 			if (this.closed || sequence !== this.loadSequence) return;
-			console.error("Agent Dashboard failed to load vault data", error);
+			console.error("Research Agent Reader failed to load vault data", error);
 			this.renderError(error);
 		}
 	}

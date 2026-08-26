@@ -288,8 +288,8 @@ export class ProcessExecutionService {
 				id: 1,
 				params: {
 					clientInfo: {
-						name: "agent-dashboard",
-						title: "Agent Dashboard",
+						name: "research-agent-reader",
+						title: "Research Agent Reader",
 						version: "0.29.0",
 					},
 					capabilities: {

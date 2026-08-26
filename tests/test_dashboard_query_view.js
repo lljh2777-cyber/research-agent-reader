@@ -91,6 +91,7 @@ for (const strictSource of [
 	"runtime/persistence.ts",
 	"runtime/process-execution.ts",
 	"services/dashboard-data.ts",
+	"services/vault-lint.ts",
 	"settings/settings-tab.ts",
 	"views/code-practice.ts",
 	"views/dashboard.ts",
@@ -261,6 +262,30 @@ assert.ok(
 );
 
 const plugin = new AgentDashboardPlugin();
+const cleanVaultPlugin = new AgentDashboardPlugin();
+cleanVaultPlugin.settings = {
+	projectRoot: "",
+	pythonExecutable: "",
+	codexExecutable: "",
+	claudeExecutable: "",
+	openCodeExecutable: "",
+	rscriptExecutable: "",
+	mineruExecutable: "",
+};
+assert.deepStrictEqual(
+	cleanVaultPlugin.checkRuntime({ id: "vault-lint", label: "知识库体检" }),
+	{
+		ready: true,
+		message: "内置知识库体检可用；不需要 Research Vault Toolkit、Python 或 Agent CLI。",
+	},
+);
+const optionalRuntime = cleanVaultPlugin.checkRuntime(
+	{ id: "synthesis", label: "综合分析", writes: true },
+	"codex-cli",
+);
+assert.strictEqual(optionalRuntime.ready, false);
+assert.match(optionalRuntime.message, /可选工具包/);
+assert.match(optionalRuntime.message, /内置阅读器、批注和知识库体检不受影响/);
 plugin.taskRuns = [
 	{
 		id: "run-complete",

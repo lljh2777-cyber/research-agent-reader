@@ -1,10 +1,10 @@
 {
-	"id": "agent-dashboard",
-	"name": "Agent Dashboard",
+	"id": "research-agent-reader",
+	"name": "Research Agent Reader",
 	"version": "0.29.0",
 	"minAppVersion": "1.11.4",
 	"description": "Read research Markdown and MinerU packages, annotate text, and connect optional local agent workflows.",
-	"author": "Jason",
+	"author": "Liao Li",
 	"authorUrl": "https://github.com/lljh2777-cyber",
 	"isDesktopOnly": true
 }

@@ -270,7 +270,7 @@ function managedCodexCandidates(): string[] {
 				);
 			});
 	} catch (error) {
-		console.warn("Agent Dashboard could not scan the managed Codex CLI directory", error);
+		console.warn("Research Agent Reader could not scan the managed Codex CLI directory", error);
 	}
 	return uniqueExistingFiles(candidates).sort((left, right) => {
 		try {
@@ -283,6 +283,7 @@ function managedCodexCandidates(): string[] {
 
 function commonCliCandidates(kind: CliExecutableKind): string[] {
 	const userProfile = process.env.USERPROFILE;
+	const homeDirectory = process.env.HOME || userProfile;
 	const appData = process.env.APPDATA;
 	const localAppData = process.env.LOCALAPPDATA;
 	if (kind === "obsidian") {
@@ -300,10 +301,26 @@ function commonCliCandidates(kind: CliExecutableKind): string[] {
 			];
 		}
 		return [
-			joinFromEnvironment(process.env.HOME, ".local", "bin", "obsidian"),
+			joinFromEnvironment(homeDirectory, ".local", "bin", "obsidian"),
 			"/usr/local/bin/obsidian",
 			"/usr/bin/obsidian",
 		];
+	}
+	if (process.platform !== "win32") {
+		const command = CLI_COMMAND_NAMES[kind];
+		const candidates = [
+			joinFromEnvironment(homeDirectory, ".local", "bin", command),
+			joinFromEnvironment(homeDirectory, "bin", command),
+			"/usr/local/bin/" + command,
+			"/usr/bin/" + command,
+		];
+		if (process.platform === "darwin") {
+			candidates.splice(2, 0, `/opt/homebrew/bin/${command}`);
+		}
+		if (kind === "opencode") {
+			candidates.unshift(joinFromEnvironment(homeDirectory, ".opencode", "bin", "opencode"));
+		}
+		return candidates;
 	}
 	if (kind === "codex") {
 		return [
@@ -480,7 +497,7 @@ export function findPreferredClaudeExecutable(): string {
 
 export function inferLegacyClaudeConfigSource(): ClaudeConfigSource {
 	const settingsPath = path.join(
-		process.env.USERPROFILE || "",
+		process.env.USERPROFILE || process.env.HOME || "",
 		".claude",
 		"settings.json",
 	);

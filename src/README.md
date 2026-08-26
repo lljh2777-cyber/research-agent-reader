@@ -1,4 +1,4 @@
-# Agent Dashboard Source Layout
+# Research Agent Reader source layout
 
 `main.js` is generated. Make implementation changes under `src/`, then run
 `pnpm build` or `npm run build`.

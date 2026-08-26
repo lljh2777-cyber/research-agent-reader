@@ -192,13 +192,13 @@ export class ObsidianCliService {
 		const ok = vaults.ok && vaultIdentity.found && plugin.ok && pluginEnabled;
 		const failedCommand = commands.find((command) => !command.ok);
 		const message = ok
-			? "Obsidian CLI 已连接，当前 Vault 与 Agent Dashboard 插件状态正常。"
+			? "Obsidian CLI 已连接，当前 Vault 与 Research Agent Reader 插件状态正常。"
 			: failedCommand?.stderr
 				|| failedCommand?.stdout
 				|| (!vaultIdentity.found
 					? `CLI 未返回当前 Vault：${options.vaultName}`
 					: !pluginEnabled
-						? "Agent Dashboard 插件未启用或状态无法确认。"
+						? "Research Agent Reader 插件未启用或状态无法确认。"
 						: "Obsidian CLI 连接测试未完全通过。");
 		return {
 			...base,

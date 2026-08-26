@@ -43,6 +43,7 @@ import {
 	sanitizeSettingsForStorage,
 } from "./runtime/persistence";
 import { ProcessExecutionService } from "./runtime/process-execution";
+import { VaultLintService } from "./services/vault-lint";
 import { AgentDashboardSettingTab } from "./settings/settings-tab";
 import { CodePracticeView } from "./views/code-practice";
 import { DashboardView } from "./views/dashboard";
@@ -111,6 +112,7 @@ import type {
 	DashboardProcessResult,
 	ExecutionConfig,
 	ExecutionOverrides,
+	LintReport,
 	LintStatus,
 	NormalizedProviderError,
 	OkfExportStatus,
@@ -174,6 +176,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	taskRuns: TaskRun[] = [];
 	querySessions: QuerySession[] = [];
 	activeQuerySessionId = "";
+	latestLintReport: LintReport | null = null;
 	lastContextFile: TFile | null = null;
 
 	private readonly lifecycleState = new DashboardLifecycleState();
@@ -230,6 +233,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				taskRuns: this.taskRuns,
 				querySessions: this.querySessions,
 				activeQuerySessionId: this.activeQuerySessionId,
+				latestLintReport: this.latestLintReport,
 			}),
 		});
 		return this.persistence;
@@ -471,7 +475,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		});
 		new Notice("批注已保留，正在交给综合分析归档");
 		const request = [
-			"处理一条由 Agent Dashboard 批注功能提交的正式知识归档请求。",
+			"处理一条由 Research Agent Reader 批注功能提交的正式知识归档请求。",
 			`批注文档：${record.annotationPath}#^${record.id}`,
 			`来源文档：${record.sourcePath}`,
 			record.section ? `所在章节：${record.section}` : "",
@@ -737,6 +741,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.activeQuerySessionId = typeof stored.activeQuerySessionId === "string"
 			? stored.activeQuerySessionId
 			: "";
+		this.latestLintReport = this.normalizeLintReport(stored.latestLintReport);
 		if (!this.settings.projectRoot) {
 			this.settings.projectRoot = this.inferProjectRoot();
 		}
@@ -1304,7 +1309,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			return `${label}: ${detection.found ? "可用" : "不可用"} · ${detection.sourceLabel}`;
 		};
 		return [
-			`Agent Dashboard ${this.manifest.version}`,
+			`Research Agent Reader ${this.manifest.version}`,
 			`平台: ${process.platform} ${process.arch}`,
 			`项目根目录: ${this.settings.projectRoot && fs.existsSync(this.settings.projectRoot) ? "可用" : "不可用"}`,
 			describe("Codex CLI", "codex", this.settings.codexExecutable),
@@ -1316,7 +1321,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			`Python: ${this.settings.pythonExecutable && fs.existsSync(this.settings.pythonExecutable) ? "可用" : "不可用"}`,
 			`Rscript: ${this.settings.rscriptExecutable && fs.existsSync(this.settings.rscriptExecutable) ? "可用" : "不可用"}`,
 			`Direct API 配置数: ${this.settings.providerProfiles.length}`,
-			"体检范围: wiki/ 与顶层索引；排除 papers/",
+			"体检范围: wiki/ 与 Vault 顶层 Markdown；排除 papers/、Clippings/（仅检查跨根链接边界）",
 			"凭据、endpoint、正文和对话内容: 已排除",
 		].join("\n");
 	}
@@ -1543,8 +1548,13 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!(adapter instanceof FileSystemAdapter)) return "";
 		const vaultRoot = adapter.getBasePath();
 		const parent = path.dirname(vaultRoot);
-		if (fs.existsSync(path.join(parent, "AGENTS.md"))) return parent;
-		return vaultRoot;
+		const isToolkitRoot = (candidate: string): boolean => (
+			fs.existsSync(path.join(candidate, "AGENTS.md"))
+			&& fs.existsSync(path.join(candidate, "tool-library", "scripts", "run_vault_action.py"))
+		);
+		if (isToolkitRoot(parent)) return parent;
+		if (isToolkitRoot(vaultRoot)) return vaultRoot;
+		return "";
 	}
 
 	getTaskRuns(): TaskRun[] {
@@ -1792,7 +1802,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			...updates,
 			finishedAt: new Date().toISOString(),
 		};
-		if (this.taskRuns[index].output) {
+		if (this.taskRuns[index].output && this.taskRuns[index].actionId !== "vault-lint") {
 			this.taskRuns[index].outputPath = await this.persistTaskRunOutput(this.taskRuns[index]);
 		}
 		await this.saveSettings();
@@ -1820,6 +1830,9 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	getLintStatus(): LintStatus {
+		if (this.latestLintReport) {
+			return { latest: this.latestLintReport, error: "" };
+		}
 		const projectRoot = this.settings.projectRoot;
 		const latestPath = path.join(projectRoot, "tool-library", "output", "lint", "latest.json");
 		let latest = null;
@@ -1834,20 +1847,57 @@ export default class AgentDashboardPlugin extends Plugin {
 		return { latest, error };
 	}
 
+	normalizeLintReport(value: unknown): LintReport | null {
+		if (!value || typeof value !== "object") return null;
+		const source = value as Record<string, unknown>;
+		const generatedAt = String(source.generated_at || "").trim();
+		if (!generatedAt || Number.isNaN(new Date(generatedAt).getTime())) return null;
+		const summarySource = source.summary && typeof source.summary === "object"
+			? source.summary as Record<string, unknown>
+			: {};
+		const numberValue = (key: string): number | undefined => {
+			const parsed = Number(summarySource[key]);
+			return Number.isFinite(parsed) ? parsed : undefined;
+		};
+		return {
+			...source,
+			generated_at: generatedAt,
+			summary: {
+				score: numberValue("score"),
+				errors: numberValue("errors"),
+				warnings: numberValue("warnings"),
+				info: numberValue("info"),
+			},
+			findings: Array.isArray(source.findings)
+				? source.findings.filter((finding) => finding && typeof finding === "object") as LintReport["findings"]
+				: [],
+		} as LintReport;
+	}
+
 	checkRuntime(
 		action: DashboardAction | null = null,
 		backendId: CliBackendId = "codex-cli",
 	): { ready: boolean; message: string } {
-		const projectRoot = this.settings.projectRoot;
-		const runner = path.join(projectRoot, "tool-library", "scripts", "run_vault_action.py");
-		const practiceRunner = path.join(projectRoot, "tool-library", "scripts", "run_code_practice.py");
-		const exporter = path.join(projectRoot, "tool-library", "scripts", "export_okf.py");
-		const lintScript = path.join(projectRoot, "tool-library", "scripts", "lint_vault.py");
+		if (action?.id === "vault-lint") {
+			return {
+				ready: true,
+				message: "内置知识库体检可用；不需要 Research Vault Toolkit、Python 或 Agent CLI。",
+			};
+		}
+		const configuredRoot = String(this.settings.projectRoot || "").trim();
+		const projectRoot = configuredRoot ? path.resolve(configuredRoot) : "";
+		const withinRoot = (...segments: string[]): string => (
+			projectRoot ? path.join(projectRoot, ...segments) : ""
+		);
+		const runner = withinRoot("tool-library", "scripts", "run_vault_action.py");
+		const practiceRunner = withinRoot("tool-library", "scripts", "run_code_practice.py");
+		const exporter = withinRoot("tool-library", "scripts", "export_okf.py");
+		const lintScript = withinRoot("tool-library", "scripts", "lint_vault.py");
 		const checks: Array<[string, boolean]> = [
-			["项目根目录", fs.existsSync(projectRoot)],
-			["AGENTS.md", fs.existsSync(path.join(projectRoot, "AGENTS.md"))],
-			["Dashboard runner", fs.existsSync(runner)],
-			["Python", fs.existsSync(this.settings.pythonExecutable)],
+			["工具包项目目录", Boolean(projectRoot) && fs.existsSync(projectRoot)],
+			["AGENTS.md", Boolean(projectRoot) && fs.existsSync(withinRoot("AGENTS.md"))],
+			["Dashboard runner", Boolean(runner) && fs.existsSync(runner)],
+			["Python", Boolean(this.settings.pythonExecutable) && fs.existsSync(this.settings.pythonExecutable)],
 		];
 		if (!action) {
 			checks.push(["Code practice runner", fs.existsSync(practiceRunner)]);
@@ -1877,9 +1927,12 @@ export default class AgentDashboardPlugin extends Plugin {
 			checks.push([getCliBackendLabel(backendId), fs.existsSync(executable)]);
 		}
 		const missing = checks.filter(([, ready]) => !ready).map(([label]) => label);
+		const feature = action ? `“${action.label}”` : "可选 Research Vault Toolkit 工作流";
 		return {
 			ready: missing.length === 0,
-			message: missing.length === 0 ? "运行环境检查通过" : `以下项目不可用：${missing.join("、")}`,
+			message: missing.length === 0
+				? `${feature}运行环境检查通过。内置阅读器、批注和知识库体检始终独立可用。`
+				: `${feature}尚未就绪：${missing.join("、")}。请在“设置 → Research Agent Reader → 运行环境”配置可选工具包；内置阅读器、批注和知识库体检不受影响。`,
 		};
 	}
 
@@ -2284,6 +2337,12 @@ export default class AgentDashboardPlugin extends Plugin {
 		const registered = ACTION_BY_ID.get(action.id);
 		if (!registered || !registered.enabled) {
 			return Promise.reject(new Error(`操作尚未启用：${action.label}`));
+		}
+		if (action.id === "vault-lint") {
+			return new VaultLintService(this.app).run(hooks).then(({ report, result }) => {
+				this.latestLintReport = report;
+				return result;
+			});
 		}
 		const effectiveConfig = executionConfig
 			? {

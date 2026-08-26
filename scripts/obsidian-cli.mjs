@@ -8,7 +8,7 @@ const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const pluginRoot = path.resolve(scriptDir, "..");
 const projectRoot = pluginRoot;
 const vaultName = String(process.env.OBSIDIAN_VAULT_NAME || "").trim();
-const pluginId = "agent-dashboard";
+const pluginId = "research-agent-reader";
 const action = process.argv[2] || "check";
 
 function isFile(candidate) {
@@ -149,11 +149,11 @@ async function reloadAndInspect({ screenshot = false } = {}) {
 		);
 		if (dashboardDom.stdout) process.stdout.write(`Dashboard DOM: ${dashboardDom.stdout}\n`);
 		if (dashboardDom.status !== 0 || !/\b[1-9]\d*\b/.test(dashboardDom.stdout)) {
-			throw new Error("插件重载后未检测到 Agent Dashboard 视图 DOM。");
+			throw new Error("插件重载后未检测到 Research Agent Reader 视图 DOM。");
 		}
 		if (screenshot) {
 			const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-			const screenshotPath = path.join(os.tmpdir(), `agent-dashboard-${stamp}.png`);
+			const screenshotPath = path.join(os.tmpdir(), `research-agent-reader-${stamp}.png`);
 			run([`vault=${vaultName}`, "dev:screenshot", `path=${screenshotPath}`]);
 			process.stdout.write(`Screenshot: ${screenshotPath}\n`);
 		}

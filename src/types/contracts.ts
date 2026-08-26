@@ -323,6 +323,12 @@ export interface LintReport {
 	generated_at: string;
 	summary?: LintSummary;
 	findings?: LintFinding[];
+	stats?: Record<string, unknown>;
+	scope?: {
+		included: string[];
+		excluded: string[];
+		boundary_only?: string[];
+	};
 }
 
 export interface LintFinding {

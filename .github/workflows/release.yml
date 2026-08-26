@@ -23,7 +23,7 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm verify
+      - run: pnpm verify:public
       - name: Verify tag matches manifest
         run: node -e "const m=require('./manifest.json'); if (m.version !== process.env.GITHUB_REF_NAME) { throw new Error('Tag must equal manifest version'); }"
       - name: Generate artifact attestation

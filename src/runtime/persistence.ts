@@ -1,6 +1,7 @@
 import type { DashboardSettings } from "./settings";
 import type {
 	ExecutionConfig,
+	LintReport,
 	QuerySession,
 	TaskRun,
 	TaskRunStatus,
@@ -15,6 +16,7 @@ export interface DashboardPersistenceState {
 	taskRuns: TaskRun[];
 	querySessions: QuerySession[];
 	activeQuerySessionId: string;
+	latestLintReport: LintReport | null;
 }
 
 export interface DashboardStoredData extends UnknownRecord {
@@ -22,6 +24,7 @@ export interface DashboardStoredData extends UnknownRecord {
 	taskRuns?: unknown[];
 	querySessions?: unknown[];
 	activeQuerySessionId?: string;
+	latestLintReport?: unknown;
 }
 
 interface SaveWaiter {
@@ -154,6 +157,7 @@ export function createPersistenceSnapshot(state: DashboardPersistenceState): Das
 			})),
 		})),
 		activeQuerySessionId: state.activeQuerySessionId,
+		latestLintReport: state.latestLintReport,
 	})) as DashboardStoredData;
 }
 

@@ -20,6 +20,12 @@ Advanced actions currently recognize a configured project root with this contrac
 └─ knowledge-base/
 ```
 
+The read-only **知识库体检** action is built into the plugin and does not require
+this toolkit. Its ordinary audit scope is `wiki/` plus top-level Vault Markdown.
+`papers/` and `Clippings/` are excluded except for the hard boundary rule that
+forbids links among `papers/`, `wiki/`, and `Clippings/`. The companion toolkit
+is still required for AI-assisted lint repair and other advanced write actions.
+
 This is an integration contract, not an installation instruction. The public
 toolkit repository, version compatibility policy, installer, and upgrade path
 will be defined separately before advanced workflows are advertised as stable.

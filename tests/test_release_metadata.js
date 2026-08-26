@@ -10,6 +10,8 @@ const manifest = JSON.parse(read("manifest.json"));
 const pkg = JSON.parse(read("package.json"));
 const versions = JSON.parse(read("versions.json"));
 
+assert.equal(manifest.id, "research-agent-reader");
+assert.equal(manifest.name, "Research Agent Reader");
 assert.match(manifest.id, /^[a-z0-9-]+$/);
 assert.equal(manifest.version, pkg.version);
 assert.equal(versions[manifest.version], manifest.minAppVersion);

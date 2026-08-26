@@ -139,7 +139,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 	private renderSettingsHome(containerEl: HTMLElement): void {
 		this.createSettingsPageHeader(
 			containerEl,
-			"Agent Dashboard",
+			"Research Agent Reader",
 			"按模块管理运行环境、CLI 后端和 Direct API。进入对应模块后再修改详细设置。",
 		);
 		const navigation = containerEl.createDiv({ cls: "agent-dashboard-settings-navigation" });
@@ -281,11 +281,14 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			true,
 		);
 		new Setting(containerEl)
-			.setName("项目根目录")
-			.setDesc("包含 AGENTS.md、.codex/ 和 tool-library/ 的项目目录。")
+			.setName("内置核心功能")
+			.setDesc("阅读器、本地批注和只读知识库体检直接使用当前 Vault，不需要项目目录、Python 或 Agent CLI。");
+		new Setting(containerEl)
+			.setName("可选工具包项目目录")
+			.setDesc("仅供文献入库、AI 深读、代码分析、综合分析、修复和 OKF 导出使用；应包含 AGENTS.md、.codex/ 和 tool-library/。留空不会影响核心阅读功能。")
 			.addText((text) =>
 				text
-					.setPlaceholder("D:\\Research\\agent-dashboard-workspace")
+					.setPlaceholder(process.platform === "win32" ? "D:\\Research\\workspace" : "/Users/name/research-workspace")
 					.setValue(this.plugin.settings.projectRoot)
 					.onChange(async (value) => {
 						this.plugin.settings.projectRoot = value.trim();
@@ -327,10 +330,10 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		});
 		new Setting(containerEl)
 			.setName("Python 可执行文件")
-			.setDesc("用于统一 runner、知识库体检和 Python 代码练习。")
+			.setDesc("仅用于可选工具包 runner 和 Python 代码练习；内置知识库体检不需要 Python。")
 			.addText((text) =>
 				text
-					.setPlaceholder("D:\\python\\python.exe")
+					.setPlaceholder(process.platform === "win32" ? "C:\\Python312\\python.exe" : "/usr/bin/python3")
 					.setValue(this.plugin.settings.pythonExecutable)
 					.onChange(async (value) => {
 						this.plugin.settings.pythonExecutable = value.trim();
@@ -342,7 +345,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			.setDesc("用于无状态 R 代码练习；不会自动安装 R 或 R 包。")
 			.addText((text) =>
 				text
-					.setPlaceholder("C:\\Program Files\\R\\R-x.y.z\\bin\\Rscript.exe")
+					.setPlaceholder(process.platform === "win32" ? "C:\\Program Files\\R\\R-x.y.z\\bin\\Rscript.exe" : "/usr/local/bin/Rscript")
 					.setValue(this.plugin.settings.rscriptExecutable)
 					.onChange(async (value) => {
 						this.plugin.settings.rscriptExecutable = value.trim();
@@ -380,8 +383,8 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					})
 			);
 		new Setting(containerEl)
-			.setName("运行环境")
-			.setDesc("检查项目根目录、Codex、Python 和 dashboard runner 是否可用。")
+			.setName("可选工具包运行环境")
+			.setDesc("检查工具包目录、Agent CLI、Python 和 runner；检查失败不会禁用内置核心功能。")
 			.addButton((button) =>
 				button.setButtonText("检查").onClick(() => {
 					const result = this.plugin.checkRuntime();
@@ -1005,7 +1008,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		);
 		new Setting(containerEl)
 			.setName("体检范围")
-			.setDesc("检查 wiki/ 与顶层知识索引；排除 papers/ 原文包。papers/ 与 wiki/ 之间禁止创建 Obsidian 或 Markdown 链接。核心排除规则不可关闭。");
+			.setDesc("内置只读体检检查 wiki/ 与 Vault 顶层 Markdown。papers/、Clippings/ 不参与断链、孤立页、属性和内容检查，仅检查跨根链接边界；papers/、wiki/、Clippings/ 三个主目录之间禁止创建 Obsidian 或 Markdown 链接。核心规则不可关闭。");
 
 		this.createProviderSectionHeader(
 			containerEl,
