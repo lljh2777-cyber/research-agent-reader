@@ -158,7 +158,8 @@ desktop QA and screenshot requirements.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Third-party integrations and development tools are
+documented in [Third-Party Notices](THIRD_PARTY_NOTICES.md).
 
 ---
 

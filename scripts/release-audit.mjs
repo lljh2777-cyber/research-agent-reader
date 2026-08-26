@@ -29,7 +29,7 @@ check(Boolean(manifest.author) && Boolean(manifest.authorUrl), "Author and autho
 check(manifest.id === "research-agent-reader", "Manifest uses the confirmed permanent plugin ID");
 check(manifest.name === "Research Agent Reader", "Manifest uses the confirmed public display name");
 
-for (const relativePath of ["README.md", "LICENSE", "SECURITY.md", "manifest.json", "versions.json", "main.js", "styles.css"]) {
+for (const relativePath of ["README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "SECURITY.md", "manifest.json", "versions.json", "main.js", "styles.css"]) {
 	check(fs.existsSync(path.join(root, relativePath)), `${relativePath} exists`);
 }
 
@@ -38,6 +38,7 @@ check(/no client-side telemetry/i.test(readme), "README discloses the telemetry 
 check(/outside the vault/i.test(readme), "README discloses access outside the Vault");
 check(/upload a selected document/i.test(readme), "README discloses optional remote document upload");
 check(/does not download, install, or update/i.test(readme), "README discloses the optional dependency boundary");
+check(/THIRD_PARTY_NOTICES\.md/.test(readme), "README links to third-party notices");
 
 const sourceFiles = execFileSync("git", [
 	"ls-files",
