@@ -46,7 +46,7 @@ This disposable Vault was generated from the standalone repository. It contains 
 4. Confirm that the left pane contains body text without the image or caption.
 5. Confirm that the right pane shows the image, inferred label \`Fig. 1\`, and its caption.
 6. Open \`papers/Plain Markdown paper.md\`; it should also use the reader.
-7. Select a sentence in the reading pane: a floating 批注 chip should appear next to the selection (the pane header also has a 批注 button). Open it, type a short note, and save — this works without any AI backend. Confirm the source text gains an annotation link and \`wiki/annotations/\` contains the note.
+7. Select a sentence in the reading pane: a floating 批注 chip should appear next to the selection (the pane header also has a 批注 button). Open it, type a short note, and save — this works without any AI backend. Confirm the source text gains an annotation link and \`wiki/annotations/\` contains the note. Wiki notes support the same flow in both editing (Live Preview) and reading mode.
 8. Run **Knowledge base health check**; it should work without Python or a toolkit path.
 9. Open Research Agent Reader settings. Core features should be described as available and the optional toolkit as unconfigured.
 10. Try an advanced AI action. It should show an actionable missing-toolkit message without breaking the reader.

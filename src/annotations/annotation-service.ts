@@ -1,5 +1,6 @@
 import {
 	App,
+	MarkdownView,
 	Notice,
 	TFile,
 	normalizePath,
@@ -208,6 +209,11 @@ export class AnnotationService {
 	}
 
 	canCaptureSelection(): boolean {
+		if (this.canCaptureDomSelection()) return true;
+		return this.canCaptureEditorSelection();
+	}
+
+	canCaptureDomSelection(): boolean {
 		const selection = window.getSelection();
 		if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return false;
 		const range = selection.getRangeAt(0);
@@ -221,10 +227,29 @@ export class AnnotationService {
 		return Boolean(source?.dataset.agentAnnotationSource);
 	}
 
+	/**
+	 * Live Preview / source mode renders plain text through CodeMirror, so the
+	 * post-processor stamps and DOM selections do not exist there. Editor
+	 * selections are captured through the Editor API instead.
+	 */
+	canCaptureEditorSelection(): boolean {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view?.file) return false;
+		if (view.file.path.startsWith(`${ANNOTATION_FOLDER}/`)) return false;
+		const editor = view.editor;
+		if (!editor || typeof editor.getSelection !== "function") return false;
+		return String(editor.getSelection() || "").trim().length > 0;
+	}
+
 	async captureSelection(): Promise<AnnotationSelection> {
+		if (this.canCaptureDomSelection()) return this.captureFromDom();
+		return this.captureFromEditor();
+	}
+
+	private async captureFromDom(): Promise<AnnotationSelection> {
 		const selection = window.getSelection();
 		if (!selection || selection.isCollapsed || selection.rangeCount !== 1) {
-			throw new Error("请先在阅读视图中选择需要批注的文字");
+			throw new Error("请先在笔记或阅读视图中选择需要批注的文字");
 		}
 		const range = selection.getRangeAt(0);
 		const selectedText = selection.toString().trim();
@@ -311,6 +336,90 @@ export class AnnotationService {
 			suffix: content.slice(sourceEnd, sourceEnd + 80),
 			isTableCell: block.matches("td, th"),
 			anchorRect: range.getBoundingClientRect(),
+		};
+	}
+
+	private async captureFromEditor(): Promise<AnnotationSelection> {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view?.file || view.file.extension !== "md") {
+			throw new Error("无法确定选区对应的 Markdown 文件");
+		}
+		if (view.file.path.startsWith(`${ANNOTATION_FOLDER}/`)) {
+			throw new Error("批注文档本身不能再批注");
+		}
+		const editor = view.editor;
+		if (!editor || typeof editor.getSelection !== "function") {
+			throw new Error("第一版只支持 Markdown 阅读视图或编辑器中的文字选区");
+		}
+		const ranges = editor.listSelections();
+		if (!ranges.length) throw new Error("请先在笔记中选择需要批注的文字");
+		const raw = String(editor.getSelection() || "");
+		const selectedText = raw.trim();
+		if (!selectedText) throw new Error("选区中没有可批注的文字");
+		if (selectedText.length > MAX_SELECTION_LENGTH) {
+			throw new Error(`第一版单次最多批注 ${MAX_SELECTION_LENGTH} 个字符`);
+		}
+		if (/[\r\n|]/.test(raw) || raw.includes("-->")) {
+			throw new Error("第一版只支持同一段落内、不含链接控制字符的纯文本选区");
+		}
+		const content = await this.app.vault.read(view.file);
+		const offsetHead = editor.posToOffset(ranges[0].head);
+		const offsetAnchor = editor.posToOffset(ranges[0].anchor);
+		const sourceStart = Math.min(offsetHead, offsetAnchor);
+		const sourceEnd = Math.max(offsetHead, offsetAnchor);
+		if (
+			!Number.isFinite(sourceStart)
+			|| !Number.isFinite(sourceEnd)
+			|| content.slice(sourceStart, sourceEnd) !== raw
+		) {
+			throw new Error("选中文字与原文不一致，请重新划选后重试");
+		}
+		if (isInsideProtectedMarkdown(content, sourceStart, sourceEnd)) {
+			throw new Error("选区位于已有链接或行内代码中，第一版不会改写这类 Markdown");
+		}
+		const contextStart = Math.max(0, sourceStart - Math.floor(CONTEXT_LIMIT / 2));
+		const contextEnd = Math.min(content.length, sourceEnd + Math.floor(CONTEXT_LIMIT / 2));
+		const lineStart = content.lastIndexOf("\n", Math.max(0, sourceStart - 1)) + 1;
+		const lineEndIndex = content.indexOf("\n", sourceEnd);
+		const line = content.slice(lineStart, lineEndIndex === -1 ? undefined : lineEndIndex);
+		const isTableCell = (line.match(/\|/g)?.length ?? 0) >= 2;
+		const headFirst = offsetHead >= offsetAnchor;
+		// Obsidian's Editor typings do not expose CM6 coordinates; access the
+		// underlying view structurally so the popover can anchor the selection.
+		const cmView = (
+			editor as unknown as {
+				cm?: {
+					coordsAtPos?: (offset: number) => {
+						left: number;
+						right: number;
+						top: number;
+						bottom: number;
+					} | null;
+				};
+			}
+		).cm;
+		const coords = typeof cmView?.coordsAtPos === "function"
+			? cmView.coordsAtPos(headFirst ? offsetHead : offsetAnchor)
+			: null;
+		const anchorRect = coords
+			? new DOMRect(
+				coords.left,
+				coords.top,
+				Math.max(1, (coords.right ?? coords.left) - coords.left),
+				Math.max(1, (coords.bottom ?? coords.top) - coords.top),
+			)
+			: new DOMRect(0, 0, 1, 1);
+		return {
+			sourcePath: view.file.path,
+			selectedText,
+			section: currentHeading(content, sourceStart),
+			context: content.slice(contextStart, contextEnd).trim(),
+			sourceStart,
+			sourceEnd,
+			prefix: content.slice(Math.max(0, sourceStart - 80), sourceStart),
+			suffix: content.slice(sourceEnd, sourceEnd + 80),
+			isTableCell,
+			anchorRect,
 		};
 	}
 

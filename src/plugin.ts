@@ -204,6 +204,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private annotationService?: AnnotationService;
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private annotationPopover: AnnotationPopover | null = null;
+	private annotationChip: HTMLElement | null = null;
 	private persistence?: DashboardPersistence;
 	private readonly cliModelDiscoveryCache = new Map<
 		CliBackendId,
@@ -307,6 +308,15 @@ export default class AgentDashboardPlugin extends Plugin {
 				: null;
 			if (link) event.stopPropagation();
 		}, { capture: true });
+		this.registerDomEvent(document, "mouseup", () => {
+			window.setTimeout(() => this.showAnnotationChip(), 0);
+		}, { capture: true });
+		this.registerDomEvent(document, "scroll", () => this.hideAnnotationChip(), { capture: true });
+		this.registerDomEvent(document, "mousedown", (event) => {
+			const insideChip = event.target instanceof Node
+				&& this.annotationChip?.contains(event.target) === true;
+			if (!insideChip) this.hideAnnotationChip();
+		}, { capture: true });
 		this.addRibbonIcon("layout-dashboard", "打开研究知识库控制台", () => {
 			this.activateDashboardView();
 		});
@@ -356,6 +366,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	onunload(): void {
 		this.annotationPopover?.close();
+		this.hideAnnotationChip();
 		void this.flushScheduledSettingsSave();
 		this.processExecution.shutdown();
 	}
@@ -377,9 +388,85 @@ export default class AgentDashboardPlugin extends Plugin {
 		}
 	}
 
-	/** True when the current text selection can be captured for annotation. */
-	canStartSelectionAnnotation(): boolean {
-		return this.annotationService?.canCaptureSelection() === true;
+	/**
+	 * Floating 批注 chip for any text selection inside a Markdown view — the
+	 * reader, reading mode, and Live Preview/source mode alike. Editor-mode
+	 * selections have no native DOM selection, so their anchor rectangle comes
+	 * from the editor coordinates.
+	 */
+	private showAnnotationChip(): void {
+		this.hideAnnotationChip();
+		if (!this.annotationService?.canCaptureSelection()) return;
+		const selection = window.getSelection();
+		let rect: DOMRect | null = null;
+		if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
+			const range = selection.getRangeAt(0);
+			const anchorElement = range.startContainer instanceof Element
+				? range.startContainer
+				: range.startContainer.parentElement;
+			if (!anchorElement?.closest(".markdown-source-view, .markdown-reading-view")) return;
+			if (anchorElement.closest(".agent-annotation-popover, input, textarea, button, pre, code")) {
+				return;
+			}
+			rect = range.getBoundingClientRect();
+		} else {
+			rect = this.editorSelectionRect();
+		}
+		if (!rect) return;
+		const chip = document.body.createDiv({ cls: "agent-dashboard-mineru-annotate-chip" });
+		const button = chip.createEl("button", {
+			cls: "agent-dashboard-mineru-annotate-chip-button",
+			text: "批注",
+			attr: { type: "button", title: "批注所选文字" },
+		});
+		const left = Math.min(Math.max(8, rect.right + 8), Math.max(8, window.innerWidth - 72));
+		const top = Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - 44));
+		chip.style.left = `${left}px`;
+		chip.style.top = `${top}px`;
+		button.addEventListener("click", (event) => {
+			event.stopPropagation();
+			this.hideAnnotationChip();
+			void this.openSelectionAnnotation();
+		});
+		this.annotationChip = chip;
+	}
+
+	private editorSelectionRect(): DOMRect | null {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		const editor = view?.editor;
+		const ranges = editor?.listSelections?.() ?? [];
+		if (!editor || !ranges.length) return null;
+		const range = ranges[0];
+		const headOffset = editor.posToOffset(range.head);
+		const anchorOffset = editor.posToOffset(range.anchor);
+		// CM6 coordinates through the structurally typed underlying view.
+		const cmView = (
+			editor as unknown as {
+				cm?: {
+					coordsAtPos?: (offset: number) => {
+						left: number;
+						right: number;
+						top: number;
+						bottom: number;
+					} | null;
+				};
+			}
+		).cm;
+		const coords = typeof cmView?.coordsAtPos === "function"
+			? cmView.coordsAtPos(Math.max(headOffset, anchorOffset))
+			: null;
+		if (!coords) return null;
+		return new DOMRect(
+			coords.left,
+			coords.top,
+			1,
+			Math.max(1, coords.bottom - coords.top),
+		);
+	}
+
+	private hideAnnotationChip(): void {
+		this.annotationChip?.remove();
+		this.annotationChip = null;
 	}
 
 	private openAnnotationPopover(options: {
