@@ -1997,9 +1997,10 @@ export default class AgentDashboardPlugin extends Plugin {
 				return await this.directQueryService.runRetrievalPreflight(runId, question, expandedTerms);
 			} catch (error) {
 				const trace = await this.getLexicalRetriever().retrieve(question, expandedTerms);
-				trace.fallback = {
-					used: false,
-					paths: [],
+				trace.retriever_fallback = {
+					used: true,
+					from: "toolkit",
+					to: "in-plugin-lexical",
 					reason: `工具链检索失败，已改用内置词法检索：${error instanceof Error ? error.message : String(error)}`,
 				};
 				return trace;
@@ -2007,10 +2008,9 @@ export default class AgentDashboardPlugin extends Plugin {
 		}
 		const trace = await this.getLexicalRetriever().retrieve(question, expandedTerms);
 		if (toolkit.configured) {
-			trace.fallback = {
-				used: false,
-				paths: [],
-				reason: `内置词法检索（工具链检索不可用：${toolkit.reason}）`,
+			trace.retriever = {
+				selected: "in-plugin-lexical",
+				reason: `工具链检索不可用：${toolkit.reason}`,
 			};
 		}
 		return trace;
@@ -2317,16 +2317,25 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!normalized.mimeType) {
 			throw new ProviderConnectionError("attachment", "图片格式不受支持");
 		}
-		const size = Number(file.stat?.size) || 0;
-		if (size > MAX_VAULT_IMAGE_BYTES) {
+		const declaredSize = Number(file.stat?.size) || 0;
+		if (declaredSize > MAX_VAULT_IMAGE_BYTES) {
 			throw new ProviderConnectionError(
 				"attachment",
 				`图片超过 ${(MAX_VAULT_IMAGE_BYTES / 1024 / 1024).toFixed(0)} MiB 上限`,
 			);
 		}
 		const bytes = await this.app.vault.readBinary(file);
+		// stat.size can be stale when the file changed on disk; enforce the
+		// limit against the bytes actually read and report the actual size.
+		const actualSize = Number(bytes?.byteLength) || 0;
+		if (actualSize > MAX_VAULT_IMAGE_BYTES) {
+			throw new ProviderConnectionError(
+				"attachment",
+				`图片超过 ${(MAX_VAULT_IMAGE_BYTES / 1024 / 1024).toFixed(0)} MiB 上限`,
+			);
+		}
 		return {
-			attachment: { ...normalized, size },
+			attachment: { ...normalized, size: actualSize },
 			content: {
 				type: "image_url",
 				image_url: {

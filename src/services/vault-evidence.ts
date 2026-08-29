@@ -6,13 +6,20 @@ const MAX_EVIDENCE_PACKETS = 8;
 const MAX_EVIDENCE_TOTAL_CHARS = 48_000;
 const MAX_EVIDENCE_FILE_CHARS = 9_000;
 
+function resolveVaultFile(app: App, relativePath: string): TFile | null {
+	const file = app?.vault?.getAbstractFileByPath?.(relativePath);
+	return file instanceof TFile ? file : null;
+}
+
 /**
  * Reads Direct API evidence packets through the active Vault API only.
  * Candidate paths come from retrieval traces (toolkit script or in-plugin
  * lexical fallback) and can never escape the Vault because
  * `getAbstractFileByPath` resolves inside it; traversal segments simply fail
- * to resolve and are skipped. The `knowledge-base/` prefix strip keeps
- * evidence paths recorded by older toolkit-era sessions readable.
+ * to resolve and are skipped. Each path is resolved as-is first, so a vault
+ * that genuinely contains a top-level `knowledge-base/` folder is read
+ * correctly; the legacy prefix strip only applies when the exact path does not
+ * exist (older toolkit-era sessions recorded vault paths under that prefix).
  */
 export async function readVaultEvidencePackets(
 	app: App,
@@ -24,20 +31,27 @@ export async function readVaultEvidencePackets(
 	let remaining = MAX_EVIDENCE_TOTAL_CHARS;
 	for (const candidate of candidates) {
 		if (evidence.length >= MAX_EVIDENCE_PACKETS || remaining <= 0) break;
-		const relativePath = String(candidate || "")
+		const normalizedPath = String(candidate || "")
 			.replace(/\\/g, "/")
-			.replace(/^knowledge-base\//i, "")
-			.replace(/^\/+/, "");
+			.replace(/^\/+/, "")
+			.slice(0, 1000);
 		if (
-			!relativePath
-			|| relativePath.split("/").includes("..")
-			|| !/\.md$/i.test(relativePath)
-			|| seen.has(relativePath.toLowerCase())
+			!normalizedPath
+			|| normalizedPath.split("/").includes("..")
+			|| !/\.md$/i.test(normalizedPath)
 		) {
 			continue;
 		}
-		const file = app?.vault?.getAbstractFileByPath?.(relativePath);
-		if (!(file instanceof TFile)) continue;
+		let resolvedPath = normalizedPath;
+		let file = resolveVaultFile(app, resolvedPath);
+		if (!file) {
+			const legacyPath = normalizedPath.replace(/^knowledge-base\//i, "");
+			if (legacyPath && legacyPath !== normalizedPath) {
+				file = resolveVaultFile(app, legacyPath);
+				if (file) resolvedPath = legacyPath;
+			}
+		}
+		if (!file || seen.has(resolvedPath.toLowerCase())) continue;
 		let raw = "";
 		try {
 			raw = await app.vault.cachedRead(file);
@@ -46,11 +60,11 @@ export async function readVaultEvidencePackets(
 		}
 		const content = raw.slice(0, Math.min(MAX_EVIDENCE_FILE_CHARS, remaining));
 		if (!content.trim()) continue;
-		seen.add(relativePath.toLowerCase());
+		seen.add(resolvedPath.toLowerCase());
 		remaining -= content.length;
 		evidence.push({
-			path: relativePath,
-			wikilink: `[[${relativePath.replace(/\.md$/i, "")}]]`,
+			path: resolvedPath,
+			wikilink: `[[${resolvedPath.replace(/\.md$/i, "")}]]`,
 			content,
 		});
 	}

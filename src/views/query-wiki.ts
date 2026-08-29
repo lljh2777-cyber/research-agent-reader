@@ -62,6 +62,7 @@ import type {
 type RetrievalTrace = Record<string, unknown> & {
 	stage?: string;
 	retrieval_label?: string;
+	lexical_terms?: string[];
 	lexical_seeds?: TraceCandidate[];
 	graph_expansion?: TraceCandidate[];
 	context_pages?: string[];
@@ -69,6 +70,16 @@ type RetrievalTrace = Record<string, unknown> & {
 		terms?: string[];
 		attempted?: boolean;
 		error?: string;
+	};
+	retriever?: {
+		selected?: string;
+		reason?: string;
+	};
+	retriever_fallback?: {
+		used?: boolean;
+		from?: string;
+		to?: string;
+		reason?: string;
 	};
 	fallback?: {
 		used?: boolean;
@@ -651,6 +662,13 @@ export class QueryWikiView extends ItemView {
 			cls: "query-wiki-trace-stage",
 			text: `检索阶段：${this.displayRetrievalStage(trace.stage)}`,
 		});
+		const lexicalTerms = Array.isArray(trace.lexical_terms) ? trace.lexical_terms : [];
+		if (lexicalTerms.length) {
+			content.createEl("p", {
+				cls: "query-wiki-trace-note",
+				text: `查询词：${lexicalTerms.slice(0, 12).map((item) => String(item)).join("、")}`,
+			});
+		}
 		if (seeds.length) this.renderTraceGroup(content, "词法种子", seeds);
 		const expandedTerms = Array.isArray(trace.keyword_expansion?.terms)
 			? trace.keyword_expansion.terms
@@ -688,6 +706,19 @@ export class QueryWikiView extends ItemView {
 				"回退索引",
 				(fallback.paths || []).map((item) => ({ path: item, title: item.replace(/\.md$/i, "") })),
 			);
+		}
+		const retrieverFallback = trace.retriever_fallback;
+		if (retrieverFallback?.used) {
+			const reason = String(retrieverFallback.reason || "");
+			content.createEl("p", {
+				cls: "query-wiki-trace-note",
+				text: `检索器回退：${this.displayRetrieverName(retrieverFallback.from)} → ${this.displayRetrieverName(retrieverFallback.to)}${reason ? `（${reason}）` : ""}`,
+			});
+		} else if (trace.retriever?.reason) {
+			content.createEl("p", {
+				cls: "query-wiki-trace-note",
+				text: `检索器：${this.displayRetrieverName(trace.retriever.selected)}（${String(trace.retriever.reason)}）`,
+			});
 		}
 		content.createEl("p", {
 			cls: "query-wiki-trace-note",
@@ -1811,6 +1842,13 @@ export class QueryWikiView extends ItemView {
 			new Notice(`整理为笔记失败：${message}`);
 		}
 		if (completedRun) new TaskResultModal(this.app, this.plugin, completedRun, null).open();
+	}
+
+	displayRetrieverName(value: unknown): string {
+		const name = String(value || "").trim();
+		if (name === "toolkit") return "Research Vault Toolkit";
+		if (name === "in-plugin-lexical") return "内置词法检索";
+		return name || "默认检索器";
 	}
 
 	displayRetrievalStage(stage: unknown): string {

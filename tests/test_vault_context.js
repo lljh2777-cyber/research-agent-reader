@@ -47,6 +47,9 @@ const hookBuild = esbuild.buildSync({
 			"export { LexicalVaultRetriever, tokenizeForLexicalRetrieval }",
 			'  from "./src/query/lexical-retrieval";',
 			'export { readVaultEvidencePackets } from "./src/services/vault-evidence";',
+			'export { DirectQueryService } from "./src/query/direct-query-service";',
+			'export { QueryWikiView } from "./src/views/query-wiki";',
+			'export { MAX_VAULT_IMAGE_BYTES } from "./src/config";',
 		].join("\n"),
 		resolveDir: pluginRoot,
 		sourcefile: hookEntry,
@@ -69,6 +72,9 @@ const {
 	LexicalVaultRetriever,
 	tokenizeForLexicalRetrieval,
 	readVaultEvidencePackets,
+	DirectQueryService,
+	QueryWikiView,
+	MAX_VAULT_IMAGE_BYTES,
 } = hookModule.exports;
 Module._load = originalLoad;
 
@@ -99,6 +105,15 @@ function testTokenizeForLexicalRetrieval() {
 	assert.ok(tokens.includes("类型"));
 	assert.ok(!tokens.includes("细胞类型"));
 	assert.deepStrictEqual(tokenizeForLexicalRetrieval(""), []);
+
+	// The cap is a per-call budget: query side 24, index side may keep more.
+	const manyTokens = Array.from(
+		{ length: 40 },
+		(_, index) => `w${String(index).padStart(2, "0")}x`,
+	).join(" ");
+	assert.equal(tokenizeForLexicalRetrieval(manyTokens).length, 24);
+	assert.equal(tokenizeForLexicalRetrieval(manyTokens, 2_000).length, 40);
+	assert.equal(tokenizeForLexicalRetrieval(manyTokens, Number.POSITIVE_INFINITY).length, 40);
 }
 
 function makeLexicalApp(notes) {
@@ -151,23 +166,89 @@ async function testLexicalRetriever() {
 	assert.equal(trace.stage, "in-plugin-lexical");
 	assert.equal(trace.engine, "in-plugin-lexical");
 	assert.equal(trace.retrieval_label, "内置词法检索");
+	assert.equal(trace.retriever.selected, "in-plugin-lexical");
+	assert.ok(trace.lexical_terms.includes("singler"));
 	assert.ok(trace.candidate_paths.includes("wiki/methods/singler-annotation.md"));
 	assert.ok(!trace.candidate_paths.includes("papers/old.md"));
+	// lexical_seeds must stay page candidates (path/title objects), not tokens.
+	assert.ok(trace.lexical_seeds.length >= 1);
+	assert.ok(trace.lexical_seeds.every((seed) => seed.path && seed.title));
 
 	const chineseTrace = await retriever.retrieve("信息熵");
 	assert.ok(chineseTrace.candidate_paths.includes("wiki/concepts/entropy.md"));
 
 	const emptyTrace = await retriever.retrieve("量子色动力学 QCD");
 	assert.deepStrictEqual(emptyTrace.candidate_paths, []);
+	assert.equal(emptyTrace.lexical_seeds.length, 0);
 
 	const expandedTrace = await retriever.retrieve("怎么做注释", ["SingleR"]);
 	assert.ok(expandedTrace.candidate_paths.includes("wiki/methods/singler-annotation.md"));
-	assert.ok(expandedTrace.lexical_seeds.includes("singler"));
+	assert.ok(expandedTrace.lexical_terms.includes("singler"));
+	assert.ok(expandedTrace.lexical_seeds.some((seed) => (
+		seed.path === "wiki/methods/singler-annotation.md"
+		&& String(seed.title).includes("SingleR 注释")
+	)));
 
 	notes[2].body = "现在讨论 SingleR 和细胞注释。";
 	notes[2].mtime = 9;
 	const refreshed = await retriever.retrieve("SingleR");
 	assert.ok(refreshed.candidate_paths.includes("papers/old.md"));
+}
+
+async function testBodyTokenLimit() {
+	// The target term appears after 100 earlier unique body tokens; with the
+	// old shared 48-token cap it never entered the index.
+	const body = [
+		...Array.from({ length: 100 }, (_, index) => `term${index}`),
+		"late-target-marker",
+	].join(" ");
+	const retriever = new LexicalVaultRetriever(makeLexicalApp([
+		{ path: "wiki/long-note.md", mtime: 1, body, title: "长笔记", tags: [] },
+	]));
+	const trace = await retriever.retrieve("late-target-marker");
+	assert.ok(trace.candidate_paths.includes("wiki/long-note.md"));
+}
+
+async function testBodyIndexBudgetResume() {
+	const notes = [
+		{ path: "wiki/a.md", mtime: 10, body: "alpha-body-marker", title: "Alpha", tags: [] },
+		{ path: "wiki/b.md", mtime: 5, body: "beta-late-marker", title: "Beta", tags: [] },
+	];
+	// Calls: deadline, budget check A (inside), budget check B (over budget).
+	const clockQueue = [0, 0, Number.MAX_SAFE_INTEGER];
+	const clock = () => (clockQueue.length ? clockQueue.shift() : 0);
+	const retriever = new LexicalVaultRetriever(makeLexicalApp(notes), { now: clock });
+
+	const firstTrace = await retriever.retrieve("beta-late-marker");
+	assert.deepStrictEqual(firstTrace.candidate_paths, []);
+
+	// The untouched-mtime file whose body was never indexed must be completed
+	// on the next refresh instead of being skipped forever.
+	const secondTrace = await retriever.retrieve("beta-late-marker");
+	assert.ok(secondTrace.candidate_paths.includes("wiki/b.md"));
+
+	const alphaTrace = await retriever.retrieve("alpha-body-marker");
+	assert.ok(alphaTrace.candidate_paths.includes("wiki/a.md"));
+}
+
+async function testExpansionTermQuota() {
+	const longQuestion = "我想了解单细胞转录组数据分析中参考集构建细胞类型注释方法比较与基准评估的实际应用有哪些";
+	const retriever = new LexicalVaultRetriever(makeLexicalApp([
+		{
+			path: "wiki/methods/singler.md",
+			mtime: 1,
+			body: "SingleR 基于 celldex 参考集做注释。",
+			title: "SingleR",
+			tags: [],
+		},
+	]));
+	const trace = await retriever.retrieve(longQuestion, ["SingleR", "celldex"]);
+	// Expansion terms keep a reserved quota even when the question alone
+	// produces more than the combined token budget.
+	assert.ok(trace.lexical_terms.includes("singler"));
+	assert.ok(trace.lexical_terms.includes("celldex"));
+	assert.ok(trace.lexical_terms.length <= 24);
+	assert.ok(trace.candidate_paths.includes("wiki/methods/singler.md"));
 }
 
 async function testReadVaultEvidencePackets() {
@@ -192,27 +273,64 @@ async function testReadVaultEvidencePackets() {
 	assert.equal(packets[0].wikilink, "[[wiki/a]]");
 	assert.equal(packets[0].content, "内容A");
 	assert.deepStrictEqual(await readVaultEvidencePackets(app, { candidate_paths: [] }), []);
+
+	// A real top-level knowledge-base/ folder must win over the legacy prefix
+	// strip; the strip only applies when the exact path does not exist.
+	const fileByPath = {
+		"knowledge-base/wiki/dup.md": new ObsidianTFile({
+			path: "knowledge-base/wiki/dup.md",
+			stat: { size: 10 },
+		}),
+		"wiki/dup.md": new ObsidianTFile({ path: "wiki/dup.md", stat: { size: 10 } }),
+		"wiki/only-legacy.md": new ObsidianTFile({
+			path: "wiki/only-legacy.md",
+			stat: { size: 10 },
+		}),
+	};
+	const contentByPath = {
+		"knowledge-base/wiki/dup.md": "顶层目录内容",
+		"wiki/dup.md": "精确路径内容",
+		"wiki/only-legacy.md": "仅旧路径内容",
+	};
+	const mixedApp = {
+		vault: {
+			getAbstractFileByPath: (value) => fileByPath[value] || null,
+			cachedRead: async (file) => contentByPath[file.path] || "",
+		},
+	};
+	const mixed = await readVaultEvidencePackets(mixedApp, {
+		candidate_paths: ["knowledge-base/wiki/dup.md", "knowledge-base/wiki/only-legacy.md"],
+	});
+	assert.equal(mixed.length, 2);
+	assert.equal(mixed[0].path, "knowledge-base/wiki/dup.md");
+	assert.equal(mixed[0].content, "顶层目录内容");
+	assert.equal(mixed[1].path, "wiki/only-legacy.md");
+	assert.equal(mixed[1].content, "仅旧路径内容");
 }
 
 async function testRetrievalDispatcher() {
 	const plugin = Object.create(DashboardPlugin.prototype);
 	const lexicalCalls = [];
+	const makeLexicalTrace = () => ({
+		stage: "in-plugin-lexical",
+		engine: "in-plugin-lexical",
+		lexical_terms: ["x"],
+		lexical_seeds: [{ path: "wiki/a.md", title: "A", score: 6 }],
+		candidate_paths: ["wiki/a.md"],
+		retriever: { selected: "in-plugin-lexical" },
+	});
 	plugin.getLexicalRetriever = () => ({
 		retrieve: async (question, expandedTerms) => {
 			lexicalCalls.push({ question, expandedTerms });
-			return {
-				stage: "in-plugin-lexical",
-				engine: "in-plugin-lexical",
-				lexical_seeds: ["x"],
-				candidate_paths: ["wiki/a.md"],
-			};
+			return makeLexicalTrace();
 		},
 	});
 
 	plugin.settings = { toolkitRoot: "", pythonExecutable: "" };
-	const fallbackTrace = await plugin.runVaultRetrievalPreflight("run-1", "问题", []);
-	assert.equal(fallbackTrace.engine, "in-plugin-lexical");
-	assert.equal(fallbackTrace.fallback, undefined);
+	const defaultTrace = await plugin.runVaultRetrievalPreflight("run-1", "问题", []);
+	assert.equal(defaultTrace.engine, "in-plugin-lexical");
+	assert.equal(defaultTrace.retriever_fallback, undefined);
+	assert.equal(defaultTrace.retriever.reason, undefined);
 	assert.equal(lexicalCalls.length, 1);
 
 	const toolkitDir = fs.mkdtempSync(path.join(os.tmpdir(), "rar-toolkit-"));
@@ -220,7 +338,8 @@ async function testRetrievalDispatcher() {
 		plugin.settings = { toolkitRoot: toolkitDir, pythonExecutable: process.execPath };
 		const missingTrace = await plugin.runVaultRetrievalPreflight("run-2", "问题", []);
 		assert.equal(missingTrace.engine, "in-plugin-lexical");
-		assert.match(String(missingTrace.fallback.reason), /检索脚本不存在/);
+		assert.equal(missingTrace.retriever_fallback, undefined);
+		assert.match(String(missingTrace.retriever.reason), /检索脚本不存在/);
 		assert.equal(lexicalCalls.length, 2);
 
 		const scriptDir = path.join(toolkitDir, "tool-library", "scripts");
@@ -230,7 +349,11 @@ async function testRetrievalDispatcher() {
 		plugin.directQueryService = {
 			runRetrievalPreflight: async (runId, question, expandedTerms) => {
 				delegated = { runId, question, expandedTerms };
-				return { stage: "lexical-seed+ppr", lexical_seeds: ["x"], candidate_paths: [] };
+				return {
+					stage: "lexical-seed+ppr",
+					lexical_seeds: [{ path: "wiki/a.md" }],
+					candidate_paths: ["wiki/a.md"],
+				};
 			},
 		};
 		const toolkitTrace = await plugin.runVaultRetrievalPreflight("run-3", "问题", ["term"]);
@@ -238,9 +361,241 @@ async function testRetrievalDispatcher() {
 		assert.equal(delegated.runId, "run-3");
 		assert.deepStrictEqual(delegated.expandedTerms, ["term"]);
 		assert.equal(lexicalCalls.length, 2);
+
+		plugin.directQueryService = {
+			runRetrievalPreflight: async () => {
+				throw new Error("Python 进程退出码 1");
+			},
+		};
+		const failedTrace = await plugin.runVaultRetrievalPreflight("run-4", "问题", []);
+		assert.equal(failedTrace.engine, "in-plugin-lexical");
+		assert.equal(failedTrace.retriever_fallback.used, true);
+		assert.equal(failedTrace.retriever_fallback.from, "toolkit");
+		assert.equal(failedTrace.retriever_fallback.to, "in-plugin-lexical");
+		assert.match(String(failedTrace.retriever_fallback.reason), /工具链检索失败/);
+		assert.match(String(failedTrace.retriever_fallback.reason), /Python 进程退出码 1/);
+		assert.equal(lexicalCalls.length, 3);
 	} finally {
 		fs.rmSync(toolkitDir, { recursive: true, force: true });
 	}
+}
+
+async function testKeywordExpansionTrigger() {
+	// Regression: expansion must trigger whenever there are no candidate
+	// paths, even when the trace already carries query tokens or string seeds.
+	const profile = {
+		id: "provider-test",
+		name: "test-provider",
+		type: "openai-compatible",
+		baseUrl: "https://api.example.test",
+		model: "test-model",
+		secretId: "test-secret",
+		timeoutSeconds: 20,
+		capabilities: { streaming: false, pdf: false, vision: false },
+		lastTest: { ok: true },
+	};
+	const preflightCalls = [];
+	const providerCalls = [];
+	const service = new DirectQueryService({
+		state: { directQueryRuns: new Map() },
+		processExecution: {},
+		getSettings: () => ({ toolkitRoot: "" }),
+		getProviderProfile: () => profile,
+		createProvider: () => ({
+			complete: async (request) => {
+				providerCalls.push(request);
+				if (providerCalls.length === 1) {
+					return { text: '{"keywords":["SingleR","celldex"]}' };
+				}
+				return { text: "根据 [[wiki/methods/singler.md]] 的回答。" };
+			},
+		}),
+		normalizeProviderError: (error) => ({
+			type: "error",
+			status: 0,
+			endpoint: "",
+			message: String(error?.message || error),
+		}),
+		runRetrievalPreflight: async (runId, question, expandedTerms = []) => {
+			preflightCalls.push({ runId, question, expandedTerms });
+			if (expandedTerms.length === 0) {
+				return {
+					stage: "in-plugin-lexical",
+					lexical_terms: ["细胞", "注释"],
+					lexical_seeds: ["细胞", "注释"],
+					candidate_paths: [],
+					retriever: { selected: "in-plugin-lexical" },
+				};
+			}
+			return {
+				stage: "in-plugin-lexical",
+				lexical_terms: ["singler", "celldex", "细胞", "注释"],
+				lexical_seeds: [{ path: "wiki/methods/singler.md", title: "SingleR", score: 6 }],
+				candidate_paths: ["wiki/methods/singler.md"],
+				retriever: { selected: "in-plugin-lexical" },
+			};
+		},
+		readEvidencePacket: async (trace) => trace.candidate_paths.map((candidatePath) => ({
+			path: candidatePath,
+			wikilink: `[[${String(candidatePath).replace(/\.md$/i, "")}]]`,
+			content: "证据内容",
+		})),
+		readVaultImageData: async () => {
+			throw new Error("unused");
+		},
+	});
+	const result = await service.run(
+		"run-expand",
+		"profile-test",
+		"细胞注释有哪些方法？",
+		[],
+		"vault",
+	);
+	assert.equal(result.exitCode, 0);
+	assert.equal(preflightCalls.length, 2);
+	assert.deepStrictEqual(preflightCalls[1].expandedTerms, ["SingleR", "celldex"]);
+	assert.equal(providerCalls.length, 2);
+	assert.ok(result.stdout.includes("[[wiki/methods/singler.md]]"));
+}
+
+function makeFakeElement(tag) {
+	const element = {
+		tag,
+		cls: "",
+		text: "",
+		attr: {},
+		children: [],
+		disabled: false,
+		listeners: {},
+		createEl(childTag, opts = {}) {
+			const child = makeFakeElement(childTag);
+			if (opts.cls) child.cls = opts.cls;
+			if (opts.text !== undefined) child.text = String(opts.text);
+			if (opts.attr) child.attr = opts.attr;
+			element.children.push(child);
+			return child;
+		},
+		createDiv(opts) {
+			return element.createEl("div", opts);
+		},
+		createSpan(opts) {
+			return element.createEl("span", opts);
+		},
+		addEventListener(type, listener) {
+			element.listeners[type] = listener;
+		},
+	};
+	return element;
+}
+
+function collectElements(element, into = []) {
+	into.push(element);
+	for (const child of element.children) collectElements(child, into);
+	return into;
+}
+
+function makeTraceRenderView(opened) {
+	const viewLike = {
+		app: { workspace: { openLinkText: (pathValue) => opened.push(pathValue) } },
+	};
+	viewLike.displayRetrievalStage = QueryWikiView.prototype.displayRetrievalStage;
+	viewLike.displayRetrieverName = QueryWikiView.prototype.displayRetrieverName;
+	viewLike.renderTraceGroup = QueryWikiView.prototype.renderTraceGroup;
+	viewLike.renderRetrievalTrace = QueryWikiView.prototype.renderRetrievalTrace;
+	return viewLike;
+}
+
+function testQueryWikiTraceRendering() {
+	const opened = [];
+	const viewLike = makeTraceRenderView(opened);
+
+	// In-plugin lexical traces must render clickable page candidates, not
+	// disabled buttons without a path or title.
+	const lexicalTrace = {
+		stage: "in-plugin-lexical",
+		retrieval_label: "内置词法检索",
+		lexical_terms: ["singler", "细胞"],
+		lexical_seeds: [{
+			path: "wiki/methods/singler-annotation.md",
+			title: "SingleR 注释",
+			score: 12,
+		}],
+		candidate_paths: ["wiki/methods/singler-annotation.md"],
+		graph_expansion: [],
+		retriever: { selected: "in-plugin-lexical" },
+	};
+	const lexicalRoot = makeFakeElement("root");
+	viewLike.renderRetrievalTrace(lexicalRoot, lexicalTrace);
+	const lexicalNodes = collectElements(lexicalRoot);
+	assert.ok(lexicalNodes.some((node) => (
+		node.text.includes("内置词法检索") && node.text.includes("1 个种子")
+	)));
+	assert.ok(lexicalNodes.some((node) => node.text === "查询词：singler、细胞"));
+	const seedButton = lexicalNodes.find(
+		(node) => node.tag === "button" && node.text === "SingleR 注释",
+	);
+	assert.ok(seedButton, "lexical seed should render as a titled button");
+	assert.equal(seedButton.disabled, false);
+	assert.equal(seedButton.attr.title, "wiki/methods/singler-annotation.md");
+	seedButton.listeners.click();
+	assert.ok(opened.includes("wiki/methods/singler-annotation.md"));
+
+	// A toolkit failure fallback must surface its real reason in the trace.
+	const failedRoot = makeFakeElement("root");
+	viewLike.renderRetrievalTrace(failedRoot, {
+		stage: "in-plugin-lexical",
+		retrieval_label: "内置词法检索",
+		lexical_terms: ["x"],
+		lexical_seeds: [],
+		candidate_paths: [],
+		graph_expansion: [],
+		retriever_fallback: {
+			used: true,
+			from: "toolkit",
+			to: "in-plugin-lexical",
+			reason: "工具链检索失败，已改用内置词法检索：Python 进程退出码 1",
+		},
+	});
+	const failedNodes = collectElements(failedRoot);
+	assert.ok(failedNodes.some((node) => (
+		node.text.includes("检索器回退：Research Vault Toolkit → 内置词法检索")
+		&& node.text.includes("Python 进程退出码 1")
+	)));
+
+	// A configured-but-unavailable toolkit is reported without fallback wording.
+	const unavailableRoot = makeFakeElement("root");
+	viewLike.renderRetrievalTrace(unavailableRoot, {
+		stage: "in-plugin-lexical",
+		lexical_seeds: [],
+		graph_expansion: [],
+		retriever: {
+			selected: "in-plugin-lexical",
+			reason: "检索脚本不存在：/tool/tool-library/scripts/retrieve_vault.py",
+		},
+	});
+	const unavailableNodes = collectElements(unavailableRoot);
+	assert.ok(unavailableNodes.some((node) => (
+		node.text.includes("检索器：内置词法检索（检索脚本不存在")
+	)));
+
+	// The original "no reliable seeds → direction index" fallback stays intact.
+	const directionRoot = makeFakeElement("root");
+	viewLike.renderRetrievalTrace(directionRoot, {
+		stage: "no-match-fallback",
+		retrieval_label: "NoMatch+Index",
+		lexical_seeds: [],
+		graph_expansion: [],
+		fallback: { used: true, paths: ["notes/index.md"], reason: "" },
+	});
+	const directionNodes = collectElements(directionRoot);
+	assert.ok(directionNodes.some(
+		(node) => node.text === "未找到可靠词法种子，已回退到方向索引。",
+	));
+	const directionButton = directionNodes.find(
+		(node) => node.tag === "button" && node.text === "notes/index",
+	);
+	assert.ok(directionButton);
+	assert.equal(directionButton.disabled, false);
 }
 
 async function testImageAttachmentVaultAccess() {
@@ -254,14 +609,30 @@ async function testImageAttachmentVaultAccess() {
 		path: "wiki/assets/figures/example/figure-2.png",
 		stat: { mtime: 1, size: 9 * 1024 * 1024 },
 	});
+	const misReportedFile = new ObsidianTFile({
+		path: "wiki/assets/figures/example/figure-3.png",
+		stat: { mtime: 1, size: 3 },
+	});
+	const misReportedBytes = Buffer.alloc(2048, 7);
+	const oversizedReadFile = new ObsidianTFile({
+		path: "wiki/assets/figures/example/figure-4.png",
+		stat: { mtime: 1, size: 128 },
+	});
 	plugin.app = {
 		vault: {
 			getAbstractFileByPath: (value) => {
 				if (value === imageFile.path) return imageFile;
 				if (value === missingStatFile.path) return missingStatFile;
+				if (value === misReportedFile.path) return misReportedFile;
+				if (value === oversizedReadFile.path) return oversizedReadFile;
 				return null;
 			},
-			readBinary: async (file) => (file === imageFile ? bytes : Buffer.alloc(0)),
+			readBinary: async (file) => {
+				if (file === imageFile) return bytes;
+				if (file === misReportedFile) return misReportedBytes;
+				if (file === oversizedReadFile) return Buffer.alloc(MAX_VAULT_IMAGE_BYTES + 1);
+				return Buffer.alloc(0);
+			},
 		},
 	};
 	const payload = await plugin.readVaultImageData({
@@ -272,6 +643,17 @@ async function testImageAttachmentVaultAccess() {
 	assert.ok(payload.content.image_url.url.startsWith("data:image/png;base64,"));
 	assert.ok(
 		payload.content.image_url.url.endsWith(bytes.toString("base64")),
+	);
+
+	// A stale stat.size must not leak into the attachment: the size reported
+	// to the provider is the number of bytes actually read.
+	const misReported = await plugin.readVaultImageData({
+		path: misReportedFile.path,
+	});
+	assert.equal(misReported.attachment.size, misReportedBytes.length);
+	assert.equal(
+		misReported.content.image_url.url.length,
+		`data:image/png;base64,`.length + misReportedBytes.toString("base64").length,
 	);
 
 	await assert.rejects(
@@ -286,6 +668,11 @@ async function testImageAttachmentVaultAccess() {
 		() => plugin.readVaultImageData({ path: "wiki/assets/figures/example/figure-2.png" }),
 		(error) => /MiB 上限/.test(error.message),
 	);
+	// TOCTOU: bytes read can exceed the stale stat.size — still rejected.
+	await assert.rejects(
+		() => plugin.readVaultImageData({ path: "wiki/assets/figures/example/figure-4.png" }),
+		(error) => /MiB 上限/.test(error.message),
+	);
 	await assert.rejects(
 		() => plugin.readVaultImageData({ path: "wiki/notes/record.txt" }),
 		(error) => /仅支持 Vault 内/.test(error.message),
@@ -298,8 +685,13 @@ Promise.resolve()
 		testTokenizeForLexicalRetrieval();
 	})
 	.then(() => testLexicalRetriever())
+	.then(() => testBodyTokenLimit())
+	.then(() => testBodyIndexBudgetResume())
+	.then(() => testExpansionTermQuota())
 	.then(() => testReadVaultEvidencePackets())
 	.then(() => testRetrievalDispatcher())
+	.then(() => testKeywordExpansionTrigger())
+	.then(() => testQueryWikiTraceRendering())
 	.then(() => testImageAttachmentVaultAccess())
 	.then(() => console.log("VAULT_CONTEXT_TESTS_OK"))
 	.catch((error) => {

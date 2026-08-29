@@ -34,11 +34,14 @@ import {
 } from "./normalization";
 
 export interface RetrievalTrace extends UnknownRecord {
+	lexical_terms?: unknown[];
 	lexical_seeds?: unknown[];
 	candidate_paths?: unknown[];
 	context_pages?: string[];
 	linked_note_paths?: string[];
 	keyword_expansion?: UnknownRecord;
+	retriever?: UnknownRecord;
+	retriever_fallback?: UnknownRecord;
 	fallback?: UnknownRecord;
 }
 
@@ -118,7 +121,13 @@ export class DirectQueryService {
 			if (token.cancelled) {
 				throw new ProviderConnectionError("cancelled", "已停止本轮查询");
 			}
-			if (!Array.isArray(trace.lexical_seeds) || trace.lexical_seeds.length === 0) {
+			// Expansion triggers on missing candidate paths, not on tokenized
+			// query terms: the in-plugin lexical retriever always yields terms
+			// even when no vault page matched.
+			const candidatePaths = Array.isArray(trace.candidate_paths)
+				? trace.candidate_paths
+				: [];
+			if (candidatePaths.length === 0) {
 				try {
 					hooks.onEvent?.({
 						type: "status",
@@ -306,7 +315,12 @@ export class DirectQueryService {
 				stage: "direct-vault",
 				inspected_vault_paths: vaultSources.map((source) => source.path),
 				web_queries: [],
-				fallback_reason: String(trace?.fallback?.reason || ""),
+				fallback_reason: String(
+					trace?.retriever_fallback?.reason
+					|| trace?.retriever?.reason
+					|| trace?.fallback?.reason
+					|| "",
+				),
 			},
 			citation_validation: {
 				status: vaultSources.length ? "structured" : "not-applicable",
