@@ -1,3 +1,5 @@
+import * as fs from "node:fs";
+
 import {
 	App,
 	Notice,
@@ -140,92 +142,45 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.createSettingsPageHeader(
 			containerEl,
 			"Research Agent Reader",
-			"按模块管理运行环境、CLI 后端和 Direct API。进入对应模块后再修改详细设置。",
+			"核心阅读开箱即用；AI 助手只需配置一个供应商；其余扩展全部可选。进入模块后再修改详细设置。",
 		);
-		const navigation = containerEl.createDiv({ cls: "agent-dashboard-settings-navigation" });
-		this.createSettingsNavigationItem(navigation, {
-			page: "runtime",
-			icon: "terminal",
-			title: "运行环境",
-			description: "项目目录、Agent/Python/R 可执行文件、任务超时和环境检查。",
-			status: "本地执行",
-		});
-		const obsidianCliDetection = describeCliExecutable(
-			"obsidian",
-			this.plugin.settings.obsidianCliExecutable,
-		);
-		this.createSettingsNavigationItem(navigation, {
-			page: "obsidian-cli",
-			icon: "square-terminal",
-			title: "Obsidian CLI",
-			description: "可选的外部自动化桥梁、连接诊断与开发回归入口。",
-			status: obsidianCliDetection.found
-				? obsidianCliDetection.sourceLabel
-				: "可选 · 未检测到",
-		});
-		this.createSettingsNavigationItem(navigation, {
-			page: "mineru",
-			icon: "file-scan",
-			title: "MinerU 文献解析",
-			description: "CLI、服务地址、认证状态提示和文献入库默认参数。",
-			status: this.plugin.settings.mineruServiceMode === "private"
-				? "私有服务"
-				: `官方服务 · ${this.plugin.settings.mineruDefaultModel.toUpperCase()}`,
-		});
-		this.createSettingsNavigationItem(navigation, {
+
+		const coreNavigation = this.createSettingsHomeSection(containerEl, "阅读 · 开箱即用");
+		this.createSettingsNavigationItem(coreNavigation, {
 			page: "reader",
 			icon: "book-open-text",
 			title: "文献阅读器",
 			description: "默认接管目录、图文双栏、跟随阅读、版面框、缩放与栏宽。",
 			status: `${this.plugin.settings.readerMarkdownFolders.length} 个目录`,
+			badge: { text: "核心", tone: "ok" },
 		});
-		this.createSettingsNavigationItem(navigation, {
-			page: "tasks",
-			icon: "sliders-horizontal",
-			title: "任务默认策略",
-			description: "按操作设置默认后端、模型、推理强度、速度和查询模式。",
-			status: `${CONFIGURABLE_ACTION_IDS.length} 项策略`,
+		this.createSettingsNavigationItem(coreNavigation, {
+			page: "data",
+			icon: "database-zap",
+			title: "数据与诊断",
+			description: "历史保留、知识库维护范围、脱敏诊断和清理操作。",
+			status: `任务 ${this.plugin.settings.taskHistoryLimit} · 对话 ${this.plugin.settings.querySessionLimit}`,
+			badge: { text: "内置", tone: "ok" },
 		});
-		const reasoningLabel = REASONING_OPTIONS.find(
-			(option) => option.id === this.plugin.settings.codexReasoningEffort,
-		)?.label || this.plugin.settings.codexReasoningEffort;
-		const codexSourceLabel = getCodexConfigSourceLabel(
-			this.plugin.settings.codexConfigSource,
+
+		const aiNavigation = this.createSettingsHomeSection(containerEl, "AI 助手");
+		const profiles = this.plugin.settings.providerProfiles;
+		const activeProfile = profiles.find(
+			(profile) => profile.id === this.plugin.settings.activeProviderId,
 		);
-		this.createSettingsNavigationItem(navigation, {
-			page: "codex",
-			icon: "bot",
-			title: "Codex CLI",
-			description: "选择官方 OpenAI 配置或 CC Switch 当前配置。",
-			status: this.plugin.settings.codexConfigSource === "official"
-				? `${codexSourceLabel} · ${this.plugin.settings.codexModel} · ${reasoningLabel}`
-				: `${codexSourceLabel} · 当前配置`,
-		});
-		const claudeReasoningLabel = REASONING_OPTIONS.find(
-			(option) => option.id === this.plugin.settings.claudeReasoningEffort,
-		)?.label || this.plugin.settings.claudeReasoningEffort;
-		const claudeSourceLabel = getClaudeConfigSourceLabel(
-			this.plugin.settings.claudeConfigSource,
-		);
-		this.createSettingsNavigationItem(navigation, {
-			page: "claude",
-			icon: "sparkles",
-			title: "Claude Code",
-			description: "选择官方配置或 CC Switch，并管理模型覆盖和连接测试。",
-			status: `${claudeSourceLabel} · ${this.plugin.settings.claudeModel || "默认模型"} · ${claudeReasoningLabel}`,
-		});
-		const openCodeReasoningLabel = REASONING_OPTIONS.find(
-			(option) => option.id === this.plugin.settings.openCodeReasoningEffort,
-		)?.label || this.plugin.settings.openCodeReasoningEffort;
-		const openCodeSourceLabel = getOpenCodeConfigSourceLabel(
-			this.plugin.settings.openCodeConfigSource,
-		);
-		this.createSettingsNavigationItem(navigation, {
-			page: "opencode",
-			icon: "braces",
-			title: "OpenCode",
-			description: "选择官方 OpenCode Zen 或 CC Switch，并自动识别当前可用模型。",
-			status: `${openCodeSourceLabel} · ${this.plugin.settings.openCodeModel || "默认模型"} · ${openCodeReasoningLabel}`,
+		this.createSettingsNavigationItem(aiNavigation, {
+			page: "direct-api",
+			icon: "plug-zap",
+			title: "Direct API 知识助手",
+			description: "只读知识库助手的供应商、凭据、模型能力和连接测试。",
+			status: activeProfile
+				? `${activeProfile.name} · 已启用`
+				: profiles.length
+					? `${profiles.length} 个配置`
+					: "未配置",
+			badge: activeProfile
+				? { text: "已配置", tone: "ok" }
+				: { text: "未配置", tone: "warn" },
 		});
 		const annotationBackendId = this.plugin.settings.annotationBackendId || "auto";
 		const annotationProfile = this.plugin.settings.providerProfiles.find(
@@ -242,42 +197,128 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					: annotationProfile
 						? `${annotationProfile.name} · ${annotationProfile.model}`
 						: "自动选择";
-		this.createSettingsNavigationItem(navigation, {
+		this.createSettingsNavigationItem(aiNavigation, {
 			page: "annotations",
 			icon: "message-square-text",
 			title: "批注 AI",
 			description: "选择批注解释后端、模型、推理强度、速度和输出长度。",
 			status: annotationStatus,
+			badge: annotationBackendId === "auto"
+				? { text: "可选后端", tone: "muted" }
+				: { text: "已配置", tone: "ok" },
 		});
-		const profiles = this.plugin.settings.providerProfiles;
-		const activeProfile = profiles.find(
-			(profile) => profile.id === this.plugin.settings.activeProviderId,
+		this.createSettingsNavigationItem(aiNavigation, {
+			page: "tasks",
+			icon: "sliders-horizontal",
+			title: "任务默认策略",
+			description: "按操作设置默认后端、模型、推理强度、速度和查询模式。",
+			status: `${CONFIGURABLE_ACTION_IDS.length} 项策略`,
+			badge: { text: "可选", tone: "muted" },
+		});
+
+		const optionalNavigation = this.createSettingsHomeSection(containerEl, "可选扩展 · 高级");
+		const toolkitRoot = String(this.plugin.settings.toolkitRoot || "").trim();
+		const toolkitAvailable = toolkitRoot !== "" && fs.existsSync(toolkitRoot);
+		this.createSettingsNavigationItem(optionalNavigation, {
+			page: "runtime",
+			icon: "terminal",
+			title: "工具链与运行环境",
+			description: "可选工具链目录、Agent/Python/R 可执行文件、任务超时和环境检查。",
+			status: toolkitAvailable
+				? "工具链可用"
+				: toolkitRoot
+					? "目录不可用"
+					: "本地执行",
+			badge: toolkitAvailable
+				? { text: "已配置", tone: "ok" }
+				: { text: "可选", tone: "muted" },
+		});
+		const reasoningLabel = REASONING_OPTIONS.find(
+			(option) => option.id === this.plugin.settings.codexReasoningEffort,
+		)?.label || this.plugin.settings.codexReasoningEffort;
+		const codexSourceLabel = getCodexConfigSourceLabel(
+			this.plugin.settings.codexConfigSource,
 		);
-		this.createSettingsNavigationItem(navigation, {
-			page: "direct-api",
-			icon: "plug-zap",
-			title: "Direct API 知识助手",
-			description: "只读知识库助手的供应商、凭据、模型能力和连接测试。",
-			status: activeProfile
-				? `${activeProfile.name} · 已启用`
-				: profiles.length
-					? `${profiles.length} 个配置`
-					: "未配置",
+		const codexAvailable = this.plugin.isCliBackendAvailable("codex-cli");
+		this.createSettingsNavigationItem(optionalNavigation, {
+			page: "codex",
+			icon: "bot",
+			title: "Codex CLI",
+			description: "选择官方 OpenAI 配置或 CC Switch 当前配置。",
+			status: this.plugin.settings.codexConfigSource === "official"
+				? `${codexSourceLabel} · ${this.plugin.settings.codexModel} · ${reasoningLabel}`
+				: `${codexSourceLabel} · 当前配置`,
+			badge: codexAvailable
+				? { text: "可用", tone: "ok" }
+				: { text: "未检测到", tone: "warn" },
 		});
-		this.createSettingsNavigationItem(navigation, {
-			page: "data",
-			icon: "database-zap",
-			title: "数据与诊断",
-			description: "历史保留、知识库维护范围、脱敏诊断和清理操作。",
-			status: `任务 ${this.plugin.settings.taskHistoryLimit} · 对话 ${this.plugin.settings.querySessionLimit}`,
+		const claudeReasoningLabel = REASONING_OPTIONS.find(
+			(option) => option.id === this.plugin.settings.claudeReasoningEffort,
+		)?.label || this.plugin.settings.claudeReasoningEffort;
+		const claudeSourceLabel = getClaudeConfigSourceLabel(
+			this.plugin.settings.claudeConfigSource,
+		);
+		const claudeAvailable = this.plugin.isCliBackendAvailable("claude-code");
+		this.createSettingsNavigationItem(optionalNavigation, {
+			page: "claude",
+			icon: "sparkles",
+			title: "Claude Code",
+			description: "选择官方配置或 CC Switch，并管理模型覆盖和连接测试。",
+			status: `${claudeSourceLabel} · ${this.plugin.settings.claudeModel || "默认模型"} · ${claudeReasoningLabel}`,
+			badge: claudeAvailable
+				? { text: "可用", tone: "ok" }
+				: { text: "未检测到", tone: "warn" },
+		});
+		const openCodeReasoningLabel = REASONING_OPTIONS.find(
+			(option) => option.id === this.plugin.settings.openCodeReasoningEffort,
+		)?.label || this.plugin.settings.openCodeReasoningEffort;
+		const openCodeSourceLabel = getOpenCodeConfigSourceLabel(
+			this.plugin.settings.openCodeConfigSource,
+		);
+		const openCodeAvailable = this.plugin.isCliBackendAvailable("opencode");
+		this.createSettingsNavigationItem(optionalNavigation, {
+			page: "opencode",
+			icon: "braces",
+			title: "OpenCode",
+			description: "选择官方 OpenCode Zen 或 CC Switch，并自动识别当前可用模型。",
+			status: `${openCodeSourceLabel} · ${this.plugin.settings.openCodeModel || "默认模型"} · ${openCodeReasoningLabel}`,
+			badge: openCodeAvailable
+				? { text: "可用", tone: "ok" }
+				: { text: "未检测到", tone: "warn" },
+		});
+		this.createSettingsNavigationItem(optionalNavigation, {
+			page: "mineru",
+			icon: "file-scan",
+			title: "MinerU 文献解析",
+			description: "CLI、服务地址、认证状态提示和文献入库默认参数。",
+			status: this.plugin.settings.mineruServiceMode === "private"
+				? "私有服务"
+				: `官方服务 · ${this.plugin.settings.mineruDefaultModel.toUpperCase()}`,
+			badge: { text: "可选", tone: "muted" },
+		});
+		const obsidianCliDetection = describeCliExecutable(
+			"obsidian",
+			this.plugin.settings.obsidianCliExecutable,
+		);
+		this.createSettingsNavigationItem(optionalNavigation, {
+			page: "obsidian-cli",
+			icon: "square-terminal",
+			title: "Obsidian CLI",
+			description: "可选的外部自动化桥梁、连接诊断与开发回归入口。",
+			status: obsidianCliDetection.found
+				? obsidianCliDetection.sourceLabel
+				: "可选外部工具",
+			badge: obsidianCliDetection.found
+				? { text: "可用", tone: "ok" }
+				: { text: "未检测到", tone: "muted" },
 		});
 	}
 
 	private renderRuntimeSettings(containerEl: HTMLElement): void {
 		this.createSettingsPageHeader(
 			containerEl,
-			"运行环境",
-			"管理 Dashboard 本地任务使用的项目路径、运行时和超时限制。",
+			"工具链与运行环境",
+			"管理可选工具链目录、本地任务的项目路径、运行时和超时限制。",
 			true,
 		);
 		new Setting(containerEl)
@@ -1819,6 +1860,14 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		header.createEl("p", { text: description });
 	}
 
+	private createSettingsHomeSection(containerEl: HTMLElement, title: string): HTMLElement {
+		containerEl.createEl("h3", {
+			cls: "agent-dashboard-settings-section-title",
+			text: title,
+		});
+		return containerEl.createDiv({ cls: "agent-dashboard-settings-navigation" });
+	}
+
 	private createSettingsNavigationItem(
 		containerEl: HTMLElement,
 		options: {
@@ -1827,6 +1876,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			title: string;
 			description: string;
 			status: string;
+			badge?: { text: string; tone: "ok" | "muted" | "warn" };
 		},
 	): void {
 		const button = containerEl.createEl("button", {
@@ -1843,6 +1893,12 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		copy.createSpan({ text: options.description });
 		const trailing = button.createDiv({ cls: "agent-dashboard-settings-navigation-trailing" });
 		trailing.createSpan({ text: options.status });
+		if (options.badge) {
+			trailing.createSpan({
+				cls: `agent-dashboard-settings-navigation-badge is-${options.badge.tone}`,
+				text: options.badge.text,
+			});
+		}
 		const chevron = trailing.createSpan({ cls: "agent-dashboard-settings-navigation-chevron" });
 		setIcon(chevron, "chevron-right");
 		button.addEventListener("click", () => {

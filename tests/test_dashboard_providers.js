@@ -354,6 +354,21 @@ async function main() {
 		await new Promise((resolve) => delayedServer.close(resolve));
 	}
 
+	const settingsTabSource = fs.readFileSync(
+		path.join(__dirname, "..", "src", "settings", "settings-tab.ts"),
+		"utf8",
+	);
+	assert.match(settingsTabSource, /"阅读 · 开箱即用"/);
+	assert.match(settingsTabSource, /"AI 助手"/);
+	assert.match(settingsTabSource, /"可选扩展 · 高级"/);
+	assert.match(settingsTabSource, /title: "工具链与运行环境"/);
+	assert.match(settingsTabSource, /agent-dashboard-settings-navigation-badge/);
+	assert.match(settingsTabSource, /is-\$\{options\.badge\.tone\}/);
+	assert.match(
+		fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8"),
+		/\.agent-dashboard-settings-navigation-badge\.is-ok/,
+	);
+
 	console.log("DASHBOARD_PROVIDER_TEST_OK");
 }
 

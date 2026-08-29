@@ -1399,6 +1399,43 @@
 	white-space: nowrap;
 }
 
+.agent-dashboard-settings-section-title {
+	margin: 22px 2px 8px;
+	color: var(--text-faint);
+	font-size: 11px;
+	font-weight: 650;
+	letter-spacing: 0.05em;
+}
+
+.agent-dashboard-settings-section-title:first-child {
+	margin-top: 4px;
+}
+
+.agent-dashboard-settings-navigation-badge {
+	flex: none;
+	border-radius: 999px;
+	font-family: var(--font-interface);
+	font-size: 10px;
+	font-weight: 650;
+	line-height: 1.4;
+	padding: 1px 8px;
+}
+
+.agent-dashboard-settings-navigation-badge.is-ok {
+	color: var(--color-green);
+	background: rgba(var(--color-green-rgb), 0.13);
+}
+
+.agent-dashboard-settings-navigation-badge.is-warn {
+	color: var(--color-orange);
+	background: rgba(var(--color-orange-rgb), 0.14);
+}
+
+.agent-dashboard-settings-navigation-badge.is-muted {
+	color: var(--text-faint);
+	background: var(--background-modifier-hover);
+}
+
 .agent-dashboard-settings-navigation-chevron,
 .agent-dashboard-settings-navigation-chevron svg {
 	width: 16px;
