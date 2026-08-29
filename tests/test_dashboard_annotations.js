@@ -107,19 +107,22 @@ assert.match(styles, /a\.internal-link\[data-href\^="wiki\/annotations\/"\]/);
 assert.match(styles, /\.agent-annotation-header[\s\S]*cursor:\s*grab/);
 assert.match(styles, /\.agent-annotation-popover\.is-dragging[\s\S]*cursor:\s*grabbing/);
 
-// The reader must expose visible annotation entries: a pane-header button and
-// a selection-following chip, both reusing the command flow without adding a
-// default hotkey.
+// The reader keeps an always-visible header button; the floating selection
+// chip lives at plugin level so it also covers wiki notes in Live Preview.
 const readerSource = source("src/views/mineru-reader.ts");
 assert.match(readerSource, /agent-dashboard-mineru-annotate-button/);
-assert.match(readerSource, /setupAnnotationChip/);
-assert.match(readerSource, /agent-dashboard-mineru-annotate-chip/);
-assert.match(readerSource, /canStartSelectionAnnotation/);
 assert.match(readerSource, /openSelectionAnnotation/);
-assert.match(readerSource, /hideAnnotationChip/);
+assert.doesNotMatch(readerSource, /setupAnnotationChip/);
 assert.match(pluginSource, /\tasync openSelectionAnnotation\(\): Promise<void> \{/);
-assert.match(pluginSource, /\tcanStartSelectionAnnotation\(\): boolean \{/);
 assert.doesNotMatch(pluginSource, /\tprivate async openSelectionAnnotation/);
+assert.match(pluginSource, /showAnnotationChip/);
+assert.match(pluginSource, /editorSelectionRect/);
+assert.match(pluginSource, /\.markdown-source-view, \.markdown-reading-view/);
+assert.match(serviceSource, /canCaptureEditorSelection/);
+assert.match(serviceSource, /captureFromEditor/);
+assert.match(serviceSource, /posToOffset/);
+assert.match(serviceSource, /coordsAtPos/);
+assert.match(serviceSource, /getActiveViewOfType\(MarkdownView\)/);
 assert.match(styles, /\.agent-dashboard-mineru-annotate-chip \{[\s\S]*?position: fixed;/);
 assert.match(styles, /\.agent-dashboard-mineru-annotate-button/);
 assert.match(
