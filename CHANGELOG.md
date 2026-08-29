@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- Regrouped the settings home page into 阅读 · 开箱即用 / AI 助手 / 可选扩展 · 高级 sections with unified per-module state badges, renamed the 运行环境 module to 工具链与运行环境, and clarified in the header that core reading works without any configuration.
 - Extracted the plugin into a standalone repository layout.
 - Raised the minimum Obsidian version to 1.11.4 for SecretStorage compatibility.
 - Removed the default annotation hotkey so users can choose their own shortcut.
