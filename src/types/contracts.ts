@@ -227,7 +227,7 @@ export interface ProviderRuntimeConfig {
 	capabilities?: Partial<ProviderCapabilities>;
 }
 
-export type NativeWebSearchProtocol = "qwen" | "openrouter" | "zhipu";
+export type NativeWebSearchProtocol = "qwen" | "openrouter" | "zhipu" | "deepseek";
 
 export interface WebSearchResult {
 	title: string;

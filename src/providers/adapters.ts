@@ -418,10 +418,47 @@ export class OpenAICompatibleProvider extends LLMProvider {
 		return body;
 	}
 
+	// DeepSeek exposes web search only through its Responses API
+	// (input/instructions shape, server-executed web_search tool), not through
+	// chat/completions.
+	private usesResponsesApi(request: ProviderChatRequest): boolean {
+		return request.webSearch?.protocol === "deepseek";
+	}
+
+	private responsesBody(request: ProviderChatRequest, stream: boolean) {
+		const system = request.messages
+			.filter((message) => message.role === "system")
+			.map((message) => contentAsText(message.content))
+			.join("\n");
+		const input = request.messages
+			.filter((message) => message.role !== "system")
+			.map((message) => ({ role: message.role, content: contentAsText(message.content) }));
+		return {
+			model: request.model || this.config.model,
+			...(system ? { instructions: system } : {}),
+			input,
+			max_output_tokens: request.maxTokens || 256,
+			tools: [{ type: "web_search" }],
+			store: false,
+			stream,
+		};
+	}
+
 	async complete(
 		request: ProviderChatRequest,
 		options: ProviderRequestOptions = {},
 	): Promise<ProviderCompletion> {
+		if (this.usesResponsesApi(request)) {
+			const result = await this.request("responses", {
+				method: "POST",
+				headers: await this.headers(),
+				body: this.responsesBody(request, false),
+				timeoutMs: options.timeoutMs,
+				registerCancel: options.registerCancel,
+			});
+			const payload = this.requireJson(result, "文本生成");
+			return { text: extractOpenAIText(payload), raw: payload };
+		}
 		const result = await this.request("v1/chat/completions", {
 			method: "POST",
 			headers: await this.headers(),
@@ -439,6 +476,26 @@ export class OpenAICompatibleProvider extends LLMProvider {
 		options: ProviderRequestOptions = {},
 	): Promise<ProviderCompletion> {
 		let text = "";
+		if (this.usesResponsesApi(request)) {
+			await this.plugin.providerHttpStream({
+				url: buildProviderUrl(this.config.baseUrl, "responses"),
+				method: "POST",
+				headers: await this.headers(),
+				body: this.responsesBody(request, true),
+				timeoutMs: (options.timeoutMs || this.config.timeoutSeconds * 1000),
+				format: "sse",
+				registerCancel: options.registerCancel,
+				onEvent: (data) => {
+					if (data === "[DONE]") return;
+					const payload = parseProviderJson(data);
+					const delta = payload?.type === "response.output_text.delta"
+						? payload.delta
+						: undefined;
+					text += emitProviderDelta(onDelta, delta);
+				},
+			});
+			return { text };
+		}
 		await this.plugin.providerHttpStream({
 			url: buildProviderUrl(this.config.baseUrl, "v1/chat/completions"),
 			method: "POST",

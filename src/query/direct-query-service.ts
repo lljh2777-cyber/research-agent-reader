@@ -61,7 +61,7 @@ export interface VaultImageData {
 }
 
 export type WebSearchBackendResolution =
-	| { kind: "native"; protocol: "qwen" | "openrouter" | "zhipu" }
+	| { kind: "native"; protocol: "qwen" | "openrouter" | "zhipu" | "deepseek" }
 	| { kind: "tavily"; search: (queries: string[]) => Promise<WebSearchResult[]> }
 	| { kind: "unavailable"; reason: string };
 

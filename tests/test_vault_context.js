@@ -963,7 +963,9 @@ function testNativeWebSearchDetection() {
 	assert.equal(detectNativeWebSearchProtocol("https://openrouter.ai/api"), "openrouter");
 	assert.equal(detectNativeWebSearchProtocol("https://dashscope.aliyuncs.com/compatible-mode"), "qwen");
 	assert.equal(detectNativeWebSearchProtocol("https://open.bigmodel.cn/api"), "zhipu");
-	assert.equal(detectNativeWebSearchProtocol("https://api.deepseek.com"), null);
+	assert.equal(detectNativeWebSearchProtocol("https://api.deepseek.com"), "deepseek");
+	assert.equal(detectNativeWebSearchProtocol("https://api.deepseek.com/v1"), "deepseek");
+	assert.equal(detectNativeWebSearchProtocol("https://api.example.com"), null);
 	assert.equal(detectNativeWebSearchProtocol(""), null);
 }
 
