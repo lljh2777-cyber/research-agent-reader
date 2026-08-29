@@ -49,6 +49,8 @@ const hookBuild = esbuild.buildSync({
 			'export { readVaultEvidencePackets, makeVaultSourcePathResolver }',
 			'  from "./src/services/vault-evidence";',
 			'export { normalizeQueryVaultSources } from "./src/query/normalization";',
+			'export { ProcessExecutionService, resolveCliProcessCwd }',
+			'  from "./src/runtime/process-execution";',
 			'export { DirectQueryService } from "./src/query/direct-query-service";',
 			'export { QueryWikiView } from "./src/views/query-wiki";',
 			'export { MAX_VAULT_IMAGE_BYTES } from "./src/config";',
@@ -76,6 +78,8 @@ const {
 	readVaultEvidencePackets,
 	makeVaultSourcePathResolver,
 	normalizeQueryVaultSources,
+	ProcessExecutionService,
+	resolveCliProcessCwd,
 	DirectQueryService,
 	QueryWikiView,
 	MAX_VAULT_IMAGE_BYTES,
@@ -780,6 +784,46 @@ async function testVaultSourcePathEndToEnd() {
 	);
 }
 
+function testCliProcessCwd() {
+	// Independent CLI processes never spawn inside a missing toolkit root.
+	assert.equal(resolveCliProcessCwd(""), process.cwd());
+	assert.equal(resolveCliProcessCwd("   "), process.cwd());
+	assert.equal(resolveCliProcessCwd("Z:/definitely/not/a/real/dir"), process.cwd());
+	assert.equal(resolveCliProcessCwd(os.tmpdir()), os.tmpdir());
+}
+
+async function testRunVaultActionToolkitGuard() {
+	const service = Object.create(ProcessExecutionService.prototype);
+	await assert.rejects(
+		() => service.runVaultAction({
+			runId: "guard-1",
+			action: { id: "vault-retrieval", label: "知识库检索", writes: false },
+			input: "",
+			executionConfig: null,
+			settings: { toolkitRoot: "" },
+		}),
+		(error) => /未配置工具包目录/.test(error.message),
+	);
+
+	const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rar-empty-root-"));
+	try {
+		await assert.rejects(
+			() => service.runVaultAction({
+				runId: "guard-2",
+				action: { id: "vault-retrieval", label: "知识库检索", writes: false },
+				input: "",
+				executionConfig: null,
+				settings: { toolkitRoot: emptyRoot },
+			}),
+			(error) => /统一 runner 不存在/.test(error.message),
+		);
+		// The guard must run before any stop-file directory is created.
+		assert.equal(fs.existsSync(path.join(emptyRoot, "tool-library")), false);
+	} finally {
+		fs.rmSync(emptyRoot, { recursive: true, force: true });
+	}
+}
+
 Promise.resolve()
 	.then(() => {
 		testMigrateLegacySettingsKeys();
@@ -794,6 +838,8 @@ Promise.resolve()
 	.then(() => testKeywordExpansionTrigger())
 	.then(() => testQueryWikiTraceRendering())
 	.then(() => testVaultSourcePathEndToEnd())
+	.then(() => testCliProcessCwd())
+	.then(() => testRunVaultActionToolkitGuard())
 	.then(() => testImageAttachmentVaultAccess())
 	.then(() => console.log("VAULT_CONTEXT_TESTS_OK"))
 	.catch((error) => {

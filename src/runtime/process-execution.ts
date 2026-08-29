@@ -116,6 +116,17 @@ function createClaudeProcessEnv(settings: DashboardSettings): NodeJS.ProcessEnv 
 	return env;
 }
 
+/**
+ * Independent CLI processes (model discovery, version probes, connection
+ * tests) must not depend on the optional toolkit directory: it is often
+ * unconfigured, and spawning inside a missing cwd fails. Toolkit runners keep
+ * requiring a valid toolkit root and are validated before spawning.
+ */
+export function resolveCliProcessCwd(toolkitRoot: string): string {
+	const root = String(toolkitRoot || "").trim();
+	return root && fs.existsSync(root) ? root : process.cwd();
+}
+
 export class ProcessExecutionService {
 	constructor(private readonly state: DashboardLifecycleState) {}
 
@@ -194,7 +205,7 @@ export class ProcessExecutionService {
 			];
 			const invocation = prepareCliSpawn(executable, appServerArgs);
 			const child = spawn(invocation.executable, invocation.args, {
-				cwd: settings.toolkitRoot,
+				cwd: resolveCliProcessCwd(settings.toolkitRoot),
 				shell: false,
 				windowsHide: true,
 			});
@@ -435,7 +446,7 @@ export class ProcessExecutionService {
 			const args = useOfficialConfig ? ["models", "opencode"] : ["models"];
 			const invocation = prepareCliSpawn(executable, args);
 			const child = spawn(invocation.executable, invocation.args, {
-				cwd: settings.toolkitRoot,
+				cwd: resolveCliProcessCwd(settings.toolkitRoot),
 				shell: false,
 				windowsHide: true,
 			});
@@ -626,6 +637,12 @@ export class ProcessExecutionService {
 		const { runId, action, input, executionConfig, settings, hooks = {} } = options;
 		const projectRoot = settings.toolkitRoot;
 		const runner = path.join(projectRoot, "tool-library", "scripts", "run_vault_action.py");
+		if (!String(projectRoot || "").trim()) {
+			return Promise.reject(new Error("未配置工具包目录，无法执行需要 Research Vault Toolkit 的操作"));
+		}
+		if (!fs.existsSync(runner)) {
+			return Promise.reject(new Error(`统一 runner 不存在：${runner}`));
+		}
 		const timeoutSeconds = Math.max(
 			10,
 			Math.min(
@@ -861,7 +878,7 @@ export class ProcessExecutionService {
 			let timer = 0;
 			const invocation = prepareCliSpawn(executable, ["--version"]);
 			const child = spawn(invocation.executable, invocation.args, {
-				cwd: settings.toolkitRoot,
+				cwd: resolveCliProcessCwd(settings.toolkitRoot),
 				shell: false,
 				windowsHide: true,
 			});
@@ -952,7 +969,7 @@ export class ProcessExecutionService {
 			let timer = 0;
 			const invocation = prepareCliSpawn(executable, ["version"]);
 			const child = spawn(invocation.executable, invocation.args, {
-				cwd: settings.toolkitRoot,
+				cwd: resolveCliProcessCwd(settings.toolkitRoot),
 				shell: false,
 				windowsHide: true,
 			});
@@ -1038,7 +1055,7 @@ export class ProcessExecutionService {
 			args.push("仅回复：CLAUDE_BACKEND_OK");
 			const invocation = prepareCliSpawn(executable, args);
 			const child = spawn(invocation.executable, invocation.args, {
-				cwd: settings.toolkitRoot,
+				cwd: resolveCliProcessCwd(settings.toolkitRoot),
 				shell: false,
 				windowsHide: true,
 				env: createClaudeProcessEnv(settings),
