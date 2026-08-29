@@ -363,7 +363,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		return ACTION_BY_ID.get(actionId) || null;
 	}
 
-	private async openSelectionAnnotation(): Promise<void> {
+	async openSelectionAnnotation(): Promise<void> {
 		if (!this.annotationService) return;
 		try {
 			const selection = await this.annotationService.captureSelection();
@@ -374,6 +374,11 @@ export default class AgentDashboardPlugin extends Plugin {
 		} catch (error) {
 			new Notice(error instanceof Error ? error.message : String(error));
 		}
+	}
+
+	/** True when the current text selection can be captured for annotation. */
+	canStartSelectionAnnotation(): boolean {
+		return this.annotationService?.canCaptureSelection() === true;
 	}
 
 	private openAnnotationPopover(options: {

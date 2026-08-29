@@ -106,6 +106,27 @@ assert.doesNotMatch(popoverSource, /text:\s*"关闭"/);
 assert.match(styles, /a\.internal-link\[data-href\^="wiki\/annotations\/"\]/);
 assert.match(styles, /\.agent-annotation-header[\s\S]*cursor:\s*grab/);
 assert.match(styles, /\.agent-annotation-popover\.is-dragging[\s\S]*cursor:\s*grabbing/);
+
+// The reader must expose visible annotation entries: a pane-header button and
+// a selection-following chip, both reusing the command flow without adding a
+// default hotkey.
+const readerSource = source("src/views/mineru-reader.ts");
+assert.match(readerSource, /agent-dashboard-mineru-annotate-button/);
+assert.match(readerSource, /setupAnnotationChip/);
+assert.match(readerSource, /agent-dashboard-mineru-annotate-chip/);
+assert.match(readerSource, /canStartSelectionAnnotation/);
+assert.match(readerSource, /openSelectionAnnotation/);
+assert.match(readerSource, /hideAnnotationChip/);
+assert.match(pluginSource, /\tasync openSelectionAnnotation\(\): Promise<void> \{/);
+assert.match(pluginSource, /\tcanStartSelectionAnnotation\(\): boolean \{/);
+assert.doesNotMatch(pluginSource, /\tprivate async openSelectionAnnotation/);
+assert.match(styles, /\.agent-dashboard-mineru-annotate-chip \{[\s\S]*?position: fixed;/);
+assert.match(styles, /\.agent-dashboard-mineru-annotate-button/);
+assert.match(
+	source("scripts/prepare-test-vault.mjs"),
+	/a floating 批注 chip should appear next to the selection/,
+);
+
 const plugin = new AgentDashboardPlugin();
 const targets = plugin.parseAnnotationArchiveTargets(
 	'完成。\nANNOTATION_ARCHIVE_TARGETS: ["wiki/methods/hi-c", "knowledge-base/wiki/concepts/spatial-proximity.md"]',
