@@ -163,6 +163,7 @@ interface QueryViewHost extends PluginHost {
 		hooks?: QueryRunnerHooks,
 		attachments?: VaultImageAttachment[],
 	): Promise<DashboardProcessResult>;
+	directProfileSupportsWebSearch(profileId: string): boolean;
 	saveQueryAnswerNote(sessionId: string, messageId: string): Promise<string>;
 	runVaultAction(
 		runId: string,
@@ -1072,11 +1073,12 @@ export class QueryWikiView extends ItemView {
 				if (
 					value === "web"
 					&& !isCliBackendId(activeBackendId)
+					&& !this.plugin.directProfileSupportsWebSearch(activeBackendId)
 				) {
 					if (this.pendingImages.length) this.pendingImages = [];
 					await this.plugin.setActiveQueryBackend("codex-cli");
 					new Notice(
-						"Direct API 仅用于知识库内检索；联网搜索已切换到 Codex CLI",
+						"该 Direct API 供应商未启用联网搜索；已切换到 Codex CLI",
 					);
 				}
 				await this.plugin.setActiveQueryMode(value);
@@ -1175,14 +1177,20 @@ export class QueryWikiView extends ItemView {
 		});
 		openCodeOption.disabled = !this.plugin.isCliBackendAvailable("opencode");
 		const directGroup = backend.createEl("optgroup", {
-			attr: { label: "Direct API（仅知识库）" },
+			attr: { label: "Direct API" },
 		});
 		directProfiles.forEach((profile) => {
+			const webCapable = this.plugin.directProfileSupportsWebSearch(profile.id);
 			const option = directGroup.createEl("option", {
-				text: `Direct API · ${profile.name} · ${profile.model} · 知识库`,
-				attr: { value: profile.id },
+				text: `Direct API · ${profile.name} · ${profile.model} · ${webCapable ? "知识库+联网" : "知识库"}`,
+				attr: {
+					value: profile.id,
+					title: webCapable
+						? "知识库问答与联网搜索均可用"
+						: "仅知识库问答；联网需在设置中启用原生联网或配置 Tavily",
+				},
 			});
-			option.disabled = this.session.retrievalMode === "web";
+			option.disabled = this.session.retrievalMode === "web" && !webCapable;
 		});
 		backend.value = backendId;
 		const model = this.createSelectField(grid, "模型");

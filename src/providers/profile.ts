@@ -27,6 +27,29 @@ export function profileSupportsQueryImage(profile: unknown): boolean {
 		&& asRecord(source.capabilities).vision === true;
 }
 
+export type ProfileWebSearchMode = "auto" | "off" | "native" | "tavily";
+
+export type NativeWebSearchProtocol = "qwen" | "openrouter" | "zhipu";
+
+const WEB_SEARCH_MODES: ReadonlySet<string> = new Set([
+	"auto",
+	"off",
+	"native",
+	"tavily",
+]);
+
+/** Detects server-side web search support from the configured base URL. */
+export function detectNativeWebSearchProtocol(
+	baseUrl: unknown,
+): NativeWebSearchProtocol | null {
+	const base = String(baseUrl || "").toLowerCase();
+	if (!base) return null;
+	if (base.includes("openrouter")) return "openrouter";
+	if (/dashscope|aliyuncs|tongyi|qwen/.test(base)) return "qwen";
+	if (/bigmodel|zhipu|chatglm/.test(base)) return "zhipu";
+	return null;
+}
+
 export interface ProviderProfile {
 	id: string;
 	name: string;
@@ -35,6 +58,7 @@ export interface ProviderProfile {
 	model: string;
 	secretId: string;
 	timeoutSeconds: number;
+	webSearch: ProfileWebSearchMode;
 	capabilities: {
 		streaming: boolean;
 		pdf: boolean;
@@ -67,6 +91,7 @@ export function makeProviderProfile(type: unknown = "openai"): ProviderProfile {
 		model: metadata.defaultModel,
 		secretId: "",
 		timeoutSeconds: 20,
+		webSearch: "auto",
 		capabilities: { ...metadata.capabilities, visionConfigured: false },
 		lastTest: null,
 		createdAt: now,
@@ -108,6 +133,9 @@ export function normalizeProviderProfile(profile: unknown): ProviderProfile {
 		model,
 		secretId: String(source.secretId || "").trim().slice(0, 160),
 		timeoutSeconds: Number.isFinite(timeout) ? Math.max(3, Math.min(120, timeout)) : 20,
+		webSearch: WEB_SEARCH_MODES.has(String(source.webSearch || ""))
+			? (String(source.webSearch) as ProfileWebSearchMode)
+			: "auto",
 		capabilities: {
 			streaming: typeof capabilities.streaming === "boolean"
 				? capabilities.streaming

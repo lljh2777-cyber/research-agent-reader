@@ -218,7 +218,7 @@ assert.ok(
 );
 assert.ok(
 	queryViewSource.includes('label: "Agent（知识库 / 联网）"')
-		&& queryViewSource.includes('label: "Direct API（仅知识库）"'),
+		&& queryViewSource.includes('label: "Direct API"'),
 	"query backend selection should visibly separate Agent and Direct API capabilities",
 );
 assert.ok(
@@ -584,11 +584,15 @@ async function testDirectApiQuery() {
 			[],
 			"web",
 		),
-		(error) => /Direct API 仅用于知识库内检索/.test(error.message),
+		(error) => /联网搜索不可用/.test(error.message),
 	);
 	assert.ok(
-		queryViewSource.includes("option.disabled = this.session.retrievalMode === \"web\""),
-		"Direct API options should remain available for vault mode but be disabled in web mode",
+		queryViewSource.includes('option.disabled = this.session.retrievalMode === "web" && !webCapable'),
+		"Direct API options should stay selectable in web mode when web search is enabled",
+	);
+	assert.ok(
+		queryViewSource.includes("directProfileSupportsWebSearch(activeBackendId)"),
+		"switching to web mode should keep Direct API when its web search is available",
 	);
 
 	const expansionCalls = [];

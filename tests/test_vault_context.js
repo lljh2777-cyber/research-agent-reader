@@ -50,6 +50,8 @@ const hookBuild = esbuild.buildSync({
 			'  from "./src/services/vault-evidence";',
 			'export { saveQueryAnswerNote, sanitizeQueryNoteFilename }',
 			'  from "./src/services/query-note";',
+			'export { searchTavily, buildWebEvidenceContext } from "./src/services/web-search";',
+			'export { detectNativeWebSearchProtocol } from "./src/providers/profile";',
 			'export { normalizeQueryVaultSources } from "./src/query/normalization";',
 			'export { ProcessExecutionService, resolveCliProcessCwd }',
 			'  from "./src/runtime/process-execution";',
@@ -82,6 +84,9 @@ const {
 	normalizeQueryVaultSources,
 	saveQueryAnswerNote,
 	sanitizeQueryNoteFilename,
+	searchTavily,
+	buildWebEvidenceContext,
+	detectNativeWebSearchProtocol,
 	ProcessExecutionService,
 	resolveCliProcessCwd,
 	DirectQueryService,
@@ -954,6 +959,210 @@ async function testSaveQueryAnswerNote() {
 	);
 }
 
+function testNativeWebSearchDetection() {
+	assert.equal(detectNativeWebSearchProtocol("https://openrouter.ai/api"), "openrouter");
+	assert.equal(detectNativeWebSearchProtocol("https://dashscope.aliyuncs.com/compatible-mode"), "qwen");
+	assert.equal(detectNativeWebSearchProtocol("https://open.bigmodel.cn/api"), "zhipu");
+	assert.equal(detectNativeWebSearchProtocol("https://api.deepseek.com"), null);
+	assert.equal(detectNativeWebSearchProtocol(""), null);
+}
+
+async function testWebSearchService() {
+	const calls = [];
+	const app = {
+		httpRequest: async (options) => {
+			calls.push(options);
+			const query = options.body.query;
+			return {
+				status: 200,
+				json: {
+					results: query === "q1"
+						? [
+							{ title: "A", url: "https://a.example/1", content: "x".repeat(1500) },
+							{ title: "B", url: "https://b.example/2", content: "y" },
+						]
+						: [
+							{ title: "A2", url: "https://a.example/1", content: "dup" },
+							{ title: "C", url: "https://c.example/3", content: "z" },
+						],
+				},
+			};
+		},
+	};
+	const results = await searchTavily(app, "tv-key", ["q1", "q2"], { maxResults: 5, timeoutMs: 4000 });
+	assert.equal(calls.length, 2);
+	assert.equal(calls[0].url, "https://api.tavily.com/search");
+	assert.equal(calls[0].headers.Authorization, "Bearer tv-key");
+	assert.equal(calls[0].body.max_results, 5);
+	assert.equal(results.length, 3, "duplicate URLs dedupe across queries");
+	assert.deepEqual(results.map((result) => result.title), ["A", "B", "C"]);
+	assert.ok(results[0].content.length <= 1200, "result content is truncated");
+
+	const budgetResults = [
+		{ title: "A", url: "https://a.example/1", content: "a".repeat(300), publishedAt: "" },
+		{ title: "B", url: "https://b.example/2", content: "b".repeat(300), publishedAt: "" },
+		{ title: "C", url: "https://c.example/3", content: "c".repeat(300), publishedAt: "" },
+	];
+	const context = buildWebEvidenceContext(budgetResults, { perResultChars: 300, totalChars: 640 });
+	assert.ok(context.includes("[1] A"));
+	assert.ok(context.includes("[2] B"));
+	assert.ok(!context.includes("[3]"), "total budget truncates later blocks");
+	assert.ok(context.length <= 700, "context respects the total budget");
+
+	await assert.rejects(
+		() => searchTavily(app, "", ["q"], { maxResults: 5, timeoutMs: 1000 }),
+		(error) => /Tavily API Key/.test(error.message),
+	);
+	const unauthorized = {
+		httpRequest: async () => ({ status: 401, json: null }),
+	};
+	await assert.rejects(
+		() => searchTavily(unauthorized, "bad", ["q"], { maxResults: 5, timeoutMs: 1000 }),
+		(error) => /Tavily API Key 无效/.test(error.message),
+	);
+}
+
+async function testDirectApiWebQuery() {
+	const makeProfile = (baseUrl, webSearch) => ({
+		id: "provider-web",
+		name: "web-provider",
+		type: "openai-compatible",
+		baseUrl,
+		model: "web-model",
+		secretId: "s",
+		timeoutSeconds: 20,
+		webSearch,
+		capabilities: { streaming: false, pdf: false, vision: false },
+		lastTest: { ok: true },
+	});
+
+	// Native path: request carries provider web-search flags; answer links
+	// become model-verified web sources.
+	const nativeProfile = makeProfile("https://openrouter.ai/api", "native");
+	const captured = [];
+	const nativeService = new DirectQueryService({
+		state: { directQueryRuns: new Map() },
+		processExecution: {},
+		getSettings: () => ({}),
+		getProviderProfile: () => nativeProfile,
+		createProvider: () => ({
+			complete: async (request) => {
+				captured.push(request);
+				return {
+					text: "结论：可以。[OpenRouter 文档](https://openrouter.ai/docs/web-search)",
+				};
+			},
+		}),
+		normalizeProviderError: (error) => ({
+			type: "error", status: 0, endpoint: "", message: String(error?.message || error),
+		}),
+		runRetrievalPreflight: async () => {
+			throw new Error("web mode must not run the vault preflight");
+		},
+		readEvidencePacket: async () => [],
+		readVaultImageData: async () => {
+			throw new Error("unused");
+		},
+		resolveWebSearchBackend: () => ({ kind: "native", protocol: "openrouter" }),
+	});
+	const nativeResult = await nativeService.runWebQuery("run-native", "provider-web", "OpenRouter 联网怎么用？", [], {});
+	assert.equal(nativeResult.exitCode, 0);
+	assert.equal(captured[0].webSearch.protocol, "openrouter");
+	assert.equal(captured[0].webSearch.maxResults, 5);
+	const nativePayload = nativeResult.events.find((event) => event.type === "retrieval-result").payload;
+	assert.equal(nativePayload.retrieval_path.stage, "direct-web");
+	assert.equal(nativePayload.web_sources.length, 1);
+	assert.equal(nativePayload.web_sources[0].cited, true);
+	assert.equal(nativePayload.web_sources[0].verification, "model");
+
+	// Tavily path: keyword expansion feeds ≤3 bounded queries; [n] citations
+	// decide cited flags and validation status.
+	const tavilyProfile = makeProfile("https://api.deepseek.com", "tavily");
+	const searches = [];
+	const tavilyService = new DirectQueryService({
+		state: { directQueryRuns: new Map() },
+		processExecution: {},
+		getSettings: () => ({}),
+		getProviderProfile: () => tavilyProfile,
+		createProvider: () => ({
+			complete: async (request) => {
+				if (request.maxTokens === 256) {
+					return { text: '{"keywords":["tavily api"]}' };
+				}
+				return { text: "Tavily 支持搜索 API [1]，配额见 [2]。", raw: null };
+			},
+		}),
+		normalizeProviderError: (error) => ({
+			type: "error", status: 0, endpoint: "", message: String(error?.message || error),
+		}),
+		runRetrievalPreflight: async () => {
+			throw new Error("unused");
+		},
+		readEvidencePacket: async () => [],
+		readVaultImageData: async () => {
+			throw new Error("unused");
+		},
+		resolveWebSearchBackend: () => ({
+			kind: "tavily",
+			search: async (queries) => {
+				searches.push(queries);
+				return [
+					{ title: "Tavily 文档", url: "https://tavily.com/docs", content: "search api", publishedAt: "2026-01-01" },
+					{ title: "定价", url: "https://tavily.com/pricing", content: "credits", publishedAt: "" },
+				];
+			},
+		}),
+	});
+	const tavilyResult = await tavilyService.runWebQuery("run-tavily", "provider-web", "Tavily 是什么？", [], {});
+	assert.equal(tavilyResult.exitCode, 0);
+	assert.ok(searches[0].length >= 1 && searches[0].length <= 3);
+	assert.equal(searches[0][0], "Tavily 是什么？");
+	const tavilyPayload = tavilyResult.events.find((event) => event.type === "retrieval-result").payload;
+	assert.equal(tavilyPayload.web_sources[0].cited, true);
+	assert.equal(tavilyPayload.web_sources[1].cited, true);
+	assert.equal(tavilyPayload.citation_validation.status, "structured");
+	assert.equal(tavilyPayload.web_sources[0].verification, "structured");
+
+	// Unavailable backends surface an actionable rejection.
+	const blockedService = new DirectQueryService({
+		state: { directQueryRuns: new Map() },
+		processExecution: {},
+		getSettings: () => ({}),
+		getProviderProfile: () => makeProfile("https://api.deepseek.com", "off"),
+		createProvider: () => {
+			throw new Error("must not be created");
+		},
+		normalizeProviderError: (error) => ({
+			type: "error", status: 0, endpoint: "", message: String(error?.message || error),
+		}),
+		runRetrievalPreflight: async () => ({}),
+		readEvidencePacket: async () => [],
+		readVaultImageData: async () => {
+			throw new Error("unused");
+		},
+		resolveWebSearchBackend: () => ({ kind: "unavailable", reason: "该供应商未启用联网搜索" }),
+	});
+	await assert.rejects(
+		() => blockedService.runWebQuery("run-off", "provider-web", "q", [], {}),
+		(error) => /联网搜索不可用/.test(error.message),
+	);
+
+	// Source-level: settings, view gating, and the chatBody native flags.
+	const settingsSource = fs.readFileSync(path.join(pluginRoot, "src", "settings", "settings-tab.ts"), "utf8");
+	assert.match(settingsSource, /联网搜索（Tavily 兜底）/);
+	assert.match(settingsSource, /webSearchTavilySecretId/);
+	assert.match(
+		fs.readFileSync(path.join(pluginRoot, "src", "runtime", "settings.ts"), "utf8"),
+		/webSearchTavilySecretId: ""/,
+	);
+	const adaptersSource = fs.readFileSync(path.join(pluginRoot, "src", "providers", "adapters.ts"), "utf8");
+	assert.match(adaptersSource, /body\.plugins = \[\{ id: "web_search", max_results: webSearch\.maxResults \|\| 5 \}\]/);
+	assert.match(adaptersSource, /body\.enable_search = true/);
+	const pluginSource = fs.readFileSync(path.join(pluginRoot, "src", "plugin.ts"), "utf8");
+	assert.match(pluginSource, /private resolveWebSearchBackend\(profile: ProviderProfile\)/);
+	assert.match(pluginSource, /directProfileSupportsWebSearch\(profileId: string\): boolean/);
+}
+
 Promise.resolve()
 	.then(() => {
 		testMigrateLegacySettingsKeys();
@@ -971,6 +1180,9 @@ Promise.resolve()
 	.then(() => testCliProcessCwd())
 	.then(() => testRunVaultActionToolkitGuard())
 	.then(() => testSaveQueryAnswerNote())
+	.then(() => testNativeWebSearchDetection())
+	.then(() => testWebSearchService())
+	.then(() => testDirectApiWebQuery())
 	.then(() => testImageAttachmentVaultAccess())
 	.then(() => console.log("VAULT_CONTEXT_TESTS_OK"))
 	.catch((error) => {
