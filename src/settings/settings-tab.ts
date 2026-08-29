@@ -1435,6 +1435,26 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			"普通解释可自由选择 Agent 或 Direct API；启用浅层联网后仅使用 Agent，始终不写入文件。",
 			true,
 		);
+		new Setting(containerEl)
+			.setName("划选批注入口")
+			.setDesc("默认入口：在任意 Markdown 视图（阅读器、阅读模式、实时预览）划选文字，点击选区旁的浮动「批注」圆标即可弹出批注方式选择。也可以为「批注所选文字」命令绑定自定义快捷键（如 Shift+S），划选后按键弹出同样的选择。")
+			.addButton((button) => button
+				.setButtonText("打开快捷键设置")
+				.onClick(() => {
+					const settingRoot = (this.app as unknown as {
+						setting?: {
+							open?: () => void;
+							openTabById?: (id: string) => void;
+						};
+					}).setting;
+					try {
+						settingRoot?.open?.();
+						settingRoot?.openTabById?.("hotkeys");
+						new Notice("在快捷键列表中搜索「批注所选文字」进行绑定");
+					} catch {
+						new Notice("请手动前往 设置 → 快捷键，搜索「批注所选文字」绑定");
+					}
+				}));
 		const verifiedProfiles = this.plugin.settings.providerProfiles.filter(
 			(profile) => profile.lastTest?.ok,
 		);
