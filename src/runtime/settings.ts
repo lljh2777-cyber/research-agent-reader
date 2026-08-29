@@ -128,7 +128,7 @@ const CLI_COMMAND_NAMES: Record<CliExecutableKind, string> = {
 };
 
 export interface DashboardSettings {
-	projectRoot: string;
+	toolkitRoot: string;
 	readerMarkdownFolders: string[];
 	obsidianCliExecutable: string;
 	codexExecutable: string;
@@ -562,8 +562,33 @@ export function isManagedCodexExecutable(executable: unknown): boolean {
 		|| Boolean(desktopInstall && normalized === desktopInstall);
 }
 
+export interface LegacySettingsKeyMigration {
+	settings: Record<string, unknown>;
+	changed: boolean;
+}
+
+/**
+ * Older builds stored the optional toolkit workspace as `projectRoot`. That
+ * directory is toolkit-only and must never be treated as the active Vault, so
+ * the persisted key is renamed to `toolkitRoot` and its value carried over.
+ */
+export function migrateLegacySettingsKeys(
+	storedSettings: Record<string, unknown>,
+): LegacySettingsKeyMigration {
+	const settings = { ...storedSettings };
+	let changed = false;
+	if (Object.prototype.hasOwnProperty.call(settings, "projectRoot")) {
+		const legacyRoot = typeof settings.projectRoot === "string" ? settings.projectRoot : "";
+		delete settings.projectRoot;
+		const currentRoot = typeof settings.toolkitRoot === "string" ? settings.toolkitRoot.trim() : "";
+		if (!currentRoot && legacyRoot.trim()) settings.toolkitRoot = legacyRoot;
+		changed = true;
+	}
+	return { settings, changed };
+}
+
 export const DEFAULT_SETTINGS: DashboardSettings = {
-	projectRoot: "",
+	toolkitRoot: "",
 	readerMarkdownFolders: ["papers", "Clippings"],
 	obsidianCliExecutable: findPreferredObsidianCliExecutable(),
 	codexExecutable: findPreferredCodexExecutable(),

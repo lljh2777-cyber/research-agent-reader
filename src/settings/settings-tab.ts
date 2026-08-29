@@ -289,9 +289,9 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			.addText((text) =>
 				text
 					.setPlaceholder(process.platform === "win32" ? "D:\\Research\\workspace" : "/Users/name/research-workspace")
-					.setValue(this.plugin.settings.projectRoot)
+					.setValue(this.plugin.settings.toolkitRoot)
 					.onChange(async (value) => {
-						this.plugin.settings.projectRoot = value.trim();
+						this.plugin.settings.toolkitRoot = value.trim();
 						await this.plugin.saveSettings();
 					})
 			);

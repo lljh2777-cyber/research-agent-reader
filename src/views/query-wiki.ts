@@ -1819,6 +1819,7 @@ export class QueryWikiView extends ItemView {
 			"lexical-seed+graph-expansion": "词法种子 → 关系扩展",
 			"lexical-seed+ppr": "词法种子 → PPR 图扩展",
 			"llm-keyword+ppr": "LLM 关键词扩展 → PPR 图扩展",
+			"in-plugin-lexical": "内置词法检索",
 			"no-match-fallback": "无匹配 → 方向索引回退",
 			"preflight-unavailable": "预检不可用，交由检索 skill 回退",
 		}[stageKey] || stageKey || "未知";

@@ -69,7 +69,7 @@ function makePlugin(profile) {
 		},
 	};
 	plugin.settings = {
-		projectRoot: "D:\\example",
+		toolkitRoot: "D:\\example",
 		codexExecutable: "codex.exe",
 		codexModel: "gpt-5.6-terra",
 		codexReasoningEffort: "medium",
@@ -149,7 +149,7 @@ async function main() {
 	const migrationPlugin = new AgentDashboardPlugin();
 	migrationPlugin.loadData = async () => ({
 		settings: {
-			projectRoot: path.resolve(__dirname, "../.."),
+			toolkitRoot: path.resolve(__dirname, "../.."),
 			providerProfiles: [{
 				id: "provider-qwen",
 				name: "Qwen3.7-Plus",

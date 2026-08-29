@@ -19,6 +19,12 @@ All notable changes to this project will be documented in this file.
 - Added a strict release guard for the already-occupied provisional plugin ID and display name.
 - Renamed the public plugin identity to `Research Agent Reader` with ID `research-agent-reader` before publication.
 
+### Fixed
+
+- Direct API image attachments and vault evidence packets now read through the active Obsidian Vault API instead of deriving a `knowledge-base` folder from the toolkit root, so they work in any Vault layout.
+- Added an in-plugin lexical retrieval fallback so Direct API vault queries work without the optional toolkit; toolkit retrieval stays primary when configured, and failures fall back transparently with a trace reason.
+- Renamed the persisted `projectRoot` setting to `toolkitRoot` with automatic migration of existing `data.json` values.
+
 ### Notes
 
 - Advanced Research Vault workflows still require a separately installed toolkit.

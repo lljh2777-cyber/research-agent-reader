@@ -65,8 +65,8 @@ interface DirectQueryDependencies {
 		question: string,
 		expandedTerms?: string[],
 	) => Promise<Record<string, unknown>>;
-	readEvidencePacket: (trace: RetrievalTrace) => VaultEvidencePacket[];
-	readVaultImageData: (attachment: VaultImageAttachment) => VaultImageData;
+	readEvidencePacket: (trace: RetrievalTrace) => Promise<VaultEvidencePacket[]>;
+	readVaultImageData: (attachment: VaultImageAttachment) => Promise<VaultImageData>;
 }
 
 export class DirectQueryService {
@@ -173,7 +173,7 @@ export class DirectQueryService {
 					...(Array.isArray(trace.candidate_paths) ? trace.candidate_paths : []),
 				])];
 			}
-			const evidence = this.deps.readEvidencePacket(trace);
+			const evidence = await this.deps.readEvidencePacket(trace);
 			trace.context_pages = evidence.map((item) => item.path);
 			const retrievalEvent = {
 				type: "retrieval-preflight",
@@ -188,7 +188,7 @@ export class DirectQueryService {
 			});
 			const request = {
 				model: profile.model,
-				messages: this.buildMessages(
+				messages: await this.buildMessages(
 					question,
 					priorMessages,
 					evidence,
@@ -375,15 +375,15 @@ export class DirectQueryService {
 		expandedTerms: string[] = [],
 	): Promise<Record<string, unknown>> {
 		const settings = this.deps.getSettings();
-		const projectRoot = path.resolve(settings.projectRoot);
-		const script = path.join(projectRoot, "tool-library", "scripts", "retrieve_vault.py");
+		const toolkitRoot = path.resolve(settings.toolkitRoot);
+		const script = path.join(toolkitRoot, "tool-library", "scripts", "retrieve_vault.py");
 		if (!fs.existsSync(script)) {
 			throw new Error(`知识库检索脚本不存在：${script}`);
 		}
 		if (!settings.pythonExecutable || !fs.existsSync(settings.pythonExecutable)) {
 			throw new Error(`Python 不可用：${settings.pythonExecutable}`);
 		}
-		const args = [script, "--project-root", projectRoot, "--query", question.slice(0, 4000)];
+		const args = [script, "--project-root", toolkitRoot, "--query", question.slice(0, 4000)];
 		for (const term of expandedTerms.slice(0, 10)) {
 			args.push("--expanded-term", term.slice(0, 80));
 		}
@@ -391,7 +391,7 @@ export class DirectQueryService {
 			runId,
 			executable: settings.pythonExecutable,
 			args,
-			cwd: projectRoot,
+			cwd: toolkitRoot,
 			timeoutMs: 45_000,
 			timeoutMessage: "知识库检索超过 45 秒",
 		});
@@ -402,50 +402,12 @@ export class DirectQueryService {
 		}
 	}
 
-	readEvidencePacket(trace: RetrievalTrace): VaultEvidencePacket[] {
-		const projectRoot = path.resolve(this.deps.getSettings().projectRoot);
-		const vaultRoot = path.resolve(projectRoot, "knowledge-base");
-		const vaultPrefix = `${vaultRoot}${path.sep}`;
-		const candidates = Array.isArray(trace?.candidate_paths) ? trace.candidate_paths : [];
-		const evidence: VaultEvidencePacket[] = [];
-		const seen = new Set<string>();
-		let remaining = 48_000;
-		for (const candidate of candidates) {
-			if (evidence.length >= 8 || remaining <= 0) break;
-			const relativePath = String(candidate || "")
-				.replace(/\\/g, "/")
-				.replace(/^knowledge-base\//i, "")
-				.replace(/^\/+/, "");
-			if (
-				!relativePath
-				|| !/\.md$/i.test(relativePath)
-				|| seen.has(relativePath.toLowerCase())
-			) {
-				continue;
-			}
-			const absolutePath = path.resolve(vaultRoot, ...relativePath.split("/"));
-			if (absolutePath !== vaultRoot && !absolutePath.startsWith(vaultPrefix)) continue;
-			if (!fs.existsSync(absolutePath) || !fs.statSync(absolutePath).isFile()) continue;
-			const raw = fs.readFileSync(absolutePath, "utf8");
-			const content = raw.slice(0, Math.min(9000, remaining));
-			if (!content.trim()) continue;
-			seen.add(relativePath.toLowerCase());
-			remaining -= content.length;
-			evidence.push({
-				path: relativePath,
-				wikilink: `[[${relativePath.replace(/\.md$/i, "")}]]`,
-				content,
-			});
-		}
-		return evidence;
-	}
-
-	buildMessages(
+	async buildMessages(
 		question: string,
 		priorMessages: QueryMessage[],
 		evidence: VaultEvidencePacket[],
 		attachments: VaultImageAttachment[] = [],
-	): ChatMessage[] {
+	): Promise<ChatMessage[]> {
 		const recentTurns: ChatMessage[] = priorMessages
 			.filter((message) => message.status === "done" && message.content)
 			.slice(-6)
@@ -454,8 +416,10 @@ export class DirectQueryService {
 				content: String(message.content).slice(0, 1800),
 			}));
 		const evidenceJson = JSON.stringify(evidence, null, 2);
-		const imagePayloads = normalizeVaultImageAttachments(attachments)
-			.map((attachment) => this.deps.readVaultImageData(attachment));
+		const imagePayloads = await Promise.all(
+			normalizeVaultImageAttachments(attachments)
+				.map(async (attachment) => this.deps.readVaultImageData(attachment)),
+		);
 		const totalImageBytes = imagePayloads.reduce(
 			(sum, payload) => sum + Number(payload.attachment.size || 0),
 			0,

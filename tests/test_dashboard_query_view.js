@@ -43,6 +43,42 @@ const pluginSourceRoot = path.resolve(
 	"../src",
 );
 const fixtureProjectRoot = path.resolve(__dirname, "fixtures", "project");
+
+function makeFixtureVaultApp() {
+	const vaultRoot = path.join(fixtureProjectRoot, "knowledge-base");
+	const fileByPath = new Map();
+	const resolveAbsolute = (value) => {
+		const key = String(value || "");
+		if (!key || key.split("/").includes("..")) return null;
+		const absolute = path.join(vaultRoot, ...key.split("/"));
+		if (!fs.existsSync(absolute) || !fs.statSync(absolute).isFile()) return null;
+		return { key, absolute };
+	};
+	return {
+		vault: {
+			getAbstractFileByPath: (value) => {
+				const resolved = resolveAbsolute(value);
+				if (!resolved) return null;
+				if (!fileByPath.has(resolved.key)) {
+					fileByPath.set(resolved.key, new TFileStub({
+						path: resolved.key,
+						basename: path.basename(resolved.key, ".md"),
+						stat: { mtime: 0, size: fs.statSync(resolved.absolute).size },
+					}));
+				}
+				return fileByPath.get(resolved.key);
+			},
+			readBinary: (file) => fs.promises.readFile(
+				path.join(vaultRoot, ...String(file.path).split("/")),
+			),
+			cachedRead: async (file) => fs.promises.readFile(
+				path.join(vaultRoot, ...String(file.path).split("/")),
+				"utf8",
+			),
+		},
+	};
+}
+
 const AgentDashboardPlugin = require(pluginPath);
 Module._load = originalLoad;
 const pluginSource = fs.readdirSync(pluginSourceRoot, { recursive: true })
@@ -264,7 +300,7 @@ assert.ok(
 const plugin = new AgentDashboardPlugin();
 const cleanVaultPlugin = new AgentDashboardPlugin();
 cleanVaultPlugin.settings = {
-	projectRoot: "",
+	toolkitRoot: "",
 	pythonExecutable: "",
 	codexExecutable: "",
 	claudeExecutable: "",
@@ -381,7 +417,7 @@ assert.strictEqual(session.queryBackendId, "codex-cli");
 
 const claudePlugin = new AgentDashboardPlugin();
 claudePlugin.settings = {
-	projectRoot: path.resolve(__dirname, "../.."),
+	toolkitRoot: path.resolve(__dirname, "../.."),
 	codexExecutable: process.execPath,
 	codexModel: "gpt-5.6-terra",
 	codexReasoningEffort: "medium",
@@ -422,13 +458,14 @@ async function testDirectApiQuery() {
 		lastTest: { ok: true },
 	};
 	plugin.settings = {
-		projectRoot: fixtureProjectRoot,
+		toolkitRoot: fixtureProjectRoot,
 		providerProfiles: [profile],
 	};
+	plugin.app = makeFixtureVaultApp();
 	assert.deepStrictEqual(plugin.getVerifiedProviderProfiles().map((item) => item.id), [profile.id]);
 	assert.strictEqual(plugin.resolveQueryBackendId(profile.id), profile.id);
 	assert.strictEqual(plugin.resolveQueryBackendId("missing-provider"), "codex-cli");
-	const safeEvidence = plugin.readVaultEvidencePacket({
+	const safeEvidence = await plugin.readVaultEvidencePacket({
 		candidate_paths: ["wiki/index.md", "../AGENTS.md"],
 	});
 	assert.strictEqual(safeEvidence.length, 1);
@@ -534,7 +571,7 @@ async function testDirectApiQuery() {
 	assert.strictEqual(normalizedVisionSession.messages[0].attachments[0].path, imagePath);
 	assert.strictEqual(normalizedVisionSession.messages[0].attachments[1].path, secondImagePath);
 	assert.ok(!JSON.stringify(normalizedVisionSession).includes("base64"));
-	assert.throws(
+	await assert.rejects(
 		() => plugin.readVaultImageData({ path: "../outside.png" }),
 		(error) => /超出当前 Vault/.test(error.message),
 	);
@@ -730,7 +767,7 @@ async function testDirectApiQuery() {
 async function testSerializedSettingsSnapshots() {
 	const persistencePlugin = new AgentDashboardPlugin();
 	persistencePlugin.settings = {
-		projectRoot: "first-root",
+		toolkitRoot: "first-root",
 		providerProfiles: [],
 		activeProviderId: "",
 	};
@@ -754,11 +791,11 @@ async function testSerializedSettingsSnapshots() {
 		snapshots.push(snapshot);
 	};
 	const first = persistencePlugin.saveSettings();
-	persistencePlugin.settings.projectRoot = "second-root";
+	persistencePlugin.settings.toolkitRoot = "second-root";
 	const second = persistencePlugin.saveSettings();
 	await Promise.all([first, second]);
 	assert.deepStrictEqual(
-		snapshots.map((snapshot) => snapshot.settings.projectRoot),
+		snapshots.map((snapshot) => snapshot.settings.toolkitRoot),
 		["first-root", "second-root"],
 	);
 	assert.strictEqual(snapshots[0].taskRuns[0].output.length, 12000);
@@ -772,7 +809,7 @@ async function testSerializedSettingsSnapshots() {
 async function testClaudeCliModelDiscovery() {
 	const discoveryPlugin = new AgentDashboardPlugin();
 	discoveryPlugin.settings = {
-		projectRoot: path.resolve(__dirname, "../.."),
+		toolkitRoot: path.resolve(__dirname, "../.."),
 		claudeExecutable: process.execPath,
 		claudeConfigSource: "official",
 		claudeModel: "qwen-test-model",

@@ -26,6 +26,7 @@ import {
 	getOpenCodeDefaultModelLabel,
 	inferLegacyClaudeConfigSource,
 	isManagedCodexExecutable,
+	migrateLegacySettingsKeys,
 	normalizeActionExecutionDefaults,
 	normalizeReaderMarkdownFolders,
 } from "./runtime/settings";
@@ -44,6 +45,7 @@ import {
 } from "./runtime/persistence";
 import { ProcessExecutionService } from "./runtime/process-execution";
 import { VaultLintService } from "./services/vault-lint";
+import { readVaultEvidencePackets } from "./services/vault-evidence";
 import { AgentDashboardSettingTab } from "./settings/settings-tab";
 import { CodePracticeView } from "./views/code-practice";
 import { DashboardView } from "./views/dashboard";
@@ -102,7 +104,9 @@ import {
 	DirectQueryService,
 	type RetrievalTrace,
 	type VaultEvidencePacket,
+	type VaultImageData,
 } from "./query/direct-query-service";
+import { LexicalVaultRetriever } from "./query/lexical-retrieval";
 import type {
 	CliModelDiscoveryResult,
 	CodePracticeRequest,
@@ -197,6 +201,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		readVaultImageData: (attachment) => this.readVaultImageData(attachment),
 	});
 	private annotationService?: AnnotationService;
+	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private annotationPopover: AnnotationPopover | null = null;
 	private persistence?: DashboardPersistence;
 	private readonly cliModelDiscoveryCache = new Map<
@@ -590,7 +595,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	readPracticeFigure(relativePath: string): string {
-		const root = path.resolve(this.settings.projectRoot);
+		const root = path.resolve(this.settings.toolkitRoot);
 		const outputRoot = path.join(root, "tool-library", "output", "code-practice", "figures");
 		const candidate = path.resolve(root, relativePath);
 		const relative = path.relative(outputRoot, candidate);
@@ -709,7 +714,10 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		const stored = await this.getPersistence().load();
-		const storedSettings = stored.settings && typeof stored.settings === "object" ? stored.settings : stored;
+		const rawStoredSettings = stored.settings && typeof stored.settings === "object" ? stored.settings : stored;
+		const { settings: storedSettings, changed: migratedLegacyKeys } = migrateLegacySettingsKeys(
+			asRecord(rawStoredSettings),
+		);
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings) as DashboardSettings;
 		const normalizedProfiles = Array.isArray(storedSettings.providerProfiles)
 			? storedSettings.providerProfiles.slice(0, 20).map((profile) => normalizeProviderProfile(profile))
@@ -742,10 +750,10 @@ export default class AgentDashboardPlugin extends Plugin {
 			? stored.activeQuerySessionId
 			: "";
 		this.latestLintReport = this.normalizeLintReport(stored.latestLintReport);
-		if (!this.settings.projectRoot) {
-			this.settings.projectRoot = this.inferProjectRoot();
+		if (!this.settings.toolkitRoot) {
+			this.settings.toolkitRoot = this.inferToolkitRoot();
 		}
-		let changed = false;
+		let changed = migratedLegacyKeys;
 		const normalizedReaderFolders = normalizeReaderMarkdownFolders(
 			storedSettings.readerMarkdownFolders ?? DEFAULT_SETTINGS.readerMarkdownFolders,
 		);
@@ -1281,8 +1289,8 @@ export default class AgentDashboardPlugin extends Plugin {
 			executable: this.settings.obsidianCliExecutable,
 			vaultName: this.app.vault.getName(),
 			pluginId: this.manifest.id,
-			cwd: this.settings.projectRoot && fs.existsSync(this.settings.projectRoot)
-				? this.settings.projectRoot
+			cwd: this.settings.toolkitRoot && fs.existsSync(this.settings.toolkitRoot)
+				? this.settings.toolkitRoot
 				: process.cwd(),
 		});
 		this.obsidianCliProbeState = { status: "done", result };
@@ -1311,7 +1319,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		return [
 			`Research Agent Reader ${this.manifest.version}`,
 			`平台: ${process.platform} ${process.arch}`,
-			`项目根目录: ${this.settings.projectRoot && fs.existsSync(this.settings.projectRoot) ? "可用" : "不可用"}`,
+			`工具包根目录: ${this.settings.toolkitRoot && fs.existsSync(this.settings.toolkitRoot) ? "可用" : "不可用"}`,
 			describe("Codex CLI", "codex", this.settings.codexExecutable),
 			describe("Claude Code", "claude", this.settings.claudeExecutable),
 			describe("OpenCode", "opencode", this.settings.openCodeExecutable),
@@ -1543,7 +1551,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		});
 	}
 
-	inferProjectRoot(): string {
+	inferToolkitRoot(): string {
 		const adapter = this.app.vault.adapter;
 		if (!(adapter instanceof FileSystemAdapter)) return "";
 		const vaultRoot = adapter.getBasePath();
@@ -1580,7 +1588,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	getTaskRunOutput(run: TaskRun): string {
 		if (run?.outputPath) {
 			const absolutePath = path.join(
-				this.settings.projectRoot,
+				this.settings.toolkitRoot,
 				...String(run.outputPath).split("/"),
 			);
 			try {
@@ -1598,7 +1606,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!output) return "";
 		const relativePath = `tool-library/output/dashboard-runs/${run.id}.json`;
 		const absolutePath = path.join(
-			this.settings.projectRoot,
+			this.settings.toolkitRoot,
 			...relativePath.split("/"),
 		);
 		const temporaryPath = `${absolutePath}.tmp`;
@@ -1810,7 +1818,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	getOkfExportStatus(): OkfExportStatus {
-		const projectRoot = this.settings.projectRoot;
+		const projectRoot = this.settings.toolkitRoot;
 		const exporter = path.join(projectRoot, "tool-library", "scripts", "export_okf.py");
 		const latestPath = path.join(projectRoot, "tool-library", "output", "okf", "latest.json");
 		let latest = null;
@@ -1833,7 +1841,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (this.latestLintReport) {
 			return { latest: this.latestLintReport, error: "" };
 		}
-		const projectRoot = this.settings.projectRoot;
+		const projectRoot = this.settings.toolkitRoot;
 		const latestPath = path.join(projectRoot, "tool-library", "output", "lint", "latest.json");
 		let latest = null;
 		let error = "";
@@ -1884,7 +1892,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				message: "内置知识库体检可用；不需要 Research Vault Toolkit、Python 或 Agent CLI。",
 			};
 		}
-		const configuredRoot = String(this.settings.projectRoot || "").trim();
+		const configuredRoot = String(this.settings.toolkitRoot || "").trim();
 		const projectRoot = configuredRoot ? path.resolve(configuredRoot) : "";
 		const withinRoot = (...segments: string[]): string => (
 			projectRoot ? path.join(projectRoot, ...segments) : ""
@@ -1983,11 +1991,52 @@ export default class AgentDashboardPlugin extends Plugin {
 		question: string,
 		expandedTerms: string[] = [],
 	): Promise<Record<string, unknown>> {
-		return this.directQueryService.runRetrievalPreflight(runId, question, expandedTerms);
+		const toolkit = this.resolveToolkitRetrieval();
+		if (toolkit.available) {
+			try {
+				return await this.directQueryService.runRetrievalPreflight(runId, question, expandedTerms);
+			} catch (error) {
+				const trace = await this.getLexicalRetriever().retrieve(question, expandedTerms);
+				trace.fallback = {
+					used: false,
+					paths: [],
+					reason: `工具链检索失败，已改用内置词法检索：${error instanceof Error ? error.message : String(error)}`,
+				};
+				return trace;
+			}
+		}
+		const trace = await this.getLexicalRetriever().retrieve(question, expandedTerms);
+		if (toolkit.configured) {
+			trace.fallback = {
+				used: false,
+				paths: [],
+				reason: `内置词法检索（工具链检索不可用：${toolkit.reason}）`,
+			};
+		}
+		return trace;
 	}
 
-	readVaultEvidencePacket(trace: RetrievalTrace): VaultEvidencePacket[] {
-		return this.directQueryService.readEvidencePacket(trace);
+	private resolveToolkitRetrieval(): { available: boolean; configured: boolean; reason: string } {
+		const toolkitRoot = String(this.settings.toolkitRoot || "").trim();
+		if (!toolkitRoot) return { available: false, configured: false, reason: "未配置工具包目录" };
+		const script = path.join(toolkitRoot, "tool-library", "scripts", "retrieve_vault.py");
+		if (!fs.existsSync(script)) {
+			return { available: false, configured: true, reason: `检索脚本不存在：${script}` };
+		}
+		const python = String(this.settings.pythonExecutable || "").trim();
+		if (!python || !fs.existsSync(python)) {
+			return { available: false, configured: true, reason: "Python 不可用" };
+		}
+		return { available: true, configured: true, reason: "" };
+	}
+
+	private getLexicalRetriever(): LexicalVaultRetriever {
+		if (!this.lexicalRetriever) this.lexicalRetriever = new LexicalVaultRetriever(this.app);
+		return this.lexicalRetriever;
+	}
+
+	async readVaultEvidencePacket(trace: RetrievalTrace): Promise<VaultEvidencePacket[]> {
+		return readVaultEvidencePackets(this.app, trace);
 	}
 
 	resolveVaultLinkedFile(rawLink: unknown, sourcePath = ""): TFile | null {
@@ -2247,13 +2296,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		);
 	}
 
-	readVaultImageData(attachment: VaultImageAttachment): {
-		attachment: VaultImageAttachment;
-		content: {
-			type: "image_url";
-			image_url: { url: string };
-		};
-	} {
+	async readVaultImageData(attachment: VaultImageAttachment): Promise<VaultImageData> {
 		const normalized = normalizeVaultImageAttachment(attachment);
 		if (!normalized) {
 			throw new ProviderConnectionError(
@@ -2261,64 +2304,44 @@ export default class AgentDashboardPlugin extends Plugin {
 				"仅支持 Vault 内的 PNG、JPEG 和 WebP 图片",
 			);
 		}
-		const projectRoot = path.resolve(this.settings.projectRoot);
-		const vaultRoot = path.resolve(projectRoot, "knowledge-base");
-		if (!fs.existsSync(vaultRoot)) {
-			throw new ProviderConnectionError("attachment", `Vault 根目录不存在：${vaultRoot}`);
-		}
 		if (normalized.path.split("/").includes("..")) {
 			throw new ProviderConnectionError("attachment", "图片路径超出当前 Vault");
 		}
-		const absolutePath = path.resolve(vaultRoot, ...normalized.path.split("/"));
-		if (!fs.existsSync(absolutePath)) {
-			throw new ProviderConnectionError("attachment", `图片不存在：${normalized.path}`);
+		const file = this.app?.vault?.getAbstractFileByPath?.(normalized.path);
+		if (!(file instanceof TFile)) {
+			throw new ProviderConnectionError(
+				"attachment",
+				`图片不存在于当前 Vault：${normalized.path}`,
+			);
 		}
-		const vaultRealPath = fs.realpathSync(vaultRoot);
-		const imageRealPath = fs.realpathSync(absolutePath);
-		const normalizedVault = vaultRealPath.toLowerCase();
-		const normalizedImage = imageRealPath.toLowerCase();
-		if (
-			normalizedImage !== normalizedVault
-			&& !normalizedImage.startsWith(`${normalizedVault}${path.sep}`)
-		) {
-			throw new ProviderConnectionError("attachment", "图片路径超出当前 Vault");
+		if (!normalized.mimeType) {
+			throw new ProviderConnectionError("attachment", "图片格式不受支持");
 		}
-		const stat = fs.statSync(imageRealPath);
-		if (!stat.isFile()) {
-			throw new ProviderConnectionError("attachment", "图片路径不是文件");
-		}
-		if (stat.size > MAX_VAULT_IMAGE_BYTES) {
+		const size = Number(file.stat?.size) || 0;
+		if (size > MAX_VAULT_IMAGE_BYTES) {
 			throw new ProviderConnectionError(
 				"attachment",
 				`图片超过 ${(MAX_VAULT_IMAGE_BYTES / 1024 / 1024).toFixed(0)} MiB 上限`,
 			);
 		}
-		const extension = path.extname(imageRealPath).toLowerCase();
-		const mimeType = VAULT_IMAGE_MIME_TYPES[extension];
-		if (!mimeType) {
-			throw new ProviderConnectionError("attachment", "图片格式不受支持");
-		}
+		const bytes = await this.app.vault.readBinary(file);
 		return {
-			attachment: {
-				...normalized,
-				size: stat.size,
-				mimeType,
-			},
+			attachment: { ...normalized, size },
 			content: {
 				type: "image_url",
 				image_url: {
-					url: `data:${mimeType};base64,${fs.readFileSync(imageRealPath).toString("base64")}`,
+					url: `data:${normalized.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
 				},
 			},
 		};
 	}
 
-	buildDirectQueryMessages(
+	async buildDirectQueryMessages(
 		question: string,
 		priorMessages: QueryMessage[],
 		evidence: VaultEvidencePacket[],
 		attachments: VaultImageAttachment[] = [],
-	): ChatMessage[] {
+	): Promise<ChatMessage[]> {
 		return this.directQueryService.buildMessages(
 			question,
 			priorMessages,
