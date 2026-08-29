@@ -9,6 +9,7 @@ import {
 
 import type AgentDashboardPlugin from "../plugin";
 import { getCliBackendLabel, type CliBackendId } from "../config";
+import { detectNativeWebSearchProtocol } from "../providers/profile";
 import {
 	getClaudeDefaultModelLabel,
 	getOpenCodeDefaultModelLabel,
@@ -565,7 +566,15 @@ export class AnnotationService {
 			: !["codex-cli", "claude-code", "opencode"].includes(configuredBackend)
 				? this.plugin.getProviderProfile(configuredBackend)
 				: null;
-		const directProfile = webSearchEnabled ? null : selectedDirectProfile;
+		// With shallow web search enabled, Direct API stays usable when the
+		// profile's provider runs server-side web search natively.
+		const directNativeProtocol = selectedDirectProfile
+			&& (selectedDirectProfile.webSearch || "auto") !== "off"
+			? detectNativeWebSearchProtocol(selectedDirectProfile.baseUrl)
+			: null;
+		const directProfile = webSearchEnabled
+			? (directNativeProtocol ? selectedDirectProfile : null)
+			: selectedDirectProfile;
 		if (directProfile?.lastTest?.ok) {
 			const provider = this.plugin.createLLMProvider(directProfile);
 			const result = await provider.complete(
@@ -576,6 +585,9 @@ export class AnnotationService {
 						{ role: "user", content: user },
 					],
 					maxTokens: this.plugin.settings.annotationMaxTokens,
+					...(webSearchEnabled && directNativeProtocol
+						? { webSearch: { protocol: directNativeProtocol } }
+						: {}),
 				},
 				{
 					registerCancel,

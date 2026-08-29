@@ -1347,7 +1347,9 @@ export class QueryWikiView extends ItemView {
 						profileSupportsQueryImage(selectedProfile)
 							? `可附加最多 ${MAX_QUERY_IMAGE_ATTACHMENTS} 张 Vault 图片，并自动识别问题中的笔记链接。`
 							: "当前适配器未启用视觉输入。",
-						"Direct API 仅使用插件筛选出的 Vault 证据，不联网、不执行 Skill、不调用工具，也不写入文件。",
+						this.session.retrievalMode === "web"
+							? "Direct API 通过供应商原生联网或 Tavily 检索公开网络来源，回答需引用 [n] 来源；不执行 Skill、不调用工具、不写入文件。"
+							: "Direct API 仅使用插件筛选出的 Vault 证据，不联网、不执行 Skill、不调用工具，也不写入文件。",
 					].join("")
 					: usingClaude
 						? `Claude Code 使用 ${claudeSourceLabel} 和 plan 权限模式。知识库模式只开放 Read、Glob 和 Grep；联网搜索模式额外开放 WebSearch 和 WebFetch。可附加最多 ${MAX_QUERY_IMAGE_ATTACHMENTS} 张 Vault 图片，图片由 Read 工具按本地路径读取；两种模式都不开放文件写入。视觉与联网结果取决于当前模型及账号能力。`

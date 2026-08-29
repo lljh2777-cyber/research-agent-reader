@@ -22,6 +22,7 @@ import {
 	type ProviderTypeId,
 } from "../config";
 import {
+	detectNativeWebSearchProtocol,
 	makeProviderProfile,
 	modelHasKnownVisionSupport,
 	type ProfileWebSearchMode,
@@ -67,6 +68,8 @@ interface SettingsPluginHost extends PluginHost {
 	probeObsidianCliConnection(): Promise<ObsidianCliConnectionResult>;
 	invalidateCliModelDiscovery(backendId: CliBackendId): void;
 	getProviderErrorLabel(type: string): string;
+	getProviderProfile(profileId: string): ProviderProfile | null;
+	directApiBoundaryLabel(profileId: string): string;
 	supportsFast(model: string): boolean;
 	clearCompletedTaskHistory(): Promise<number>;
 	resetQueryHistory(): Promise<void>;
@@ -98,6 +101,8 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 	display(): void {
 		const { containerEl } = this;
+		const previousPage = this.activePage;
+		const previousScrollTop = containerEl.scrollTop;
 		containerEl.empty();
 		containerEl.addClass("agent-dashboard-settings");
 		switch (this.activePage) {
@@ -136,6 +141,13 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				break;
 			default:
 				this.renderSettingsHome(containerEl);
+		}
+		// Re-rendering replaces the DOM and resets the scroll position; keep
+		// it stable when staying on the same settings page.
+		if (this.activePage === previousPage) {
+			containerEl.scrollTop = previousScrollTop;
+		} else {
+			containerEl.scrollTop = 0;
 		}
 	}
 
@@ -1557,12 +1569,19 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.annotationWebSearchEnabled)
 					.onChange(async (value) => {
 						this.plugin.settings.annotationWebSearchEnabled = value;
-						if (
-							value
-							&& !["auto", "codex-cli", "claude-code", "opencode"].includes(backendId)
-						) {
-							this.plugin.settings.annotationBackendId = "codex-cli";
-							new Notice("Direct API 不联网，批注后端已切换为 Codex CLI");
+						const directBackendSelected = value
+							&& !["auto", "codex-cli", "claude-code", "opencode"].includes(backendId);
+						if (directBackendSelected) {
+							const profile = this.plugin.getProviderProfile(backendId);
+							const nativeCapable = Boolean(
+								profile
+								&& (profile.webSearch || "auto") !== "off"
+								&& detectNativeWebSearchProtocol(profile.baseUrl),
+							);
+							if (!nativeCapable) {
+								this.plugin.settings.annotationBackendId = "codex-cli";
+								new Notice("该 Direct API 供应商不支持原生联网，批注后端已切换为 Codex CLI");
+							}
 						}
 						await this.plugin.saveSettings();
 						this.display();
@@ -2301,7 +2320,13 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				testedAt: profile.lastTest.testedAt,
 			}
 			: null);
-		if (result) this.renderConnectionResult(containerEl, result);
+		if (result) {
+			this.renderConnectionResult(
+				containerEl,
+				result,
+				this.plugin.directApiBoundaryLabel(profile.id),
+			);
+		}
 	}
 
 	invalidateProviderProfile(profile: ProviderProfile): void {
@@ -2315,6 +2340,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 	renderConnectionResult(
 		parent: HTMLElement,
 		result: ProviderConnectionTestResult,
+		boundary?: string,
 	): void {
 		const panel = parent.createDiv({
 			cls: `agent-dashboard-provider-result ${result.ok ? "is-success" : "is-error"}`,
@@ -2359,7 +2385,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				);
 			}
 			if (!isAgent) {
-				addRow("能力边界", "仅知识库上下文，不联网、不写入");
+				addRow("能力边界", boundary || "仅知识库上下文，不联网、不写入");
 			}
 			addRow("响应时间", `${result.responseTimeMs} ms`);
 			if (result.responsePreview) addRow("最小响应", result.responsePreview);
