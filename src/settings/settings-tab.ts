@@ -1044,6 +1044,24 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 		this.createProviderSectionHeader(
 			containerEl,
+			"问答笔记",
+			"回答可一键落为 Markdown 笔记（frontmatter + 来源回链）；目录在全 Vault 内解析。",
+		);
+		new Setting(containerEl)
+			.setName("笔记目录")
+			.setDesc("Vault 相对目录，默认 wiki/qa。留空时回退到默认值，路径不会超出当前 Vault。")
+			.addText((text) =>
+				text
+					.setPlaceholder("wiki/qa")
+					.setValue(this.plugin.settings.queryNotesFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.queryNotesFolder = value.trim();
+						await this.plugin.saveSettings();
+					})
+			);
+
+		this.createProviderSectionHeader(
+			containerEl,
 			"知识库维护范围",
 			"核心范围由项目契约固定，避免用户设置造成原文包污染或跨目录链接冲突。",
 		);
