@@ -227,10 +227,24 @@ export interface ProviderRuntimeConfig {
 	capabilities?: Partial<ProviderCapabilities>;
 }
 
+export type NativeWebSearchProtocol = "qwen" | "openrouter" | "zhipu";
+
+export interface WebSearchResult {
+	title: string;
+	url: string;
+	content: string;
+	publishedAt: string;
+}
+
 export interface ProviderChatRequest {
 	model?: string;
 	messages: readonly ChatMessage[];
 	maxTokens?: number;
+	/** Server-side web search flags for providers with native search. */
+	webSearch?: {
+		protocol: NativeWebSearchProtocol;
+		maxResults?: number;
+	};
 }
 
 export interface ProviderRequestOptions {

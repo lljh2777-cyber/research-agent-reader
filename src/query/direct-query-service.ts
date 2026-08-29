@@ -20,15 +20,19 @@ import {
 import type { DashboardLifecycleState } from "../runtime/lifecycle-state";
 import type { ProcessExecutionService } from "../runtime/process-execution";
 import type { DashboardSettings } from "../runtime/settings";
+import { buildWebEvidenceContext } from "../services/web-search";
 import type {
 	DashboardProcessHooks,
 	DashboardProcessResult,
 	DirectQueryRunToken,
 	NormalizedProviderError,
+	ProviderChatRequest,
 	QueryMessage,
 	QueryRetrievalMode,
+	WebSearchResult,
 } from "../types/contracts";
 import {
+	extractModelProvidedWebSources,
 	normalizeVaultImageAttachments,
 	type VaultImageAttachment,
 } from "./normalization";
@@ -56,6 +60,11 @@ export interface VaultImageData {
 	content: ChatImageContent;
 }
 
+export type WebSearchBackendResolution =
+	| { kind: "native"; protocol: "qwen" | "openrouter" | "zhipu" }
+	| { kind: "tavily"; search: (queries: string[]) => Promise<WebSearchResult[]> }
+	| { kind: "unavailable"; reason: string };
+
 interface DirectQueryDependencies {
 	state: DashboardLifecycleState;
 	processExecution: ProcessExecutionService;
@@ -70,6 +79,7 @@ interface DirectQueryDependencies {
 	) => Promise<Record<string, unknown>>;
 	readEvidencePacket: (trace: RetrievalTrace) => Promise<VaultEvidencePacket[]>;
 	readVaultImageData: (attachment: VaultImageAttachment) => Promise<VaultImageData>;
+	resolveWebSearchBackend: (profile: ProviderProfile) => WebSearchBackendResolution;
 }
 
 export class DirectQueryService {
@@ -92,11 +102,11 @@ export class DirectQueryService {
 			);
 		}
 		const profile = normalizeProviderProfile(storedProfile);
+		if (mode === "web") {
+			return this.runWebQuery(runId, providerId, question, priorMessages, hooks);
+		}
 		if (mode !== "vault") {
-			throw new ProviderConnectionError(
-				"unsupported",
-				"Direct API 仅用于知识库内检索；联网搜索请改用 Codex CLI、Claude Code 或 OpenCode",
-			);
+			throw new ProviderConnectionError("unsupported", `不支持的检索模式：${mode}`);
 		}
 		const imageAttachments = normalizeVaultImageAttachments(attachments);
 		if (imageAttachments.length && !profileSupportsQueryImage(profile)) {
@@ -345,6 +355,261 @@ export class DirectQueryService {
 		};
 	}
 
+	/**
+	 * Direct API web mode: a bounded search-answer loop. Plugin-side Tavily
+	 * searches (keyword-expanded, ≤3 queries) or provider-native server search
+	 * feed one grounded completion; there is no unbounded tool calling.
+	 */
+	async runWebQuery(
+		runId: string,
+		providerId: string,
+		question: string,
+		priorMessages: QueryMessage[],
+		hooks: DashboardProcessHooks = {},
+	): Promise<DashboardProcessResult> {
+		const storedProfile = this.deps.getProviderProfile(providerId);
+		if (!storedProfile || storedProfile.lastTest?.ok !== true) {
+			throw new ProviderConnectionError(
+				"configuration",
+				"Direct API 配置不存在或尚未通过连接测试",
+			);
+		}
+		const profile = normalizeProviderProfile(storedProfile);
+		const backend = this.deps.resolveWebSearchBackend(profile);
+		if (backend.kind === "unavailable") {
+			throw new ProviderConnectionError(
+				"configuration",
+				`联网搜索不可用：${backend.reason}`,
+			);
+		}
+		const token: DirectQueryRunToken = { cancelled: false };
+		this.deps.state.directQueryRuns.set(runId, token);
+		try {
+			const provider = this.deps.createProvider(profile);
+			const webQueries: string[] = [];
+			let sources: WebSearchResult[] = [];
+			let verification: "structured" | "model" = "structured";
+			if (backend.kind === "tavily") {
+				hooks.onEvent?.({
+					type: "status",
+					stage: "web-search",
+					label: "正在检索网络来源（Tavily）",
+				});
+				let expanded: string[] = [];
+				try {
+					expanded = (await this.generateKeywords(provider, profile, question)).slice(0, 2);
+				} catch (error) {
+					if (token.cancelled) throw error;
+					// Keyword expansion is best-effort; the raw question still searches.
+				}
+				if (token.cancelled) {
+					throw new ProviderConnectionError("cancelled", "已停止本轮查询");
+				}
+				const queries = [question, ...expanded]
+					.map((item) => String(item || "").trim())
+					.filter(Boolean)
+					.slice(0, 3);
+				webQueries.push(...queries);
+				sources = await backend.search(queries);
+			} else {
+				hooks.onEvent?.({
+					type: "status",
+					stage: "web-search",
+					label: "正在使用供应商原生联网检索",
+				});
+				webQueries.push(question.trim().slice(0, 200));
+				verification = "model";
+			}
+			if (token.cancelled) {
+				throw new ProviderConnectionError("cancelled", "已停止本轮查询");
+			}
+			const request: ProviderChatRequest = {
+				model: profile.model,
+				messages: buildWebSearchMessages(question, priorMessages, sources, webQueries),
+				maxTokens: 4096,
+				...(backend.kind === "native"
+					? { webSearch: { protocol: backend.protocol, maxResults: 5 } }
+					: {}),
+			};
+			hooks.onEvent?.({
+				type: "status",
+				stage: "direct-api-generation",
+				label: `正在由 ${profile.name} 汇总网络来源`,
+			});
+			let streamedText = "";
+			let response: Awaited<ReturnType<LLMProvider["complete"]>> | null = null;
+			const shouldStream = profile.capabilities?.streaming === true
+				&& profile.lastTest?.streamingVerified === true;
+			if (shouldStream) {
+				try {
+					response = await provider.stream(
+						request,
+						(delta) => {
+							streamedText += delta;
+							hooks.onEvent?.({ type: "assistant-delta", delta });
+						},
+						{
+							registerCancel: (cancel) => {
+								token.abort = cancel;
+							},
+						},
+					);
+				} catch (error) {
+					if (
+						token.cancelled
+						|| this.deps.normalizeProviderError(error).type === "cancelled"
+					) {
+						throw error;
+					}
+					if (streamedText) hooks.onEvent?.({ type: "assistant-reset" });
+					hooks.onEvent?.({
+						type: "status",
+						stage: "stream-fallback",
+						label: "流式输出失败，正在切换为普通请求",
+					});
+					streamedText = "";
+					response = null;
+				} finally {
+					token.abort = undefined;
+				}
+			}
+			if (!response || !String(response.text || streamedText).trim()) {
+				response = await provider.complete(request, {
+					registerCancel: (cancel) => {
+						token.abort = cancel;
+					},
+				});
+				token.abort = undefined;
+			}
+			if (token.cancelled) {
+				throw new ProviderConnectionError("cancelled", "已停止本轮查询");
+			}
+			const answer = String(response?.text || streamedText || "").trim();
+			if (!answer) {
+				throw new ProviderConnectionError("protocol", "Direct API 返回了空回答");
+			}
+			if (backend.kind === "native") {
+				const linked = extractModelProvidedWebSources(answer).map((source) => ({
+					title: source.title,
+					url: source.url,
+					content: "",
+					publishedAt: source.publishedAt,
+				}));
+				const seen = new Set(sources.map((source) => source.url.toLowerCase()));
+				for (const source of linked) {
+					if (!seen.has(source.url.toLowerCase())) {
+						seen.add(source.url.toLowerCase());
+						sources.push(source);
+					}
+				}
+			}
+			const retrievalResult = this.buildWebRetrievalResult(
+				answer,
+				sources,
+				webQueries,
+				profile,
+				verification,
+			);
+			const retrievalEvent = {
+				type: "retrieval-preflight",
+				mode: "web",
+				payload: {
+					stage: "direct-web",
+					retrieval_label: "联网搜索",
+					web_queries: webQueries,
+					source_count: sources.length,
+				},
+			};
+			const resultEvent = {
+				type: "retrieval-result",
+				payload: retrievalResult,
+			};
+			hooks.onEvent?.(retrievalEvent);
+			hooks.onEvent?.(resultEvent);
+			return {
+				exitCode: 0,
+				signal: "",
+				stdout: answer,
+				stderr: "",
+				events: [retrievalEvent, resultEvent],
+			};
+		} finally {
+			if (this.deps.state.directQueryRuns.get(runId) === token) {
+				this.deps.state.directQueryRuns.delete(runId);
+			}
+		}
+	}
+
+	buildWebRetrievalResult(
+		answer: string,
+		sources: WebSearchResult[],
+		webQueries: string[],
+		profile: ProviderProfile,
+		verification: "structured" | "model",
+	): UnknownRecord {
+		const normalizedProfile = normalizeProviderProfile(profile || {});
+		const cited = new Set<number>();
+		if (verification === "model") {
+			// Native-search sources were extracted from the answer's own links;
+			// they are cited by construction.
+			sources.forEach((_, index) => cited.add(index + 1));
+		}
+		for (const match of String(answer || "").matchAll(/\[(\d{1,2})\]/g)) {
+			const index = Number(match[1]);
+			if (index >= 1 && index <= sources.length) cited.add(index);
+		}
+		const domainOf = (url: string): string => {
+			try {
+				return new URL(url).hostname;
+			} catch {
+				return "";
+			}
+		};
+		const webSources = sources.map((source, index) => ({
+			title: source.title,
+			url: source.url,
+			domain: domainOf(source.url),
+			publisher: domainOf(source.url),
+			published_at: source.publishedAt,
+			cited: cited.has(index + 1),
+			event_verified: false,
+			verification,
+		}));
+		return {
+			answer_markdown: String(answer || "").trim(),
+			vault_sources: [],
+			web_sources: webSources,
+			conflicts: [],
+			evidence_gaps: webSources.length && !cited.size
+				? ["回答未包含 [n] 引用标记，请检查来源依据"]
+				: [],
+			retrieval_path: {
+				stage: "direct-web",
+				inspected_vault_paths: [],
+				web_queries: webQueries,
+				fallback_reason: "",
+			},
+			citation_validation: {
+				status: webSources.length ? (cited.size ? "structured" : "unverified") : "unverified",
+				source_count: webSources.length,
+				cited_count: cited.size,
+				event_verified_count: 0,
+				vault_source_count: 0,
+				vault_cited_count: 0,
+				unlisted_citations: [],
+				uncited_sources: webSources.filter((source) => !source.cited).map((source) => source.url),
+				unlisted_vault_citations: [],
+				uncited_vault_sources: [],
+				warnings: webSources.length && !cited.size ? ["回答未包含 [n] 引用标记"] : [],
+			},
+			provider_runtime: {
+				provider: normalizedProfile.name,
+				model: normalizedProfile.model,
+				scope: "web",
+			},
+		};
+	}
+
 	async generateKeywords(
 		provider: LLMProvider,
 		profile: ProviderProfile,
@@ -506,4 +771,44 @@ export class DirectQueryService {
 	isActive(runId: string): boolean {
 		return this.deps.state.directQueryRuns.has(runId);
 	}
+}
+
+export function buildWebSearchMessages(
+	question: string,
+	priorMessages: QueryMessage[],
+	sources: WebSearchResult[],
+	webQueries: string[],
+): ChatMessage[] {
+	const recentTurns: ChatMessage[] = priorMessages
+		.filter((message) => message.status === "done" && message.content)
+		.slice(-6)
+		.map((message) => ({
+			role: message.role === "assistant" ? "assistant" : "user",
+			content: String(message.content).slice(0, 1800),
+		}));
+	const context = buildWebEvidenceContext(sources);
+	const sourceList = sources
+		.map((source, index) => `[${index + 1}] ${source.title} — ${source.url}`)
+		.join("\n");
+	const system = [
+		"你是联网研究助手，基于给定的网络搜索结果回答问题。",
+		"只依据搜索结果作答；引用时使用方括号编号（如 [1]、[2]），编号对应来源列表。",
+		"搜索结果不足以回答时，明确说明信息不足，不得编造来源或内容。",
+		"不要输出搜索过程报告，直接给出结构化的中文回答。",
+	].join("\n");
+	const user = [
+		`当前问题：${String(question).slice(0, 4000)}`,
+		webQueries.length ? `已执行的搜索词：${webQueries.join("、")}` : "",
+		"",
+		"以下是网络搜索结果：",
+		sourceList || "（无结果）",
+		"",
+		"搜索结果正文：",
+		context || "（无内容）",
+	].filter(Boolean).join("\n");
+	return [
+		{ role: "system", content: system },
+		...recentTurns,
+		{ role: "user", content: user },
+	];
 }

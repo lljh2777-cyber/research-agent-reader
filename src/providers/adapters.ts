@@ -35,6 +35,8 @@ interface ProviderRequestBody {
 	messages: readonly ChatMessage[];
 	max_tokens: number;
 	stream: boolean;
+	// Provider-specific web-search and extension flags.
+	[key: string]: unknown;
 }
 
 function contentAsText(content: ChatMessage["content"]): string {
@@ -404,6 +406,15 @@ export class OpenAICompatibleProvider extends LLMProvider {
 			max_tokens: request.maxTokens || 256,
 			stream,
 		};
+		const webSearch = request.webSearch;
+		if (webSearch?.protocol === "qwen") {
+			body.enable_search = true;
+			body.search_options = { forced_search: true, search_strategy: "standard" };
+		} else if (webSearch?.protocol === "openrouter") {
+			body.plugins = [{ id: "web_search", max_results: webSearch.maxResults || 5 }];
+		} else if (webSearch?.protocol === "zhipu") {
+			body.tools = [{ type: "web_search", web_search: { enable: true } }];
+		}
 		return body;
 	}
 

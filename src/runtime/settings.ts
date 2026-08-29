@@ -187,6 +187,9 @@ export interface DashboardSettings {
 	querySessionLimit: number;
 	queryMessageLimit: number;
 	queryNotesFolder: string;
+	webSearchTavilySecretId: string;
+	webSearchMaxResults: number;
+	webSearchTimeoutSeconds: number;
 }
 
 export function normalizeReaderMarkdownFolders(value: unknown): string[] {
@@ -648,4 +651,7 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	querySessionLimit: 8,
 	queryMessageLimit: 30,
 	queryNotesFolder: "wiki/qa",
+	webSearchTavilySecretId: "",
+	webSearchMaxResults: 5,
+	webSearchTimeoutSeconds: 20,
 };

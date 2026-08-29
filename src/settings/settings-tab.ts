@@ -24,6 +24,7 @@ import {
 import {
 	makeProviderProfile,
 	modelHasKnownVisionSupport,
+	type ProfileWebSearchMode,
 	type ProviderProfile,
 } from "../providers/profile";
 import type { ProviderModel } from "../providers/shared";
@@ -1868,6 +1869,52 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			});
 			return;
 		}
+		this.createProviderSectionHeader(
+			containerEl,
+			"联网搜索（Tavily 兜底）",
+			"仅 Direct API 的联网问答使用：供应商不支持原生联网时，插件侧调用 Tavily 检索并让模型引用 [n] 来源。API Key 保存在 Obsidian SecretStorage，不写入 data.json。",
+		);
+		if (this.app.secretStorage && typeof SecretComponent === "function") {
+			const tavilySetting = new Setting(containerEl)
+				.setName("Tavily API Key")
+				.setDesc("在 https://tavily.com 免费注册获取；未配置时，无原生联网的供应商（如 DeepSeek）无法使用联网模式。");
+			tavilySetting.addComponent((element) =>
+				new SecretComponent(this.app, element)
+					.setValue(this.plugin.settings.webSearchTavilySecretId)
+					.onChange(async (value) => {
+						this.plugin.settings.webSearchTavilySecretId = String(value || "").trim().slice(0, 160);
+						await this.plugin.saveSettings();
+					})
+			);
+		}
+		new Setting(containerEl)
+			.setName("每个搜索词的结果数")
+			.setDesc("联网问答每个搜索词最多取用的结果数（1-8），多结果自动去重并截断。")
+			.addText((text) =>
+				text
+					.setPlaceholder("5")
+					.setValue(String(this.plugin.settings.webSearchMaxResults || 5))
+					.onChange(async (value) => {
+						const parsed = Number.parseInt(value, 10);
+						if (!Number.isFinite(parsed)) return;
+						this.plugin.settings.webSearchMaxResults = Math.max(1, Math.min(8, parsed));
+						await this.plugin.saveSettings();
+					})
+			);
+		new Setting(containerEl)
+			.setName("搜索超时（秒）")
+			.setDesc("单次 Tavily 请求的超时上限（5-60 秒）。")
+			.addText((text) =>
+				text
+					.setPlaceholder("20")
+					.setValue(String(this.plugin.settings.webSearchTimeoutSeconds || 20))
+					.onChange(async (value) => {
+						const parsed = Number.parseInt(value, 10);
+						if (!Number.isFinite(parsed)) return;
+						this.plugin.settings.webSearchTimeoutSeconds = Math.max(5, Math.min(60, parsed));
+						await this.plugin.saveSettings();
+					})
+			);
 		this.renderProviderProfile(containerEl, selectedProfile);
 	}
 
@@ -2057,6 +2104,26 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					})
 			);
 		}
+		new Setting(section)
+			.setName("联网搜索")
+			.setDesc("问答视图「联网搜索」模式的取网方式：自动优先供应商原生联网（OpenRouter、通义千问、智谱），否则回退 Tavily；关闭后该供应商仅可知识库问答。")
+			.addDropdown((dropdown) => {
+				const modes: Array<[ProfileWebSearchMode, string]> = [
+					["auto", "自动（原生优先，Tavily 兜底）"],
+					["native", "仅供应商原生"],
+					["tavily", "仅 Tavily"],
+					["off", "关闭"],
+				];
+				for (const [value, label] of modes) dropdown.addOption(value, label);
+				dropdown.setValue(profile.webSearch || "auto");
+				dropdown.onChange(async (value) => {
+					profile.webSearch = (["auto", "off", "native", "tavily"].includes(value)
+						? value
+						: "auto") as ProfileWebSearchMode;
+					profile.updatedAt = new Date().toISOString();
+					await this.plugin.saveSettings();
+				});
+			});
 		new Setting(section)
 			.setName("API Base URL")
 			.setDesc(`服务根地址。${metadata.defaultBaseUrl ? `默认：${metadata.defaultBaseUrl}` : ""}`)

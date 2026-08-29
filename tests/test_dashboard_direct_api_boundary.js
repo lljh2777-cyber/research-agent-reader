@@ -78,7 +78,9 @@ const profile = hooks.normalizeProviderProfile({
 		webSearchVerified: true,
 	},
 });
-assert.equal(profile.webSearch, undefined);
+// The legacy prototype's object-shaped webSearch config must not survive
+// normalization: the plugin only accepts its own opt-in mode strings.
+assert.equal(profile.webSearch, "auto");
 assert.equal(profile.lastTest.webSearchVerified, undefined);
 
 const provider = new hooks.OpenAICompatibleProvider({}, profile);
@@ -94,6 +96,21 @@ const staleSearchBody = provider.chatBody({
 });
 assert.equal(staleSearchBody.enable_search, undefined);
 assert.equal(staleSearchBody.search_options, undefined);
+// Malformed/legacy protocol strings must never enable server search.
+const legacyShapedBody = provider.chatBody({
+	model: profile.model,
+	messages,
+	webSearch: { protocol: "qwen-chat-completions", forcedSearch: true },
+});
+assert.equal(legacyShapedBody.enable_search, undefined);
+assert.equal(legacyShapedBody.search_options, undefined);
+// Only the plugin's own short protocols enable explicit server search.
+const nativeBody = provider.chatBody({
+	model: profile.model,
+	messages,
+	webSearch: { protocol: "openrouter", maxResults: 5 },
+});
+assert.deepEqual(nativeBody.plugins, [{ id: "web_search", max_results: 5 }]);
 
 (async () => {
 	let capturedOptions = null;

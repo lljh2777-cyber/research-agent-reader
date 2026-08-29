@@ -47,6 +47,7 @@ import { ProcessExecutionService } from "./runtime/process-execution";
 import { VaultLintService } from "./services/vault-lint";
 import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./services/vault-evidence";
 import { saveQueryAnswerNote } from "./services/query-note";
+import { searchTavily, type WebSearchHttpDeps } from "./services/web-search";
 import { AgentDashboardSettingTab } from "./settings/settings-tab";
 import { CodePracticeView } from "./views/code-practice";
 import { DashboardView } from "./views/dashboard";
@@ -90,6 +91,7 @@ import {
 	type LLMProvider,
 } from "./providers/adapters";
 import {
+	detectNativeWebSearchProtocol,
 	normalizeProviderProfile,
 } from "./providers/profile";
 import {
@@ -106,6 +108,7 @@ import {
 	type RetrievalTrace,
 	type VaultEvidencePacket,
 	type VaultImageData,
+	type WebSearchBackendResolution,
 } from "./query/direct-query-service";
 import { LexicalVaultRetriever } from "./query/lexical-retrieval";
 import type {
@@ -200,6 +203,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		},
 		readEvidencePacket: (trace) => this.readVaultEvidencePacket(trace),
 		readVaultImageData: (attachment) => this.readVaultImageData(attachment),
+		resolveWebSearchBackend: (profile) => this.resolveWebSearchBackend(profile),
 	});
 	private annotationService?: AnnotationService;
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
@@ -215,6 +219,62 @@ export default class AgentDashboardPlugin extends Plugin {
 		Promise<CliModelDiscoveryResult>
 	>();
 	private mineruReaderActivationQueue: Promise<void> = Promise.resolve();
+
+	/**
+	 * Resolves how one Direct API profile reaches the web: provider-native
+	 * server search, plugin-side Tavily searches, or nothing (with an
+	 * actionable reason the query view can surface).
+	 */
+	private resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution {
+		const normalized = normalizeProviderProfile(profile);
+		const mode = normalized.webSearch || "auto";
+		if (mode === "off") {
+			return { kind: "unavailable", reason: "该供应商未启用联网搜索（设置 → Direct API → 联网搜索）" };
+		}
+		const protocol = detectNativeWebSearchProtocol(normalized.baseUrl);
+		if (mode === "native") {
+			return protocol
+				? { kind: "native", protocol }
+				: { kind: "unavailable", reason: "未识别出该供应商的原生联网协议，请改用 Tavily" };
+		}
+		if (mode === "auto" && protocol) {
+			return { kind: "native", protocol };
+		}
+		const secretId = String(this.settings.webSearchTavilySecretId || "").trim();
+		const secret = secretId
+			? String(this.app.secretStorage?.getSecret?.(secretId) || "").trim()
+			: "";
+		if (!secret) {
+			return {
+				kind: "unavailable",
+				reason: mode === "tavily"
+					? "未配置 Tavily API Key（设置 → Direct API → 联网搜索）"
+					: "该供应商不支持原生联网，且未配置 Tavily API Key",
+			};
+		}
+		const httpDeps: WebSearchHttpDeps = {
+			httpRequest: async (options) => {
+				const response = await this.providerHttpRequest(options);
+				return { status: response.status, json: response.json };
+			},
+		};
+		const maxResults = Math.max(1, Math.min(8, Math.round(this.settings.webSearchMaxResults) || 5));
+		const timeoutMs = Math.max(
+			5,
+			Math.min(60, Math.round(this.settings.webSearchTimeoutSeconds) || 20),
+		) * 1000;
+		return {
+			kind: "tavily",
+			search: (queries) => searchTavily(httpDeps, secret, queries, { maxResults, timeoutMs }),
+		};
+	}
+
+	/** Whether one Direct API profile can answer web-mode queries right now. */
+	directProfileSupportsWebSearch(profileId: string): boolean {
+		const profile = this.getProviderProfile(profileId);
+		if (!profile) return false;
+		return this.resolveWebSearchBackend(profile).kind !== "unavailable";
+	}
 	private readonly readerAutoOpenBypass = new Set<string>();
 	obsidianCliProbeState: ObsidianCliProbeState = { status: "idle" };
 
