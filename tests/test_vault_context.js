@@ -48,6 +48,8 @@ const hookBuild = esbuild.buildSync({
 			'  from "./src/query/lexical-retrieval";',
 			'export { readVaultEvidencePackets, makeVaultSourcePathResolver }',
 			'  from "./src/services/vault-evidence";',
+			'export { saveQueryAnswerNote, sanitizeQueryNoteFilename }',
+			'  from "./src/services/query-note";',
 			'export { normalizeQueryVaultSources } from "./src/query/normalization";',
 			'export { ProcessExecutionService, resolveCliProcessCwd }',
 			'  from "./src/runtime/process-execution";',
@@ -78,6 +80,8 @@ const {
 	readVaultEvidencePackets,
 	makeVaultSourcePathResolver,
 	normalizeQueryVaultSources,
+	saveQueryAnswerNote,
+	sanitizeQueryNoteFilename,
 	ProcessExecutionService,
 	resolveCliProcessCwd,
 	DirectQueryService,
@@ -824,6 +828,132 @@ async function testRunVaultActionToolkitGuard() {
 	}
 }
 
+function makeQueryNoteApp(createdPaths) {
+	return {
+		vault: {
+			existing: new Set(),
+			getAbstractFileByPath(value) {
+				return this.existing.has(value) || createdPaths.has(value) ? { path: value } : null;
+			},
+			async createFolder(segment) {
+				this.existing.add(segment);
+			},
+			async create(filePath, content) {
+				createdPaths.set(filePath, content);
+				return { path: filePath };
+			},
+		},
+	};
+}
+
+async function testSaveQueryAnswerNote() {
+	const createdPaths = new Map();
+	const app = makeQueryNoteApp(createdPaths);
+	const savedPath = await saveQueryAnswerNote(app, {
+		folder: "wiki/qa",
+		question: "RNA-seq 是什么？",
+		answer: "RNA-seq 是转录组测序。",
+		sources: ["wiki/methods/rna-seq.md", "wiki/methods/rna-seq.md", "notes/other.md"],
+		sessionTitle: "知识库对话",
+		createdAt: "2026-08-29T12:30:00.000Z",
+	});
+	assert.match(savedPath, /^wiki\/qa\/\d{8}-\d{4} RNA-seq 是什么？\.md$/);
+	const content = createdPaths.get(savedPath);
+	assert.ok(content.includes('"title: RNA-seq 是什么？"') || content.includes("title:"));
+	assert.ok(content.includes("type: qa"));
+	assert.ok(content.includes("  - qa"));
+	assert.ok(content.includes("# RNA-seq 是什么？"));
+	assert.ok(content.includes("RNA-seq 是转录组测序。"));
+	assert.ok(content.includes("- [[wiki/methods/rna-seq]]"));
+	assert.ok(content.includes("- [[notes/other]]"));
+	assert.equal(content.match(/\[\[wiki\/methods\/rna-seq\]\]/g).length, 1, "duplicate sources dedupe");
+
+	// Same question again -> a distinct file, no overwrite.
+	const secondPath = await saveQueryAnswerNote(app, {
+		folder: "wiki/qa",
+		question: "RNA-seq 是什么？",
+		answer: "第二次回答",
+		sources: [],
+		sessionTitle: "知识库对话",
+		createdAt: "2026-08-29T12:30:00.000Z",
+	});
+	assert.notEqual(secondPath, savedPath);
+	assert.match(secondPath, / RNA-seq 是什么？ 2\.md$/);
+
+	// Unsafe filenames are sanitized; empty folder falls back to wiki/qa.
+	assert.equal(sanitizeQueryNoteFilename('a/b\\c:d*e?"f<g>|i'), "a b c d e f g i");
+	const fallbackPath = await saveQueryAnswerNote(app, {
+		folder: "  ",
+		question: "  ",
+		answer: "回答",
+		sources: [],
+		sessionTitle: "会话",
+	});
+	assert.match(fallbackPath, /^wiki\/qa\/\d{8}-\d{4} 未命名问答\.md$/);
+
+	await assert.rejects(
+		() => saveQueryAnswerNote(app, {
+			folder: "../outside",
+			question: "x",
+			answer: "y",
+			sources: [],
+			sessionTitle: "s",
+		}),
+		(error) => /超出当前 Vault/.test(error.message),
+	);
+
+	// Plugin-level entry: question lookup, empty-answer rejection.
+	const plugin = Object.create(DashboardPlugin.prototype);
+	plugin.app = app;
+	plugin.settings = { queryNotesFolder: "wiki/qa" };
+	plugin.querySessions = [{
+		id: "session-1",
+		title: "RNA-seq 学习",
+		retrievalMode: "vault",
+		queryBackendId: "codex-cli",
+		createdAt: "2026-08-29T12:00:00.000Z",
+		updatedAt: "2026-08-29T12:00:00.000Z",
+		messages: [
+			{ id: "m1", role: "user", content: "RNA-seq 是什么？", status: "done", createdAt: "2026-08-29T12:00:00.000Z" },
+			{
+				id: "m2",
+				role: "assistant",
+				content: "转录组测序回答。",
+				status: "done",
+				createdAt: "2026-08-29T12:01:00.000Z",
+				vaultSources: [{ path: "wiki/methods/rna-seq.md", title: "rna-seq", cited: true }],
+			},
+		],
+	}];
+	const pluginPath = await plugin.saveQueryAnswerNote("session-1", "m2");
+	assert.match(pluginPath, /^wiki\/qa\/\d{8}-\d{4} RNA-seq 是什么？\.md$/);
+	assert.ok(createdPaths.get(pluginPath).includes("转录组测序回答。"));
+	await assert.rejects(
+		() => plugin.saveQueryAnswerNote("session-1", "missing"),
+		(error) => /找不到要落笔记的回答/.test(error.message),
+	);
+
+	// The query view must expose a visible per-answer entry.
+	const queryViewSource = fs.readFileSync(
+		path.join(pluginRoot, "src", "views", "query-wiki.ts"),
+		"utf8",
+	);
+	assert.match(queryViewSource, /query-wiki-message-note/);
+	assert.match(queryViewSource, /落为笔记：保存为 Markdown 笔记/);
+	assert.match(queryViewSource, /saveQueryAnswerNote\(sessionId: string, messageId: string\): Promise<string>;/);
+	const pluginSource = fs.readFileSync(path.join(pluginRoot, "src", "plugin.ts"), "utf8");
+	assert.match(pluginSource, /async saveQueryAnswerNote\(sessionId: string, messageId: string\)/);
+	const settingsSource = fs.readFileSync(
+		path.join(pluginRoot, "src", "settings", "settings-tab.ts"),
+		"utf8",
+	);
+	assert.match(settingsSource, /queryNotesFolder/);
+	assert.match(
+		fs.readFileSync(path.join(pluginRoot, "src", "runtime", "settings.ts"), "utf8"),
+		/queryNotesFolder: "wiki\/qa"/,
+	);
+}
+
 Promise.resolve()
 	.then(() => {
 		testMigrateLegacySettingsKeys();
@@ -840,6 +970,7 @@ Promise.resolve()
 	.then(() => testVaultSourcePathEndToEnd())
 	.then(() => testCliProcessCwd())
 	.then(() => testRunVaultActionToolkitGuard())
+	.then(() => testSaveQueryAnswerNote())
 	.then(() => testImageAttachmentVaultAccess())
 	.then(() => console.log("VAULT_CONTEXT_TESTS_OK"))
 	.catch((error) => {

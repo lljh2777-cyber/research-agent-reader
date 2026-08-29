@@ -163,6 +163,7 @@ interface QueryViewHost extends PluginHost {
 		hooks?: QueryRunnerHooks,
 		attachments?: VaultImageAttachment[],
 	): Promise<DashboardProcessResult>;
+	saveQueryAnswerNote(sessionId: string, messageId: string): Promise<string>;
 	runVaultAction(
 		runId: string,
 		action: DashboardAction,
@@ -579,6 +580,38 @@ export class QueryWikiView extends ItemView {
 					new Notice(`复制失败：${error instanceof Error ? error.message : String(error)}`);
 				}
 			});
+			if (message.role === "assistant" && message.status === "done") {
+				const noteButton = messageTools.createEl("button", {
+					cls: "query-wiki-message-copy query-wiki-message-note",
+					attr: {
+						type: "button",
+						title: "落为笔记：保存为 Markdown 笔记",
+						"aria-label": "将本回答保存为笔记",
+					},
+				});
+				setIcon(noteButton, "notebook-pen");
+				noteButton.addEventListener("click", async () => {
+					noteButton.disabled = true;
+					try {
+						const savedPath = await this.plugin.saveQueryAnswerNote(
+							this.session.id,
+							message.id,
+						);
+						setIcon(noteButton, "check");
+						noteButton.title = "已保存笔记";
+						new Notice(`已保存笔记：${savedPath}`);
+					} catch (error) {
+						new Notice(`落笔记失败：${error instanceof Error ? error.message : String(error)}`);
+					} finally {
+						window.setTimeout(() => {
+							if (!noteButton.isConnected) return;
+							noteButton.disabled = false;
+							setIcon(noteButton, "notebook-pen");
+							noteButton.title = "落为笔记：保存为 Markdown 笔记";
+						}, 1600);
+					}
+				});
+			}
 		}
 		const body = article.createDiv({ cls: "query-wiki-message-body" });
 		if (message.role === "user") {

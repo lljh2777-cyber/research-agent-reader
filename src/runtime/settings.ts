@@ -186,6 +186,7 @@ export interface DashboardSettings {
 	taskHistoryLimit: number;
 	querySessionLimit: number;
 	queryMessageLimit: number;
+	queryNotesFolder: string;
 }
 
 export function normalizeReaderMarkdownFolders(value: unknown): string[] {
@@ -646,4 +647,5 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	taskHistoryLimit: 30,
 	querySessionLimit: 8,
 	queryMessageLimit: 30,
+	queryNotesFolder: "wiki/qa",
 };

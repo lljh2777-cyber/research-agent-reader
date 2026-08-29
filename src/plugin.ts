@@ -46,6 +46,7 @@ import {
 import { ProcessExecutionService } from "./runtime/process-execution";
 import { VaultLintService } from "./services/vault-lint";
 import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./services/vault-evidence";
+import { saveQueryAnswerNote } from "./services/query-note";
 import { AgentDashboardSettingTab } from "./settings/settings-tab";
 import { CodePracticeView } from "./views/code-practice";
 import { DashboardView } from "./views/dashboard";
@@ -2044,6 +2045,33 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	async readVaultEvidencePacket(trace: RetrievalTrace): Promise<VaultEvidencePacket[]> {
 		return readVaultEvidencePackets(this.app, trace);
+	}
+
+	/** Saves one query answer as a Markdown note and returns its Vault path. */
+	async saveQueryAnswerNote(sessionId: string, messageId: string): Promise<string> {
+		const session = this.querySessions.find((item) => item.id === sessionId);
+		const messageIndex = session?.messages.findIndex((item) => item.id === messageId) ?? -1;
+		if (!session || messageIndex < 1) throw new Error("找不到要落笔记的回答");
+		const message = session.messages[messageIndex];
+		if (message.role !== "assistant" || !String(message.content || "").trim()) {
+			throw new Error("该消息没有可保存的回答内容");
+		}
+		let question = "";
+		for (let cursor = messageIndex - 1; cursor >= 0; cursor -= 1) {
+			const prior = session.messages[cursor];
+			if (prior.role === "user" && String(prior.content || "").trim()) {
+				question = String(prior.content).trim();
+				break;
+			}
+		}
+		return saveQueryAnswerNote(this.app, {
+			folder: this.settings.queryNotesFolder,
+			question: question || session.title || "知识库问答",
+			answer: String(message.content),
+			sources: (message.vaultSources || []).map((source) => source.path),
+			sessionTitle: session.title,
+			createdAt: message.createdAt,
+		});
 	}
 
 	resolveVaultLinkedFile(rawLink: unknown, sourcePath = ""): TFile | null {
