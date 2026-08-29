@@ -5215,6 +5215,45 @@ button.agent-dashboard-mineru-thumbnail {
 	white-space: nowrap;
 }
 
+.agent-dashboard-mineru-pane-heading .agent-dashboard-mineru-annotate-button {
+	appearance: none;
+	flex: none;
+	border: 1px solid var(--agent-dashboard-mineru-border);
+	border-radius: 6px;
+	background: var(--agent-dashboard-mineru-toolbar);
+	color: var(--text-normal);
+	font-size: 12px;
+	font-weight: 600;
+	padding: 3px 12px;
+	cursor: pointer;
+}
+
+.agent-dashboard-mineru-pane-heading .agent-dashboard-mineru-annotate-button:hover {
+	background: var(--background-modifier-hover);
+}
+
+.agent-dashboard-mineru-annotate-chip {
+	position: fixed;
+	z-index: var(--layer-popover, 1000);
+}
+
+.agent-dashboard-mineru-annotate-chip .agent-dashboard-mineru-annotate-chip-button {
+	appearance: none;
+	border: 1px solid var(--interactive-accent);
+	border-radius: 999px;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: 12px;
+	font-weight: 600;
+	padding: 3px 14px;
+	cursor: pointer;
+	box-shadow: var(--shadow-s);
+}
+
+.agent-dashboard-mineru-annotate-chip .agent-dashboard-mineru-annotate-chip-button:hover {
+	filter: brightness(1.08);
+}
+
 .agent-dashboard-mineru-markdown-scroll {
 	min-height: 0;
 	overflow: auto;

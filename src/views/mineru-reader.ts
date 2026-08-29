@@ -37,6 +37,8 @@ interface MineruReaderHost {
 	app: App;
 	settings: DashboardSettings;
 	openReaderSourceMarkdown?(articlePath: string): Promise<void>;
+	openSelectionAnnotation(): Promise<void>;
+	canStartSelectionAnnotation(): boolean;
 }
 
 const DEFAULT_STATE: MineruReaderViewState = {
@@ -135,6 +137,7 @@ export class MineruReaderView extends ItemView {
 	private readerPackage: MineruReaderPackage | null = null;
 	private markdownScroller: HTMLElement | null = null;
 	private markdownPageStatus: HTMLElement | null = null;
+	private annotationChip: HTMLElement | null = null;
 	private markdownPageAnchorCount = 0;
 	private referenceHost: HTMLElement | null = null;
 	private workspaceEl: HTMLElement | null = null;
@@ -210,6 +213,7 @@ export class MineruReaderView extends ItemView {
 		this.opened = false;
 		this.loadGeneration += 1;
 		this.referenceGeneration += 1;
+		this.hideAnnotationChip();
 		this.clearWorkspaceLifecycle();
 		if (this.resizeTimer) window.clearTimeout(this.resizeTimer);
 		this.resizeTimer = null;
@@ -389,6 +393,14 @@ export class MineruReaderView extends ItemView {
 		const paneHeader = pane.createDiv({ cls: "agent-dashboard-mineru-pane-heading" });
 		this.markdownPageStatus = paneHeader.createEl("strong");
 		this.updateMarkdownPageStatus();
+		const annotateButton = paneHeader.createEl("button", {
+			cls: "agent-dashboard-mineru-annotate-button",
+			text: "批注",
+			attr: { type: "button", title: "批注正文中选中的文字" },
+		});
+		this.onWorkspaceEvent(annotateButton, "click", () => {
+			void this.plugin.openSelectionAnnotation();
+		});
 		const scroller = pane.createDiv({
 			cls: "agent-dashboard-mineru-markdown-scroll markdown-reading-view",
 		});
@@ -396,6 +408,7 @@ export class MineruReaderView extends ItemView {
 			cls: "agent-dashboard-mineru-article markdown-rendered",
 		});
 		this.markdownScroller = scroller;
+		this.setupAnnotationChip(scroller);
 		const activateMarkdownFollowing = (): void => {
 			if (this.pdfFollowInteractionSource === "markdown") return;
 			this.pdfFollowInteractionSource = "markdown";
@@ -1544,6 +1557,56 @@ export class MineruReaderView extends ItemView {
 		this.markdownPageAnchorCount = 0;
 		this.referenceHost = null;
 		this.workspaceEl = null;
+	}
+
+	/**
+	 * Discoverable in-reader annotation entry: after selecting body text, a
+	 * floating 批注 chip appears near the selection; the pane header button is
+	 * the always-visible fallback. Both reuse the plugin command flow.
+	 */
+	private setupAnnotationChip(scroller: HTMLElement): void {
+		this.onWorkspaceEvent(scroller, "scroll", () => this.hideAnnotationChip());
+		this.onWorkspaceEvent(scroller, "mouseup", () => {
+			window.setTimeout(() => this.showAnnotationChip(), 0);
+		});
+		this.registerDomEvent(document, "mousedown", (event) => {
+			const insideChip = event.target instanceof Node
+				&& this.annotationChip?.contains(event.target) === true;
+			if (!insideChip) this.hideAnnotationChip();
+		}, { capture: true });
+	}
+
+	private showAnnotationChip(): void {
+		this.hideAnnotationChip();
+		if (!this.plugin.canStartSelectionAnnotation()) return;
+		const selection = window.getSelection();
+		if (!selection || selection.isCollapsed || selection.rangeCount === 0) return;
+		const rect = selection.getRangeAt(0).getBoundingClientRect();
+		if (!rect || (rect.width === 0 && rect.height === 0)) return;
+		const chip = document.body.createDiv({ cls: "agent-dashboard-mineru-annotate-chip" });
+		const button = chip.createEl("button", {
+			cls: "agent-dashboard-mineru-annotate-chip-button",
+			text: "批注",
+			attr: { type: "button", title: "批注所选文字" },
+		});
+		const left = Math.min(
+			Math.max(8, rect.right + 8),
+			Math.max(8, window.innerWidth - 72),
+		);
+		const top = Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - 44));
+		chip.style.left = `${left}px`;
+		chip.style.top = `${top}px`;
+		button.addEventListener("click", (event) => {
+			event.stopPropagation();
+			this.hideAnnotationChip();
+			void this.plugin.openSelectionAnnotation();
+		});
+		this.annotationChip = chip;
+	}
+
+	private hideAnnotationChip(): void {
+		this.annotationChip?.remove();
+		this.annotationChip = null;
 	}
 
 	private onWorkspaceEvent<K extends keyof HTMLElementEventMap>(
