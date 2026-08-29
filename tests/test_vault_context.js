@@ -755,7 +755,8 @@ async function testVaultSourcePathEndToEnd() {
 		1,
 	);
 
-	// Persisted sessions go through the same vault-aware resolution.
+	// Persisted sessions go through the same vault-aware resolution, keeping
+	// both same-named sources distinct across the load path.
 	const plugin = Object.create(DashboardPlugin.prototype);
 	plugin.app = app;
 	plugin.settings = { queryMessageLimit: 50 };
@@ -766,12 +767,16 @@ async function testVaultSourcePathEndToEnd() {
 			role: "assistant",
 			content: "回答",
 			status: "done",
-			vaultSources: [{ path: "knowledge-base/wiki/only-legacy.md", cited: true }],
+			vaultSources: [
+				{ path: "knowledge-base/wiki/dup.md", cited: true },
+				{ path: "wiki/dup.md", cited: true },
+				{ path: "knowledge-base/wiki/only-legacy.md", cited: true },
+			],
 		}],
 	});
 	assert.deepStrictEqual(
 		session.messages[0].vaultSources.map((source) => source.path),
-		["wiki/only-legacy.md"],
+		["knowledge-base/wiki/dup.md", "wiki/dup.md", "wiki/only-legacy.md"],
 	);
 }
 
