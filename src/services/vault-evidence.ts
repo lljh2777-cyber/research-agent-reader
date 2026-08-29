@@ -11,15 +11,45 @@ function resolveVaultFile(app: App, relativePath: string): TFile | null {
 	return file instanceof TFile ? file : null;
 }
 
+export interface ResolvedVaultSourcePath {
+	path: string;
+	file: TFile | null;
+}
+
+/**
+ * Resolves a source path against the active Vault: the exact path wins; the
+ * legacy `knowledge-base/` prefix strip only applies when the exact path does
+ * not exist (older toolkit-era sessions recorded vault paths under that
+ * prefix). Unresolvable paths keep their exact form.
+ */
+export function resolveVaultSourceFile(
+	app: App,
+	rawPath: string,
+): ResolvedVaultSourcePath {
+	const exactPath = String(rawPath || "").trim().replace(/\\/g, "/").replace(/^\/+/, "");
+	const exactFile = resolveVaultFile(app, exactPath);
+	if (exactFile) return { path: exactPath, file: exactFile };
+	const legacyPath = exactPath.replace(/^knowledge-base\//i, "");
+	if (legacyPath && legacyPath !== exactPath) {
+		const legacyFile = resolveVaultFile(app, legacyPath);
+		if (legacyFile) return { path: legacyPath, file: legacyFile };
+	}
+	return { path: exactPath, file: null };
+}
+
+/** Path-only variant for source normalization before dedupe and display. */
+export function makeVaultSourcePathResolver(app: App): (rawPath: string) => string {
+	return (rawPath) => resolveVaultSourceFile(app, rawPath).path;
+}
+
 /**
  * Reads Direct API evidence packets through the active Vault API only.
  * Candidate paths come from retrieval traces (toolkit script or in-plugin
  * lexical fallback) and can never escape the Vault because
  * `getAbstractFileByPath` resolves inside it; traversal segments simply fail
- * to resolve and are skipped. Each path is resolved as-is first, so a vault
- * that genuinely contains a top-level `knowledge-base/` folder is read
- * correctly; the legacy prefix strip only applies when the exact path does not
- * exist (older toolkit-era sessions recorded vault paths under that prefix).
+ * to resolve and are skipped. Paths are resolved via `resolveVaultSourceFile`
+ * so a vault that genuinely contains a top-level `knowledge-base/` folder is
+ * read correctly.
  */
 export async function readVaultEvidencePackets(
 	app: App,
@@ -42,29 +72,21 @@ export async function readVaultEvidencePackets(
 		) {
 			continue;
 		}
-		let resolvedPath = normalizedPath;
-		let file = resolveVaultFile(app, resolvedPath);
-		if (!file) {
-			const legacyPath = normalizedPath.replace(/^knowledge-base\//i, "");
-			if (legacyPath && legacyPath !== normalizedPath) {
-				file = resolveVaultFile(app, legacyPath);
-				if (file) resolvedPath = legacyPath;
-			}
-		}
-		if (!file || seen.has(resolvedPath.toLowerCase())) continue;
+		const resolved = resolveVaultSourceFile(app, normalizedPath);
+		if (!resolved.file || seen.has(resolved.path.toLowerCase())) continue;
 		let raw = "";
 		try {
-			raw = await app.vault.cachedRead(file);
+			raw = await app.vault.cachedRead(resolved.file);
 		} catch {
 			continue;
 		}
 		const content = raw.slice(0, Math.min(MAX_EVIDENCE_FILE_CHARS, remaining));
 		if (!content.trim()) continue;
-		seen.add(resolvedPath.toLowerCase());
+		seen.add(resolved.path.toLowerCase());
 		remaining -= content.length;
 		evidence.push({
-			path: resolvedPath,
-			wikilink: `[[${resolvedPath.replace(/\.md$/i, "")}]]`,
+			path: resolved.path,
+			wikilink: `[[${resolved.path.replace(/\.md$/i, "")}]]`,
 			content,
 		});
 	}

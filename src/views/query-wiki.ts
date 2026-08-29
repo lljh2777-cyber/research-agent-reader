@@ -33,8 +33,10 @@ import {
 	normalizeQueryVaultSources,
 	normalizeQueryWebSources,
 	normalizeVaultImageAttachments,
+	type QueryVaultSource,
 	type VaultImageAttachment,
 } from "../query/normalization";
+import { makeVaultSourcePathResolver } from "../services/vault-evidence";
 import {
 	profileSupportsQueryImage,
 	type ProviderProfile,
@@ -749,8 +751,14 @@ export class QueryWikiView extends ItemView {
 		});
 	}
 
+	normalizeVaultSourceEntries(values: unknown): QueryVaultSource[] {
+		return normalizeQueryVaultSources(values, {
+			resolveVaultPath: makeVaultSourcePathResolver(this.app),
+		});
+	}
+
 	renderSourcePanel(parent: HTMLElement, message: PersistedQueryMessage): void {
-		const vaultSources = normalizeQueryVaultSources(message.vaultSources);
+		const vaultSources = this.normalizeVaultSourceEntries(message.vaultSources);
 		const webSources = normalizeQueryWebSources(message.webSources);
 		const validation = normalizeQueryCitationValidation(message.citationValidation);
 		const details = parent.createEl("details", { cls: "query-wiki-sources" });
@@ -1616,7 +1624,7 @@ export class QueryWikiView extends ItemView {
 				error,
 				progress: "",
 				retrievalTrace: traceEvent?.payload || assistantMessage.retrievalTrace || null,
-				vaultSources: normalizeQueryVaultSources(structuredResult?.vault_sources),
+				vaultSources: this.normalizeVaultSourceEntries(structuredResult?.vault_sources),
 				webSources: normalizeQueryWebSources(structuredResult?.web_sources),
 				citationValidation: normalizeQueryCitationValidation(structuredResult?.citation_validation),
 				retrievalPath: normalizeQueryRetrievalPath(structuredResult?.retrieval_path),
@@ -1696,7 +1704,7 @@ export class QueryWikiView extends ItemView {
 			const payload = event.payload;
 			void this.plugin.updateQueryMessage(sessionId, messageId, {
 				content: String(payload.answer_markdown || "").slice(0, 20000),
-				vaultSources: normalizeQueryVaultSources(payload.vault_sources),
+				vaultSources: this.normalizeVaultSourceEntries(payload.vault_sources),
 				webSources: normalizeQueryWebSources(payload.web_sources),
 				citationValidation: normalizeQueryCitationValidation(payload.citation_validation),
 				retrievalPath: normalizeQueryRetrievalPath(payload.retrieval_path),

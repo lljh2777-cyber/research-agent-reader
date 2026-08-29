@@ -143,7 +143,9 @@ export class DirectQueryService {
 						) as RetrievalTrace;
 						trace.keyword_expansion = {
 							...(trace.keyword_expansion || {}),
+							used: true,
 							attempted: true,
+							terms: [...expandedTerms],
 							provider: profile.name,
 							model: profile.model,
 						};

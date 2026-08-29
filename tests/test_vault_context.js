@@ -46,7 +46,9 @@ const hookBuild = esbuild.buildSync({
 			'export { migrateLegacySettingsKeys } from "./src/runtime/settings";',
 			"export { LexicalVaultRetriever, tokenizeForLexicalRetrieval }",
 			'  from "./src/query/lexical-retrieval";',
-			'export { readVaultEvidencePackets } from "./src/services/vault-evidence";',
+			'export { readVaultEvidencePackets, makeVaultSourcePathResolver }',
+			'  from "./src/services/vault-evidence";',
+			'export { normalizeQueryVaultSources } from "./src/query/normalization";',
 			'export { DirectQueryService } from "./src/query/direct-query-service";',
 			'export { QueryWikiView } from "./src/views/query-wiki";',
 			'export { MAX_VAULT_IMAGE_BYTES } from "./src/config";',
@@ -72,6 +74,8 @@ const {
 	LexicalVaultRetriever,
 	tokenizeForLexicalRetrieval,
 	readVaultEvidencePackets,
+	makeVaultSourcePathResolver,
+	normalizeQueryVaultSources,
 	DirectQueryService,
 	QueryWikiView,
 	MAX_VAULT_IMAGE_BYTES,
@@ -455,6 +459,9 @@ async function testKeywordExpansionTrigger() {
 	assert.equal(preflightCalls.length, 2);
 	assert.deepStrictEqual(preflightCalls[1].expandedTerms, ["SingleR", "celldex"]);
 	assert.equal(providerCalls.length, 2);
+	const retrievalEvent = result.events.find((event) => event.type === "retrieval-preflight");
+	assert.equal(retrievalEvent.payload.keyword_expansion.used, true);
+	assert.deepStrictEqual(retrievalEvent.payload.keyword_expansion.terms, ["SingleR", "celldex"]);
 	assert.ok(result.stdout.includes("[[wiki/methods/singler.md]]"));
 }
 
@@ -679,6 +686,95 @@ async function testImageAttachmentVaultAccess() {
 	);
 }
 
+async function testVaultSourcePathEndToEnd() {
+	const contentByPath = {
+		"knowledge-base/wiki/dup.md": "顶层目录内容",
+		"wiki/dup.md": "精确路径内容",
+		"wiki/only-legacy.md": "仅旧路径内容",
+	};
+	const fileByPath = Object.fromEntries(Object.entries(contentByPath).map((
+		[filePath, content],
+	) => [filePath, new ObsidianTFile({ path: filePath, stat: { size: content.length } })]));
+	const app = {
+		vault: {
+			getAbstractFileByPath: (value) => fileByPath[value] || null,
+			cachedRead: async (file) => contentByPath[file.path] || "",
+		},
+	};
+
+	// Evidence layer reads both real files without rewriting their paths.
+	const packets = await readVaultEvidencePackets(app, {
+		candidate_paths: ["knowledge-base/wiki/dup.md", "wiki/dup.md"],
+	});
+	assert.deepStrictEqual(packets.map((packet) => packet.path), [
+		"knowledge-base/wiki/dup.md",
+		"wiki/dup.md",
+	]);
+
+	// buildRetrievalResult keeps those paths in vault_sources.
+	const payload = DirectQueryService.prototype.buildRetrievalResult(
+		"对比 [[knowledge-base/wiki/dup]] 与 [[wiki/dup]]。",
+		packets,
+		{ fallback: { used: false, paths: [] } },
+		{
+			id: "provider-test",
+			name: "test-provider",
+			type: "openai-compatible",
+			baseUrl: "https://api.example.test",
+			model: "test-model",
+			timeoutSeconds: 20,
+			capabilities: { streaming: false, pdf: false, vision: false },
+			lastTest: { ok: true },
+		},
+	);
+	assert.deepStrictEqual(payload.vault_sources.map((source) => source.path), [
+		"knowledge-base/wiki/dup.md",
+		"wiki/dup.md",
+	]);
+
+	// Source normalization resolves against the Vault: exact paths win, both
+	// distinct sources survive dedupe, and only missing exact paths fall back
+	// to the legacy prefix strip.
+	const normalized = normalizeQueryVaultSources(payload.vault_sources, {
+		resolveVaultPath: makeVaultSourcePathResolver(app),
+	});
+	assert.deepStrictEqual(normalized.map((source) => source.path), [
+		"knowledge-base/wiki/dup.md",
+		"wiki/dup.md",
+	]);
+	assert.deepStrictEqual(normalized.map((source) => source.cited), [true, true]);
+
+	const resolver = makeVaultSourcePathResolver(app);
+	assert.equal(resolver("knowledge-base/wiki/only-legacy.md"), "wiki/only-legacy.md");
+	assert.equal(resolver("knowledge-base/wiki/ghost.md"), "knowledge-base/wiki/ghost.md");
+	assert.equal(
+		normalizeQueryVaultSources(
+			[{ path: "wiki/dup.md", cited: true }, { path: "WIKI/DUP.MD", cited: true }],
+			{ resolveVaultPath: resolver },
+		).length,
+		1,
+	);
+
+	// Persisted sessions go through the same vault-aware resolution.
+	const plugin = Object.create(DashboardPlugin.prototype);
+	plugin.app = app;
+	plugin.settings = { queryMessageLimit: 50 };
+	const session = plugin.normalizeQuerySession({
+		id: "session-1",
+		messages: [{
+			id: "message-1",
+			role: "assistant",
+			content: "回答",
+			status: "done",
+			vaultSources: [{ path: "knowledge-base/wiki/only-legacy.md", cited: true }],
+		}],
+	});
+	assert.deepStrictEqual(
+		session.messages[0].vaultSources.map((source) => source.path),
+		["wiki/only-legacy.md"],
+	);
+}
+
 Promise.resolve()
 	.then(() => {
 		testMigrateLegacySettingsKeys();
@@ -692,6 +788,7 @@ Promise.resolve()
 	.then(() => testRetrievalDispatcher())
 	.then(() => testKeywordExpansionTrigger())
 	.then(() => testQueryWikiTraceRendering())
+	.then(() => testVaultSourcePathEndToEnd())
 	.then(() => testImageAttachmentVaultAccess())
 	.then(() => console.log("VAULT_CONTEXT_TESTS_OK"))
 	.catch((error) => {

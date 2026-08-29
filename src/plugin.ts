@@ -45,7 +45,7 @@ import {
 } from "./runtime/persistence";
 import { ProcessExecutionService } from "./runtime/process-execution";
 import { VaultLintService } from "./services/vault-lint";
-import { readVaultEvidencePackets } from "./services/vault-evidence";
+import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./services/vault-evidence";
 import { AgentDashboardSettingTab } from "./settings/settings-tab";
 import { CodePracticeView } from "./views/code-practice";
 import { DashboardView } from "./views/dashboard";
@@ -1370,7 +1370,9 @@ export default class AgentDashboardPlugin extends Plugin {
 				retrievalTrace: message.retrievalTrace && typeof message.retrievalTrace === "object"
 					? message.retrievalTrace as Record<string, unknown>
 					: null,
-				vaultSources: normalizeQueryVaultSources(message.vaultSources),
+				vaultSources: normalizeQueryVaultSources(message.vaultSources, {
+					resolveVaultPath: makeVaultSourcePathResolver(this.app),
+				}),
 				webSources: normalizeQueryWebSources(message.webSources),
 				citationValidation: normalizeQueryCitationValidation(message.citationValidation),
 				retrievalPath: normalizeQueryRetrievalPath(message.retrievalPath),
