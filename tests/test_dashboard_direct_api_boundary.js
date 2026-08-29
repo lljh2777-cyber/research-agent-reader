@@ -113,8 +113,10 @@ const nativeBody = provider.chatBody({
 assert.deepEqual(nativeBody.plugins, [{ id: "web_search", max_results: 5 }]);
 
 (async () => {
+	let capturedRoute = null;
 	let capturedOptions = null;
-	provider.request = async (_route, options) => {
+	provider.request = async (route, options) => {
+		capturedRoute = route;
 		capturedOptions = options;
 		return {
 			json: {
@@ -131,6 +133,20 @@ assert.deepEqual(nativeBody.plugins, [{ id: "web_search", max_results: 5 }]);
 	});
 	assert.equal(capturedOptions.timeoutMs, 30000);
 	assert.equal(capturedOptions.body.enable_search, undefined);
+
+	// DeepSeek web search goes through the Responses API with the server-side
+	// web_search tool, never through chat/completions flags.
+	await provider.complete({
+		model: profile.model,
+		messages,
+		webSearch: { protocol: "deepseek" },
+	}, {
+		timeoutMs: 30000,
+	});
+	assert.ok(String(capturedRoute).includes("responses"));
+	assert.deepEqual(capturedOptions.body.tools, [{ type: "web_search" }]);
+	assert.equal(capturedOptions.body.enable_search, undefined);
+	assert.equal(capturedOptions.body.instructions, undefined);
 
 	const plugin = Object.create(DashboardPlugin.prototype);
 	plugin.querySessions = [

@@ -2106,7 +2106,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		}
 		new Setting(section)
 			.setName("联网搜索")
-			.setDesc("问答视图「联网搜索」模式的取网方式：自动优先供应商原生联网（OpenRouter、通义千问、智谱），否则回退 Tavily；关闭后该供应商仅可知识库问答。")
+			.setDesc("问答视图「联网搜索」模式的取网方式：自动优先供应商原生联网（OpenRouter、通义千问、智谱、DeepSeek Responses），否则回退 Tavily；关闭后该供应商仅可知识库问答。")
 			.addDropdown((dropdown) => {
 				const modes: Array<[ProfileWebSearchMode, string]> = [
 					["auto", "自动（原生优先，Tavily 兜底）"],

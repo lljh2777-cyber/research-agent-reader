@@ -29,7 +29,7 @@ export function profileSupportsQueryImage(profile: unknown): boolean {
 
 export type ProfileWebSearchMode = "auto" | "off" | "native" | "tavily";
 
-export type NativeWebSearchProtocol = "qwen" | "openrouter" | "zhipu";
+export type NativeWebSearchProtocol = "qwen" | "openrouter" | "zhipu" | "deepseek";
 
 const WEB_SEARCH_MODES: ReadonlySet<string> = new Set([
 	"auto",
@@ -47,6 +47,7 @@ export function detectNativeWebSearchProtocol(
 	if (base.includes("openrouter")) return "openrouter";
 	if (/dashscope|aliyuncs|tongyi|qwen/.test(base)) return "qwen";
 	if (/bigmodel|zhipu|chatglm/.test(base)) return "zhipu";
+	if (base.includes("deepseek")) return "deepseek";
 	return null;
 }
 
