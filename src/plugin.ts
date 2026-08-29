@@ -275,6 +275,37 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!profile) return false;
 		return this.resolveWebSearchBackend(profile).kind !== "unavailable";
 	}
+
+	/**
+	 * Human-readable capability boundary for one Direct API profile, shown in
+	 * the connection test result instead of the legacy "never web" wording.
+	 */
+	directApiBoundaryLabel(profileId: string): string {
+		const profile = this.getProviderProfile(profileId);
+		if (!profile) return "仅知识库上下文，不联网、不写入";
+		const mode = normalizeProviderProfile(profile).webSearch || "auto";
+		if (mode === "off") return "仅知识库上下文，不联网、不写入";
+		const protocol = detectNativeWebSearchProtocol(profile.baseUrl);
+		const protocolLabels: Record<string, string> = {
+			openrouter: "OpenRouter",
+			qwen: "通义千问",
+			zhipu: "智谱",
+			deepseek: "DeepSeek",
+		};
+		if (protocol) {
+			return `知识库上下文 + 联网搜索（原生 · ${protocolLabels[protocol] || protocol}），不写入文件`;
+		}
+		const tavilyReady = Boolean(String(this.settings.webSearchTavilySecretId || "").trim());
+		if (mode === "tavily" || (mode === "auto" && tavilyReady)) {
+			return tavilyReady
+				? "知识库上下文 + 联网搜索（Tavily），不写入文件"
+				: "仅知识库上下文（未配置 Tavily），不联网、不写入";
+		}
+		if (mode === "native") {
+			return "仅知识库上下文（未识别出原生联网协议），不联网、不写入";
+		}
+		return "仅知识库上下文，不联网、不写入";
+	}
 	private readonly readerAutoOpenBypass = new Set<string>();
 	obsidianCliProbeState: ObsidianCliProbeState = { status: "idle" };
 
