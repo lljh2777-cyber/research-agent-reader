@@ -33,8 +33,10 @@ import {
 	normalizeQueryVaultSources,
 	normalizeQueryWebSources,
 	normalizeVaultImageAttachments,
+	type QueryVaultSource,
 	type VaultImageAttachment,
 } from "../query/normalization";
+import { makeVaultSourcePathResolver } from "../services/vault-evidence";
 import {
 	profileSupportsQueryImage,
 	type ProviderProfile,
@@ -62,6 +64,7 @@ import type {
 type RetrievalTrace = Record<string, unknown> & {
 	stage?: string;
 	retrieval_label?: string;
+	lexical_terms?: string[];
 	lexical_seeds?: TraceCandidate[];
 	graph_expansion?: TraceCandidate[];
 	context_pages?: string[];
@@ -69,6 +72,16 @@ type RetrievalTrace = Record<string, unknown> & {
 		terms?: string[];
 		attempted?: boolean;
 		error?: string;
+	};
+	retriever?: {
+		selected?: string;
+		reason?: string;
+	};
+	retriever_fallback?: {
+		used?: boolean;
+		from?: string;
+		to?: string;
+		reason?: string;
 	};
 	fallback?: {
 		used?: boolean;
@@ -651,6 +664,13 @@ export class QueryWikiView extends ItemView {
 			cls: "query-wiki-trace-stage",
 			text: `检索阶段：${this.displayRetrievalStage(trace.stage)}`,
 		});
+		const lexicalTerms = Array.isArray(trace.lexical_terms) ? trace.lexical_terms : [];
+		if (lexicalTerms.length) {
+			content.createEl("p", {
+				cls: "query-wiki-trace-note",
+				text: `查询词：${lexicalTerms.slice(0, 12).map((item) => String(item)).join("、")}`,
+			});
+		}
 		if (seeds.length) this.renderTraceGroup(content, "词法种子", seeds);
 		const expandedTerms = Array.isArray(trace.keyword_expansion?.terms)
 			? trace.keyword_expansion.terms
@@ -689,6 +709,19 @@ export class QueryWikiView extends ItemView {
 				(fallback.paths || []).map((item) => ({ path: item, title: item.replace(/\.md$/i, "") })),
 			);
 		}
+		const retrieverFallback = trace.retriever_fallback;
+		if (retrieverFallback?.used) {
+			const reason = String(retrieverFallback.reason || "");
+			content.createEl("p", {
+				cls: "query-wiki-trace-note",
+				text: `检索器回退：${this.displayRetrieverName(retrieverFallback.from)} → ${this.displayRetrieverName(retrieverFallback.to)}${reason ? `（${reason}）` : ""}`,
+			});
+		} else if (trace.retriever?.reason) {
+			content.createEl("p", {
+				cls: "query-wiki-trace-note",
+				text: `检索器：${this.displayRetrieverName(trace.retriever.selected)}（${String(trace.retriever.reason)}）`,
+			});
+		}
 		content.createEl("p", {
 			cls: "query-wiki-trace-note",
 			text: "这些页面是候选路由；实际采用的证据以回答中的“检索路径”和引用为准。",
@@ -718,8 +751,14 @@ export class QueryWikiView extends ItemView {
 		});
 	}
 
+	normalizeVaultSourceEntries(values: unknown): QueryVaultSource[] {
+		return normalizeQueryVaultSources(values, {
+			resolveVaultPath: makeVaultSourcePathResolver(this.app),
+		});
+	}
+
 	renderSourcePanel(parent: HTMLElement, message: PersistedQueryMessage): void {
-		const vaultSources = normalizeQueryVaultSources(message.vaultSources);
+		const vaultSources = this.normalizeVaultSourceEntries(message.vaultSources);
 		const webSources = normalizeQueryWebSources(message.webSources);
 		const validation = normalizeQueryCitationValidation(message.citationValidation);
 		const details = parent.createEl("details", { cls: "query-wiki-sources" });
@@ -1585,7 +1624,7 @@ export class QueryWikiView extends ItemView {
 				error,
 				progress: "",
 				retrievalTrace: traceEvent?.payload || assistantMessage.retrievalTrace || null,
-				vaultSources: normalizeQueryVaultSources(structuredResult?.vault_sources),
+				vaultSources: this.normalizeVaultSourceEntries(structuredResult?.vault_sources),
 				webSources: normalizeQueryWebSources(structuredResult?.web_sources),
 				citationValidation: normalizeQueryCitationValidation(structuredResult?.citation_validation),
 				retrievalPath: normalizeQueryRetrievalPath(structuredResult?.retrieval_path),
@@ -1665,7 +1704,7 @@ export class QueryWikiView extends ItemView {
 			const payload = event.payload;
 			void this.plugin.updateQueryMessage(sessionId, messageId, {
 				content: String(payload.answer_markdown || "").slice(0, 20000),
-				vaultSources: normalizeQueryVaultSources(payload.vault_sources),
+				vaultSources: this.normalizeVaultSourceEntries(payload.vault_sources),
 				webSources: normalizeQueryWebSources(payload.web_sources),
 				citationValidation: normalizeQueryCitationValidation(payload.citation_validation),
 				retrievalPath: normalizeQueryRetrievalPath(payload.retrieval_path),
@@ -1813,12 +1852,20 @@ export class QueryWikiView extends ItemView {
 		if (completedRun) new TaskResultModal(this.app, this.plugin, completedRun, null).open();
 	}
 
+	displayRetrieverName(value: unknown): string {
+		const name = String(value || "").trim();
+		if (name === "toolkit") return "Research Vault Toolkit";
+		if (name === "in-plugin-lexical") return "内置词法检索";
+		return name || "默认检索器";
+	}
+
 	displayRetrievalStage(stage: unknown): string {
 		const stageKey = String(stage || "");
 		return {
 			"lexical-seed+graph-expansion": "词法种子 → 关系扩展",
 			"lexical-seed+ppr": "词法种子 → PPR 图扩展",
 			"llm-keyword+ppr": "LLM 关键词扩展 → PPR 图扩展",
+			"in-plugin-lexical": "内置词法检索",
 			"no-match-fallback": "无匹配 → 方向索引回退",
 			"preflight-unavailable": "预检不可用，交由检索 skill 回退",
 		}[stageKey] || stageKey || "未知";

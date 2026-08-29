@@ -65,20 +65,37 @@ export interface QueryVaultSource {
 	cited: boolean;
 }
 
-export function normalizeQueryVaultSources(values: unknown): QueryVaultSource[] {
+export interface QueryVaultSourceNormalizationOptions {
+	/**
+	 * Resolves a raw source path against the active Vault before dedupe.
+	 * Callers with Vault access must pass one that prefers the exact path and
+	 * only falls back to legacy `knowledge-base/` prefix compatibility (see
+	 * `makeVaultSourcePathResolver`); without a resolver paths are kept as-is
+	 * and are never rewritten by string matching alone.
+	 */
+	resolveVaultPath?: (rawPath: string) => string;
+}
+
+export function normalizeQueryVaultSources(
+	values: unknown,
+	options: QueryVaultSourceNormalizationOptions = {},
+): QueryVaultSource[] {
+	const sanitize = (value: string) => value
+		.trim()
+		.replace(/\\/g, "/")
+		.replace(/^\/+/, "")
+		.slice(0, 1000);
+	const resolveVaultPath = options.resolveVaultPath
+		|| ((rawPath: string) => rawPath);
 	const seen = new Set<string>();
 	const normalized: QueryVaultSource[] = [];
 	for (const value of Array.isArray(values) ? values : []) {
 		const source = asRecord(value);
-		let sourcePath = String(source.path || "")
-			.trim()
-			.replace(/\\/g, "/")
-			.replace(/^knowledge-base\//i, "")
-			.replace(/^\/+/, "");
+		const sourcePath = sanitize(resolveVaultPath(sanitize(String(source.path || ""))));
 		if (!sourcePath || seen.has(sourcePath.toLowerCase())) continue;
 		seen.add(sourcePath.toLowerCase());
 		normalized.push({
-			path: sourcePath.slice(0, 1000),
+			path: sourcePath,
 			title: String(source.title || path.posix.basename(sourcePath, path.posix.extname(sourcePath)))
 				.trim()
 				.slice(0, 500),

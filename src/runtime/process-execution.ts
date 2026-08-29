@@ -194,7 +194,7 @@ export class ProcessExecutionService {
 			];
 			const invocation = prepareCliSpawn(executable, appServerArgs);
 			const child = spawn(invocation.executable, invocation.args, {
-				cwd: settings.projectRoot,
+				cwd: settings.toolkitRoot,
 				shell: false,
 				windowsHide: true,
 			});
@@ -435,7 +435,7 @@ export class ProcessExecutionService {
 			const args = useOfficialConfig ? ["models", "opencode"] : ["models"];
 			const invocation = prepareCliSpawn(executable, args);
 			const child = spawn(invocation.executable, invocation.args, {
-				cwd: settings.projectRoot,
+				cwd: settings.toolkitRoot,
 				shell: false,
 				windowsHide: true,
 			});
@@ -503,7 +503,7 @@ export class ProcessExecutionService {
 
 	recoverInterruptedPracticeRuns(settings: DashboardSettings): void {
 		const runsDirectory = path.join(
-			settings.projectRoot,
+			settings.toolkitRoot,
 			"tool-library",
 			"output",
 			"code-practice",
@@ -532,7 +532,7 @@ export class ProcessExecutionService {
 		settings: DashboardSettings,
 		request: CodePracticeRequest,
 	): Promise<CodePracticeResult> {
-		const projectRoot = settings.projectRoot;
+		const projectRoot = settings.toolkitRoot;
 		const runner = path.join(projectRoot, "tool-library", "scripts", "run_code_practice.py");
 		if (!fs.existsSync(runner)) {
 			return Promise.reject(new Error(`代码练习 runner 不存在：${runner}`));
@@ -624,7 +624,7 @@ export class ProcessExecutionService {
 
 	runVaultAction(options: VaultActionProcessOptions): Promise<DashboardProcessResult> {
 		const { runId, action, input, executionConfig, settings, hooks = {} } = options;
-		const projectRoot = settings.projectRoot;
+		const projectRoot = settings.toolkitRoot;
 		const runner = path.join(projectRoot, "tool-library", "scripts", "run_vault_action.py");
 		const timeoutSeconds = Math.max(
 			10,
@@ -861,7 +861,7 @@ export class ProcessExecutionService {
 			let timer = 0;
 			const invocation = prepareCliSpawn(executable, ["--version"]);
 			const child = spawn(invocation.executable, invocation.args, {
-				cwd: settings.projectRoot,
+				cwd: settings.toolkitRoot,
 				shell: false,
 				windowsHide: true,
 			});
@@ -952,7 +952,7 @@ export class ProcessExecutionService {
 			let timer = 0;
 			const invocation = prepareCliSpawn(executable, ["version"]);
 			const child = spawn(invocation.executable, invocation.args, {
-				cwd: settings.projectRoot,
+				cwd: settings.toolkitRoot,
 				shell: false,
 				windowsHide: true,
 			});
@@ -1038,7 +1038,7 @@ export class ProcessExecutionService {
 			args.push("仅回复：CLAUDE_BACKEND_OK");
 			const invocation = prepareCliSpawn(executable, args);
 			const child = spawn(invocation.executable, invocation.args, {
-				cwd: settings.projectRoot,
+				cwd: settings.toolkitRoot,
 				shell: false,
 				windowsHide: true,
 				env: createClaudeProcessEnv(settings),
@@ -1140,7 +1140,7 @@ export class ProcessExecutionService {
 		const executable = String(settings.openCodeExecutable || "");
 		const pythonExecutable = String(settings.pythonExecutable || "").trim();
 		const runner = path.join(
-			settings.projectRoot,
+			settings.toolkitRoot,
 			"tool-library",
 			"scripts",
 			"run_vault_action.py",
@@ -1209,7 +1209,7 @@ export class ProcessExecutionService {
 				"--probe-backend",
 				"opencode",
 				"--project-root",
-				settings.projectRoot,
+				settings.toolkitRoot,
 				"--backend-executable",
 				executable,
 				"--backend-config-source",
@@ -1223,7 +1223,7 @@ export class ProcessExecutionService {
 			];
 			if (configuredModel) args.push("--backend-model", configuredModel);
 			const child = spawn(pythonExecutable, args, {
-				cwd: settings.projectRoot,
+				cwd: settings.toolkitRoot,
 				shell: false,
 				windowsHide: true,
 				env: {
