@@ -16,6 +16,8 @@ export interface DashboardActionOptions {
 	mineruPages?: string;
 	mineruTimeoutSeconds?: number;
 	mineruIncludeSourcePdf?: boolean;
+	/** Light-agent runs require the explicit remote-upload confirmation. */
+	mineruRemoteConfirmed?: boolean;
 	pdfXraySource?: PdfXraySource;
 }
 

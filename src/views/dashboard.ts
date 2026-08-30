@@ -17,15 +17,19 @@ import {
 import { VIEW_TYPE, isCliBackendId } from "../config";
 import {
 	ActionInputModal,
+	type ActionRunnerKind,
 	type ExecutionOverrides,
 } from "../modals/action-input";
 import { TaskResultModal } from "../modals/task-result";
+import type { PaperIngestFlowOptions } from "../agent/paper-ingest-flow";
+import type { AgentLoopRunOutcome } from "../agent/agent-loop-service";
 import { serializeActionRequest } from "../runtime/action-request";
 import {
 	DashboardDataService,
 	type DashboardVaultChange,
 } from "../services/dashboard-data";
 import type {
+	DashboardProcessEvent,
 	DashboardProcessResult,
 	ExecutionConfig,
 	PluginHost,
@@ -51,6 +55,15 @@ const ACTION_ICONS: Record<string, string> = {
 	"okf-export": "package-open",
 };
 
+function describeLightStatus(status: AgentLoopRunOutcome["loopStatus"]): string {
+	return {
+		completed: "已完成",
+		cancelled: "已停止",
+		"budget-exhausted": "达到步数/时间预算",
+		failed: "运行失败",
+	}[status] || status;
+}
+
 interface DashboardHost extends PluginHost {
 	getRunningTaskRun(actionId: string): TaskRun | null;
 	stopDirectVaultQuery(runId: string): boolean;
@@ -58,6 +71,15 @@ interface DashboardHost extends PluginHost {
 	activateQueryWikiView(initialInput?: string): Promise<void>;
 	activateCodePracticeView(): Promise<void>;
 	supportsFast(model: string): boolean;
+	lightPaperIngestAvailable(): { ready: boolean; reason: string };
+	getActiveDirectProviderSummary(): { name: string; model: string } | null;
+	runLightPaperIngest(
+		runId: string,
+		options: PaperIngestFlowOptions,
+		profileId: string,
+		hooks?: { onEvent?: (event: DashboardProcessEvent) => void },
+	): Promise<AgentLoopRunOutcome>;
+	getLightAgentRunResult(runId: string): AgentLoopRunOutcome | null;
 	runVaultAction(
 		runId: string,
 		action: DashboardAction,
@@ -577,8 +599,8 @@ export class DashboardView extends ItemView {
 			return;
 		}
 		if (action.ai || action.requiresInput) {
-			new ActionInputModal(this.app, this.plugin, action, ({ input, overrides, options: actionOptions }) => {
-				void this.executeAction(action, input, overrides, actionOptions);
+			new ActionInputModal(this.app, this.plugin, action, ({ input, overrides, options: actionOptions, runner }) => {
+				void this.executeAction(action, input, overrides, actionOptions, runner);
 			}, options).open();
 			return;
 		}
@@ -590,7 +612,12 @@ export class DashboardView extends ItemView {
 		input: string,
 		executionOverrides: ExecutionOverrides = {},
 		actionOptions: DashboardActionOptions = {},
+		runner: ActionRunnerKind = "cli-agent",
 	): Promise<void> {
+		if (action.id === "paper-ingest" && runner === "light-agent") {
+			await this.executeLightPaperIngest(action, input, actionOptions);
+			return;
+		}
 		const summary = input.trim().split(/\r?\n/)[0].slice(0, 160) || action.description;
 		const requestPayload = serializeActionRequest(
 			action,
@@ -664,6 +691,108 @@ export class DashboardView extends ItemView {
 								? `${action.label}已停止，修改已回滚`
 								: `${action.label}已停止`
 						: `${action.label}执行失败`,
+			);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			completedRun = await this.plugin.finishTaskRun(run.id, {
+				status: "failed",
+				exitCode: null,
+				output: "",
+				error: message,
+			});
+			new Notice(`${action.label}执行失败：${message}`);
+		}
+		await this.loadAndRender();
+		if (completedRun) {
+			this.openTaskResult(completedRun);
+		}
+	}
+
+	/**
+	 * 文献入库 through the in-plugin bounded agent loop: no CLI process, the
+	 * Direct API profile is the brain and the loop only exposes allowlisted
+	 * tools. Mirrors executeAction's TaskRun lifecycle.
+	 */
+	async executeLightPaperIngest(
+		action: DashboardAction,
+		input: string,
+		actionOptions: DashboardActionOptions,
+	): Promise<void> {
+		const availability = this.plugin.lightPaperIngestAvailable();
+		if (!availability.ready) {
+			new Notice(`轻量 Agent 不可用：${availability.reason}`);
+			return;
+		}
+		const profileId = this.plugin.settings.activeProviderId;
+		const providerSummary = this.plugin.getActiveDirectProviderSummary();
+		const summary = input.trim().split(/\r?\n/)[0].slice(0, 160) || "轻量 Agent 文献入库";
+		const flowOptions: PaperIngestFlowOptions = {
+			sourcePdfPath: input.trim().split(/\r?\n/)[0]?.trim() || "",
+			requestNotes: input.trim(),
+			createArticleMarkdown: actionOptions.createArticleMarkdown !== false,
+			createArticleWiki: actionOptions.createArticleWiki !== false,
+			articleWikiSource: actionOptions.articleWikiSource === "pdf"
+				? "pdf"
+				: actionOptions.articleWikiSource === "article"
+					? "article"
+					: "auto",
+			mineruModel: actionOptions.mineruModel === "pipeline" || actionOptions.mineruModel === "auto"
+				? actionOptions.mineruModel
+				: "vlm",
+			mineruLanguage: actionOptions.mineruLanguage || "en",
+			mineruOcr: actionOptions.mineruOcr === true,
+			mineruFormula: actionOptions.mineruFormula !== false,
+			mineruTable: actionOptions.mineruTable !== false,
+			mineruPages: actionOptions.mineruPages || "",
+			mineruTimeoutSeconds: Math.max(60, Math.min(1800, Math.round(Number(actionOptions.mineruTimeoutSeconds)) || 600)),
+			mineruIncludeSourcePdf: actionOptions.mineruIncludeSourcePdf === true,
+			remoteUploadConfirmed: actionOptions.mineruRemoteConfirmed === true,
+		};
+		if (flowOptions.createArticleMarkdown && !flowOptions.remoteUploadConfirmed) {
+			new Notice("请先勾选「确认远程处理」：PDF 将发送至 MinerU 服务");
+			return;
+		}
+		const executionConfig: ExecutionConfig = {
+			backend: "direct-api",
+			providerId: profileId,
+			providerName: providerSummary?.name || "Direct API",
+			model: providerSummary?.model || "",
+			reasoningEffort: null,
+			serviceTier: null,
+		};
+		const run = await this.plugin.startTaskRun(action, summary, executionConfig);
+		await this.loadAndRender();
+		let completedRun: TaskRun | null = null;
+		try {
+			const outcome = await this.plugin.runLightPaperIngest(run.id, flowOptions, profileId);
+			const conflict = outcome.result?.status === "conflict";
+			const status = outcome.exitCode === 0
+				? "done"
+				: outcome.loopStatus === "cancelled"
+					? "interrupted"
+					: "failed";
+			completedRun = await this.plugin.finishTaskRun(run.id, {
+				status,
+				exitCode: outcome.exitCode,
+				output: outcome.stdout,
+				error: status === "failed"
+					? conflict
+						? "发现身份或证据冲突，未生成所选输出（详见输出）"
+						: outcome.result
+							? "轻量 Agent 未按约定返回结构化结果（详见输出）"
+							: `轻量 Agent 未完成：${describeLightStatus(outcome.loopStatus)}`
+					: status === "interrupted"
+						? "任务已手动停止"
+						: "",
+			});
+			new Notice(
+				status === "done"
+					? conflict
+						? "文献入库发现冲突，详见任务结果"
+						: `${action.label}已完成（轻量 Agent）`
+					: status === "interrupted"
+						? `${action.label}已停止`
+						: `${action.label}未完成（轻量 Agent）`,
 			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);

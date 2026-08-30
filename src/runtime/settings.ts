@@ -190,6 +190,7 @@ export interface DashboardSettings {
 	webSearchTavilySecretId: string;
 	webSearchMaxResults: number;
 	webSearchTimeoutSeconds: number;
+	lightAgentMaxSteps: number;
 }
 
 export function normalizeReaderMarkdownFolders(value: unknown): string[] {
@@ -654,4 +655,5 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	webSearchTavilySecretId: "",
 	webSearchMaxResults: 5,
 	webSearchTimeoutSeconds: 20,
+	lightAgentMaxSteps: 10,
 };

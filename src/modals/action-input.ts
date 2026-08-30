@@ -28,10 +28,13 @@ import type {
 
 export type { ExecutionOverrides } from "../types/contracts";
 
+export type ActionRunnerKind = "light-agent" | "cli-agent";
+
 export interface ActionInputResult {
 	input: string;
 	overrides: ExecutionOverrides | Record<string, never>;
 	options: DashboardActionOptions;
+	runner: ActionRunnerKind;
 }
 
 interface ActionInputHost {
@@ -59,6 +62,8 @@ interface ActionInputHost {
 			serviceTier: "default" | "fast";
 		}>;
 	};
+	lightPaperIngestAvailable(): { ready: boolean; reason: string };
+	getActiveDirectProviderSummary(): { name: string; model: string } | null;
 	resolveActionExecutionConfig(
 		action: DashboardAction,
 		overrides?: Partial<ExecutionOverrides>,
@@ -88,6 +93,7 @@ export class ActionInputModal extends Modal {
 	private readonly action: DashboardAction;
 	private readonly onSubmit: (result: ActionInputResult) => void;
 	private readonly initialInput: string;
+	private runner: ActionRunnerKind = "cli-agent";
 
 	constructor(
 		app: App,
@@ -135,7 +141,29 @@ export class ActionInputModal extends Modal {
 			input.value = this.initialInput;
 		}
 
-		const controls = this.action.ai ? this.renderExecutionControls(contentEl) : null;
+		const runnerAvailable = this.action.id === "paper-ingest"
+			? this.plugin.lightPaperIngestAvailable()
+			: { ready: false, reason: "" };
+		if (this.action.id === "paper-ingest") {
+			this.runner = runnerAvailable.ready ? "light-agent" : "cli-agent";
+		}
+		const runnerChoiceHost = contentEl.createDiv();
+		const controlsHost = contentEl.createDiv();
+		let activeControls: { getOverrides: () => ExecutionOverrides } | null = null;
+		const renderControls = (): void => {
+			controlsHost.empty();
+			activeControls = null;
+			if (!this.action.ai) return;
+			if (this.action.id === "paper-ingest" && this.runner === "light-agent") {
+				this.renderLightAgentControls(controlsHost);
+				return;
+			}
+			activeControls = this.renderExecutionControls(controlsHost);
+		};
+		if (this.action.id === "paper-ingest") {
+			this.renderRunnerChoice(runnerChoiceHost, runnerAvailable, () => renderControls());
+		}
+		renderControls();
 		const footer = contentEl.createDiv({ cls: "agent-dashboard-modal-actions" });
 		const cancel = footer.createEl("button", { text: "取消" });
 		cancel.type = "button";
@@ -157,8 +185,9 @@ export class ActionInputModal extends Modal {
 			this.close();
 			this.onSubmit({
 				input: value,
-				overrides: controls ? controls.getOverrides() : {},
+				overrides: activeControls ? activeControls.getOverrides() : {},
 				options: actionOptions.getOptions(),
+				runner: this.runner,
 			});
 		};
 		if (input) {
@@ -174,6 +203,75 @@ export class ActionInputModal extends Modal {
 		submit.addEventListener("click", submitAction);
 		syncSubmitState();
 		window.setTimeout(() => (input || submit).focus(), 0);
+	}
+
+	/**
+	 * Chooses between the in-plugin light agent (Direct API) and the Codex
+	 * CLI toolkit pipeline for paper-ingest. Both produce the same outputs;
+	 * they differ in requirements and write scope.
+	 */
+	renderRunnerChoice(
+		parent: HTMLElement,
+		availability: { ready: boolean; reason: string },
+		onChange: () => void,
+	): void {
+		const section = parent.createEl("section", {
+			cls: "agent-dashboard-action-options",
+			attr: { "aria-label": "运行方式" },
+		});
+		section.createEl("h3", { text: "运行方式" });
+		const providerSummary = this.plugin.getActiveDirectProviderSummary();
+		const lightLabel = availability.ready && providerSummary
+			? `轻量 Agent · ${providerSummary.name}（${providerSummary.model}）`
+			: "轻量 Agent · Direct API";
+		const light = this.createRadioOption(section, "paper-ingest-runner", "light", lightLabel, this.runner === "light-agent");
+		light.disabled = !availability.ready;
+		const lightNote = section.createEl("p", {
+			cls: "agent-dashboard-action-options-description",
+			text: availability.ready
+				? "在插件内运行有界工具循环：只读检索知识库、白名单元数据接口、MinerU 提取和限定目录写入；步数与时间预算受限，可随时停止。"
+				: `轻量 Agent 不可用：${availability.reason}`,
+		});
+		lightNote.style.marginLeft = "24px";
+		const cli = this.createRadioOption(section, "paper-ingest-runner", "cli", "Codex CLI · 完整入库", this.runner === "cli-agent");
+		const cliNote = section.createEl("p", {
+			cls: "agent-dashboard-action-options-description",
+			text: "通过工具链里的编排管线运行：额外维护 papers.csv、references.bib、文献索引和 wiki/log。需要配置 Codex CLI 与工具链目录。",
+		});
+		cliNote.style.marginLeft = "24px";
+		const sync = (): void => {
+			this.runner = light.checked ? "light-agent" : "cli-agent";
+		};
+		light.addEventListener("change", () => {
+			sync();
+			onChange();
+		});
+		cli.addEventListener("change", () => {
+			sync();
+			onChange();
+		});
+		if (this.runner === "light-agent") light.checked = true;
+		else cli.checked = true;
+	}
+
+	renderLightAgentControls(parent: HTMLElement): void {
+		const section = parent.createEl("section", {
+			cls: "agent-dashboard-run-config",
+			attr: { "aria-label": "轻量 Agent 运行配置" },
+		});
+		const heading = section.createDiv({ cls: "agent-dashboard-run-config-heading" });
+		heading.createSpan({ text: "运行配置" });
+		const providerSummary = this.plugin.getActiveDirectProviderSummary();
+		heading.createSpan({
+			cls: "agent-dashboard-run-config-summary",
+			text: providerSummary
+				? `轻量 Agent · ${providerSummary.name} · ${providerSummary.model}`
+				: "轻量 Agent · Direct API",
+		});
+		section.createDiv({
+			cls: "agent-dashboard-run-config-note",
+			text: "模型只看到任务、检索结果和工具返回；写文件限定在 papers/ 与 wiki/sources/，联网接口限定在 Crossref/arXiv/DOI 白名单。不更新 papers.csv 与 references.bib（完整登记请用 Codex CLI 方式）。",
+		});
 	}
 
 	renderActionOptions(
@@ -465,6 +563,7 @@ export class ActionInputModal extends Modal {
 					mineruPages: normalizePages() || "",
 					mineruTimeoutSeconds: timeout.input.valueAsNumber,
 					mineruIncludeSourcePdf: includeSourcePdf.checked,
+					mineruRemoteConfirmed: uploadConfirmation ? uploadConfirmation.checked : true,
 				}),
 				isValid: () => {
 					if (!markdownOption.checked && !wikiOption.checked) return false;

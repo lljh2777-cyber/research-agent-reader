@@ -9,7 +9,12 @@ interface TaskResultHost {
 	isActionRunning(actionId: string): boolean;
 	getLintStatus(): LintStatus;
 	getMineruArticlePath?(run: TaskRun): string;
+	getLightAgentRunResult?(runId: string): {
+		result: { articlePath?: string; wikiPath?: string } | null;
+		filesWritten: readonly string[];
+	} | null;
 	activateMineruReaderView?(articlePath?: string): Promise<void>;
+	openVaultFile?(path: string): void;
 }
 
 export class TaskResultModal extends Modal {
@@ -87,13 +92,25 @@ export class TaskResultModal extends Modal {
 				this.onRepair?.();
 			});
 		}
-		const mineruArticlePath = this.plugin.getMineruArticlePath?.(this.run) || "";
-		if (mineruArticlePath) {
+		const lightResult = this.plugin.getLightAgentRunResult?.(this.run.id) || null;
+		const articlePath = lightResult?.result?.articlePath
+			|| this.plugin.getMineruArticlePath?.(this.run)
+			|| "";
+		if (articlePath) {
 			const openReader = footer.createEl("button", { text: "打开 MinerU 阅读器" });
 			openReader.type = "button";
 			openReader.addEventListener("click", () => {
 				this.close();
-				void this.plugin.activateMineruReaderView?.(mineruArticlePath);
+				void this.plugin.activateMineruReaderView?.(articlePath);
+			});
+		}
+		const wikiPath = lightResult?.result?.wikiPath || "";
+		if (wikiPath && this.plugin.openVaultFile) {
+			const openWiki = footer.createEl("button", { text: "打开文章 Wiki" });
+			openWiki.type = "button";
+			openWiki.addEventListener("click", () => {
+				this.close();
+				this.plugin.openVaultFile?.(wikiPath);
 			});
 		}
 		const close = footer.createEl("button", { cls: "mod-cta", text: "关闭" });

@@ -11,6 +11,7 @@ import {
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
 
 import { ACTION_BY_ID, type DashboardAction } from "./actions";
 import {
@@ -44,6 +45,8 @@ import {
 	sanitizeSettingsForStorage,
 } from "./runtime/persistence";
 import { ProcessExecutionService } from "./runtime/process-execution";
+import { AgentLoopService, type AgentLoopRunOutcome } from "./agent/agent-loop-service";
+import type { PaperIngestFlowOptions } from "./agent/paper-ingest-flow";
 import { VaultLintService } from "./services/vault-lint";
 import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./services/vault-evidence";
 import { saveQueryAnswerNote } from "./services/query-note";
@@ -120,6 +123,7 @@ import type {
 	DashboardProcessResult,
 	ExecutionConfig,
 	ExecutionOverrides,
+	DashboardProcessEvent,
 	LintReport,
 	LintStatus,
 	NormalizedProviderError,
@@ -205,6 +209,24 @@ export default class AgentDashboardPlugin extends Plugin {
 		readVaultImageData: (attachment) => this.readVaultImageData(attachment),
 		resolveWebSearchBackend: (profile) => this.resolveWebSearchBackend(profile),
 	});
+	private readonly agentLoopService = new AgentLoopService({
+		app: this.app,
+		getSettings: () => this.settings,
+		getProvider: (profileId) => {
+			const profile = this.getProviderProfile(profileId);
+			if (!profile || profile.lastTest?.ok !== true) return null;
+			return {
+				provider: this.createLLMProvider(profile),
+				profileName: profile.name,
+				model: profile.model,
+			};
+		},
+		providerHttpRequest: (options) => this.providerHttpRequest(options),
+		getTavilySecret: () => this.getTavilySecretValue(),
+		getLexicalRetriever: () => this.getLexicalRetriever(),
+		runMineruHelper: (args) => this.runMineruHelperProcess(args),
+	});
+	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private annotationPopover: AnnotationPopover | null = null;
@@ -2185,10 +2207,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (mode === "auto" && protocol) {
 			return { kind: "native", protocol };
 		}
-		const secretId = String(this.settings.webSearchTavilySecretId || "").trim();
-		const secret = secretId
-			? String(this.app.secretStorage?.getSecret?.(secretId) || "").trim()
-			: "";
+		const secret = this.getTavilySecretValue();
 		if (!secret) {
 			return {
 				kind: "unavailable",
@@ -2219,6 +2238,107 @@ export default class AgentDashboardPlugin extends Plugin {
 		const profile = this.getProviderProfile(profileId);
 		if (!profile) return false;
 		return this.resolveWebSearchBackend(profile).kind !== "unavailable";
+	}
+
+	getTavilySecretValue(): string {
+		const secretId = String(this.settings.webSearchTavilySecretId || "").trim();
+		if (!secretId) return "";
+		return String(this.app.secretStorage?.getSecret?.(secretId) || "").trim();
+	}
+
+	/** Whether the in-plugin light agent can run paper-ingest right now. */
+	lightPaperIngestAvailable(): { ready: boolean; reason: string } {
+		const profile = this.getProviderProfile(this.settings.activeProviderId);
+		if (!profile || profile.lastTest?.ok !== true) {
+			return { ready: false, reason: "需要一个已通过连接测试的 Direct API 配置（设置 → Direct API）" };
+		}
+		return { ready: true, reason: "" };
+	}
+
+	/**
+	 * Runs 文献入库 through the in-plugin bounded agent loop (Direct API
+	 * brain, allowlisted tools) instead of the Codex CLI toolkit pipeline.
+	 */
+	runLightPaperIngest(
+		runId: string,
+		options: PaperIngestFlowOptions,
+		profileId: string,
+		hooks: { onEvent?: (event: DashboardProcessEvent) => void } = {},
+	): Promise<AgentLoopRunOutcome> {
+		this.lightAgentResults.delete(runId);
+		return this.agentLoopService.runPaperIngest(runId, options, profileId, hooks)
+			.then((outcome) => {
+				this.lightAgentResults.set(runId, outcome);
+				return outcome;
+			})
+			.catch((error) => {
+				this.lightAgentResults.delete(runId);
+				throw error;
+			});
+	}
+
+	getLightAgentRunResult(runId: string): AgentLoopRunOutcome | null {
+		return this.lightAgentResults.get(runId) || null;
+	}
+
+	getActiveDirectProviderSummary(): { name: string; model: string } | null {
+		const profile = this.getProviderProfile(this.settings.activeProviderId);
+		if (!profile) return null;
+		return { name: profile.name, model: profile.model };
+	}
+
+	/** Opens a vault Markdown file in a new tab (used by result actions). */
+	openVaultFile(path: string): void {
+		const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
+		if (!(file instanceof TFile)) {
+			new Notice(`文件不存在：${path}`);
+			return;
+		}
+		void this.app.workspace.getLeaf("tab").openFile(file);
+	}
+
+	/**
+	 * Spawns the toolkit MinerU helper with an argument array (no shell) and
+	 * resolves with its exit code and captured output.
+	 */
+	private runMineruHelperProcess(args: {
+		pythonExecutable: string;
+		helperPath: string;
+		cliArgs: string[];
+		cwd: string;
+		timeoutMs: number;
+	}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+		return new Promise((resolve, reject) => {
+			let stdout = "";
+			let stderr = "";
+			let settled = false;
+			const child = spawn(args.pythonExecutable, args.cliArgs, {
+				cwd: args.cwd,
+				shell: false,
+				windowsHide: true,
+				env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+			});
+			const timer = window.setTimeout(() => {
+				if (settled) return;
+				settled = true;
+				child.kill();
+				resolve({ exitCode: 124, stdout, stderr: `${stderr}\nMinerU 提取超时`.trim() });
+			}, args.timeoutMs);
+			child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
+			child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+			child.once("error", (error: Error) => {
+				if (settled) return;
+				settled = true;
+				window.clearTimeout(timer);
+				reject(error);
+			});
+			child.once("close", (code: number | null) => {
+				if (settled) return;
+				settled = true;
+				window.clearTimeout(timer);
+				resolve({ exitCode: code ?? 1, stdout, stderr });
+			});
+		});
 	}
 
 	/**
@@ -2630,6 +2750,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	stopVaultAction(runId: string): boolean {
+		if (this.agentLoopService.stop(runId)) return true;
 		return this.processExecution.stopVaultAction(runId);
 	}
 

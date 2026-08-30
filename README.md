@@ -16,10 +16,14 @@ connecting optional local AI-agent workflows.
   figure navigation, reconstructed visuals, and caption recovery safeguards.
 - Creates local Markdown annotations from selected reading text.
 - Provides a vault dashboard, query view, and optional Direct API connections.
+- Runs paper intake through an in-plugin bounded agent loop on a Direct API
+  profile (allowlisted metadata lookups, vault search, MinerU conversion, and
+  write access limited to `papers/` and `wiki/sources/`), with the optional
+  Codex CLI toolkit pipeline remaining available for full registry updates.
 - Detects optional Codex CLI, Claude Code, OpenCode, MinerU, Python, R, and
   Obsidian CLI installations without installing or updating them.
-- Supports optional Research Vault Toolkit workflows for paper intake, deep
-  reading, code analysis, vault linting, and OKF export.
+- Supports optional Research Vault Toolkit workflows for deep reading, code
+  analysis, vault linting, and OKF export.
 
 The current user interface is primarily Simplified Chinese. English localization
 is planned before the first stable community release.
