@@ -224,6 +224,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		providerHttpRequest: (options) => this.providerHttpRequest(options),
 		getTavilySecret: () => this.getTavilySecretValue(),
 		getLexicalRetriever: () => this.getLexicalRetriever(),
+		getVaultRoot: () => this.getActiveVaultRoot(),
+		pathExists: (absolutePath) => fs.existsSync(absolutePath),
 		runMineruHelper: (args) => this.runMineruHelperProcess(args),
 	});
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
@@ -394,6 +396,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationPopover?.close();
 		this.hideAnnotationChip();
 		void this.flushScheduledSettingsSave();
+		this.agentLoopService.shutdown();
 		this.processExecution.shutdown();
 	}
 
@@ -2255,7 +2258,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		return { ready: true, reason: "" };
 	}
 
-	/** Whether the light agent could run MinerU (toolkit + Python + CLI). */
+	/** Whether the light agent could run MinerU (toolkit + Python + CLI + vault alignment). */
 	lightAgentMineruReady(): boolean {
 		const toolkitRoot = String(this.settings.toolkitRoot || "").trim();
 		if (!toolkitRoot || !fs.existsSync(toolkitRoot)) return false;
@@ -2264,7 +2267,27 @@ export default class AgentDashboardPlugin extends Plugin {
 		}
 		const python = String(this.settings.pythonExecutable || "").trim();
 		if (!python || !fs.existsSync(python)) return false;
-		return describeCliExecutable("mineru", this.settings.mineruExecutable).found;
+		if (!describeCliExecutable("mineru", this.settings.mineruExecutable).found) return false;
+		// The helper publishes under <toolkitRoot>/knowledge-base/papers/; the
+		// active vault must be that folder or the toolkit root itself, or the
+		// conversion result would land outside this vault.
+		const vaultRoot = this.getActiveVaultRoot().replace(/[\\/]+$/, "").toLowerCase();
+		if (!vaultRoot) return false;
+		const normalizedToolkit = toolkitRoot.replace(/[\\/]+$/, "").toLowerCase();
+		return vaultRoot === normalizedToolkit
+			|| vaultRoot === `${normalizedToolkit}/knowledge-base`;
+	}
+
+	/** Absolute filesystem path of the active vault (desktop adapter only). */
+	getActiveVaultRoot(): string {
+		const adapter = this.app.vault.adapter as unknown as {
+			getBasePath?: () => string;
+		};
+		try {
+			return typeof adapter.getBasePath === "function" ? adapter.getBasePath() : "";
+		} catch {
+			return "";
+		}
 	}
 
 	/**
@@ -2291,6 +2314,12 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	getLightAgentRunResult(runId: string): AgentLoopRunOutcome | null {
 		return this.lightAgentResults.get(runId) || null;
+	}
+
+	/** Persisted receipt paths for a light-agent run (survive reloads). */
+	getTaskRunArtifacts(run: TaskRun): { articlePath?: string; wikiPath?: string } | null {
+		if (run.actionId !== "paper-ingest" || !run.artifacts) return null;
+		return run.artifacts;
 	}
 
 	getActiveDirectProviderSummary(): { name: string; model: string } | null {
@@ -2330,6 +2359,9 @@ export default class AgentDashboardPlugin extends Plugin {
 				cwd: args.cwd,
 				shell: false,
 				windowsHide: true,
+				// Own process group on POSIX so the negative-pid kill in
+				// killTree() reaches the MinerU CLI subprocess as well.
+				detached: process.platform !== "win32",
 				env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
 			});
 			const settle = (result: { exitCode: number; stdout: string; stderr: string } | Error) => {
@@ -2342,12 +2374,34 @@ export default class AgentDashboardPlugin extends Plugin {
 			};
 			const killTree = (): void => {
 				try {
-					// Windows child from spawn without shell: kill() ends the
-					// direct child; helper itself spawns no grandchildren that
-					// outlive it (MinerU CLI is invoked synchronously by the helper).
-					child.kill();
+					if (!child.pid) {
+						child.kill();
+						return;
+					}
+					if (process.platform === "win32") {
+						// child.kill() only terminates the direct Python process;
+						// the MinerU CLI it waits on would survive as an orphan.
+						// taskkill /T ends the whole process tree (array args, no shell).
+						spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+							shell: false,
+							windowsHide: true,
+						});
+					} else {
+						// The helper is spawned detached on POSIX paths via negative
+						// pid when possible; plain kill remains the fallback.
+						try {
+							process.kill(-child.pid);
+						} catch {
+							child.kill();
+						}
+					}
 				} catch (killError) {
 					console.warn("Could not kill MinerU helper process", killError);
+					try {
+						child.kill();
+					} catch {
+						// Nothing more we can do.
+					}
 				}
 			};
 			const onAbort = (): void => {

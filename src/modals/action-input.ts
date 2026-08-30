@@ -334,7 +334,7 @@ export class ActionInputModal extends Modal {
 					cls: "agent-dashboard-action-options-warning",
 					text: !mineruAvailable
 						? "未检测到 MinerU CLI。若要生成原文 Markdown，请先在插件设置的工具链与运行环境中配置。"
-						: "轻量 Agent 需要「工具包目录 + Python + MinerU CLI」三者齐备才能生成原文 Markdown；当前不完整，本次仅可创建文章 Wiki（内容来自元数据与用户说明，不读取 PDF 正文）。",
+						: "轻量 Agent 生成原文 Markdown 需要：工具包目录 + Python + MinerU CLI 齐备，且当前 Vault 对应工具链目录（或其 knowledge-base 子目录）；当前不满足，本次仅可创建文章 Wiki（内容来自元数据与用户说明，不读取 PDF 正文）。",
 				})
 				: null;
 

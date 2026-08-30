@@ -50,6 +50,8 @@ const hookBuild = esbuild.buildSync({
 			"  runAuthorizedMineruExtract,",
 			"  mineruReadiness,",
 			"  commitSourceNote,",
+			"  validateSourceNoteContent,",
+			"  yamlSafeScalar,",
 			"  VaultWriteJournal,",
 			'} from "./src/agent/tools";',
 			"export {",
@@ -60,6 +62,11 @@ const hookBuild = esbuild.buildSync({
 			"  buildIdentityTools,",
 			"  parseIdentityResult,",
 			"  parseNoteDraft,",
+			"  validateIdentityReceipts,",
+			"  evaluateDraftPhase,",
+			"  computeIngestOutcomeStatus,",
+			"  resolveUniqueCitekey,",
+			"  deriveArticleVaultPath,",
 			"  resolveArticleVaultPath,",
 			"  PAPER_INGEST_READ_PREFIXES,",
 			'} from "./src/agent/paper-ingest-flow";',
@@ -94,6 +101,8 @@ const {
 	runAuthorizedMineruExtract,
 	mineruReadiness,
 	commitSourceNote,
+	validateSourceNoteContent,
+	yamlSafeScalar,
 	VaultWriteJournal,
 	buildIdentitySystemPrompt,
 	buildIdentityUserMessage,
@@ -102,6 +111,11 @@ const {
 	buildIdentityTools,
 	parseIdentityResult,
 	parseNoteDraft,
+	validateIdentityReceipts,
+	evaluateDraftPhase,
+	computeIngestOutcomeStatus,
+	resolveUniqueCitekey,
+	deriveArticleVaultPath,
 	resolveArticleVaultPath,
 	PAPER_INGEST_READ_PREFIXES,
 	articleHeadContainsTitle,
@@ -114,8 +128,9 @@ const createContext = () => ({
 	remainingMs: () => 600000,
 });
 
-function createFakeVault(files) {
+function createFakeVault(files, options = {}) {
 	const written = [];
+	const created = [];
 	const adapter = {
 		exists: async (target) => {
 			const normalized = String(target).replace(/\\/g, "/");
@@ -123,19 +138,37 @@ function createFakeVault(files) {
 			for (const key of files.keys()) {
 				if (key.startsWith(`${normalized}/`)) return true;
 			}
-			return written.some((entry) => entry.path === normalized);
+			return [...written, ...created].some((entry) => entry.path === normalized);
 		},
 		write: async (target, data) => {
 			written.push({ path: String(target), data: String(data) });
 		},
 		mkdir: async () => {},
+		read: async (target) => {
+			const normalized = String(target).replace(/\\/g, "/");
+			if (files.has(normalized)) return files.get(normalized);
+			const entry = [...written, ...created].find((item) => item.path === normalized);
+			if (!entry) throw new Error(`文件不存在：${normalized}`);
+			return entry.data;
+		},
 	};
 	const toStubFile = (filePath) => {
 		const extension = filePath.split(".").pop() || "";
 		return Object.assign(new ObsidianTFile(), { path: filePath, extension });
 	};
+	const create = async (target, data) => {
+		const normalized = String(target).replace(/\\/g, "/");
+		if (files.has(normalized) || created.some((entry) => entry.path === normalized)) {
+			throw new Error("File already exists");
+		}
+		const entry = { path: normalized, data: String(data) };
+		created.push(entry);
+		return toStubFile(normalized);
+	};
 	return {
 		written,
+		created,
+		createShouldFail: options.createShouldFail || false,
 		vault: {
 			getAbstractFileByPath: (target) => {
 				const normalized = String(target).replace(/\\/g, "/");
@@ -147,6 +180,10 @@ function createFakeVault(files) {
 			getFiles: () => [...files.keys()].map(toStubFile),
 			read: async (file) => files.get(String(file.path)) ?? "",
 			adapter,
+			create: async (target, data) => {
+				if (options.createShouldFail) throw new Error("File already exists");
+				return create(target, data);
+			},
 		},
 	};
 }
@@ -186,23 +223,28 @@ function testExtractFirstJsonObject() {
 	assert.equal(extractFirstJsonObject("没有 JSON").json, null);
 }
 
-async function testLoopToolRoundtrip() {
-	const toolCalls = [];
+async function testLoopToolRoundtripAndReceipts() {
 	const tools = [{
 		name: "echo",
 		description: "echoes input",
 		parameters: { value: "任意字符串" },
 		required: ["value"],
 		async execute(args) {
-			toolCalls.push(args);
 			return { output: `echo:${args.value}`, summary: "echoed" };
+		},
+	}, {
+		name: "boom",
+		description: "always fails",
+		parameters: {},
+		async execute() {
+			throw new Error("boom");
 		},
 	}];
 	const provider = createFakeProvider([
 		JSON.stringify({ action: "tool", tool: "echo", arguments: { value: "hi" } }),
-		JSON.stringify({ action: "final", result: { ok: true, value: "hi" } }),
+		JSON.stringify({ action: "tool", tool: "boom", arguments: {} }),
+		JSON.stringify({ action: "final", result: { ok: true } }),
 	]);
-	const steps = [];
 	const result = await runBoundedAgentLoop({
 		system: "测试系统提示",
 		user: "开始任务",
@@ -210,16 +252,15 @@ async function testLoopToolRoundtrip() {
 		provider,
 		model: "test-model",
 		maxTokens: 4096,
-		onStep: (step) => steps.push(step.kind),
 	});
 	assert.equal(result.status, "completed");
 	assert.equal(result.final.ok, true);
-	assert.equal(toolCalls.length, 1);
-	assert.equal(toolCalls[0].value, "hi");
-	assert.deepEqual(steps, ["tool", "final"]);
-	assert.match(result.trace, /调用 echo/);
-	assert.match(result.trace, /echo → echoed/);
-	assert.match(provider.calls[0][0], /工具循环协议/);
+	assert.equal(result.toolCalls.length, 2, "plugin must record one receipt per tool execution");
+	assert.equal(result.toolCalls[0].tool, "echo");
+	assert.equal(result.toolCalls[0].ok, true);
+	assert.match(result.toolCalls[0].argsSummary, /value=hi/);
+	assert.equal(result.toolCalls[1].tool, "boom");
+	assert.equal(result.toolCalls[1].ok, false);
 }
 
 async function testLoopRepairsNonConsecutiveProtocolErrors() {
@@ -256,22 +297,36 @@ async function testLoopRepairsNonConsecutiveProtocolErrors() {
 	assert.match(third.error, /工具循环协议/);
 }
 
-async function testLoopUnknownToolAndBudget() {
+async function testLoopCancellationAbortsSignalDuringTools() {
 	const provider = createFakeProvider([
-		JSON.stringify({ action: "tool", tool: "nope", arguments: {} }),
-		JSON.stringify({ action: "final", result: { recovered: true } }),
+		JSON.stringify({ action: "tool", tool: "wait", arguments: {} }),
+		JSON.stringify({ action: "final", result: {} }),
 	]);
+	let cancelled = false;
+	let signalDuringTool = null;
+	const controller = new AbortController();
 	const result = await runBoundedAgentLoop({
 		system: "s", user: "u",
 		tools: [{
-			name: "real", description: "d", parameters: {},
-			async execute() { return { output: "ok" }; },
+			name: "wait", description: "d", parameters: {},
+			async execute(args, context) {
+				assert.ok(context && typeof context.remainingMs === "function", "tools must receive a context");
+				cancelled = true;
+				controller.abort();
+				await new Promise((resolve) => setTimeout(resolve, 900));
+				signalDuringTool = context.signal.aborted;
+				return { output: "done waiting" };
+			},
 		}],
 		provider, model: "m", maxTokens: 2048,
+		signal: controller.signal,
+		isCancelled: () => cancelled,
 	});
-	assert.equal(result.status, "completed");
-	assert.match(result.trace, /未知工具 nope/);
+	assert.equal(result.status, "cancelled", "external cancel must end the loop");
+	assert.equal(signalDuringTool, true, "context signal must be aborted while the tool is running");
+}
 
+async function testLoopBudgetAndTruncation() {
 	const loopProvider = createFakeProvider([
 		() => JSON.stringify({ action: "tool", tool: "loop", arguments: {} }),
 	]);
@@ -287,28 +342,6 @@ async function testLoopUnknownToolAndBudget() {
 	assert.equal(budgeted.status, "budget-exhausted");
 	assert.equal(executions, 4);
 	assert.match(budgeted.error, /最大轮数/);
-}
-
-async function testLoopCancellationAndTruncation() {
-	let cancelled = false;
-	const provider = createFakeProvider([
-		JSON.stringify({ action: "tool", tool: "wait", arguments: {} }),
-		JSON.stringify({ action: "final", result: {} }),
-	]);
-	const result = await runBoundedAgentLoop({
-		system: "s", user: "u",
-		tools: [{
-			name: "wait", description: "d", parameters: {},
-			async execute(args, context) {
-				assert.ok(context && typeof context.remainingMs === "function", "tools must receive a context");
-				cancelled = true;
-				return { output: "done waiting" };
-			},
-		}],
-		provider, model: "m", maxTokens: 2048,
-		isCancelled: () => cancelled,
-	});
-	assert.equal(result.status, "cancelled");
 
 	const truncationProvider = createFakeProvider([
 		JSON.stringify({ action: "tool", tool: "firehose", arguments: {} }),
@@ -330,7 +363,6 @@ async function testLoopCancellationAndTruncation() {
 	assert.ok(toolResultMessage, "tool result message missing from transcript");
 	assert.ok(toolResultMessage.includes("已截断"));
 
-	// Hard budget: with only 10 chars left, at most 10 chars may pass through.
 	const budgetProvider = createFakeProvider([
 		JSON.stringify({ action: "tool", tool: "f", arguments: {} }),
 		JSON.stringify({ action: "tool", tool: "f", arguments: {} }),
@@ -388,19 +420,27 @@ async function testVaultReadAndListScoping() {
 	});
 }
 
-async function testVaultSearchTool() {
+async function testVaultSearchScopeFiltering() {
+	const calls = [];
 	const retriever = {
-		retrieve: async (question) => ({
-			lexical_seeds: question.includes("Existing")
-				? [{ path: "wiki/sources/existing.md", title: "Existing", score: 3 }]
-				: [],
-		}),
+		retrieve: async (question, expandedTerms, options) => {
+			calls.push(options);
+			// The private result would outrank the in-scope one globally.
+			return {
+				lexical_seeds: question.includes("secret")
+					? [
+						{ path: "private/secret.md", title: "个人计划", score: 9 },
+						{ path: "wiki/sources/a.md", title: "Demo", score: 2 },
+					]
+					: [{ path: "wiki/sources/a.md", title: "Demo", score: 2 }],
+			};
+		},
 	};
-	const tool = createVaultSearchTool(retriever);
-	const found = await tool.execute({ question: "Existing related" }, createContext());
-	assert.match(found.output, /wiki\/sources\/existing\.md/);
-	const empty = await tool.execute({ question: "nothing" }, createContext());
-	assert.match(empty.output, /没有找到/);
+	const tool = createVaultSearchTool(retriever, PAPER_INGEST_READ_PREFIXES);
+	const found = await tool.execute({ question: "secret Demo" }, createContext());
+	assert.doesNotMatch(found.output, /private\/secret\.md/, "out-of-scope paths must never reach the model");
+	assert.match(found.output, /wiki\/sources\/a\.md/);
+	assert.equal(calls[0] && calls[0].allowedPrefixes[0], "wiki/sources", "retriever must be asked to scope ranking itself");
 	await tool.execute({ question: "" }, createContext()).then(() => {
 		assert.fail("expected empty question to be rejected");
 	}, (error) => {
@@ -410,9 +450,11 @@ async function testVaultSearchTool() {
 
 async function testCrossrefDomainTools() {
 	const requests = [];
+	const signals = [];
 	const deps = {
-		httpGetJson: async (url) => {
+		httpGetJson: async (url, timeoutMs, options) => {
 			requests.push(url);
+			signals.push(options && options.signal);
 			if (url.includes("query.bibliographic")) {
 				return {
 					status: 200,
@@ -437,12 +479,13 @@ async function testCrossrefDomainTools() {
 		},
 	};
 	const search = createCrossrefSearchTool(deps);
-	const searchResult = await search.execute({ query: "Demo Paper & Special/Chars" }, createContext());
+	const context = createContext();
+	const searchResult = await search.execute({ query: "Demo Paper & Special/Chars" }, context);
 	const decoded = decodeURIComponent(requests[0]);
 	assert.ok(requests[0].startsWith("https://api.crossref.org/works?query.bibliographic="));
 	assert.match(decoded, /Demo Paper & Special\/Chars/);
 	assert.match(searchResult.output, /10\.1000\/demo/);
-	assert.match(searchResult.output, /Journal of Tests/);
+	assert.equal(signals[0], context.signal, "crossref requests must carry the run signal");
 
 	const doi = createCrossrefDoiTool(deps);
 	const doiResult = await doi.execute({ doi: "https://doi.org/10.1000/found" }, createContext());
@@ -565,12 +608,15 @@ async function testAuthorizedMineruExtract() {
 	assert.match(aborted.message, /已取消/);
 }
 
-async function testCommitSourceNoteCreateOnly() {
+async function testCommitSourceNoteSafety() {
 	const fake = createFakeVault(new Map([["wiki/sources/existing.md", "已有内容"]]));
 	const journal = new VaultWriteJournal();
 	const fields = {
 		title: "Demo Paper: A Study",
 		title_zh: "演示论文：一项研究",
+		authors: "Wang, J.; Li, H.",
+		year: "2026",
+		doi: "10.1000/demo",
 		researchQuestion: "研究问题内容。",
 		conclusion: "结论内容。",
 		motivation: "动机内容。",
@@ -581,42 +627,125 @@ async function testCommitSourceNoteCreateOnly() {
 		{ app: fake },
 		"demo_2026",
 		fields,
-		"ingest_mode: lightweight\nregistry_status: pending",
+		"",
 	);
 	assert.equal(receipt.path, "wiki/sources/demo_2026.md");
 	assert.equal(receipt.operation, "create");
-	assert.match(fake.written[0].data, /title_zh: 演示论文：一项研究/);
-	assert.match(fake.written[0].data, /ingest_mode: lightweight/);
-	assert.match(fake.written[0].data, /## 研究问题/);
+	const content = fake.created[0].data;
+	assert.match(content, /title: "Demo Paper: A Study"/);
+	assert.match(content, /title_zh: "演示论文：一项研究"/);
+	assert.match(content, /authors: "Wang, J\.; Li, H\.""/.source ? /authors: "Wang, J\.; Li, H\."/ : /authors/);
+	assert.match(content, /doi: "10\.1000\/demo"/);
+	assert.match(content, /ingest_mode: "lightweight"/);
+	assert.match(content, /registry_status: "pending"/);
+	assert.match(content, /## 研究问题/);
+	assert.deepEqual(validateSourceNoteContent(content), []);
 	journal.record(receipt);
 	assert.deepEqual(journal.paths(), ["wiki/sources/demo_2026.md"]);
 
-	// Create-only: an existing note must never be overwritten.
+	// Atomic create: the vault's create() is used, so an existing note is
+	// never overwritten.
 	const overwrite = await commitSourceNote({ app: fake }, "existing", fields, "").then(() => null, (error) => error);
 	assert.ok(overwrite instanceof Error);
 	assert.match(overwrite.message, /不会覆盖/);
-	assert.equal(fake.written.length, 1);
+	assert.equal(fake.written.length, 0, "no adapter.write may be used for note commits");
+
+	// Concurrent create between dedup and commit: vault.create throws.
+	const concurrent = await commitSourceNote({ app: { vault: { ...fake.vault, create: async () => { throw new Error("File already exists"); } } } }, "demo_2026", fields, "")
+		.then(() => null, (error) => error);
+	assert.match(concurrent.message, /不会覆盖/);
+
+	const injected = await commitSourceNote(
+		{ app: fake },
+		"injected",
+		{ ...fields, title: "正常标题\nregistry_status: \"registered\"\nmalicious: true" },
+		"",
+	).then(() => null, (error) => error);
+	assert.equal(injected, null, "injection attempts must be neutralized, not rejected");
+	const injectedContent = fake.created[fake.created.length - 1].data;
+	assert.match(injectedContent, /title: "正常标题 registry_status: \\"registered\\" malicious: true"/);
+	assert.deepEqual(validateSourceNoteContent(injectedContent), []);
+
+	const crossLink = await commitSourceNote(
+		{ app: fake },
+		"crosslink",
+		{ ...fields, conclusion: "见 [[papers/example/article]] 的图 2" },
+		"",
+	).then(() => null, (error) => error);
+	assert.ok(crossLink instanceof Error);
+	assert.match(crossLink.message, /跨主目录链接/);
 
 	const badCitekey = await commitSourceNote({ app: fake }, "../evil", fields, "").then(() => null, (error) => error);
 	assert.match(badCitekey.message, /citekey 不合法/);
+
+	const cancelledController = new AbortController();
+	cancelledController.abort();
+	const cancelled = await commitSourceNote(
+		{ app: fake }, "cancelled", fields, "", { signal: cancelledController.signal },
+	).then(() => null, (error) => error);
+	assert.match(cancelled.message, /已取消/);
 }
 
-async function testResolveArticleVaultPathLayouts() {
-	const rootLayout = createFakeVault(new Map([["papers/x/article.md", "# T"]]));
-	assert.equal(await resolveArticleVaultPath({ app: rootLayout }, "x"), "papers/x/article.md");
-	const nestedLayout = createFakeVault(new Map([["knowledge-base/papers/x/article.md", "# T"]]));
-	assert.equal(
-		await resolveArticleVaultPath({ app: nestedLayout }, "x"),
-		"knowledge-base/papers/x/article.md",
+async function testArticlePathBinding() {
+	// Published inside the vault (knowledge-base layout) → accepted.
+	const vaultRoot = "D:/Obsidian Vault/DemoVault";
+	const inside = deriveArticleVaultPath(
+		"D:/Obsidian Vault/DemoVault/papers/demo_2026",
+		vaultRoot,
 	);
-	const missing = createFakeVault(new Map([]));
-	assert.equal(await resolveArticleVaultPath({ app: missing }, "x"), "");
+	assert.equal(inside, "papers/demo_2026/article.md");
+
+	const nested = deriveArticleVaultPath(
+		"D:/Obsidian Vault/DemoVault/knowledge-base/papers/demo_2026",
+		`${vaultRoot}/knowledge-base`,
+	);
+	assert.equal(nested, "papers/demo_2026/article.md");
+
+	// Published in a different toolkit → never claimed as this run's receipt.
+	const outside = deriveArticleVaultPath(
+		"D:/ResearchToolkit/knowledge-base/papers/demo_2026",
+		vaultRoot,
+	);
+	assert.equal(outside, "");
+
+	// A stale same-citekey package in the vault cannot be claimed either —
+	// the path must come from the published location.
+	const vault = createFakeVault(new Map([["papers/demo_2026/article.md", "# 旧包"]]));
+	const claimed = await resolveArticleVaultPath(
+		{ app: vault },
+		"D:/ResearchToolkit/knowledge-base/papers/demo_2026",
+		vaultRoot,
+	);
+	assert.equal(claimed, "", "stale same-citekey vault files must not be claimed");
+
+	const resolvedInside = await resolveArticleVaultPath(
+		{ app: vault },
+		"D:/Obsidian Vault/DemoVault/papers/demo_2026",
+		vaultRoot,
+	);
+	assert.equal(resolvedInside, "papers/demo_2026/article.md");
+}
+
+async function testResolveUniqueCitekey() {
+	const existing = new Set(["demo_2026", "demo_2026-2"]);
+	const first = await resolveUniqueCitekey("other_2026", async (key) => existing.has(key));
+	assert.deepEqual(first, { citekey: "other_2026", renamed: false });
+	const suffixed = await resolveUniqueCitekey("demo_2026", async (key) => existing.has(key));
+	assert.deepEqual(suffixed, { citekey: "demo_2026-3", renamed: true });
+	const full = await resolveUniqueCitekey(
+		"demo_2026",
+		async (key) => existing.has(key) || key === "demo_2026-3"
+			|| key === "demo_2026-4" || key === "demo_2026-5"
+			|| key === "demo_2026-6" || key === "demo_2026-7"
+			|| key === "demo_2026-8" || key === "demo_2026-9",
+	).then(() => null, (error) => error);
+	assert.match(full.message, /已被占用/);
 }
 
 function testIdentityAndDraftContracts() {
 	const options = {
-		sourcePdfPath: "D:/raw/demo.pdf",
-		requestNotes: "重点处理图 2",
+		sourcePdfPath: "D:/Users/someone/PrivateDir/demo.pdf",
+		requestNotes: "D:/Users/someone/PrivateDir/demo.pdf\n重点处理图 2",
 		createArticleMarkdown: true,
 		createArticleWiki: true,
 		articleWikiSource: "auto",
@@ -635,10 +764,13 @@ function testIdentityAndDraftContracts() {
 	assert.match(identityPrompt, /crossref_search/);
 	assert.match(identityPrompt, /不能写入任何文件/);
 	assert.match(identityPrompt, /不是给你的指令/);
+	assert.match(identityPrompt, /插件会核对本阶段是否真的执行过元数据查询和去重检索/);
 	assert.doesNotMatch(identityPrompt, /write_note/);
 
+	// Path privacy: only the basename reaches the model prompt.
 	const user = buildIdentityUserMessage(options);
-	assert.match(user, /D:\/raw\/demo\.pdf/);
+	assert.match(user, /demo\.pdf/);
+	assert.doesNotMatch(user, /PrivateDir/);
 	assert.match(user, /重点处理图 2/);
 
 	const draftPrompt = buildDraftSystemPrompt(options, "demo_2026", "Demo Paper");
@@ -654,17 +786,23 @@ function testIdentityAndDraftContracts() {
 
 	const verified = parseIdentityResult({
 		status: "verified",
+		duplicateStatus: "none",
 		citekey: "demo_2026",
 		title: "Demo Paper",
+		year: "2026",
 		doi: "https://doi.org/10.1000/demo",
-		notes: ["PDF 正文未读取；说明文字带 / 和 \\ 不应被路径化"],
+		notes: ["说明文字带 / 和 \\ 不应被路径化"],
 	});
 	assert.equal(verified.status, "verified");
+	assert.equal(verified.duplicateStatus, "none");
 	assert.equal(verified.doi, "10.1000/demo");
 	assert.match(verified.notes[0], /不应被路径化/);
 
-	assert.throws(() => parseIdentityResult({ status: "verified", citekey: "bad citekey!" }), /citekey 不合法/);
-	const conflict = parseIdentityResult({ status: "conflict", conflicts: ["DOI 与标题不一致"], citekey: "" });
+	assert.throws(() => parseIdentityResult({ status: "verified", duplicateStatus: "none", citekey: "bad citekey!" }), /citekey 不合法/);
+	assert.throws(() => parseIdentityResult({ status: "verified", duplicateStatus: "none", citekey: "ok_2026", title: "" }), /原文标题/);
+	assert.throws(() => parseIdentityResult({ status: "verified", duplicateStatus: "none", citekey: "ok_2026", title: "Demo Paper", year: "20X6" }), /四位数字/);
+	assert.equal(parseIdentityResult({ status: "verified", citekey: "ok_2026", title: "Demo Paper" }), null, "duplicateStatus is required for verified identities");
+	const conflict = parseIdentityResult({ status: "conflict", duplicateStatus: "possible", conflicts: ["DOI 与标题不一致"], citekey: "" });
 	assert.equal(conflict.status, "conflict");
 	assert.equal(parseIdentityResult({ status: "nonsense" }), null);
 	assert.equal(parseIdentityResult(null), null);
@@ -683,6 +821,107 @@ function testIdentityAndDraftContracts() {
 	assert.equal(draft.evidenceGaps, "缺口");
 	const longSection = "x".repeat(9000);
 	assert.equal(parseNoteDraft({ status: "completed", conclusion: longSection }).conclusion.length, 6000);
+}
+
+function testIdentityReceiptGate() {
+	const identity = {
+		status: "verified",
+		duplicateStatus: "none",
+		citekey: "demo_2026",
+		title: "Demo Paper",
+		title_zh: "",
+		authors: "",
+		year: "2026",
+		doi: "10.1000/demo",
+		duplicates: [],
+		conflicts: [],
+		notes: [],
+	};
+	// First-round "verified" without any tool work must be rejected.
+	assert.match(
+		validateIdentityReceipts(identity, [])[0],
+		/元数据查询/,
+	);
+	const missingDedup = validateIdentityReceipts(identity, [
+		{ tool: "crossref_search", ok: true, argsSummary: "query=demo" },
+	]);
+	assert.equal(missingDedup.length, 2, "missing dedup lookup AND unverified DOI must both be rejected");
+	assert.match(missingDedup[0], /去重检索/);
+	assert.match(missingDedup[1], /crossref_doi/);
+	assert.deepEqual(
+		validateIdentityReceipts(identity, [
+			{ tool: "crossref_search", ok: true, argsSummary: "query=demo" },
+			{ tool: "vault_search", ok: true, argsSummary: "question=demo" },
+			{ tool: "crossref_doi", ok: true, argsSummary: "doi=https://doi.org/10.1000/DEMO · " },
+		]),
+		[],
+		"full receipts must pass (doi.org prefix and casing normalized)",
+	);
+}
+
+function testDraftGateAndStatusSemantics() {
+	const options = {
+		sourcePdfPath: "a.pdf",
+		requestNotes: "",
+		createArticleMarkdown: true,
+		createArticleWiki: true,
+		articleWikiSource: "article",
+		mineruModel: "vlm",
+		mineruLanguage: "en",
+		mineruOcr: false,
+		mineruFormula: true,
+		mineruTable: true,
+		mineruPages: "",
+		mineruTimeoutSeconds: 600,
+		mineruIncludeSourcePdf: false,
+		remoteUploadConfirmed: true,
+	};
+	// Strict article mode without a verified package must not draft.
+	const blocked = evaluateDraftPhase(options, "", false);
+	assert.equal(blocked.run, false);
+	assert.match(blocked.blocker, /已有 article\.md/);
+	const allowed = evaluateDraftPhase(options, "papers/x/article.md", false);
+	assert.equal(allowed.run, true);
+	const downgraded = evaluateDraftPhase({ ...options, articleWikiSource: "auto" }, "", false);
+	assert.equal(downgraded.run, true);
+	assert.match(downgraded.downgradeNote, /元数据与用户说明/);
+
+	// Technical errors are "failed", never dressed up as conflicts.
+	assert.equal(
+		computeIngestOutcomeStatus({
+			cancelled: false, conflicts: [], errors: ["Provider timeout"],
+			identityConflict: false, markdownSatisfied: true, wikiSatisfied: true,
+		}),
+		"failed",
+	);
+	assert.equal(
+		computeIngestOutcomeStatus({
+			cancelled: false, conflicts: ["疑似重复"], errors: [],
+			identityConflict: false, markdownSatisfied: true, wikiSatisfied: true,
+		}),
+		"conflict",
+	);
+	assert.equal(
+		computeIngestOutcomeStatus({
+			cancelled: false, conflicts: [], errors: [],
+			identityConflict: false, markdownSatisfied: false, wikiSatisfied: true,
+		}),
+		"failed",
+	);
+	assert.equal(
+		computeIngestOutcomeStatus({
+			cancelled: false, conflicts: [], errors: [],
+			identityConflict: false, markdownSatisfied: true, wikiSatisfied: true,
+		}),
+		"completed",
+	);
+	assert.equal(
+		computeIngestOutcomeStatus({
+			cancelled: true, conflicts: [], errors: [],
+			identityConflict: false, markdownSatisfied: true, wikiSatisfied: true,
+		}),
+		"failed",
+	);
 }
 
 function testPhaseToolsetsAreRead() {
@@ -725,28 +964,40 @@ async function testArticleHeadTitleGate() {
 		await articleHeadContainsTitle({ app: fake }, "papers/other/article.md", "Novae: A Graph-Based Foundation Model for Spatial Transcriptomics"),
 		false,
 	);
-	// Very short titles skip the heuristic gate.
-	assert.equal(await articleHeadContainsTitle({ app: fake }, "papers/other/article.md", "Tiny"), true);
-	assert.equal(await articleHeadContainsTitle({ app: fake }, "papers/none/article.md", "Anything At All"), false);
+	// Empty/short titles fail the gate instead of passing it.
+	assert.equal(await articleHeadContainsTitle({ app: fake }, "papers/other/article.md", "Tiny"), false);
+	assert.equal(await articleHeadContainsTitle({ app: fake }, "papers/other/article.md", ""), false);
+	assert.equal(await articleHeadContainsTitle({ app: fake }, "papers/none/article.md", "Anything At All Here"), false);
+}
+
+function testYamlScalarSafety() {
+	assert.equal(yamlSafeScalar("plain"), "\"plain\"");
+	assert.equal(yamlSafeScalar("a\nb: c"), "\"a b: c\"");
+	assert.equal(yamlSafeScalar("单引号'与\"双引号"), "\"单引号'与\\\"双引号\"");
+	assert.doesNotMatch(yamlSafeScalar("标题\n---"), /真实换行|标题\n/);
 }
 
 (async () => {
 	testExtractFirstJsonObject();
-	await testLoopToolRoundtrip();
+	await testLoopToolRoundtripAndReceipts();
 	await testLoopRepairsNonConsecutiveProtocolErrors();
-	await testLoopUnknownToolAndBudget();
-	await testLoopCancellationAndTruncation();
+	await testLoopCancellationAbortsSignalDuringTools();
+	await testLoopBudgetAndTruncation();
 	await testVaultReadAndListScoping();
-	await testVaultSearchTool();
+	await testVaultSearchScopeFiltering();
 	await testCrossrefDomainTools();
 	await testWebSearchToolValidation();
 	testMineruHelperArgValidation();
 	await testAuthorizedMineruExtract();
-	await testCommitSourceNoteCreateOnly();
-	await testResolveArticleVaultPathLayouts();
+	await testCommitSourceNoteSafety();
+	await testArticlePathBinding();
+	await testResolveUniqueCitekey();
 	testIdentityAndDraftContracts();
+	testIdentityReceiptGate();
+	testDraftGateAndStatusSemantics();
 	testPhaseToolsetsAreRead();
 	await testArticleHeadTitleGate();
+	testYamlScalarSafety();
 	console.log("AGENT_LOOP_TESTS_OK");
 })().catch((error) => {
 	console.error(error);

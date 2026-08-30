@@ -18,13 +18,18 @@ export interface VaultToolDeps {
 				exists(path: string, sensitive?: boolean): Promise<boolean>;
 				write(path: string, data: string): Promise<void>;
 				mkdir(path: string): Promise<void>;
+				read(path: string): Promise<string>;
 			};
 		};
 	};
 }
 
 export interface HttpToolDeps {
-	httpGetJson(url: string, timeoutMs: number): Promise<{ status: number; json: unknown; text: string }>;
+	httpGetJson(
+		url: string,
+		timeoutMs: number,
+		options?: { signal?: AbortSignal },
+	): Promise<{ status: number; json: unknown; text: string }>;
 }
 
 export interface MineruToolDeps {
@@ -140,11 +145,11 @@ export function createCrossrefSearchTool(deps: HttpToolDeps): AgentTool {
 			query: "标题或书目关键词，例如：Novae a graph-based foundation model",
 		},
 		required: ["query"],
-		async execute(args) {
+		async execute(args, context) {
 			const query = String(args.query || "").trim().slice(0, 300);
 			if (!query) throw new Error("crossref_search 需要 query 参数");
 			const url = `https://api.crossref.org/works?query.bibliographic=${encodeURIComponent(query)}&rows=5`;
-			const response = await deps.httpGetJson(url, 20_000);
+			const response = await deps.httpGetJson(url, 20_000, { signal: context.signal });
 			if (response.status !== 200) throw new Error(`Crossref HTTP ${response.status}`);
 			const items = extractCrossrefItems(response.json);
 			if (!items.length) return { output: "Crossref 没有返回候选。", summary: "0 条候选" };
@@ -164,11 +169,11 @@ export function createCrossrefDoiTool(deps: HttpToolDeps): AgentTool {
 			doi: "DOI，例如 10.1038/s41586-024-08153-9",
 		},
 		required: ["doi"],
-		async execute(args) {
+		async execute(args, context) {
 			const doi = String(args.doi || "").trim().replace(/^https?:\/\/doi\.org\//i, "");
 			if (!/^10\.\d{4,9}\/\S+$/.test(doi)) throw new Error(`DOI 格式不合法：${doi}`);
 			const url = `https://api.crossref.org/works/${encodeURIComponent(doi)}`;
-			const response = await deps.httpGetJson(url, 20_000);
+			const response = await deps.httpGetJson(url, 20_000, { signal: context.signal });
 			if (response.status === 404) throw new Error(`Crossref 没有这个 DOI：${doi}`);
 			if (response.status !== 200) throw new Error(`Crossref HTTP ${response.status}`);
 			const items = extractCrossrefItems(response.json);
@@ -208,11 +213,15 @@ function extractCrossrefItems(json: unknown): string[] {
 }
 
 export function createVaultSearchTool(retriever: {
-	retrieve(question: string, expandedTerms?: string[]): Promise<Record<string, unknown>>;
-}): AgentTool {
+	retrieve(
+		question: string,
+		expandedTerms?: string[],
+		options?: { allowedPrefixes?: string[] },
+	): Promise<Record<string, unknown>>;
+}, allowedPrefixes: readonly string[]): AgentTool {
 	return {
 		name: "vault_search",
-		description: "在当前知识库中按关键词做词法检索，返回最相关的笔记路径与标题。用于查重（找已有 sources 笔记）。",
+		description: `在知识库中按关键词做词法检索（范围限定：${allowedPrefixes.join("、")}），返回最相关的笔记路径与标题。用于查重（找已有 sources 笔记）。`,
 		parameters: {
 			question: "检索问题或关键词，例如论文标题、方法名、DOI",
 			limit: "可选，返回条数上限，默认 8，最大 20",
@@ -222,9 +231,16 @@ export function createVaultSearchTool(retriever: {
 			const question = String(args.question || "").trim();
 			if (!question) throw new Error("vault_search 需要 question 参数");
 			const limit = Math.max(1, Math.min(20, Math.round(Number(args.limit)) || 8));
-			const result = await retriever.retrieve(question);
+			// Scoping happens inside the retriever so ranking itself never
+			// considers out-of-scope files; the belt-and-braces output filter
+			// below guarantees no out-of-scope path can reach the model.
+			const result = await retriever.retrieve(question, [], { allowedPrefixes: [...allowedPrefixes] });
 			const seeds = Array.isArray(result.lexical_seeds) ? result.lexical_seeds : [];
-			const lines = seeds
+			const inScope = seeds.filter((seed) => {
+				const path = String((seed as { path?: string }).path || "").replace(/\\/g, "/");
+				return allowedPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+			});
+			const lines = inScope
 				.slice(0, limit)
 				.map((seed, index) => {
 					const record = seed as { path?: string; title?: string; score?: number };
@@ -232,9 +248,9 @@ export function createVaultSearchTool(retriever: {
 				});
 			return {
 				output: lines.length
-					? `共 ${seeds.length} 个候选，前 ${lines.length}：\n${lines.join("\n")}`
+					? `共 ${inScope.length} 个候选，前 ${lines.length}：\n${lines.join("\n")}`
 					: "没有找到相关笔记。",
-				summary: `${seeds.length} 个候选`,
+				summary: `${inScope.length} 个候选`,
 			};
 		},
 	};
@@ -383,6 +399,9 @@ export async function runAuthorizedMineruExtract(
 export interface SourceNoteFields {
 	title: string;
 	title_zh: string;
+	authors: string;
+	year: string;
+	doi: string;
 	researchQuestion: string;
 	conclusion: string;
 	motivation: string;
@@ -396,6 +415,47 @@ export interface SourceNoteWriteReceipt {
 	charCount: number;
 }
 
+/**
+ * Single-line, control-char-free, double-quoted YAML scalar. Model-supplied
+ * text can never break out of a frontmatter value or inject new keys.
+ */
+export function yamlSafeScalar(value: string): string {
+	const collapsed = String(value || "")
+		.replace(/[\r\n\t]+/g, " ")
+		// Strip C0 control characters and DEL.
+		.replace(/[\u0000-\u001f\u007f]/g, "")
+		.trim();
+	return JSON.stringify(collapsed).replace(/</g, "\\u003c");
+}
+
+/** Wiki notes must not link into the papers/ or Clippings/ root folders. */
+const CROSS_ROOT_LINK_PATTERN = /\[\[(?:papers|clippings)(?:\/[^\]|]*)?(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/i;
+
+/**
+ * Structural validation of the generated note: exactly one frontmatter
+ * block with the required keys, and no cross-root links in the body.
+ * Returns human-readable violations; an empty array means safe.
+ */
+export function validateSourceNoteContent(content: string): string[] {
+	const violations: string[] = [];
+	const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(content);
+	if (!match) {
+		violations.push("frontmatter 缺失或格式不正确");
+		return violations;
+	}
+	const rest = content.slice(match[0].length);
+	if (/^---\s*$/m.test(rest)) {
+		violations.push("正文包含多余的 frontmatter 边界");
+	}
+	for (const required of ["title:", "title_zh:", "type: \"source\"", "depth: \"abstract-level\"", "registry_status: \"pending\""]) {
+		if (!match[1].includes(required)) violations.push(`frontmatter 缺少 ${required}`);
+	}
+	if (CROSS_ROOT_LINK_PATTERN.test(rest)) {
+		violations.push("正文包含跨主目录链接（papers/Clippings）");
+	}
+	return violations;
+}
+
 function buildSourceNoteMarkdown(
 	citekey: string,
 	fields: SourceNoteFields,
@@ -404,12 +464,17 @@ function buildSourceNoteMarkdown(
 	const created = new Date().toISOString().slice(0, 10);
 	const frontmatter = [
 		"---",
-		`title: ${fields.title}`,
-		`title_zh: ${fields.title_zh || '""'}`,
-		`citekey: ${citekey}`,
-		"type: source",
-		"depth: abstract-level",
-		`created: ${created}`,
+		`title: ${yamlSafeScalar(fields.title)}`,
+		`title_zh: ${yamlSafeScalar(fields.title_zh)}`,
+		`citekey: ${yamlSafeScalar(citekey)}`,
+		`authors: ${yamlSafeScalar(fields.authors)}`,
+		`year: ${yamlSafeScalar(fields.year)}`,
+		`doi: ${yamlSafeScalar(fields.doi)}`,
+		"type: \"source\"",
+		"depth: \"abstract-level\"",
+		"ingest_mode: \"lightweight\"",
+		"registry_status: \"pending\"",
+		`created: ${yamlSafeScalar(created)}`,
 		...(depthNote ? [depthNote] : []),
 		"---",
 	].join("\n");
@@ -430,28 +495,40 @@ function buildSourceNoteMarkdown(
 	return `${frontmatter}${body}\n`;
 }
 
+export interface VaultCreateDeps extends VaultToolDeps {
+	app: {
+		vault: VaultToolDeps["app"]["vault"] & {
+			create(path: string, data: string): Promise<unknown>;
+		};
+	};
+}
+
 /**
- * Commits one source note at the citekey-derived path. Create-only: an
- * existing note is never overwritten (the Codex CLI pipeline owns updates);
- * the plugin builds the YAML and section structure, the model only supplies
- * the field values.
+ * Commits one source note at the citekey-derived path. Create-only via the
+ * vault's atomic create (an existing note is never overwritten — the Codex
+ * CLI pipeline owns updates); the plugin builds the YAML and section
+ * structure from validated model fields, then reads the file back to verify
+ * what was actually written.
  */
 export async function commitSourceNote(
-	deps: VaultToolDeps,
+	deps: VaultCreateDeps,
 	citekey: string,
 	fields: SourceNoteFields,
 	depthNote = "",
+	options: { signal?: AbortSignal } = {},
 ): Promise<SourceNoteWriteReceipt> {
+	if (options.signal?.aborted) throw new Error("任务已取消，未写入文件");
 	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(citekey)) {
 		throw new Error(`citekey 不合法：${citekey}`);
 	}
 	if (!fields.title.trim()) throw new Error("笔记缺少核验后的原文标题");
 	const path = normalizePath(`wiki/sources/${citekey}.md`);
 	if (pathEscapesScope(path)) throw new Error(`派生路径不合法：wiki/sources/${citekey}.md`);
-	if (await deps.app.vault.adapter.exists(path, true)) {
-		throw new Error(`已存在同名笔记，轻量入库不会覆盖：${path}（如需更新请使用 Codex CLI 完整入库）`);
-	}
 	const content = buildSourceNoteMarkdown(citekey, fields, depthNote);
+	const violations = validateSourceNoteContent(content);
+	if (violations.length) {
+		throw new Error(`生成的笔记未通过结构校验：${violations.join("；")}`);
+	}
 	const segments = path.split("/");
 	for (let index = 1; index < segments.length; index += 1) {
 		const folder = segments.slice(0, index).join("/");
@@ -459,7 +536,19 @@ export async function commitSourceNote(
 			await deps.app.vault.adapter.mkdir(folder);
 		}
 	}
-	await deps.app.vault.adapter.write(path, content);
+	if (options.signal?.aborted) throw new Error("任务已取消，未写入文件");
+	// Atomic create: fails when the file appeared between the earlier dedup
+	// check and now (another task or sync service), instead of overwriting.
+	try {
+		await deps.app.vault.create(path, content);
+	} catch (createError) {
+		const message = createError instanceof Error ? createError.message : String(createError);
+		throw new Error(`创建笔记失败（已存在同名文件时不会覆盖）：${message.slice(0, 200)}`);
+	}
+	const written = await deps.app.vault.adapter.read(path);
+	if (written !== content) {
+		throw new Error("写入后回读校验不一致，请人工检查该文件");
+	}
 	return { path, operation: "create", charCount: content.length };
 }
 

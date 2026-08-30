@@ -14,6 +14,10 @@ All notable changes to this project will be documented in this file.
 
 - Task stopping is now resolved by a unified `stopTaskRun` (light-agent loop → direct query → process) instead of inferring the executor from `executionConfig.backend`, so the dashboard stop button reliably stops light-agent runs.
 - Loop hardening: cancellation and the wall-clock deadline share one abort signal handed to tools (the MinerU subprocess is killed promptly on abort, with capped output capture); consecutive (not lifetime) protocol-failure repair; tool-output budget is a hard cap without the 200-char floor; the JSON extractor skips invalid leading objects; read tools are restricted to `wiki/sources` + `papers`; generic URL fetches were replaced by `crossref_search` / `crossref_doi` domain tools that own the URL.
+- Receipt binding: the MinerU receipt is derived from where the helper actually published and only counts when the article lies inside the active vault (stale same-citekey packages are never claimed); cancelling a run aborts in-flight HTTP via registerCancel, terminates the helper's process tree (taskkill /T on Windows, process group on POSIX), shuts down on plugin unload, and caps the MinerU timeout at the run's remaining budget.
+- Search scoping: `vault_search` runs (and ranks) only inside `wiki/sources` + `papers`, so out-of-scope paths and titles never reach the model.
+- Safe note serialization: frontmatter values are single-line quoted scalars (injection-proof), note commits use the vault's atomic create with read-back verification, cross-root links are rejected, and bibliographic metadata (authors/year/doi) is stored alongside `ingest_mode`/`registry_status`.
+- Identity gating: "verified" is accepted only with plugin-observed tool receipts (metadata lookup + dedup lookup + exact DOI verification when a DOI is claimed), a structured `duplicateStatus` (exact → skip as no-op, possible → human confirmation), and deterministic citekey suffixing on collisions; technical errors are reported as failures, distinct from evidence conflicts.
 
 ## [0.29.0] - 2026-08-30
 

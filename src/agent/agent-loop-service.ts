@@ -17,11 +17,15 @@ import {
 	buildIdentityTools,
 	buildIdentityUserMessage,
 	commitSourceNote,
+	evaluateDraftPhase,
+	computeIngestOutcomeStatus,
 	mineruReadiness,
 	parseIdentityResult,
 	parseNoteDraft,
 	resolveArticleVaultPath,
+	resolveUniqueCitekey,
 	runAuthorizedMineruExtract,
+	validateIdentityReceipts,
 	VaultWriteJournal,
 	type PaperIngestFlowOptions,
 	type PaperIngestIdentity,
@@ -41,8 +45,16 @@ export interface AgentLoopServiceDeps {
 	providerHttpRequest(options: ProviderHttpRequestOptions): Promise<ProviderHttpResponse>;
 	getTavilySecret(): string;
 	getLexicalRetriever(): {
-		retrieve(question: string, expandedTerms?: string[]): Promise<Record<string, unknown>>;
+		retrieve(
+			question: string,
+			expandedTerms?: string[],
+			options?: { allowedPrefixes?: string[] },
+		): Promise<Record<string, unknown>>;
 	} | null;
+	/** Absolute filesystem path of the active vault, or "" when unavailable. */
+	getVaultRoot(): string;
+	/** Filesystem existence probe for toolkit-side paths; injectable for tests. */
+	pathExists(absolutePath: string): boolean;
 	/** Spawns the toolkit MinerU helper; injectable for tests. */
 	runMineruHelper(args: {
 		pythonExecutable: string;
@@ -72,8 +84,17 @@ export interface PaperIngestFinalResult {
 	wikiPath: string;
 	filesWritten: string[];
 	duplicates: string[];
+	/** Identity/title/authorization blockers — safe stops, not failures. */
 	conflicts: string[];
+	/** Technical errors (provider, network, extraction, unexpected). */
+	errors: string[];
 	notes: string[];
+}
+
+export interface TaskRunArtifacts {
+	articlePath: string;
+	wikiPath: string;
+	filesWritten: string[];
 }
 
 export interface AgentLoopRunOutcome {
@@ -84,8 +105,9 @@ export interface AgentLoopRunOutcome {
 	/** Structured result built from tool receipts. */
 	result: PaperIngestFinalResult | null;
 	loopStatus: AgentLoopResult["status"];
-	/** Vault paths written during the run, for direct navigation in the UI. */
+	/** Vault paths written/published during the run, for direct navigation. */
 	filesWritten: readonly string[];
+	artifacts: TaskRunArtifacts;
 	executionConfig: ExecutionConfig;
 }
 
@@ -101,14 +123,15 @@ interface IngestState {
 	traces: string[];
 	notes: string[];
 	conflicts: string[];
+	errors: string[];
 	duplicates: string[];
 	journal: VaultWriteJournal;
 	receipts: PaperIngestReceipts;
 	identity: PaperIngestIdentity | null;
 	draft: PaperIngestNoteDraft | null;
 	titleConflict: boolean;
+	duplicateNoOp: boolean;
 	cancelled: boolean;
-	errorMessage: string;
 }
 
 export class AgentLoopService {
@@ -130,6 +153,18 @@ export class AgentLoopService {
 		return true;
 	}
 
+	/** Cancels every active run; called from plugin.onunload(). */
+	shutdown(): void {
+		for (const active of this.activeRuns.values()) {
+			try {
+				active.handle.cancel();
+			} catch (cancelError) {
+				console.warn("Could not cancel light-agent run during shutdown", cancelError);
+			}
+		}
+		this.activeRuns.clear();
+	}
+
 	async runPaperIngest(
 		runId: string,
 		options: PaperIngestFlowOptions,
@@ -147,14 +182,15 @@ export class AgentLoopService {
 			traces: [],
 			notes: [],
 			conflicts: [],
+			errors: [],
 			duplicates: [],
 			journal: new VaultWriteJournal(),
 			receipts: { mineruPackage: null, articleVaultPath: "", writes: [] },
 			identity: null,
 			draft: null,
 			titleConflict: false,
+			duplicateNoOp: false,
 			cancelled: false,
-			errorMessage: "",
 		};
 		this.activeRuns.set(runId, {
 			handle: {
@@ -176,7 +212,7 @@ export class AgentLoopService {
 		try {
 			const retriever = this.deps.getLexicalRetriever();
 			if (!retriever) throw new Error("知识库检索组件不可用");
-			const toolDeps = this.buildToolDeps(settings, retriever);
+			const toolDeps = this.buildToolDeps(settings, retriever, abortController.signal);
 			const deadline = Date.now() + Math.max(
 				60_000,
 				Math.min(4 * 60 * 60 * 1000, (Math.round(settings.taskTimeoutMinutes) || 60) * 60 * 1000),
@@ -184,6 +220,7 @@ export class AgentLoopService {
 			const maxStepsPerPhase = Math.max(3, Math.min(20, Math.round(settings.lightAgentMaxSteps) || 10));
 			const maxTokens = Math.max(512, Math.min(8192, Math.round(settings.lightAgentMaxOutputTokens) || 4096));
 			const isCancelled = (): boolean => state.cancelled;
+			const loopTimeout = (): number => Math.max(30_000, deadline - Date.now());
 
 			// ---- Phase 1: identity + dedup (model loop, read-only tools) ----
 			emitStatus("running", "阶段一 · 身份核验与去重");
@@ -195,37 +232,59 @@ export class AgentLoopService {
 				model: resolved.model,
 				maxTokens,
 				maxSteps: maxStepsPerPhase,
-				timeoutMs: Math.max(30_000, deadline - Date.now()),
+				timeoutMs: loopTimeout(),
 				maxToolOutputChars: 60000,
+				signal: abortController.signal,
 				isCancelled,
 				onStep: onStep("身份核验"),
 			});
 			state.traces.push(identityLoop.trace);
 			if (identityLoop.status !== "completed") {
-				state.errorMessage = identityLoop.error;
+				state.errors.push(identityLoop.error || describeLoopStatus(identityLoop.status));
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
 			try {
 				state.identity = parseIdentityResult(identityLoop.final);
 			} catch (identityError) {
-				state.errorMessage = identityError instanceof Error ? identityError.message : String(identityError);
+				state.errors.push(identityError instanceof Error ? identityError.message : String(identityError));
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
 			if (!state.identity) {
-				state.errorMessage = "阶段一未返回可解析的身份结果";
-				return this.finish(state, options, profileId, resolved, emitStatus);
-			}
-			state.conflicts.push(...state.identity.conflicts);
-			state.duplicates.push(...state.identity.duplicates);
-			state.notes.push(...state.identity.notes);
-			emitStatus("running", state.identity.status === "verified"
-				? `阶段一完成 · citekey ${state.identity.citekey}`
-				: "阶段一完成 · 发现冲突");
-
-			if (state.identity.status === "conflict") {
+				state.errors.push("阶段一未返回可解析的身份结果");
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
 			const identity = state.identity;
+			state.conflicts.push(...identity.conflicts);
+			state.duplicates.push(...identity.duplicates);
+			state.notes.push(...identity.notes);
+
+			// Gate: the model must have actually done the verification work.
+			const receiptProblems = validateIdentityReceipts(identity, identityLoop.toolCalls);
+			if (receiptProblems.length) {
+				state.errors.push(`阶段一未满足插件侧凭据要求：${receiptProblems.join("；")}`);
+				return this.finish(state, options, profileId, resolved, emitStatus);
+			}
+
+			if (identity.status === "conflict") {
+				return this.finish(state, options, profileId, resolved, emitStatus);
+			}
+			if (identity.duplicateStatus === "possible") {
+				state.conflicts.push(`疑似重复，需要人工确认：${identity.duplicates.join("；") || "见检索结果"}`);
+				return this.finish(state, options, profileId, resolved, emitStatus);
+			}
+			if (identity.duplicateStatus === "exact") {
+				state.duplicateNoOp = true;
+				state.notes.push(`已存在完全相同文献，跳过生成：${identity.duplicates.join("；") || "见检索结果"}`);
+				return this.finish(state, options, profileId, resolved, emitStatus);
+			}
+			emitStatus("running", `阶段一完成 · citekey ${identity.citekey}`);
+
+			// Deterministic citekey uniqueness across vault and toolkit target.
+			const citekeyCheck = await this.resolveCitekeyUniqueness(identity.citekey);
+			if (citekeyCheck.renamed) {
+				identity.citekey = citekeyCheck.citekey;
+				state.notes.push(`citekey 已被占用，自动改为 ${citekeyCheck.citekey}`);
+			}
 
 			// ---- Phase 2: MinerU extraction (deterministic, authorized PDF only) ----
 			if (options.createArticleMarkdown) {
@@ -239,54 +298,23 @@ export class AgentLoopService {
 					if (!readiness.ready) {
 						state.notes.push(`无法生成原文 Markdown：${readiness.reason}`);
 					} else {
-						try {
-							state.receipts.mineruPackage = await runAuthorizedMineruExtract(
-								toolDeps.mineru,
-								{
-									source: options.sourcePdfPath,
-									citekey: identity.citekey,
-									model: options.mineruModel,
-									language: options.mineruLanguage,
-									ocr: options.mineruOcr,
-									formula: options.mineruFormula,
-									table: options.mineruTable,
-									pages: options.mineruPages,
-									timeoutSeconds: options.mineruTimeoutSeconds,
-									includeSourcePdf: options.mineruIncludeSourcePdf,
-								},
-								{
-									signal: abortController.signal,
-									timeoutMs: Math.max(60_000, Math.min(1800_000, options.mineruTimeoutSeconds * 1000)),
-								},
-							);
-							state.receipts.articleVaultPath = await resolveArticleVaultPath(toolDeps.vault, identity.citekey);
-							if (!state.receipts.articleVaultPath) {
-								state.conflicts.push(`MinerU 包已发布但未在知识库中找到 papers/${identity.citekey}/article.md`);
-							} else {
-								state.notes.push(`原文包已发布：${state.receipts.articleVaultPath.replace(/\/article\.md$/, "")}`);
-								state.titleConflict = !(await articleHeadContainsTitle(
-									toolDeps.vault,
-									state.receipts.articleVaultPath,
-									identity.title,
-								));
-								if (state.titleConflict) {
-									state.conflicts.push(`article.md 开头与核验标题不一致：${identity.title}`);
-								}
-							}
-						} catch (mineruError) {
-							if (state.cancelled) {
-								return this.finish(state, options, profileId, resolved, emitStatus);
-							}
-							state.conflicts.push(
-								`MinerU 提取失败：${mineruError instanceof Error ? mineruError.message : String(mineruError)}`,
-							);
-						}
+						await this.runExtractionPhase(options, identity, toolDeps, abortController, deadline, state);
 					}
 				}
 			}
 
 			// ---- Phase 3: note draft fields (model loop) + plugin commit ----
-			if (options.createArticleWiki && !state.titleConflict) {
+			const draftDecision = evaluateDraftPhase(
+				options,
+				state.receipts.articleVaultPath,
+				state.titleConflict,
+			);
+			if (draftDecision.blocker) {
+				state.conflicts.push(draftDecision.blocker);
+			} else if (draftDecision.downgradeNote) {
+				state.notes.push(draftDecision.downgradeNote);
+			}
+			if (draftDecision.run) {
 				emitStatus("running", "阶段三 · 整理文章 Wiki 字段");
 				const draftLoop = await runBoundedAgentLoop({
 					system: buildDraftSystemPrompt(options, identity.citekey, identity.title),
@@ -296,19 +324,20 @@ export class AgentLoopService {
 					model: resolved.model,
 					maxTokens,
 					maxSteps: Math.min(maxStepsPerPhase, 8),
-					timeoutMs: Math.max(30_000, deadline - Date.now()),
+					timeoutMs: loopTimeout(),
 					maxToolOutputChars: 60000,
+					signal: abortController.signal,
 					isCancelled,
 					onStep: onStep("文章 Wiki"),
 				});
 				state.traces.push(draftLoop.trace);
 				if (draftLoop.status !== "completed") {
-					state.errorMessage = draftLoop.error;
+					state.errors.push(draftLoop.error || describeLoopStatus(draftLoop.status));
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}
 				state.draft = parseNoteDraft(draftLoop.final);
 				if (!state.draft) {
-					state.conflicts.push("阶段三未返回可解析的笔记字段");
+					state.errors.push("阶段三未返回可解析的笔记字段");
 				} else {
 					state.notes.push(...state.draft.notes);
 					if (!state.draft.title_zh) {
@@ -321,30 +350,35 @@ export class AgentLoopService {
 							{
 								title: identity.title || state.draft.title,
 								title_zh: state.draft.title_zh,
+								authors: identity.authors,
+								year: identity.year,
+								doi: identity.doi,
 								researchQuestion: state.draft.researchQuestion,
 								conclusion: state.draft.conclusion,
 								motivation: state.draft.motivation,
 								evidenceGaps: state.draft.evidenceGaps,
 								notes: [],
 							},
-							"ingest_mode: lightweight\nregistry_status: pending",
+							"",
+							{ signal: abortController.signal },
 						);
 						state.journal.record(receipt);
 						state.receipts.writes = state.journal.receipts();
 					} catch (commitError) {
-						state.conflicts.push(
-							`笔记写入未完成：${commitError instanceof Error ? commitError.message : String(commitError)}`,
-						);
+						const message = commitError instanceof Error ? commitError.message : String(commitError);
+						if (message.includes("已存在同名文件")) {
+							state.conflicts.push(`笔记写入未完成：${message}`);
+						} else {
+							state.errors.push(`笔记写入失败：${message}`);
+						}
 					}
 				}
-			} else if (options.createArticleWiki && state.titleConflict) {
-				state.notes.push("因标题一致性问题未创建文章 Wiki，请人工核对后重试");
 			}
 
 			return this.finish(state, options, profileId, resolved, emitStatus);
 		} catch (error) {
 			if (!state.cancelled) {
-				state.errorMessage = error instanceof Error ? error.message : String(error);
+				state.errors.push(error instanceof Error ? error.message : String(error));
 			}
 			return this.finish(state, options, profileId, resolved, emitStatus);
 		} finally {
@@ -352,24 +386,132 @@ export class AgentLoopService {
 		}
 	}
 
+	/** Publishes the MinerU package and binds the receipt to the active vault. */
+	private async runExtractionPhase(
+		options: PaperIngestFlowOptions,
+		identity: PaperIngestIdentity,
+		toolDeps: ReturnType<AgentLoopService["buildToolDeps"]>,
+		abortController: AbortController,
+		deadline: number,
+		state: IngestState,
+	): Promise<void> {
+		const remaining = deadline - Date.now();
+		if (remaining < 60_000) {
+			state.conflicts.push("剩余时间预算不足以运行 MinerU 提取，已跳过");
+			return;
+		}
+		const timeoutMs = Math.min(
+			Math.max(60_000, Math.min(1800_000, options.mineruTimeoutSeconds * 1000)),
+			remaining,
+		);
+		try {
+			state.receipts.mineruPackage = await runAuthorizedMineruExtract(
+				toolDeps.mineru,
+				{
+					source: options.sourcePdfPath,
+					citekey: identity.citekey,
+					model: options.mineruModel,
+					language: options.mineruLanguage,
+					ocr: options.mineruOcr,
+					formula: options.mineruFormula,
+					table: options.mineruTable,
+					pages: options.mineruPages,
+					timeoutSeconds: Math.round(timeoutMs / 1000),
+					includeSourcePdf: options.mineruIncludeSourcePdf,
+				},
+				{ signal: abortController.signal, timeoutMs },
+			);
+			const vaultRoot = this.deps.getVaultRoot();
+			if (!vaultRoot) {
+				state.errors.push("无法确定当前 Vault 的文件系统位置，无法将发布结果绑定到本次任务");
+				return;
+			}
+			state.receipts.articleVaultPath = await resolveArticleVaultPath(
+				toolDeps.vault,
+				state.receipts.mineruPackage.packagePath,
+				vaultRoot,
+			);
+			if (!state.receipts.articleVaultPath) {
+				state.errors.push(
+					`MinerU 发布位置（${state.receipts.mineruPackage.packagePath}）不在当前 Vault 内；结果未计入本次入库。请确认工具链目录与 Vault 的对应关系（Vault 应为工具链目录本身或其 knowledge-base 子目录）`,
+				);
+				return;
+			}
+			state.notes.push(`原文包已发布：${state.receipts.articleVaultPath.replace(/\/article\.md$/, "")}`);
+			state.titleConflict = !(await articleHeadContainsTitle(
+				toolDeps.vault,
+				state.receipts.articleVaultPath,
+				identity.title,
+			));
+			if (state.titleConflict) {
+				state.conflicts.push(`article.md 开头与核验标题不一致：${identity.title}`);
+			}
+		} catch (mineruError) {
+			if (state.cancelled) return;
+			state.errors.push(
+				`MinerU 提取失败：${mineruError instanceof Error ? mineruError.message : String(mineruError)}`,
+			);
+		}
+	}
+
+	/** Vault + toolkit publish target existence check for the citekey. */
+	private async resolveCitekeyUniqueness(
+		base: string,
+	): Promise<{ citekey: string; renamed: boolean }> {
+		const vault = this.deps.app.vault;
+		const toolkitRoot = String(this.deps.getSettings().toolkitRoot || "").replace(/[\\/]+$/, "");
+		const exists = async (citekey: string): Promise<boolean> => {
+			const notePath = `wiki/sources/${citekey}.md`;
+			const packagePaths = [
+				`papers/${citekey}/article.md`,
+				`knowledge-base/papers/${citekey}/article.md`,
+			];
+			if (vault.getAbstractFileByPath(notePath)) return true;
+			for (const candidate of packagePaths) {
+				if (await vault.adapter.exists(candidate, true)) return true;
+			}
+			if (toolkitRoot) {
+				const toolkitPackage = `${toolkitRoot}/knowledge-base/papers/${citekey}`;
+				if (this.deps.pathExists(toolkitPackage)) return true;
+			}
+			return false;
+		};
+		return resolveUniqueCitekey(base, exists);
+	}
+
 	private buildToolDeps(
 		settings: DashboardSettings,
-		lexicalRetriever: { retrieve(question: string, expandedTerms?: string[]): Promise<Record<string, unknown>> },
+		lexicalRetriever: { retrieve(
+			question: string,
+			expandedTerms?: string[],
+			options?: { allowedPrefixes?: string[] },
+		): Promise<Record<string, unknown>> },
+		runSignal: AbortSignal,
 	) {
+		// Wire the run-level signal into every HTTP request so user stops and
+		// the wall-clock deadline abort in-flight calls immediately.
+		const httpGetJson = async (
+			url: string,
+			timeoutMs: number,
+			options?: { signal?: AbortSignal },
+		) => {
+			const signal = options?.signal || runSignal;
+			const response = await this.deps.providerHttpRequest({
+				url,
+				method: "GET",
+				headers: { Accept: "application/json" },
+				body: null,
+				timeoutMs,
+				registerCancel: (cancel) => {
+					if (signal.aborted) cancel();
+					else signal.addEventListener("abort", cancel, { once: true });
+				},
+			});
+			return { status: response.status, json: response.json, text: response.text };
+		};
 		return {
 			vault: { app: this.deps.app },
-			http: {
-				httpGetJson: async (url: string, timeoutMs: number) => {
-					const response = await this.deps.providerHttpRequest({
-						url,
-						method: "GET",
-						headers: { Accept: "application/json" },
-						body: null,
-						timeoutMs,
-					});
-					return { status: response.status, json: response.json, text: response.text };
-				},
-			},
+			http: { httpGetJson },
 			mineru: {
 				toolkitRoot: settings.toolkitRoot,
 				mineruExecutable: settings.mineruExecutable,
@@ -387,6 +529,10 @@ export class AgentLoopService {
 							headers: request.headers,
 							body: request.body,
 							timeoutMs: request.timeoutMs,
+							registerCancel: (cancel) => {
+								if (runSignal.aborted) cancel();
+								else runSignal.addEventListener("abort", cancel, { once: true });
+							},
 						});
 						return { status: response.status, json: response.json };
 					},
@@ -411,24 +557,27 @@ export class AgentLoopService {
 		emitStatus: (status: string, label: string) => void,
 	): AgentLoopRunOutcome {
 		const conflicts = [...state.conflicts];
-		if (state.errorMessage) conflicts.push(state.errorMessage);
+		const errors = [...state.errors];
 		const notes = [...state.notes];
 
-		const markdownSatisfied = !options.createArticleMarkdown
+		const markdownSatisfied = state.duplicateNoOp
+			|| !options.createArticleMarkdown
 			|| (state.receipts.mineruPackage !== null
 				&& Boolean(state.receipts.articleVaultPath)
 				&& !state.titleConflict);
-		const wikiSatisfied = !options.createArticleWiki || state.receipts.writes.length > 0;
+		const wikiSatisfied = state.duplicateNoOp
+			|| !options.createArticleWiki
+			|| state.receipts.writes.length > 0;
 		const identityConflict = state.identity?.status === "conflict";
 
-		const status: PaperIngestFinalResult["status"] = state.cancelled
-			? "failed"
-			: (identityConflict || conflicts.length > 0)
-				? "conflict"
-				: (markdownSatisfied && wikiSatisfied)
-					? "completed"
-					: "failed";
-
+		const status = computeIngestOutcomeStatus({
+			cancelled: state.cancelled,
+			conflicts,
+			errors,
+			identityConflict,
+			markdownSatisfied,
+			wikiSatisfied,
+		});
 		const loopStatus: AgentLoopResult["status"] = state.cancelled
 			? "cancelled"
 			: status === "completed"
@@ -445,6 +594,7 @@ export class AgentLoopService {
 			filesWritten: [...state.journal.paths()],
 			duplicates: [...state.duplicates],
 			conflicts,
+			errors,
 			notes,
 		};
 
@@ -452,6 +602,11 @@ export class AgentLoopService {
 			status === "completed" ? "done" : state.cancelled ? "stopped" : "failed",
 			describeOutcome(status, state.cancelled),
 		);
+		const artifacts: TaskRunArtifacts = {
+			articlePath: result.articlePath,
+			wikiPath: result.wikiPath,
+			filesWritten: [...result.filesWritten],
+		};
 		const traceWithResult = [
 			...state.traces,
 			"",
@@ -470,6 +625,7 @@ export class AgentLoopService {
 			result,
 			loopStatus,
 			filesWritten: [...state.journal.paths()],
+			artifacts,
 			executionConfig: {
 				backend: "direct-api",
 				providerId: profileId,
@@ -491,6 +647,15 @@ function describeOutcome(status: PaperIngestFinalResult["status"], cancelled: bo
 	}
 }
 
+function describeLoopStatus(status: AgentLoopResult["status"]): string {
+	return {
+		cancelled: "已手动停止",
+		"budget-exhausted": "达到步数或时间预算上限",
+		failed: "运行失败",
+		completed: "已完成",
+	}[status] || status;
+}
+
 /** Plugin-side title consistency gate on the published article. */
 export async function articleHeadContainsTitle(
 	deps: { app: { vault: { getAbstractFileByPath(path: string): unknown; read(file: unknown): Promise<string> } } },
@@ -498,7 +663,8 @@ export async function articleHeadContainsTitle(
 	title: string,
 ): Promise<boolean> {
 	const normalizedTitle = normalizeTitle(title);
-	if (normalizedTitle.length < 8) return true;
+	// Empty or very short titles cannot pass the gate on their own.
+	if (normalizedTitle.replace(/\s/g, "").length < 8) return false;
 	const file = deps.app.vault.getAbstractFileByPath(articleVaultPath);
 	if (!file) return false;
 	const content = await deps.app.vault.read(file);
@@ -523,6 +689,7 @@ function formatStructuredResult(result: PaperIngestFinalResult): string {
 	];
 	if (result.duplicates.length) lines.push(`- duplicates: ${result.duplicates.join("；")}`);
 	if (result.conflicts.length) lines.push(`- conflicts: ${result.conflicts.join("；")}`);
+	if (result.errors.length) lines.push(`- errors: ${result.errors.join("；")}`);
 	if (result.notes.length) lines.push(`- notes: ${result.notes.join("；")}`);
 	return lines.filter(Boolean).join("\n");
 }

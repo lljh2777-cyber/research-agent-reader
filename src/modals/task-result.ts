@@ -13,6 +13,7 @@ interface TaskResultHost {
 		result: { articlePath?: string; wikiPath?: string } | null;
 		filesWritten: readonly string[];
 	} | null;
+	getTaskRunArtifacts?(run: TaskRun): { articlePath?: string; wikiPath?: string } | null;
 	activateMineruReaderView?(articlePath?: string): Promise<void>;
 	openVaultFile?(path: string): void;
 }
@@ -92,8 +93,12 @@ export class TaskResultModal extends Modal {
 				this.onRepair?.();
 			});
 		}
-		const lightResult = this.plugin.getLightAgentRunResult?.(this.run.id) || null;
-		const articlePath = lightResult?.result?.articlePath
+		// Prefer the in-memory structured result, then artifacts persisted on
+		// the TaskRun (survive plugin reloads), then the regex fallback.
+		const lightResult = this.plugin.getLightAgentRunResult?.(this.run.id)?.result
+			|| this.plugin.getTaskRunArtifacts?.(this.run)
+			|| null;
+		const articlePath = lightResult?.articlePath
 			|| this.plugin.getMineruArticlePath?.(this.run)
 			|| "";
 		if (articlePath) {
@@ -104,7 +109,7 @@ export class TaskResultModal extends Modal {
 				void this.plugin.activateMineruReaderView?.(articlePath);
 			});
 		}
-		const wikiPath = lightResult?.result?.wikiPath || "";
+		const wikiPath = lightResult?.wikiPath || "";
 		if (wikiPath && this.plugin.openVaultFile) {
 			const openWiki = footer.createEl("button", { text: "打开文章 Wiki" });
 			openWiki.type = "button";

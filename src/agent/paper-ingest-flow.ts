@@ -46,6 +46,7 @@ export interface PaperIngestFlowOptions {
 /** Structured identity/dedup contract the first phase must produce. */
 export interface PaperIngestIdentity {
 	status: "verified" | "conflict";
+	duplicateStatus: "none" | "exact" | "possible";
 	citekey: string;
 	title: string;
 	title_zh: string;
@@ -58,8 +59,16 @@ export interface PaperIngestIdentity {
 }
 
 /** Structured note-field contract the draft phase must produce. */
-export interface PaperIngestNoteDraft extends SourceNoteFields {
+/** Bibliographic metadata comes from phase 1; the draft only supplies prose. */
+export interface PaperIngestNoteDraft {
 	status: "completed" | "insufficient-evidence";
+	title: string;
+	title_zh: string;
+	researchQuestion: string;
+	conclusion: string;
+	motivation: string;
+	evidenceGaps: string;
+	notes: string[];
 }
 
 export interface PaperIngestToolDeps {
@@ -68,19 +77,24 @@ export interface PaperIngestToolDeps {
 	mineru: MineruToolDeps;
 	tavily: TavilySearchDeps;
 	lexicalRetriever: {
-		retrieve(question: string, expandedTerms?: string[]): Promise<Record<string, unknown>>;
+		retrieve(
+			question: string,
+			expandedTerms?: string[],
+			options?: { allowedPrefixes?: string[] },
+		): Promise<Record<string, unknown>>;
 	};
 }
 
 const IDENTIFY_RESULT_SCHEMA = `{
   "status": "verified | conflict",
+  "duplicateStatus": "none | exact | possible",
   "citekey": "选定 citekey：第一作者姓氏小写_关键词_年份，仅字母数字._-",
-  "title": "核验后的原文标题",
+  "title": "核验后的原文标题（不得为空）",
   "title_zh": "审校后的简体中文标题（无法确定时留空）",
   "authors": "第一作者等，如 Wang, J.; Li, H.（未知留空）",
-  "year": "年份（未知留空）",
+  "year": "四位年份（未知留空）",
   "doi": "核验通过的 DOI（无则留空）",
-  "duplicates": ["发现的重复项及判断依据；确认重复时在 notes 说明已有路径"],
+  "duplicates": ["发现重复时：已有笔记/包的路径及判断依据"],
   "conflicts": ["证据冲突；status=conflict 时必填"],
   "notes": ["复用、跳过、元数据缺口等需要用户知道的事项"]
 }`;
@@ -108,11 +122,12 @@ export function buildIdentitySystemPrompt(options: PaperIngestFlowOptions): stri
 		"你是研究知识库的文献入库轻量 Agent（阶段一：身份核验与去重）。你只能通过工具访问知识库和白名单元数据服务；本阶段不能写入任何文件。",
 		"",
 		"## 执行顺序",
-		"1. 身份核验：根据用户提供的 PDF 路径/文件名和任务说明确定候选标题，用 crossref_search 检索候选，用 crossref_doi 精确核对；Crossref 查不到时可用 web_search（如可用）。",
-		"2. 去重：用 vault_search 检索 wiki/sources 与 papers 下是否已有同 DOI、同 arXiv、同规范化标题或同 citekey 的记录，必要时用 vault_read 查看候选笔记的 frontmatter。",
-		"3. 证据冲突（元数据互相矛盾、无法确定唯一身份）时：status=conflict，写明冲突，不得猜一个身份继续。",
-		"4. 确定 citekey：第一作者姓氏小写_关键词_年份，仅字母数字._-；与现有文件冲突时加 -2、-3 后缀。",
-		"5. 输出 final，result 按下面的 JSON 结构。",
+		"1. 身份核验：根据用户提供的文件名和任务说明确定候选标题，用 crossref_search 检索候选，用 crossref_doi 精确核对；Crossref 查不到时可用 web_search（如可用）。至少完成一次元数据查询。",
+		"2. 去重：用 vault_search 检索 wiki/sources 与 papers 下是否已有同 DOI、同 arXiv、同规范化标题或同 citekey 的记录，必要时用 vault_read 查看候选笔记的 frontmatter。至少完成一次去重检索。",
+		"3. 判定 duplicateStatus：exact=确认同一文献（已有 DOI/citekey 完全一致的记录）；possible=疑似但不确定；none=确认没有重复。exact/possible 时在 duplicates 里写明已有路径与依据。",
+		"4. 证据冲突（元数据互相矛盾、无法确定唯一身份）时：status=conflict，写明冲突，不得猜一个身份继续。",
+		"5. 确定 citekey：第一作者姓氏小写_关键词_年份，仅字母数字._-；与现有文件冲突时加 -2、-3 后缀。",
+		"6. 输出 final，result 按下面的 JSON 结构。注意：插件会核对本阶段是否真的执行过元数据查询和去重检索，未执行时 verified 会被拒绝。",
 		"",
 		`## final.result JSON 结构\n${IDENTIFY_RESULT_SCHEMA}`,
 		"",
@@ -120,17 +135,30 @@ export function buildIdentitySystemPrompt(options: PaperIngestFlowOptions): stri
 	].join("\n");
 }
 
+/** Sends only the file name to the remote model, never local directories. */
+export function describeSourceForModel(sourcePdfPath: string): string {
+	if (!sourcePdfPath) return "（用户未提供路径，从任务说明中解析）";
+	const normalized = String(sourcePdfPath).replace(/\\/g, "/");
+	const name = normalized.split("/").filter(Boolean).pop() || "未命名 PDF";
+	return `本地 PDF「${name}」（完整路径由插件保管）`;
+}
+
 export function buildIdentityUserMessage(options: PaperIngestFlowOptions): string {
+	const firstLine = options.requestNotes.trim().split(/\r?\n/)[0]?.trim() || "";
+	const isPathLine = /\.pdf$/i.test(firstLine) || /^[A-Za-z]:[\\/]/.test(firstLine) || /^\//.test(firstLine);
+	const notesWithoutPath = isPathLine
+		? options.requestNotes.trim().split(/\r?\n/).slice(1).join("\n").trim()
+		: options.requestNotes.trim();
 	return [
 		"身份核验与去重任务：",
-		`- 来源 PDF：${options.sourcePdfPath || "（用户未提供路径，从任务说明中解析）"}`,
+		`- 来源 PDF：${describeSourceForModel(options.sourcePdfPath)}`,
 		`- 后续输出计划：${[
 			options.createArticleMarkdown ? "MinerU 原文包" : "",
 			options.createArticleWiki ? "初步文章 Wiki" : "",
 		].filter(Boolean).join(" + ") || "仅登记身份"}`,
 		"",
 		"任务说明（用户原文）：",
-		options.requestNotes || "（无补充说明）",
+		notesWithoutPath || "（无补充说明）",
 	].join("\n");
 }
 
@@ -183,7 +211,7 @@ export function buildIdentityTools(deps: PaperIngestToolDeps): AgentTool[] {
 	const tools: AgentTool[] = [
 		createCrossrefSearchTool(deps.http),
 		createCrossrefDoiTool(deps.http),
-		createVaultSearchTool(deps.lexicalRetriever),
+		createVaultSearchTool(deps.lexicalRetriever, PAPER_INGEST_READ_PREFIXES),
 		createVaultListTool(deps.vault, PAPER_INGEST_READ_PREFIXES),
 		createVaultReadTool(deps.vault, PAPER_INGEST_READ_PREFIXES),
 	];
@@ -194,7 +222,7 @@ export function buildIdentityTools(deps: PaperIngestToolDeps): AgentTool[] {
 export function buildDraftTools(deps: PaperIngestToolDeps): AgentTool[] {
 	return [
 		createVaultReadTool(deps.vault, PAPER_INGEST_READ_PREFIXES),
-		createVaultSearchTool(deps.lexicalRetriever),
+		createVaultSearchTool(deps.lexicalRetriever, PAPER_INGEST_READ_PREFIXES),
 	];
 }
 
@@ -205,6 +233,8 @@ export function parseIdentityResult(
 	if (!final) return null;
 	const status = String(final.status || "").toLowerCase();
 	if (!["verified", "conflict"].includes(status)) return null;
+	const duplicateStatusRaw = String(final.duplicateStatus || final.duplicate_status || "").toLowerCase();
+	if (!["none", "exact", "possible"].includes(duplicateStatusRaw)) return null;
 	const normalizeTextArray = (value: unknown): string[] => Array.isArray(value)
 		? value.map((item) => String(item || "").trim()).filter(Boolean)
 		: [];
@@ -212,18 +242,61 @@ export function parseIdentityResult(
 	if (status === "verified" && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(citekey)) {
 		throw new Error(`模型返回的 citekey 不合法：${citekey}`);
 	}
+	const title = String(final.title || "").trim();
+	if (status === "verified" && title.replace(/[\s\p{P}]+/gu, "").length < 4) {
+		throw new Error("模型未返回可信的原文标题，已拒绝 verified 结果");
+	}
+	const year = String(final.year || "").trim();
+	if (status === "verified" && year && !/^\d{4}$/.test(year)) {
+		throw new Error(`模型返回的年份不是四位数字：${year}`);
+	}
 	return {
 		status: status as PaperIngestIdentity["status"],
+		duplicateStatus: duplicateStatusRaw as PaperIngestIdentity["duplicateStatus"],
 		citekey,
-		title: String(final.title || "").trim(),
+		title,
 		title_zh: String(final.title_zh || "").trim(),
-		authors: String(final.authors || "").trim(),
-		year: String(final.year || "").trim(),
+		authors: String(final.authors || "").trim().slice(0, 400),
+		year,
 		doi: String(final.doi || "").trim().replace(/^https?:\/\/doi\.org\//i, ""),
 		duplicates: normalizeTextArray(final.duplicates),
 		conflicts: normalizeTextArray(final.conflicts),
 		notes: normalizeTextArray(final.notes),
 	};
+}
+
+/**
+ * Plugin-side gate on phase 1: a "verified" identity is only accepted when
+ * the loop's tool receipts prove the required work actually happened — at
+ * least one successful metadata lookup, at least one successful dedup
+ * lookup, and (when a DOI is claimed) a successful exact DOI verification.
+ */
+export function validateIdentityReceipts(
+	identity: PaperIngestIdentity,
+	toolCalls: ReadonlyArray<{ tool: string; ok: boolean; argsSummary: string }>,
+): string[] {
+	if (identity.status !== "verified") return [];
+	const problems: string[] = [];
+	const okCalls = (names: string[]): number =>
+		toolCalls.filter((call) => names.includes(call.tool) && call.ok).length;
+	if (okCalls(["crossref_search", "crossref_doi", "web_search"]) < 1) {
+		problems.push("未执行任何元数据查询（crossref/web_search）");
+	}
+	if (okCalls(["vault_search", "vault_list", "vault_read"]) < 1) {
+		problems.push("未执行任何去重检索（vault 查询）");
+	}
+	if (identity.doi) {
+		const normalizedDoi = identity.doi.toLowerCase();
+		const verifiedDois = toolCalls
+			.filter((call) => call.tool === "crossref_doi" && call.ok)
+			.map((call) => /doi=([^·\n]*)/i.exec(call.argsSummary)?.[1] || "")
+			.map((value) => value.trim().replace(/^https?:\/\/doi\.org\//i, "").toLowerCase())
+			.filter(Boolean);
+		if (!verifiedDois.includes(normalizedDoi)) {
+			problems.push(`声明了 DOI ${identity.doi}，但没有对应的 crossref_doi 核验记录`);
+		}
+	}
+	return problems;
 }
 
 /** Validates the draft phase output into note fields. */
@@ -248,24 +321,41 @@ export function parseNoteDraft(final: Record<string, unknown> | null): PaperInge
 }
 
 /**
- * Resolves the vault-relative article path after a helper publish. The
- * helper returns an absolute package path; the vault-relative location is
- * one of the two established layouts, verified by existence.
+ * Resolves the vault-relative article path from where the helper ACTUALLY
+ * published (receipt.packagePath), not from the citekey. The published
+ * article must sit inside the active vault, or there is no receipt — a
+ * same-citekey package that already existed in the vault is never claimed.
+ */
+export function deriveArticleVaultPath(
+	publishedPackagePath: string,
+	vaultRoot: string,
+): string {
+	const normalizedPackage = String(publishedPackagePath || "").replace(/\\/g, "/");
+	const normalizedRoot = String(vaultRoot || "").replace(/\\/g, "/").replace(/\/+$/, "");
+	if (!normalizedPackage || !normalizedRoot) return "";
+	const publishedArticle = `${normalizedPackage.replace(/\/+$/, "")}/article.md`;
+	const prefix = `${normalizedRoot}/`;
+	// Windows paths are case-insensitive; fold case for the containment
+	// check but keep the published casing for the relative slice.
+	if (!publishedArticle.toLowerCase().startsWith(prefix.toLowerCase())) return "";
+	const relative = publishedArticle.slice(prefix.length);
+	if (relative.split("/").some((segment) => segment === ".." || segment === "")) return "";
+	return relative;
+}
+
+/**
+ * Convenience wrapper: derive from the receipt and verify existence in the
+ * active vault. Returns "" whenever the helper published outside the vault.
  */
 export async function resolveArticleVaultPath(
 	deps: VaultToolDeps,
-	citekey: string,
+	publishedPackagePath: string,
+	vaultRoot: string,
 ): Promise<string> {
-	const candidates = [
-		`papers/${citekey}/article.md`,
-		`knowledge-base/papers/${citekey}/article.md`,
-	];
-	for (const candidate of candidates) {
-		if (await deps.app.vault.adapter.exists(normalizeVaultPath(candidate), true)) {
-			return candidate;
-		}
-	}
-	return "";
+	const relative = deriveArticleVaultPath(publishedPackagePath, vaultRoot);
+	if (!relative) return "";
+	const exists = await deps.app.vault.adapter.exists(normalizeVaultPath(relative), true);
+	return exists ? relative : "";
 }
 
 function normalizeVaultPath(value: string): string {
@@ -279,6 +369,68 @@ export interface PaperIngestReceipts {
 	articleVaultPath: string;
 	/** Receipts of files the plugin itself wrote. */
 	writes: ReturnType<VaultWriteJournal["receipts"]>;
+}
+
+/**
+ * Whether the draft phase may run given the actual extraction receipt.
+ * Strict "article" mode without a verified package must not produce a wiki.
+ */
+export function evaluateDraftPhase(
+	options: PaperIngestFlowOptions,
+	articleVaultPath: string,
+	titleConflict: boolean,
+): { run: boolean; blocker: string; downgradeNote: string } {
+	if (!options.createArticleWiki || titleConflict) return { run: false, blocker: "", downgradeNote: "" };
+	if (options.articleWikiSource === "article" && !articleVaultPath) {
+		return {
+			run: false,
+			blocker: "文章 Wiki 内容来源为「已有 article.md」，但本次没有已验证的 article 包，未创建 Wiki",
+			downgradeNote: "",
+		};
+	}
+	const downgradeNote = articleVaultPath
+		? ""
+		: options.articleWikiSource === "pdf"
+			? "轻量方式不读取 PDF 正文：内容来源已降级为文献元数据与用户说明"
+			: options.articleWikiSource === "auto"
+				? "未找到已验证 article 包：内容来源回退为文献元数据与用户说明"
+				: "";
+	return { run: true, blocker: "", downgradeNote };
+}
+
+/**
+ * Outcome status precedence: user cancellation → conflict (identity/title/
+ * extraction blockers only) → technical errors → receipts. Technical
+ * failures must never be dressed up as "evidence conflicts".
+ */
+export function computeIngestOutcomeStatus(input: {
+	cancelled: boolean;
+	conflicts: string[];
+	errors: string[];
+	identityConflict: boolean;
+	markdownSatisfied: boolean;
+	wikiSatisfied: boolean;
+}): "completed" | "conflict" | "failed" {
+	if (input.cancelled) return "failed";
+	if (input.conflicts.length > 0 || input.identityConflict) return "conflict";
+	if (input.errors.length > 0) return "failed";
+	return input.markdownSatisfied && input.wikiSatisfied ? "completed" : "failed";
+}
+
+/**
+ * Deterministic citekey uniqueness: suffixes -2..-9 when the vault (or the
+ * toolkit publish target) already contains the base citekey.
+ */
+export async function resolveUniqueCitekey(
+	base: string,
+	exists: (citekey: string) => Promise<boolean>,
+): Promise<{ citekey: string; renamed: boolean }> {
+	if (!(await exists(base))) return { citekey: base, renamed: false };
+	for (let suffix = 2; suffix <= 9; suffix += 1) {
+		const candidate = `${base}-${suffix}`;
+		if (!(await exists(candidate))) return { citekey: candidate, renamed: true };
+	}
+	throw new Error(`citekey ${base} 及其 -2..-9 后缀均已被占用，请改用其他 citekey`);
 }
 
 export { runAuthorizedMineruExtract, commitSourceNote, mineruReadiness, VaultWriteJournal };

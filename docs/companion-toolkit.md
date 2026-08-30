@@ -37,13 +37,22 @@ search, and capped reads restricted to `wiki/sources` and `papers`.
 The model never writes files and never chooses extraction paths:
 
 - When the selected output includes original Markdown and the toolkit is
-  configured (Python + MinerU CLI), the plugin itself spawns
+  configured (Python + MinerU CLI, with the active vault corresponding to the
+  toolkit root or its `knowledge-base` subfolder), the plugin itself spawns
   `tool-library/scripts/run_mineru_extract.py` for the exact PDF the user
-  authorized, then verifies `papers/<citekey>/article.md` exists in the vault
-  and that its opening matches the verified title.
+  authorized. The receipt is then derived from where the helper ACTUALLY
+  published (`packagePath`) and only counts when the article sits inside the
+  active vault — stale same-citekey packages are never claimed, and the run
+  fails honestly when the toolkit publishes elsewhere. The plugin also
+  verifies the article opening against the verified title.
 - The wiki note is written by the plugin from model-supplied *fields* into
-  `wiki/sources/<citekey>.md`, create-only, with `ingest_mode: lightweight`
-  and `registry_status: pending` frontmatter.
+  `wiki/sources/<citekey>.md` via the vault's atomic create (never
+  overwriting), with safe single-line YAML scalars, bibliographic metadata
+  (authors/year/doi), `ingest_mode: lightweight`, and
+  `registry_status: pending` frontmatter.
+- "Verified" identity results are additionally gated on plugin-observed tool
+  receipts (at least one metadata lookup, one dedup lookup, and exact DOI
+  verification whenever a DOI is claimed).
 
 The light runner never updates `papers.csv`, `references.bib`, or index/log
 pages — those registry files remain the Codex CLI pipeline's job, which can

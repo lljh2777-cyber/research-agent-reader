@@ -54,6 +54,12 @@ export interface AgentLoopRequest {
 	maxToolOutputChars?: number;
 	/** Max characters per single tool result. */
 	maxToolResultChars?: number;
+	/**
+	 * Run-level abort signal owned by the caller. When it fires, the loop's
+	 * internal signal aborts too — including while a tool is executing — so
+	 * cancellation reaches HTTP requests and subprocesses immediately.
+	 */
+	signal?: AbortSignal;
 	/** Returns true when the run has been cancelled by the user. */
 	isCancelled?(): boolean;
 	/** Progress callback for live UI updates. */
@@ -72,6 +78,14 @@ export interface AgentLoopStep {
 
 export type AgentLoopStatus = "completed" | "cancelled" | "budget-exhausted" | "failed";
 
+/** One observed tool execution, kept as a plugin-side receipt. */
+export interface AgentToolCallReceipt {
+	tool: string;
+	ok: boolean;
+	/** Compact argument summary for receipt checks (e.g. the queried DOI). */
+	argsSummary: string;
+}
+
 export interface AgentLoopResult {
 	status: AgentLoopStatus;
 	/** Final JSON payload produced by the model, when it finished properly. */
@@ -81,6 +95,8 @@ export interface AgentLoopResult {
 	/** Full human-readable trace of the run (tool calls and results). */
 	trace: string;
 	steps: AgentLoopStep[];
+	/** Plugin-observed tool receipts, used to gate self-reported success. */
+	toolCalls: AgentToolCallReceipt[];
 	providerModel: string;
 	error: string;
 }

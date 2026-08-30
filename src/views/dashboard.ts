@@ -758,17 +758,24 @@ export class DashboardView extends ItemView {
 		try {
 			const outcome = await this.plugin.runLightPaperIngest(run.id, flowOptions, profileId);
 			const conflict = outcome.result?.status === "conflict";
+			const duplicate = outcome.result?.status === "completed"
+				&& outcome.exitCode === 0
+				&& !outcome.result.wikiPath
+				&& !outcome.result.articlePath
+				&& (outcome.result.duplicates.length > 0 || outcome.result.notes.some((note) => note.includes("已存在完全相同文献")));
 			const status = outcome.exitCode === 0
 				? "done"
 				: outcome.loopStatus === "cancelled"
 					? "interrupted"
 					: "failed";
-			const failureReason = outcome.result?.conflicts.find(Boolean)
+			const failureReason = outcome.result?.errors.find(Boolean)
+				|| outcome.result?.conflicts.find(Boolean)
 				|| (outcome.result ? "轻量 Agent 未完成所选输出（详见输出）" : "轻量 Agent 未返回结构化结果");
 			completedRun = await this.plugin.finishTaskRun(run.id, {
 				status,
 				exitCode: outcome.exitCode,
 				output: outcome.stdout,
+				artifacts: outcome.artifacts,
 				error: status === "failed"
 					? conflict
 						? "发现身份或证据冲突，未生成所选输出（详见输出）"
@@ -779,9 +786,11 @@ export class DashboardView extends ItemView {
 			});
 			new Notice(
 				status === "done"
-					? conflict
-						? "文献入库发现冲突，详见任务结果"
-						: `${action.label}已完成（轻量 Agent）`
+					? duplicate
+						? "已存在完全相同文献，跳过生成（详见任务结果）"
+						: conflict
+							? "文献入库发现冲突，详见任务结果"
+							: `${action.label}已完成（轻量 Agent）`
 					: status === "interrupted"
 						? `${action.label}已停止`
 						: `${action.label}未完成（轻量 Agent）`,

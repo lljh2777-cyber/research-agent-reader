@@ -3,6 +3,7 @@ import type {
 	AgentLoopResult,
 	AgentLoopStep,
 	AgentTool,
+	AgentToolCallReceipt,
 	AgentToolContext,
 } from "./types";
 
@@ -154,6 +155,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 
 	const steps: AgentLoopStep[] = [];
 	const traceLines: string[] = [];
+	const toolCallReceipts: AgentToolCallReceipt[] = [];
 	const transcript: Array<{ role: "user" | "assistant"; content: string }> = [];
 	let toolOutputBudget = maxToolOutputChars;
 	let consecutiveProtocolFailures = 0;
@@ -188,6 +190,23 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 		}
 	};
 
+	// External cancellation must reach tools mid-execution, not just between
+	// provider turns: forward the run-level signal onto the internal one.
+	const externalSignal = request.signal || null;
+	const forwardExternalAbort = () => abortForCancellation("cancelled");
+	if (externalSignal?.aborted) forwardExternalAbort();
+	else externalSignal?.addEventListener("abort", forwardExternalAbort, { once: true });
+	// Persistent watcher: user cancellation and the wall-clock deadline abort
+	// the shared signal even while a tool or HTTP request is in flight.
+	const runWatcher = setInterval(() => {
+		if (cancelled()) abortForCancellation("cancelled");
+		else if (Date.now() > deadline) abortForCancellation("timeout");
+	}, 500);
+	const teardown = (): void => {
+		clearInterval(runWatcher);
+		externalSignal?.removeEventListener("abort", forwardExternalAbort);
+	};
+
 	try {
 		for (let step = 1; step <= maxSteps; step += 1) {
 			if (cancelled()) {
@@ -203,18 +222,11 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 				{ role: "system" as const, content: buildLoopSystemPrompt(request) },
 				...transcript,
 			];
-			// Abort the in-flight provider request promptly when the user stops
-			// the run or the deadline passes instead of waiting for the next
-			// between-turns poll.
+			// Cancel the in-flight provider request as soon as the shared run
+			// signal aborts (user stop, external abort, or deadline).
 			let activeCancel: (() => void) | null = null;
 			const cancelWatcher = setInterval(() => {
-				if (cancelled()) {
-					abortForCancellation("cancelled");
-					activeCancel?.();
-				} else if (Date.now() > deadline) {
-					abortForCancellation("timeout");
-					activeCancel?.();
-				}
+				if (controller.signal.aborted) activeCancel?.();
 			}, 500);
 			let completion: Awaited<ReturnType<typeof request.provider.complete>>;
 			try {
@@ -290,6 +302,11 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 			trace(`[第 ${step} 轮] 调用 ${tool.name}(${argSummary})`);
 			transcript.push({ role: "assistant", content: rawText });
 
+			if (controller.signal.aborted) {
+				if (cancelled()) status = "cancelled";
+				break;
+			}
+
 			let toolResult: string;
 			let toolStatus = "ok";
 			try {
@@ -301,6 +318,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 				toolResult = toolError instanceof Error ? toolError.message : String(toolError);
 				trace(`[第 ${step} 轮] ${tool.name} 失败：${toolResult.slice(0, 200)}`);
 			}
+			toolCallReceipts.push({ tool: tool.name, ok: toolStatus === "ok", argsSummary: argSummary });
 
 			const truncated = toolResult.length > maxToolResultChars
 				? `${toolResult.slice(0, maxToolResultChars)}\n…[结果过长，已截断]`
@@ -321,12 +339,15 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 			error = `轻量 Agent 达到最大轮数（${maxSteps}）仍未完成任务`;
 		}
 	} catch (loopError) {
-		if (cancelled()) {
+		// Preserve the status chosen by abortForCancellation (timeout keeps
+		// budget-exhausted; user stop keeps cancelled).
+		if (cancelled() && status !== "budget-exhausted") {
 			status = "cancelled";
-		} else if (status !== "budget-exhausted") {
-			status = "failed";
+		} else if (status === "failed") {
 			error = loopError instanceof Error ? loopError.message : String(loopError);
 		}
+	} finally {
+		teardown();
 	}
 
 	return {
@@ -335,6 +356,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 		finalText,
 		trace: traceLines.join("\n"),
 		steps,
+		toolCalls: toolCallReceipts,
 		providerModel: request.model,
 		error,
 	};

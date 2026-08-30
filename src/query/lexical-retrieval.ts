@@ -88,8 +88,16 @@ export class LexicalVaultRetriever {
 	async retrieve(
 		question: string,
 		expandedTerms: string[] = [],
+		options: { allowedPrefixes?: string[] } = {},
 	): Promise<Record<string, unknown>> {
 		await this.refreshIndex();
+		const allowedPrefixes = (options.allowedPrefixes || [])
+			.map((prefix) => String(prefix || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, ""))
+			.filter(Boolean);
+		const withinScope = (filePath: string): boolean => {
+			if (!allowedPrefixes.length) return true;
+			return allowedPrefixes.some((prefix) => filePath === prefix || filePath.startsWith(`${prefix}/`));
+		};
 		const questionTerms = tokenizeForLexicalRetrieval(question, QUERY_TOKEN_LIMIT);
 		const expansionTerms = tokenizeForLexicalRetrieval(
 			expandedTerms.join(" "),
@@ -100,6 +108,7 @@ export class LexicalVaultRetriever {
 		const phrase = String(question || "").trim().toLowerCase().slice(0, 60);
 		const scored: Array<{ path: string; score: number; mtime: number }> = [];
 		for (const [filePath, document] of this.documents) {
+			if (!withinScope(filePath)) continue;
 			let score = 0;
 			let reinforced = false;
 			let latinBodyHit = false;
