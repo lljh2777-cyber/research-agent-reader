@@ -132,6 +132,8 @@ interface IngestState {
 	titleConflict: boolean;
 	duplicateNoOp: boolean;
 	cancelled: boolean;
+	/** Set when the total wall-clock budget timer aborted the run. */
+	budgetAborted: boolean;
 }
 
 export class AgentLoopService {
@@ -185,11 +187,7 @@ export class AgentLoopService {
 			60_000,
 			Math.min(4 * 60 * 60 * 1000, (Math.round(settings.taskTimeoutMinutes) || 60) * 60 * 1000),
 		);
-		let budgetAborted = false;
-		const budgetTimer = setTimeout(() => {
-			budgetAborted = true;
-			abortController.abort();
-		}, Math.max(0, deadline - Date.now()));
+		let budgetTimer: ReturnType<typeof setTimeout> | null = null;
 		const state: IngestState = {
 			traces: [],
 			notes: [],
@@ -203,6 +201,7 @@ export class AgentLoopService {
 			titleConflict: false,
 			duplicateNoOp: false,
 			cancelled: false,
+			budgetAborted: false,
 		};
 		this.activeRuns.set(runId, {
 			handle: {
@@ -212,6 +211,10 @@ export class AgentLoopService {
 				},
 			},
 		});
+		budgetTimer = setTimeout(() => {
+			state.budgetAborted = true;
+			abortController.abort();
+		}, Math.max(0, deadline - Date.now()));
 		const emitStatus = (status: string, label: string): void => {
 			hooks.onEvent?.({ type: "status", stage: "agent-loop", status, label });
 		};
@@ -255,7 +258,7 @@ export class AgentLoopService {
 			});
 			state.traces.push(identityLoop.trace);
 			if (identityLoop.status !== "completed") {
-				state.errors.push(identityLoop.error || describeLoopStatus(identityLoop.status));
+				state.errors.push(deriveStopError(state, identityLoop));
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
 			try {
@@ -353,7 +356,7 @@ export class AgentLoopService {
 				});
 				state.traces.push(draftLoop.trace);
 				if (draftLoop.status !== "completed") {
-					state.errors.push(draftLoop.error || describeLoopStatus(draftLoop.status));
+					state.errors.push(deriveStopError(state, draftLoop));
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}
 					state.draft = parseNoteDraft(draftLoop.final);
@@ -407,10 +410,7 @@ export class AgentLoopService {
 			}
 			return this.finish(state, options, profileId, resolved, emitStatus);
 		} finally {
-			clearTimeout(budgetTimer);
-			if (budgetAborted && !state.cancelled && state.errors.length === 0) {
-				state.errors.push("超过任务时间预算，运行已中止");
-			}
+			if (budgetTimer !== null) clearTimeout(budgetTimer);
 			this.activeRuns.delete(runId);
 		}
 	}
@@ -587,6 +587,11 @@ export class AgentLoopService {
 	): AgentLoopRunOutcome {
 		const conflicts = [...state.conflicts];
 		const errors = [...state.errors];
+		// Budget timeouts abort the run-level signal, which loops report as a
+		// bare stop; reclassify them so the user sees the real reason.
+		if (state.budgetAborted && !state.cancelled && !errors.some((item) => item.includes("时间预算"))) {
+			errors.push("超过任务时间预算，运行已中止");
+		}
 		const notes = [...state.notes];
 
 		const markdownSatisfied = state.duplicateNoOp
@@ -665,6 +670,12 @@ export class AgentLoopService {
 			},
 		};
 	}
+}
+
+/** Loop-level stop reason, reclassified when the budget timer fired. */
+function deriveStopError(state: { budgetAborted: boolean }, loop: AgentLoopResult): string {
+	if (state.budgetAborted) return "超过任务时间预算，运行已中止";
+	return loop.error || describeLoopStatus(loop.status);
 }
 
 function describeOutcome(status: PaperIngestFinalResult["status"], cancelled: boolean): string {

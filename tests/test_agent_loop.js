@@ -691,6 +691,12 @@ async function testCommitSourceNoteSafety() {
 		"![图](../../Clippings/x.png)",
 		"见 [x][ref]\n\n[ref]: ../../papers/x.md",
 		"<a href=\"../../papers/x.md\">x</a>",
+		// Fourth round: reference titles and unquoted/spaced HTML attributes.
+		"见 [x][ref]\n\n[ref]: ../../papers/x.md \"Paper\"",
+		"见 [x][ref]\n\n[ref]: <../../papers/x.md> 'Paper'",
+		"<a href=../../papers/y.md>y</a>",
+		"<a href = \"../../papers/z.md\">z</a>",
+		"<img src = '../../Clippings/image.png'>",
 	]) {
 		const rejected = await commitSourceNote(
 			{ app: fake },
@@ -701,9 +707,10 @@ async function testCommitSourceNoteSafety() {
 		assert.ok(rejected instanceof Error, `must reject: ${injection}`);
 		assert.match(rejected.message, /Vault 内部链接/);
 	}
-	// External web links and anchors stay allowed.
+	// External web links, external reference definitions, and anchors stay
+	// allowed in every spelling.
 	const external = validateSourceNoteContent(
-		"---\ntitle: \"t\"\ntitle_zh: \"\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n见 [官网](https://example.com) 与 [本节](#研究问题)。",
+		"---\ntitle: \"t\"\ntitle_zh: \"\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n[官网](https://example.org)。\n\n[网站][ref]\n\n[ref]: https://example.org \"Example\"\n\n<a href = \"https://example.org\">Example</a>\n\n[本页章节](#结果)。",
 	);
 	assert.deepEqual(external, []);
 
