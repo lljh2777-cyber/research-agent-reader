@@ -233,6 +233,10 @@ function safePackageAssetPath(packageRoot: string, rawPath: string): string {
 	} catch {
 		// Keep the raw value when it is not valid percent-encoding.
 	}
+	// Backslashes are path separators on Windows-hosted extractions; treat
+	// them as such on every platform so `..\` traversal cannot masquerade
+	// as an ordinary filename on POSIX.
+	normalized = normalized.replace(/\\/g, "/");
 	if (!normalized || /^[a-z]+:\/\//i.test(normalized)) {
 		throw new Error(`mineru 资产引用了不支持的地址：${rawPath}`);
 	}
