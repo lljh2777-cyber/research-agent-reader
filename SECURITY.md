@@ -25,6 +25,30 @@ The plugin does not install or update external executables. Users must install
 and authenticate optional CLI backends themselves. Direct API keys are selected
 through Obsidian SecretStorage and are not stored in plugin `data.json`.
 
+## Light agent (Direct API tool loop)
+
+The paper-intake light agent lets a user-configured LLM drive a bounded tool
+loop inside the plugin. Its boundaries are enforced in code, not by prompt:
+
+- Tools are allowlisted per workflow phase; phases run in a fixed order
+  (identity/dedup → extraction → note commit) controlled by the plugin.
+- Vault reads and listings are restricted to `wiki/sources` and `papers`;
+  traversal (`..`) and out-of-scope paths are rejected.
+- Network access is limited to domain-bound metadata lookups (Crossref); the
+  plugin constructs the URLs, so model-controlled text can only fill query
+  parameters.
+- The MinerU helper always receives the exact PDF path the user confirmed in
+  the modal (remote-upload confirmation still applies); the model cannot
+  select or substitute files.
+- Wiki writes are performed by the plugin from validated model-supplied
+  fields into `wiki/sources/<citekey>.md`, create-only; existing notes are
+  never overwritten.
+- Tool output is size-capped and the run has step/wall-clock budgets;
+  cancellation aborts in-flight requests and subprocesses.
+- Tool results and web content are untrusted input and may contain prompt
+  injection; the plugin treats them as data, and only the user's modal input
+  and the plugin's own state can change what tools are allowed to do.
+
 When reporting a vulnerability, include the plugin version, Obsidian version,
 operating system, affected feature, minimal reproduction, and whether an
 optional external backend was involved. Remove credentials, private note

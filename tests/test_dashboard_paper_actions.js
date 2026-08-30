@@ -57,6 +57,16 @@ assert.match(modal, /this\.plugin\.settings\.mineruDefaultModel/);
 assert.match(modal, /this\.plugin\.settings\.mineruDefaultTimeoutSeconds/);
 assert.match(modal, /uploadConfirmation/);
 assert.match(dashboard, /serializeActionRequest\(/);
+// Stop routing must be resolved by the plugin (loop → direct query →
+// process), never inferred from executionConfig.backend in the dashboard.
+assert.match(dashboard, /requestStopRun\(run: TaskRun\): void[\s\S]*?stopTaskRun\(run\.id\)/);
+assert.doesNotMatch(dashboard, /isCliBackendId\(backend\)[\s\S]{0,200}stopDirectVaultQuery\(run\.id\)/);
+// Light-agent modal contract: runner choice, MinerU readiness gate, and the
+// honest no-PDF-reading disclaimer.
+assert.match(modal, /运行方式/);
+assert.match(modal, /lightPaperIngestAvailable\(\)/);
+assert.match(modal, /lightAgentMineruReady\(\)/);
+assert.match(modal, /不会读取 PDF 正文/);
 assert.match(actions, /知识库体检[\s\S]*papers 与 Clippings 不参与常规体检/);
 assert.match(actions, /三主目录链接边界/);
 assert.match(dashboardData, /isExcludedMaintenancePath/);

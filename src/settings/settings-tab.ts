@@ -1924,6 +1924,40 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					})
 			);
 
+		this.createProviderSectionHeader(
+			containerEl,
+			"轻量 Agent（文献入库）",
+			"文献入库的「轻量 Agent」运行方式在插件内执行有界工具循环：只读检索、白名单元数据接口、MinerU 提取与限定目录写入，无需 Codex CLI。",
+		);
+		new Setting(containerEl)
+			.setName("最大工具循环轮数")
+			.setDesc("轻量 Agent 单阶段任务的模型轮数上限（3-20）。达到上限即停止并报告当前进度。")
+			.addText((text) =>
+				text
+					.setPlaceholder("10")
+					.setValue(String(this.plugin.settings.lightAgentMaxSteps || 10))
+					.onChange(async (value) => {
+						const parsed = Number.parseInt(value, 10);
+						if (!Number.isFinite(parsed)) return;
+						this.plugin.settings.lightAgentMaxSteps = Math.max(3, Math.min(20, parsed));
+						await this.plugin.saveSettings();
+					})
+			);
+		new Setting(containerEl)
+			.setName("单轮输出 Token 上限")
+			.setDesc("轻量 Agent 每轮模型输出的最大 Token 数（512-8192）。过低会导致协议 JSON 被截断。")
+			.addText((text) =>
+				text
+					.setPlaceholder("4096")
+					.setValue(String(this.plugin.settings.lightAgentMaxOutputTokens || 4096))
+					.onChange(async (value) => {
+						const parsed = Number.parseInt(value, 10);
+						if (!Number.isFinite(parsed)) return;
+						this.plugin.settings.lightAgentMaxOutputTokens = Math.max(512, Math.min(8192, parsed));
+						await this.plugin.saveSettings();
+					})
+			);
+
 		if (!selectedProfile) {
 			const empty = containerEl.createDiv({ cls: "agent-dashboard-provider-empty" });
 			const icon = empty.createSpan();

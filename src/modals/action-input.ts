@@ -28,10 +28,13 @@ import type {
 
 export type { ExecutionOverrides } from "../types/contracts";
 
+export type ActionRunnerKind = "light-agent" | "cli-agent";
+
 export interface ActionInputResult {
 	input: string;
 	overrides: ExecutionOverrides | Record<string, never>;
 	options: DashboardActionOptions;
+	runner: ActionRunnerKind;
 }
 
 interface ActionInputHost {
@@ -59,6 +62,9 @@ interface ActionInputHost {
 			serviceTier: "default" | "fast";
 		}>;
 	};
+	lightPaperIngestAvailable(): { ready: boolean; reason: string };
+	lightAgentMineruReady(): boolean;
+	getActiveDirectProviderSummary(): { name: string; model: string } | null;
 	resolveActionExecutionConfig(
 		action: DashboardAction,
 		overrides?: Partial<ExecutionOverrides>,
@@ -88,6 +94,9 @@ export class ActionInputModal extends Modal {
 	private readonly action: DashboardAction;
 	private readonly onSubmit: (result: ActionInputResult) => void;
 	private readonly initialInput: string;
+	private runner: ActionRunnerKind = "cli-agent";
+	private paperIngestMarkdownOption: HTMLInputElement | null = null;
+	private paperIngestSync: (() => void) | null = null;
 
 	constructor(
 		app: App,
@@ -118,6 +127,15 @@ export class ActionInputModal extends Modal {
 			});
 		}
 		let syncSubmitState = () => undefined;
+		// Resolve the default runner before rendering options so the light
+		// runner can deprioritize the MinerU output when its toolchain is
+		// missing (without the toolkit, only the wiki note is possible).
+		const runnerAvailable = this.action.id === "paper-ingest"
+			? this.plugin.lightPaperIngestAvailable()
+			: { ready: false, reason: "" };
+		if (this.action.id === "paper-ingest") {
+			this.runner = runnerAvailable.ready ? "light-agent" : "cli-agent";
+		}
 		const actionOptions = this.renderActionOptions(
 			contentEl,
 			() => syncSubmitState(),
@@ -135,7 +153,26 @@ export class ActionInputModal extends Modal {
 			input.value = this.initialInput;
 		}
 
-		const controls = this.action.ai ? this.renderExecutionControls(contentEl) : null;
+		const runnerChoiceHost = contentEl.createDiv();
+		const controlsHost = contentEl.createDiv();
+		let activeControls: { getOverrides: () => ExecutionOverrides } | null = null;
+		const renderControls = (): void => {
+			controlsHost.empty();
+			activeControls = null;
+			if (!this.action.ai) return;
+			if (this.action.id === "paper-ingest" && this.runner === "light-agent") {
+				this.renderLightAgentControls(controlsHost);
+				return;
+			}
+			activeControls = this.renderExecutionControls(controlsHost);
+		};
+		if (this.action.id === "paper-ingest") {
+			this.renderRunnerChoice(runnerChoiceHost, runnerAvailable, () => {
+				this.onPaperIngestRunnerSwitched();
+				renderControls();
+			});
+		}
+		renderControls();
 		const footer = contentEl.createDiv({ cls: "agent-dashboard-modal-actions" });
 		const cancel = footer.createEl("button", { text: "取消" });
 		cancel.type = "button";
@@ -157,8 +194,9 @@ export class ActionInputModal extends Modal {
 			this.close();
 			this.onSubmit({
 				input: value,
-				overrides: controls ? controls.getOverrides() : {},
+				overrides: activeControls ? activeControls.getOverrides() : {},
 				options: actionOptions.getOptions(),
+				runner: this.runner,
 			});
 		};
 		if (input) {
@@ -174,6 +212,90 @@ export class ActionInputModal extends Modal {
 		submit.addEventListener("click", submitAction);
 		syncSubmitState();
 		window.setTimeout(() => (input || submit).focus(), 0);
+	}
+
+	/**
+	 * When the user switches runners, keep the MinerU output honest: the
+	 * light agent without a complete toolchain cannot produce original
+	 * Markdown, so the checkbox is cleared instead of failing after submit.
+	 */
+	private onPaperIngestRunnerSwitched(): void {
+		if (this.action.id !== "paper-ingest") return;
+		if (this.runner === "light-agent" && !this.paperIngestMarkdownOption) return;
+		if (this.runner === "light-agent"
+			&& this.paperIngestMarkdownOption
+			&& !this.plugin.lightAgentMineruReady()) {
+			this.paperIngestMarkdownOption.checked = false;
+			this.paperIngestSync?.();
+		}
+	}
+
+	/**
+	 * Chooses between the in-plugin light agent (Direct API) and the Codex
+	 * CLI toolkit pipeline for paper-ingest. Both produce the same outputs;
+	 * they differ in requirements and write scope.
+	 */	renderRunnerChoice(
+		parent: HTMLElement,
+		availability: { ready: boolean; reason: string },
+		onChange: () => void,
+	): void {
+		const section = parent.createEl("section", {
+			cls: "agent-dashboard-action-options",
+			attr: { "aria-label": "运行方式" },
+		});
+		section.createEl("h3", { text: "运行方式" });
+		const providerSummary = this.plugin.getActiveDirectProviderSummary();
+		const lightLabel = availability.ready && providerSummary
+			? `轻量 Agent · ${providerSummary.name}（${providerSummary.model}）`
+			: "轻量 Agent · Direct API";
+		const light = this.createRadioOption(section, "paper-ingest-runner", "light", lightLabel, this.runner === "light-agent");
+		light.disabled = !availability.ready;
+		const lightNote = section.createEl("p", {
+			cls: "agent-dashboard-action-options-description",
+			text: availability.ready
+				? "在插件内运行有界工具循环：只读检索知识库、白名单元数据接口、MinerU 提取和限定目录写入；步数与时间预算受限，可随时停止。"
+				: `轻量 Agent 不可用：${availability.reason}`,
+		});
+		lightNote.style.marginLeft = "24px";
+		const cli = this.createRadioOption(section, "paper-ingest-runner", "cli", "Codex CLI · 完整入库", this.runner === "cli-agent");
+		const cliNote = section.createEl("p", {
+			cls: "agent-dashboard-action-options-description",
+			text: "通过工具链里的编排管线运行：额外维护 papers.csv、references.bib、文献索引和 wiki/log。需要配置 Codex CLI 与工具链目录。",
+		});
+		cliNote.style.marginLeft = "24px";
+		const sync = (): void => {
+			this.runner = light.checked ? "light-agent" : "cli-agent";
+		};
+		light.addEventListener("change", () => {
+			sync();
+			onChange();
+		});
+		cli.addEventListener("change", () => {
+			sync();
+			onChange();
+		});
+		if (this.runner === "light-agent") light.checked = true;
+		else cli.checked = true;
+	}
+
+	renderLightAgentControls(parent: HTMLElement): void {
+		const section = parent.createEl("section", {
+			cls: "agent-dashboard-run-config",
+			attr: { "aria-label": "轻量 Agent 运行配置" },
+		});
+		const heading = section.createDiv({ cls: "agent-dashboard-run-config-heading" });
+		heading.createSpan({ text: "运行配置" });
+		const providerSummary = this.plugin.getActiveDirectProviderSummary();
+		heading.createSpan({
+			cls: "agent-dashboard-run-config-summary",
+			text: providerSummary
+				? `轻量 Agent · ${providerSummary.name} · ${providerSummary.model}`
+				: "轻量 Agent · Direct API",
+		});
+		section.createDiv({
+			cls: "agent-dashboard-run-config-note",
+			text: "流程由插件分阶段强制：先身份核验与去重（只读 + 白名单元数据接口），再由插件用你确认的 PDF 运行 MinerU，最后模型仅返回笔记字段、由插件生成文件（仅 wiki/sources/，不覆盖已有笔记）。未配置 MinerU 时不会读取 PDF 正文。不更新 papers.csv 与 references.bib（完整登记请用 Codex CLI 方式）。",
+		});
 	}
 
 	renderActionOptions(
@@ -197,16 +319,22 @@ export class ActionInputModal extends Modal {
 				"mineru",
 				this.plugin.settings.mineruExecutable,
 			).found;
+			const lightMarkdownReady = this.runner === "light-agent"
+				? this.plugin.lightAgentMineruReady()
+				: true;
 			const markdownOption = this.createCheckboxOption(
 				section,
 				"生成原文 Markdown",
 				"使用 MinerU precision extract 生成 article.md、结构化 JSON、图片和可验证的提取记录。",
-				true,
+				lightMarkdownReady,
 			);
-			const mineruWarning = !mineruAvailable
+			this.paperIngestMarkdownOption = markdownOption;
+			const mineruWarning = !mineruAvailable || !lightMarkdownReady
 				? section.createEl("p", {
 					cls: "agent-dashboard-action-options-warning",
-					text: "未检测到 MinerU CLI。若要生成原文 Markdown，请先在插件设置的运行环境中配置 mineru-open-api。",
+					text: !mineruAvailable
+						? "未检测到 MinerU CLI。若要生成原文 Markdown，请先在插件设置的工具链与运行环境中配置。"
+						: "轻量 Agent 生成原文 Markdown 需要：工具包目录 + Python + MinerU CLI 齐备，且当前 Vault 即工具链目录下的 knowledge-base 文件夹；当前不满足，本次仅可创建文章 Wiki（内容来自元数据与用户说明，不读取 PDF 正文）。",
 				})
 				: null;
 
@@ -425,6 +553,7 @@ export class ActionInputModal extends Modal {
 				);
 				onChange();
 			};
+			this.paperIngestSync = sync;
 			markdownOption.addEventListener("change", sync);
 			wikiOption.addEventListener("change", sync);
 			sourceSelect.addEventListener("change", onChange);
@@ -465,11 +594,15 @@ export class ActionInputModal extends Modal {
 					mineruPages: normalizePages() || "",
 					mineruTimeoutSeconds: timeout.input.valueAsNumber,
 					mineruIncludeSourcePdf: includeSourcePdf.checked,
+					mineruRemoteConfirmed: uploadConfirmation ? uploadConfirmation.checked : true,
 				}),
 				isValid: () => {
 					if (!markdownOption.checked && !wikiOption.checked) return false;
 					if (!markdownOption.checked) return true;
-					return mineruAvailable
+					const extractionReady = this.runner === "light-agent"
+						? mineruAvailable && this.plugin.lightAgentMineruReady()
+						: mineruAvailable;
+					return extractionReady
 						&& normalizePages() !== null
 						&& isNumberInRange(timeout.input, 60, 1800)
 						&& Number.isInteger(timeout.input.valueAsNumber)

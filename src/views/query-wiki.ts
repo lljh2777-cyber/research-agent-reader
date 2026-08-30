@@ -114,6 +114,9 @@ interface QueryRunnerHooks {
 }
 
 interface QueryViewHost extends PluginHost {
+	lightPaperIngestAvailable(): { ready: boolean; reason: string };
+	lightAgentMineruReady(): boolean;
+	getActiveDirectProviderSummary(): { name: string; model: string } | null;
 	querySessions: QuerySession[];
 	isQueryExecutionActive(runId: string, backendId?: string): boolean;
 	appendQueryMessages(

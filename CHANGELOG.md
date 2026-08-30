@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- In-plugin bounded light agent for paper intake (文献入库 · 轻量 Agent): runs on any tested Direct API profile without Codex CLI. The workflow is a plugin-driven state machine — phase 1 (identity + dedup) is a read-only tool loop over Crossref metadata lookups and vault lexical search; phase 2 runs the toolkit MinerU helper deterministically on exactly the user-authorized PDF (the model never chooses the path, and the upload confirmation still applies); phase 3 collects note *fields* from the model and the plugin builds and writes the wiki note itself (create-only, `wiki/sources/<citekey>.md`, with `ingest_mode: lightweight` + `registry_status: pending` frontmatter). Results are validated against plugin-observed receipts, not model claims.
+- Paper-ingest modal gains a 运行方式 choice: 轻量 Agent · Direct API (default when a tested profile exists) or Codex CLI · 完整入库 (unchanged full registry pipeline). The result modal reads the structured article/wiki paths and adds a 打开文章 Wiki button; the historical regex fallback remains for old runs.
+- Settings → Direct API: 轻量 Agent controls for the per-phase tool-loop step cap (3–20) and the per-turn output token cap (512–8192, default 4096 — prevents protocol JSON truncation at provider 256-token defaults).
+
+### Changed
+
+- Task stopping is now resolved by a unified `stopTaskRun` (light-agent loop → direct query → process) instead of inferring the executor from `executionConfig.backend`, so the dashboard stop button reliably stops light-agent runs.
+- Loop hardening: cancellation and the wall-clock deadline share one abort signal handed to tools (the MinerU subprocess is killed promptly on abort, with capped output capture); consecutive (not lifetime) protocol-failure repair; tool-output budget is a hard cap without the 200-char floor; the JSON extractor skips invalid leading objects; read tools are restricted to `wiki/sources` + `papers`; generic URL fetches were replaced by `crossref_search` / `crossref_doi` domain tools that own the URL.
+- Receipt binding: the MinerU receipt is derived from where the helper actually published and only counts when the article lies inside the active vault (stale same-citekey packages are never claimed); cancelling a run aborts in-flight HTTP via registerCancel, terminates the helper's process tree (taskkill /T on Windows, process group on POSIX), shuts down on plugin unload, and caps the MinerU timeout at the run's remaining budget.
+- Search scoping: `vault_search` runs (and ranks) only inside `wiki/sources` + `papers`, so out-of-scope paths and titles never reach the model.
+- Safe note serialization: frontmatter values are single-line quoted scalars (injection-proof), note commits use the vault's atomic create with read-back verification, cross-root links are rejected, and bibliographic metadata (authors/year/doi) is stored alongside `ingest_mode`/`registry_status`.
+- Identity gating: "verified" is accepted only with plugin-observed tool receipts (metadata lookup + dedup lookup + exact DOI verification when a DOI is claimed), a structured `duplicateStatus` (exact → skip as no-op, possible → human confirmation), and deterministic citekey suffixing on collisions; technical errors are reported as failures, distinct from evidence conflicts.
+
 ## [0.29.0] - 2026-08-30
 
 ### Added

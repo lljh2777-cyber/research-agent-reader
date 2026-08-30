@@ -11,6 +11,7 @@ import {
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawn } from "node:child_process";
 
 import { ACTION_BY_ID, type DashboardAction } from "./actions";
 import {
@@ -44,6 +45,9 @@ import {
 	sanitizeSettingsForStorage,
 } from "./runtime/persistence";
 import { ProcessExecutionService } from "./runtime/process-execution";
+import { AgentLoopService, type AgentLoopRunOutcome } from "./agent/agent-loop-service";
+import { isSameRealPath } from "./agent/path-binding";
+import type { PaperIngestFlowOptions } from "./agent/paper-ingest-flow";
 import { VaultLintService } from "./services/vault-lint";
 import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./services/vault-evidence";
 import { saveQueryAnswerNote } from "./services/query-note";
@@ -120,6 +124,7 @@ import type {
 	DashboardProcessResult,
 	ExecutionConfig,
 	ExecutionOverrides,
+	DashboardProcessEvent,
 	LintReport,
 	LintStatus,
 	NormalizedProviderError,
@@ -205,6 +210,26 @@ export default class AgentDashboardPlugin extends Plugin {
 		readVaultImageData: (attachment) => this.readVaultImageData(attachment),
 		resolveWebSearchBackend: (profile) => this.resolveWebSearchBackend(profile),
 	});
+	private readonly agentLoopService = new AgentLoopService({
+		app: this.app,
+		getSettings: () => this.settings,
+		getProvider: (profileId) => {
+			const profile = this.getProviderProfile(profileId);
+			if (!profile || profile.lastTest?.ok !== true) return null;
+			return {
+				provider: this.createLLMProvider(profile),
+				profileName: profile.name,
+				model: profile.model,
+			};
+		},
+		providerHttpRequest: (options) => this.providerHttpRequest(options),
+		getTavilySecret: () => this.getTavilySecretValue(),
+		getLexicalRetriever: () => this.getLexicalRetriever(),
+		getVaultRoot: () => this.getActiveVaultRoot(),
+		pathExists: (absolutePath) => fs.existsSync(absolutePath),
+		runMineruHelper: (args) => this.runMineruHelperProcess(args),
+	});
+	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private annotationPopover: AnnotationPopover | null = null;
@@ -372,6 +397,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationPopover?.close();
 		this.hideAnnotationChip();
 		void this.flushScheduledSettingsSave();
+		this.agentLoopService.shutdown();
 		this.processExecution.shutdown();
 	}
 
@@ -2185,10 +2211,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (mode === "auto" && protocol) {
 			return { kind: "native", protocol };
 		}
-		const secretId = String(this.settings.webSearchTavilySecretId || "").trim();
-		const secret = secretId
-			? String(this.app.secretStorage?.getSecret?.(secretId) || "").trim()
-			: "";
+		const secret = this.getTavilySecretValue();
 		if (!secret) {
 			return {
 				kind: "unavailable",
@@ -2219,6 +2242,193 @@ export default class AgentDashboardPlugin extends Plugin {
 		const profile = this.getProviderProfile(profileId);
 		if (!profile) return false;
 		return this.resolveWebSearchBackend(profile).kind !== "unavailable";
+	}
+
+	getTavilySecretValue(): string {
+		const secretId = String(this.settings.webSearchTavilySecretId || "").trim();
+		if (!secretId) return "";
+		return String(this.app.secretStorage?.getSecret?.(secretId) || "").trim();
+	}
+
+	/** Whether the in-plugin light agent can run paper-ingest right now. */
+	lightPaperIngestAvailable(): { ready: boolean; reason: string } {
+		const profile = this.getProviderProfile(this.settings.activeProviderId);
+		if (!profile || profile.lastTest?.ok !== true) {
+			return { ready: false, reason: "需要一个已通过连接测试的 Direct API 配置（设置 → Direct API）" };
+		}
+		return { ready: true, reason: "" };
+	}
+
+	/** Whether the light agent could run MinerU (toolkit + Python + CLI + vault alignment). */
+	lightAgentMineruReady(): boolean {
+		const toolkitRoot = String(this.settings.toolkitRoot || "").trim();
+		if (!toolkitRoot || !fs.existsSync(toolkitRoot)) return false;
+		if (!fs.existsSync(path.join(toolkitRoot, "tool-library", "scripts", "run_mineru_extract.py"))) {
+			return false;
+		}
+		const python = String(this.settings.pythonExecutable || "").trim();
+		if (!python || !fs.existsSync(python)) return false;
+		if (!describeCliExecutable("mineru", this.settings.mineruExecutable).found) return false;
+		// The helper publishes under <toolkitRoot>/knowledge-base/papers/; the
+		// active vault must be exactly <toolkitRoot>/knowledge-base so the
+		// published package and the wiki/sources dedup surfaces share one
+		// knowledge-base root (comparing real paths, separator- and
+		// case-safely for the platform).
+		const vaultRoot = this.getActiveVaultRoot();
+		if (!vaultRoot) return false;
+		return isSameRealPath(vaultRoot, path.join(toolkitRoot, "knowledge-base"));
+	}
+
+	/** Absolute filesystem path of the active vault (desktop adapter only). */
+	getActiveVaultRoot(): string {
+		const adapter = this.app.vault.adapter as unknown as {
+			getBasePath?: () => string;
+		};
+		try {
+			return typeof adapter.getBasePath === "function" ? adapter.getBasePath() : "";
+		} catch {
+			return "";
+		}
+	}
+
+	/**
+	 * Runs 文献入库 through the in-plugin bounded agent loop (Direct API
+	 * brain, allowlisted tools) instead of the Codex CLI toolkit pipeline.
+	 */
+	runLightPaperIngest(
+		runId: string,
+		options: PaperIngestFlowOptions,
+		profileId: string,
+		hooks: { onEvent?: (event: DashboardProcessEvent) => void } = {},
+	): Promise<AgentLoopRunOutcome> {
+		this.lightAgentResults.delete(runId);
+		return this.agentLoopService.runPaperIngest(runId, options, profileId, hooks)
+			.then((outcome) => {
+				this.lightAgentResults.set(runId, outcome);
+				return outcome;
+			})
+			.catch((error) => {
+				this.lightAgentResults.delete(runId);
+				throw error;
+			});
+	}
+
+	getLightAgentRunResult(runId: string): AgentLoopRunOutcome | null {
+		return this.lightAgentResults.get(runId) || null;
+	}
+
+	/** Persisted receipt paths for a light-agent run (survive reloads). */
+	getTaskRunArtifacts(run: TaskRun): { articlePath?: string; wikiPath?: string } | null {
+		if (run.actionId !== "paper-ingest" || !run.artifacts) return null;
+		return run.artifacts;
+	}
+
+	getActiveDirectProviderSummary(): { name: string; model: string } | null {
+		const profile = this.getProviderProfile(this.settings.activeProviderId);
+		if (!profile) return null;
+		return { name: profile.name, model: profile.model };
+	}
+
+	/** Opens a vault Markdown file in a new tab (used by result actions). */
+	openVaultFile(path: string): void {
+		const file = this.app.vault.getAbstractFileByPath(normalizePath(path));
+		if (!(file instanceof TFile)) {
+			new Notice(`文件不存在：${path}`);
+			return;
+		}
+		void this.app.workspace.getLeaf("tab").openFile(file);
+	}
+
+	/**
+	 * Spawns the toolkit MinerU helper with an argument array (no shell),
+	 * honors abort via the run-level signal, and caps captured output.
+	 */
+	private runMineruHelperProcess(args: {
+		pythonExecutable: string;
+		helperPath: string;
+		cliArgs: string[];
+		cwd: string;
+		timeoutMs: number;
+		signal: AbortSignal;
+	}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+		return new Promise((resolve, reject) => {
+			const MAX_HELPER_OUTPUT_CHARS = 1_000_000;
+			let stdout = "";
+			let stderr = "";
+			let settled = false;
+			const child = spawn(args.pythonExecutable, args.cliArgs, {
+				cwd: args.cwd,
+				shell: false,
+				windowsHide: true,
+				// Own process group on POSIX so the negative-pid kill in
+				// killTree() reaches the MinerU CLI subprocess as well.
+				detached: process.platform !== "win32",
+				env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+			});
+			const settle = (result: { exitCode: number; stdout: string; stderr: string } | Error) => {
+				if (settled) return;
+				settled = true;
+				args.signal.removeEventListener("abort", onAbort);
+				window.clearTimeout(timer);
+				if (result instanceof Error) reject(result);
+				else resolve(result);
+			};
+			const killTree = (): void => {
+				try {
+					if (!child.pid) {
+						child.kill();
+						return;
+					}
+					if (process.platform === "win32") {
+						// child.kill() only terminates the direct Python process;
+						// the MinerU CLI it waits on would survive as an orphan.
+						// taskkill /T ends the whole process tree (array args, no shell).
+						spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+							shell: false,
+							windowsHide: true,
+						});
+					} else {
+						// The helper is spawned detached on POSIX paths via negative
+						// pid when possible; plain kill remains the fallback.
+						try {
+							process.kill(-child.pid);
+						} catch {
+							child.kill();
+						}
+					}
+				} catch (killError) {
+					console.warn("Could not kill MinerU helper process", killError);
+					try {
+						child.kill();
+					} catch {
+						// Nothing more we can do.
+					}
+				}
+			};
+			const onAbort = (): void => {
+				killTree();
+				settle({ exitCode: 130, stdout, stderr: `${stderr}\n已手动停止，MinerU 子进程已终止`.trim() });
+			};
+			const timer = window.setTimeout(() => {
+				killTree();
+				settle({ exitCode: 124, stdout, stderr: `${stderr}\nMinerU 提取超时`.trim() });
+			}, args.timeoutMs);
+			if (args.signal.aborted) {
+				onAbort();
+				return;
+			}
+			args.signal.addEventListener("abort", onAbort);
+			child.stdout.on("data", (chunk: Buffer) => {
+				if (stdout.length < MAX_HELPER_OUTPUT_CHARS) stdout += chunk.toString("utf8");
+			});
+			child.stderr.on("data", (chunk: Buffer) => {
+				if (stderr.length < MAX_HELPER_OUTPUT_CHARS) stderr += chunk.toString("utf8");
+			});
+			child.once("error", (error: Error) => settle(error));
+			child.once("close", (code: number | null) => {
+				settle({ exitCode: code ?? 1, stdout, stderr });
+			});
+		});
 	}
 
 	/**
@@ -2630,6 +2840,17 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	stopVaultAction(runId: string): boolean {
+		if (this.agentLoopService.stop(runId)) return true;
+		return this.processExecution.stopVaultAction(runId);
+	}
+
+	/**
+	 * Single stop entry for any task run: resolves ownership by asking each
+	 * executor in turn instead of inferring from executionConfig.backend.
+	 */
+	stopTaskRun(runId: string): boolean {
+		if (this.agentLoopService.stop(runId)) return true;
+		if (this.directQueryService.stop(runId)) return true;
 		return this.processExecution.stopVaultAction(runId);
 	}
 

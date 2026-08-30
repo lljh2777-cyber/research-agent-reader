@@ -75,6 +75,13 @@ export type TaskRunStatus =
 	| "failed"
 	| "interrupted";
 
+/** Structured artifacts of a light-agent run, persisted with the TaskRun. */
+export interface TaskRunArtifacts {
+	articlePath: string;
+	wikiPath: string;
+	filesWritten: string[];
+}
+
 export interface TaskRun {
 	id: string;
 	actionId: string;
@@ -89,10 +96,12 @@ export interface TaskRun {
 	output: string;
 	outputPath?: string;
 	error: string;
+	/** Light-agent runs: receipt-based paths, so result actions survive reloads. */
+	artifacts?: TaskRunArtifacts;
 }
 
 export type TaskRunUpdate = Partial<
-	Pick<TaskRun, "status" | "exitCode" | "output" | "error" | "summary">
+	Pick<TaskRun, "status" | "exitCode" | "output" | "error" | "summary" | "artifacts">
 >;
 
 export interface DashboardProcessEvent {
