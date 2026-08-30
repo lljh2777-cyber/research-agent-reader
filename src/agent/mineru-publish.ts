@@ -89,7 +89,10 @@ export function resolveMineruCommand(executable: string): ResolvedMineruCommand 
 	const bare = /node_modules[\\/][^"\r\n]*?\.(?:js|mjs|cjs)/i.exec(shim);
 	const relative = quoted?.[1] || bare?.[0] || "";
 	if (relative) {
-		const entry = path.resolve(path.dirname(resolved), relative.replace(/^%~dp0[\\/]?/, ""));
+		const entry = path.resolve(
+			path.dirname(resolved),
+			relative.replace(/^%~dp0[\\/]?/, "").replace(/\\/g, "/"),
+		);
 		if (fs.existsSync(entry)) {
 			return { command: process.execPath, baseArgs: [entry] };
 		}
