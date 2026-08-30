@@ -67,6 +67,19 @@ assert.match(modal, /运行方式/);
 assert.match(modal, /lightPaperIngestAvailable\(\)/);
 assert.match(modal, /lightAgentMineruReady\(\)/);
 assert.match(modal, /不会读取 PDF 正文/);
+// 任务默认策略: paper-ingest gains a default-runner dropdown and the model
+// override is a recognized-model list, not free text.
+assert.match(settingsTab, /默认运行方式/);
+assert.match(settingsTab, /自动（优先轻量 Agent）|自动（有可用/);
+assert.match(settingsTab, /actionModelChoices/);
+assert.match(
+	settingsTab,
+	/setName\("模型覆盖"\)\s*\n\s*\.setDesc\("从当前后端识别到的模型中选择[^"]*"\)\s*\n\s*\.addDropdown/,
+	"task-defaults model override must be a recognized-model dropdown",
+);
+assert.match(settingsTab, /两种运行方式：轻量 Agent/);
+assert.match(settings, /runner: ActionRunnerPreference|runner\?: "auto" \| "light" \| "cli"|runnerRaw === "light"/);
+assert.match(modal, /actionExecutionDefaults\["paper-ingest"\]\?\.runner/);
 assert.match(actions, /知识库体检[\s\S]*papers 与 Clippings 不参与常规体检/);
 assert.match(actions, /三主目录链接边界/);
 assert.match(dashboardData, /isExcludedMaintenancePath/);

@@ -60,6 +60,7 @@ interface ActionInputHost {
 			model: string;
 			reasoningEffort: string;
 			serviceTier: "default" | "fast";
+			runner?: "auto" | "light" | "cli";
 		}>;
 	};
 	lightPaperIngestAvailable(): { ready: boolean; reason: string };
@@ -134,7 +135,16 @@ export class ActionInputModal extends Modal {
 			? this.plugin.lightPaperIngestAvailable()
 			: { ready: false, reason: "" };
 		if (this.action.id === "paper-ingest") {
-			this.runner = runnerAvailable.ready ? "light-agent" : "cli-agent";
+			// 任务默认策略中的「默认运行方式」决定弹窗预选；auto = 有可用
+			// Direct API 时优先轻量 Agent。
+			const preferredRunner = this.plugin.settings.actionExecutionDefaults["paper-ingest"]?.runner;
+			if (preferredRunner === "light" && runnerAvailable.ready) {
+				this.runner = "light-agent";
+			} else if (preferredRunner === "cli") {
+				this.runner = "cli-agent";
+			} else {
+				this.runner = runnerAvailable.ready ? "light-agent" : "cli-agent";
+			}
 		}
 		const actionOptions = this.renderActionOptions(
 			contentEl,
