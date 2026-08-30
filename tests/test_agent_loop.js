@@ -1116,8 +1116,14 @@ function testRealpathVaultAlignment() {
 	try {
 		// Vault = toolkitRoot/knowledge-base (the only supported layout).
 		assert.equal(isSameRealPath(knowledgeBase, path.join(toolkitRoot, "knowledge-base")), true);
-		// Windows-style backslashes must not break the comparison.
-		assert.equal(isSameRealPath(`${knowledgeBase}\\`, path.join(toolkitRoot, "knowledge-base")), true);
+		// Windows-style trailing separators must not break the comparison;
+		// on POSIX a backslash is an ordinary filename character, so only the
+		// platform-native separator variant is asserted there.
+		if (process.platform === "win32") {
+			assert.equal(isSameRealPath(`${knowledgeBase}\\`, path.join(toolkitRoot, "knowledge-base")), true);
+		} else {
+			assert.equal(isSameRealPath(`${knowledgeBase}/`, path.join(toolkitRoot, "knowledge-base")), true);
+		}
 		// Vault = toolkitRoot itself must be rejected.
 		assert.equal(isSameRealPath(toolkitRoot, path.join(toolkitRoot, "knowledge-base")), false);
 		// Unrelated directories are rejected.
