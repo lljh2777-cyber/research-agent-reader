@@ -717,6 +717,8 @@ async function testCommitSourceNoteSafety() {
 		"<img alt=\"a > b\" src=\"../../Clippings/x.png\">",
 		"<a title=\">\" href=\"https://example.org\">x</a>",
 		"<div data-href=\"../../papers/x.md\">metadata only</div>",
+		// CommonMark custom element tag names (hyphenated) count as HTML too.
+		"<responsive-image src=\"../../papers/x.md\" />",
 	]) {
 		const rejected = await commitSourceNote(
 			{ app: fake },

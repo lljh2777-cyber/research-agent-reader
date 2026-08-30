@@ -460,7 +460,7 @@ function findDisallowedLinkTargets(body: string): string[] {
  * inside attributes, xlink:href, srcset, SVG tricks) is rejected wholesale
  * instead of being parsed.
  */
-const RAW_HTML_TAG_PATTERN = /<\/?[A-Za-z][A-Za-z0-9]*(?:\s[^<>]*)?\/?>/;
+const RAW_HTML_TAG_PATTERN = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>/;
 
 /**
  * Structural validation of the generated note: exactly one frontmatter
