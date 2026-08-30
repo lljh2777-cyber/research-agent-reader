@@ -11,6 +11,8 @@ src/plugin.ts                Strict composition root and Obsidian lifecycle shel
 src/actions.ts               Dashboard action registry and action-level model defaults
 src/config.ts                Stable view IDs, limits, model options, provider definitions
 src/annotations/             Reading-view selection, annotation Markdown, popover, and archive handoff
+src/agent/                   Bounded light-agent loop, per-phase tool allowlists, phase-gated
+                             paper-ingest state machine, and receipt-based result contracts
 src/modals/                  Action input, task result, practice-note, and image-picker dialogs
 src/providers/adapters.ts    Direct API and Codex CLI provider implementations
 src/providers/http-transport.ts

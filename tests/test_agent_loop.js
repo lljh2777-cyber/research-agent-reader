@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const Module = require("node:module");
 const path = require("node:path");
 const esbuild = require(path.join(__dirname, "..", "node_modules", "esbuild"));
@@ -22,7 +23,7 @@ const obsidianStub = {
 	PluginSettingTab: ObsidianBase,
 	Setting: class {},
 	TFile: ObsidianTFile,
-	normalizePath: (value) => value,
+	normalizePath: (value) => String(value).replace(/([^:])\\+/g, "$1/").replace(/\/+/g, "/"),
 	setIcon: () => {},
 };
 const originalLoad = Module._load;
@@ -39,24 +40,30 @@ const hookBuild = esbuild.buildSync({
 			"export { runBoundedAgentLoop, extractFirstJsonObject, renderToolCatalog }",
 			'  from "./src/agent/loop";',
 			"export {",
-			"  createVaultSearchTool,",
 			"  createVaultReadTool,",
 			"  createVaultListTool,",
-			"  createHttpJsonTool,",
-			"  createMineruExtractTool,",
-			"  createWriteNoteTool,",
+			"  createVaultSearchTool,",
+			"  createCrossrefSearchTool,",
+			"  createCrossrefDoiTool,",
 			"  createWebSearchTool,",
 			"  buildMineruHelperArgs,",
+			"  runAuthorizedMineruExtract,",
+			"  mineruReadiness,",
+			"  commitSourceNote,",
 			"  VaultWriteJournal,",
 			'} from "./src/agent/tools";',
 			"export {",
-			"  buildPaperIngestSystemPrompt,",
-			"  buildPaperIngestUserMessage,",
-			"  buildPaperIngestTools,",
-			"  parsePaperIngestFinalResult,",
-			"  PAPER_INGEST_ALLOWED_HOSTS,",
-			"  PAPER_INGEST_WRITE_SCOPE,",
+			"  buildIdentitySystemPrompt,",
+			"  buildIdentityUserMessage,",
+			"  buildDraftSystemPrompt,",
+			"  buildDraftTools,",
+			"  buildIdentityTools,",
+			"  parseIdentityResult,",
+			"  parseNoteDraft,",
+			"  resolveArticleVaultPath,",
+			"  PAPER_INGEST_READ_PREFIXES,",
 			'} from "./src/agent/paper-ingest-flow";',
+			"export { articleHeadContainsTitle } from './src/agent/agent-loop-service';",
 		].join("\n"),
 		resolveDir: pluginRoot,
 		sourcefile: hookEntry,
@@ -77,23 +84,35 @@ hookModule._compile(hookBuild.outputFiles[0].text, hookEntry);
 const {
 	runBoundedAgentLoop,
 	extractFirstJsonObject,
-	renderToolCatalog,
 	createVaultReadTool,
 	createVaultListTool,
-	createHttpJsonTool,
-	createMineruExtractTool,
-	createWriteNoteTool,
+	createVaultSearchTool,
+	createCrossrefSearchTool,
+	createCrossrefDoiTool,
 	createWebSearchTool,
 	buildMineruHelperArgs,
+	runAuthorizedMineruExtract,
+	mineruReadiness,
+	commitSourceNote,
 	VaultWriteJournal,
-	buildPaperIngestSystemPrompt,
-	buildPaperIngestUserMessage,
-	buildPaperIngestTools,
-	parsePaperIngestFinalResult,
-	PAPER_INGEST_ALLOWED_HOSTS,
-	PAPER_INGEST_WRITE_SCOPE,
+	buildIdentitySystemPrompt,
+	buildIdentityUserMessage,
+	buildDraftSystemPrompt,
+	buildDraftTools,
+	buildIdentityTools,
+	parseIdentityResult,
+	parseNoteDraft,
+	resolveArticleVaultPath,
+	PAPER_INGEST_READ_PREFIXES,
+	articleHeadContainsTitle,
 } = hookModule.exports;
 Module._load = originalLoad;
+
+const createContext = () => ({
+	signal: new AbortController().signal,
+	deadline: Date.now() + 600000,
+	remainingMs: () => 600000,
+});
 
 function createFakeVault(files) {
 	const written = [];
@@ -126,7 +145,7 @@ function createFakeVault(files) {
 				.filter((key) => key.endsWith(".md"))
 				.map(toStubFile),
 			getFiles: () => [...files.keys()].map(toStubFile),
-			read: async (file) => files.get(file.path) ?? "",
+			read: async (file) => files.get(String(file.path)) ?? "",
 			adapter,
 		},
 	};
@@ -137,8 +156,10 @@ function createFakeProvider(turns) {
 	const calls = [];
 	return {
 		calls,
+		turnCount: () => call,
 		async complete(request) {
-			calls.push(request.messages.map((message) => `${message.role}:${String(message.content).slice(0, 2000)}`));
+			calls.push(request.messages.map((message) => `${message.role}:${String(message.content)}`));
+			assert.ok(request.maxTokens >= 512, "loop must pass an explicit maxTokens >= 512");
 			const turn = turns[Math.min(call, turns.length - 1)];
 			call += 1;
 			return { text: typeof turn === "function" ? turn(call) : turn };
@@ -157,6 +178,10 @@ function testExtractFirstJsonObject() {
 
 	const inString = "{\"action\":\"tool\",\"arguments\":{\"note\":\"brace } inside\"}}";
 	assert.equal(extractFirstJsonObject(inString).json.action, "tool");
+
+	// An invalid first balanced object must not block a later valid payload.
+	const invalidFirst = "{invalid} 说明文字 {\"action\":\"final\",\"result\":{}}";
+	assert.equal(extractFirstJsonObject(invalidFirst).json.action, "final");
 
 	assert.equal(extractFirstJsonObject("没有 JSON").json, null);
 }
@@ -184,6 +209,7 @@ async function testLoopToolRoundtrip() {
 		tools,
 		provider,
 		model: "test-model",
+		maxTokens: 4096,
 		onStep: (step) => steps.push(step.kind),
 	});
 	assert.equal(result.status, "completed");
@@ -193,188 +219,302 @@ async function testLoopToolRoundtrip() {
 	assert.deepEqual(steps, ["tool", "final"]);
 	assert.match(result.trace, /调用 echo/);
 	assert.match(result.trace, /echo → echoed/);
-	// The loop system prompt embeds the tool catalog and the protocol.
 	assert.match(provider.calls[0][0], /工具循环协议/);
-	assert.match(provider.calls[0][0], /echo/);
 }
 
-async function testLoopRejectsUnknownToolAndRepairsProtocol() {
+async function testLoopRepairsNonConsecutiveProtocolErrors() {
 	const provider = createFakeProvider([
-		"我想调用一个不存在的工具",
+		"不是 JSON",
+		JSON.stringify({ action: "final", result: { first: true } }),
+	]);
+	const first = await runBoundedAgentLoop({
+		system: "s", user: "u", tools: [], provider, model: "m", maxTokens: 2048,
+	});
+	assert.equal(first.status, "completed", "第一次协议错误应允许修复");
+
+	const provider2 = createFakeProvider([
+		JSON.stringify({ action: "tool", tool: "real", arguments: {} }),
+		"还不是 JSON",
+		JSON.stringify({ action: "final", result: { recovered: true } }),
+	]);
+	const second = await runBoundedAgentLoop({
+		system: "s", user: "u",
+		tools: [{
+			name: "real", description: "d", parameters: {},
+			async execute() { return { output: "ok" }; },
+		}],
+		provider: provider2, model: "m", maxTokens: 2048,
+	});
+	assert.equal(second.status, "completed", "合法轮次之后的单次协议错误应重置计数");
+	assert.equal(second.final.recovered, true);
+
+	const provider3 = createFakeProvider(["不是 JSON", "还不是 JSON"]);
+	const third = await runBoundedAgentLoop({
+		system: "s", user: "u", tools: [], provider: provider3, model: "m", maxTokens: 2048,
+	});
+	assert.equal(third.status, "failed");
+	assert.match(third.error, /工具循环协议/);
+}
+
+async function testLoopUnknownToolAndBudget() {
+	const provider = createFakeProvider([
 		JSON.stringify({ action: "tool", tool: "nope", arguments: {} }),
 		JSON.stringify({ action: "final", result: { recovered: true } }),
 	]);
 	const result = await runBoundedAgentLoop({
-		system: "s",
-		user: "u",
+		system: "s", user: "u",
 		tools: [{
-			name: "real",
-			description: "d",
-			parameters: {},
+			name: "real", description: "d", parameters: {},
 			async execute() { return { output: "ok" }; },
 		}],
-		provider,
-		model: "m",
+		provider, model: "m", maxTokens: 2048,
 	});
 	assert.equal(result.status, "completed");
-	assert.equal(result.final.recovered, true);
 	assert.match(result.trace, /未知工具 nope/);
-}
 
-async function testLoopFailsAfterRepeatedProtocolViolation() {
-	const provider = createFakeProvider(["不是 JSON", "还不是 JSON"]);
-	const result = await runBoundedAgentLoop({
-		system: "s",
-		user: "u",
-		tools: [],
-		provider,
-		model: "m",
-	});
-	assert.equal(result.status, "failed");
-	assert.match(result.error, /工具循环协议/);
-}
-
-async function testLoopBudgetExhaustion() {
-	const provider = createFakeProvider([
+	const loopProvider = createFakeProvider([
 		() => JSON.stringify({ action: "tool", tool: "loop", arguments: {} }),
 	]);
 	let executions = 0;
-	const result = await runBoundedAgentLoop({
-		system: "s",
-		user: "u",
+	const budgeted = await runBoundedAgentLoop({
+		system: "s", user: "u",
 		tools: [{
-			name: "loop",
-			description: "d",
-			parameters: {},
-			async execute() {
-				executions += 1;
-				return { output: "still running" };
-			},
+			name: "loop", description: "d", parameters: {},
+			async execute() { executions += 1; return { output: "still running" }; },
 		}],
-		provider,
-		model: "m",
-		maxSteps: 4,
+		provider: loopProvider, model: "m", maxTokens: 2048, maxSteps: 4,
 	});
-	assert.equal(result.status, "budget-exhausted");
+	assert.equal(budgeted.status, "budget-exhausted");
 	assert.equal(executions, 4);
-	assert.match(result.error, /最大轮数/);
+	assert.match(budgeted.error, /最大轮数/);
 }
 
-async function testLoopCancellation() {
+async function testLoopCancellationAndTruncation() {
 	let cancelled = false;
 	const provider = createFakeProvider([
 		JSON.stringify({ action: "tool", tool: "wait", arguments: {} }),
 		JSON.stringify({ action: "final", result: {} }),
 	]);
 	const result = await runBoundedAgentLoop({
-		system: "s",
-		user: "u",
+		system: "s", user: "u",
 		tools: [{
-			name: "wait",
-			description: "d",
-			parameters: {},
-			async execute() {
+			name: "wait", description: "d", parameters: {},
+			async execute(args, context) {
+				assert.ok(context && typeof context.remainingMs === "function", "tools must receive a context");
 				cancelled = true;
 				return { output: "done waiting" };
 			},
 		}],
-		provider,
-		model: "m",
+		provider, model: "m", maxTokens: 2048,
 		isCancelled: () => cancelled,
 	});
 	assert.equal(result.status, "cancelled");
-}
 
-async function testLoopToolOutputBudget() {
-	const provider = createFakeProvider([
+	const truncationProvider = createFakeProvider([
 		JSON.stringify({ action: "tool", tool: "firehose", arguments: {} }),
 		JSON.stringify({ action: "final", result: {} }),
 	]);
-	const result = await runBoundedAgentLoop({
-		system: "s",
-		user: "u",
+	const truncation = await runBoundedAgentLoop({
+		system: "s", user: "u",
 		tools: [{
-			name: "firehose",
-			description: "d",
-			parameters: {},
-			async execute() {
-				return { output: "x".repeat(5000), summary: "big" };
-			},
+			name: "firehose", description: "d", parameters: {},
+			async execute() { return { output: "x".repeat(5000), summary: "big" }; },
 		}],
-		provider,
-		model: "m",
+		provider: truncationProvider, model: "m", maxTokens: 2048,
 		maxToolResultChars: 500,
 		maxToolOutputChars: 600,
 	});
-	assert.equal(result.status, "completed");
-	// The tool result fed back to the model must be truncated.
-	const toolResultMessage = provider.calls[1]
+	assert.equal(truncation.status, "completed");
+	const toolResultMessage = truncationProvider.calls[1]
 		.find((message) => message.startsWith("user:<tool_result tool=\"firehose\""));
 	assert.ok(toolResultMessage, "tool result message missing from transcript");
 	assert.ok(toolResultMessage.includes("已截断"));
-	assert.ok(toolResultMessage.length < 1200);
+
+	// Hard budget: with only 10 chars left, at most 10 chars may pass through.
+	const budgetProvider = createFakeProvider([
+		JSON.stringify({ action: "tool", tool: "f", arguments: {} }),
+		JSON.stringify({ action: "tool", tool: "f", arguments: {} }),
+		JSON.stringify({ action: "final", result: {} }),
+	]);
+	await runBoundedAgentLoop({
+		system: "s", user: "u",
+		tools: [{
+			name: "f", description: "d", parameters: {},
+			async execute() { return { output: "y".repeat(600) }; },
+		}],
+		provider: budgetProvider, model: "m", maxTokens: 2048,
+		maxToolResultChars: 1000,
+		maxToolOutputChars: 610,
+	});
+	const secondResult = budgetProvider.calls[2]
+		.find((message) => message.startsWith("user:<tool_result tool=\"f\""));
+	assert.ok(secondResult.length <= 1000, `budget floor must cap output, got ${secondResult.length}`);
 }
 
-function testVaultReadTool() {
+async function testVaultReadAndListScoping() {
 	const fake = createFakeVault(new Map([
+		["wiki/sources/a.md", "---\ntitle: A\n---\n正文"],
 		["papers/demo/article.md", "A".repeat(200)],
 		["papers/demo/image.png", "binary"],
+		["diary/private.md", "隐私内容"],
 	]));
-	const tool = createVaultReadTool({ app: fake });
-	return tool.execute({ path: "papers/demo/article.md" }).then((result) => {
-		assert.match(result.output, /共 200 字符/);
-		return tool.execute({ path: "papers/demo/image.png" }).then(() => {
-			assert.fail("expected image read to be rejected");
-		}, (error) => {
-			assert.match(error.message, /只支持文本文件/);
-			return tool.execute({ path: "../etc/passwd" }).then(() => {
-				assert.fail("expected traversal to be rejected");
-			}, (traversalError) => {
-				assert.match(traversalError.message, /非法路径/);
-			});
-		});
+	const readTool = createVaultReadTool({ app: fake }, PAPER_INGEST_READ_PREFIXES);
+	const ok = await readTool.execute({ path: "papers/demo/article.md" }, createContext());
+	assert.match(ok.output, /共 200 字符/);
+	await readTool.execute({ path: "diary/private.md" }, createContext()).then(() => {
+		assert.fail("expected out-of-scope read to be rejected");
+	}, (error) => {
+		assert.match(error.message, /超出读取范围/);
+	});
+	await readTool.execute({ path: "../etc/passwd" }, createContext()).then(() => {
+		assert.fail("expected traversal to be rejected");
+	}, (error) => {
+		assert.match(error.message, /非法路径/);
+	});
+	await readTool.execute({ path: "papers/demo/image.png" }, createContext()).then(() => {
+		assert.fail("expected binary read to be rejected");
+	}, (error) => {
+		assert.match(error.message, /只支持文本文件/);
+	});
+
+	const listTool = createVaultListTool({ app: fake }, PAPER_INGEST_READ_PREFIXES);
+	const listed = await listTool.execute({ folder: "wiki/sources" }, createContext());
+	assert.match(listed.output, /wiki\/sources\/a\.md/);
+	assert.doesNotMatch(listed.output, /diary/);
+	await listTool.execute({ folder: "diary" }, createContext()).then(() => {
+		assert.fail("expected out-of-scope listing to be rejected");
+	}, (error) => {
+		assert.match(error.message, /超出读取范围/);
 	});
 }
 
-async function testVaultListTool() {
-	const fake = createFakeVault(new Map([
-		["wiki/sources/a.md", ""],
-		["wiki/sources/b.md", ""],
-		["papers/c/article.md", ""],
-		["papers/c/figure.png", ""],
-	]));
-	const mdTool = createVaultListTool({ app: fake });
-	const md = await mdTool.execute({ folder: "wiki/sources" });
-	assert.match(md.output, /wiki\/sources\/a\.md/);
-	assert.doesNotMatch(md.output, /papers\/c\/article\.md/);
-	const pngTool = await mdTool.execute({ folder: "papers/c", extension: "png" });
-	assert.match(pngTool.output, /figure\.png/);
+async function testVaultSearchTool() {
+	const retriever = {
+		retrieve: async (question) => ({
+			lexical_seeds: question.includes("Existing")
+				? [{ path: "wiki/sources/existing.md", title: "Existing", score: 3 }]
+				: [],
+		}),
+	};
+	const tool = createVaultSearchTool(retriever);
+	const found = await tool.execute({ question: "Existing related" }, createContext());
+	assert.match(found.output, /wiki\/sources\/existing\.md/);
+	const empty = await tool.execute({ question: "nothing" }, createContext());
+	assert.match(empty.output, /没有找到/);
+	await tool.execute({ question: "" }, createContext()).then(() => {
+		assert.fail("expected empty question to be rejected");
+	}, (error) => {
+		assert.match(error.message, /question/);
+	});
 }
 
-async function testHttpJsonToolAllowlist() {
+async function testCrossrefDomainTools() {
 	const requests = [];
-	const tool = createHttpJsonTool({
+	const deps = {
 		httpGetJson: async (url) => {
 			requests.push(url);
-			return { status: 200, json: { ok: true }, text: "" };
+			if (url.includes("query.bibliographic")) {
+				return {
+					status: 200,
+					json: {
+						message: {
+							items: [{
+								DOI: "10.1000/demo",
+								title: ["Demo Paper: A Study"],
+								author: [{ family: "Wang", given: "J." }],
+								issued: { "date-parts": [[2026]] },
+								"container-title": ["Journal of Tests"],
+							}],
+						},
+					},
+					text: "",
+				};
+			}
+			if (url.includes("10.1000%2Ffound")) {
+				return { status: 200, json: { message: { DOI: "10.1000/found", title: ["Found"] } }, text: "" };
+			}
+			return { status: 404, json: null, text: "" };
 		},
-	}, [...PAPER_INGEST_ALLOWED_HOSTS]);
-	const allowed = await tool.execute({ url: "https://api.crossref.org/works?query=test" });
-	assert.match(allowed.output, /"ok": true/);
-	await tool.execute({ url: "https://evil.example.com/steal" }).then(() => {
-		assert.fail("expected non-allowlisted host to be rejected");
+	};
+	const search = createCrossrefSearchTool(deps);
+	const searchResult = await search.execute({ query: "Demo Paper & Special/Chars" }, createContext());
+	const decoded = decodeURIComponent(requests[0]);
+	assert.ok(requests[0].startsWith("https://api.crossref.org/works?query.bibliographic="));
+	assert.match(decoded, /Demo Paper & Special\/Chars/);
+	assert.match(searchResult.output, /10\.1000\/demo/);
+	assert.match(searchResult.output, /Journal of Tests/);
+
+	const doi = createCrossrefDoiTool(deps);
+	const doiResult = await doi.execute({ doi: "https://doi.org/10.1000/found" }, createContext());
+	assert.match(doiResult.output, /10\.1000\/found/);
+	assert.ok(requests[1].startsWith("https://api.crossref.org/works/10.1000%2Ffound"));
+	await doi.execute({ doi: "10.1000/missing" }, createContext()).then(() => {
+		assert.fail("expected 404 DOI to be rejected");
 	}, (error) => {
-		assert.match(error.message, /不在白名单/);
+		assert.match(error.message, /没有这个 DOI/);
 	});
-	await tool.execute({ url: "http://api.crossref.org/works" }).then(() => {
-		assert.fail("expected plain http to be rejected");
+	await doi.execute({ doi: "not-a-doi" }, createContext()).then(() => {
+		assert.fail("expected malformed DOI to be rejected");
 	}, (error) => {
-		assert.match(error.message, /https/);
+		assert.match(error.message, /格式不合法/);
 	});
-	assert.equal(requests.length, 1);
 }
 
-async function testMineruToolBuildsHelperArgs() {
+async function testWebSearchToolValidation() {
+	const tool = createWebSearchTool({
+		http: { httpRequest: async () => ({ status: 200, json: {} }) },
+		apiKey: "tvly-test",
+		maxResults: 5,
+		timeoutMs: 1000,
+	});
+	await tool.execute({ queries: [] }, createContext()).then(() => {
+		assert.fail("expected empty queries to be rejected");
+	}, (error) => {
+		assert.match(error.message, /至少一个检索词/);
+	});
+	const noKey = createWebSearchTool({
+		http: { httpRequest: async () => ({ status: 200, json: {} }) },
+		apiKey: "",
+		maxResults: 5,
+		timeoutMs: 1000,
+	});
+	await noKey.execute({ queries: ["test"] }, createContext()).then(() => {
+		assert.fail("expected missing key to be rejected");
+	}, (error) => {
+		assert.match(error.message, /Tavily API Key/);
+	});
+}
+
+function testMineruHelperArgValidation() {
+	const deps = {
+		toolkitRoot: "D:/t",
+		mineruExecutable: "m",
+		mineruBaseUrl: "",
+		pythonExecutable: "p",
+		runHelper: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+	};
+	const missingToolkit = buildMineruHelperArgs({ ...deps, toolkitRoot: "" }, { source: "a.pdf", citekey: "x" });
+	assert.match(missingToolkit.error, /工具包目录/);
+
+	const badCitekey = buildMineruHelperArgs(deps, { source: "a.pdf", citekey: "../escape" });
+	assert.match(badCitekey.error, /citekey/);
+
+	const badSource = buildMineruHelperArgs(deps, { source: "a.txt", citekey: "ok" });
+	assert.match(badSource.error, /PDF/);
+
+	const built = buildMineruHelperArgs(deps, { source: "a.PDF", citekey: "ok_2026", timeoutSeconds: 99999 });
+	assert.equal(built.error, undefined);
+	assert.ok(built.cliArgs.includes("1800"));
+	assert.ok(built.cliArgs.includes("a.PDF"));
+}
+
+async function testAuthorizedMineruExtract() {
+	const readiness = mineruReadiness({
+		toolkitRoot: "", mineruExecutable: "", mineruBaseUrl: "", pythonExecutable: "",
+		runHelper: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+	});
+	assert.equal(readiness.ready, false);
+
 	const runs = [];
 	const deps = {
 		toolkitRoot: "D:/toolkit",
@@ -385,137 +525,95 @@ async function testMineruToolBuildsHelperArgs() {
 			runs.push(args);
 			return {
 				exitCode: 0,
-				stdout: `${JSON.stringify({ status: "published", package: "D:/vault/papers/demo/article.md", validation: { ok: true } })}\n`,
+				stdout: `${JSON.stringify({ status: "published", package: "D:\\vault\\papers\\demo_2026", validation: { ok: true } })}\n`,
 				stderr: "",
 			};
 		},
 	};
-	const tool = createMineruExtractTool(deps);
-	const result = await tool.execute({
-		source: "D:/raw/paper.pdf",
-		citekey: "demo_2026",
-		model: "vlm",
-		formula: false,
-		includeSourcePdf: true,
-	});
-	assert.match(result.output, /D:\/vault\/papers\/demo\/article\.md/);
+	const receipt = await runAuthorizedMineruExtract(
+		deps,
+		{
+			// The authorized PDF is bound by the caller (plugin), never by the model.
+			source: "D:/raw/paper.pdf",
+			citekey: "demo_2026",
+			formula: false,
+			includeSourcePdf: true,
+		},
+		{ signal: new AbortController().signal, timeoutMs: 600000 },
+	);
+	assert.match(receipt.packagePath, /D:\/vault\/papers\/demo_2026$/);
 	assert.equal(runs.length, 1);
-	assert.equal(runs[0].pythonExecutable, "D:/python/python.exe");
-	assert.deepEqual(runs[0].cliArgs.slice(0, 2), [
-		"D:/toolkit/tool-library/scripts/run_mineru_extract.py",
-		"--project-root",
-	]);
+	assert.ok(runs[0].cliArgs.includes("D:/raw/paper.pdf"));
 	assert.ok(runs[0].cliArgs.includes("--no-formula"));
-	assert.ok(runs[0].cliArgs.includes("--include-source-pdf"));
 	assert.ok(runs[0].cliArgs.includes("--base-url"));
 
-	const failingTool = createMineruExtractTool({
-		...deps,
-		runHelper: async () => ({ exitCode: 2, stdout: "", stderr: "MinerU upstream 500" }),
-	});
-	await failingTool.execute({ source: "D:/raw/paper.pdf", citekey: "demo_2026" }).then(() => {
-		assert.fail("expected non-zero helper exit to throw");
-	}, (error) => {
-		assert.match(error.message, /MinerU 提取失败/);
-	});
+	const failing = await runAuthorizedMineruExtract(
+		{ ...deps, runHelper: async () => ({ exitCode: 2, stdout: "", stderr: "MinerU upstream 500" }) },
+		{ source: "D:/raw/paper.pdf", citekey: "demo_2026" },
+		{ signal: new AbortController().signal, timeoutMs: 600000 },
+	).then(() => null, (error) => error);
+	assert.ok(failing instanceof Error);
+	assert.match(failing.message, /MinerU 提取失败/);
+
+	const controller = new AbortController();
+	controller.abort();
+	const aborted = await runAuthorizedMineruExtract(
+		deps,
+		{ source: "D:/raw/paper.pdf", citekey: "demo_2026" },
+		{ signal: controller.signal, timeoutMs: 600000 },
+	).then(() => null, (error) => error);
+	assert.match(aborted.message, /已取消/);
 }
 
-function testMineruHelperArgValidation() {
-	const missingToolkit = buildMineruHelperArgs({
-		toolkitRoot: "",
-		mineruExecutable: "mineru",
-		mineruBaseUrl: "",
-		pythonExecutable: "python",
-		runHelper: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-	}, { source: "a.pdf", citekey: "x" });
-	assert.match(missingToolkit.error, /工具包目录/);
-
-	const badCitekey = buildMineruHelperArgs({
-		toolkitRoot: "D:/t",
-		mineruExecutable: "m",
-		mineruBaseUrl: "",
-		pythonExecutable: "p",
-		runHelper: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-	}, { source: "a.pdf", citekey: "../escape" });
-	assert.match(badCitekey.error, /citekey/);
-
-	const built = buildMineruHelperArgs({
-		toolkitRoot: "D:/t/",
-		mineruExecutable: "m",
-		mineruBaseUrl: "",
-		pythonExecutable: "p",
-		runHelper: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-	}, { source: "a.PDF", citekey: "ok_2026", timeoutSeconds: 99999 });
-	assert.equal(built.error, undefined);
-	assert.ok(built.cliArgs.includes("99999") === false);
-	assert.ok(built.cliArgs.includes("1800"));
-}
-
-async function testWriteNoteScopeGuard() {
-	const fake = createFakeVault(new Map([["wiki/index.md", ""]]));
+async function testCommitSourceNoteCreateOnly() {
+	const fake = createFakeVault(new Map([["wiki/sources/existing.md", "已有内容"]]));
 	const journal = new VaultWriteJournal();
-	const tool = createWriteNoteTool({ app: fake }, PAPER_INGEST_WRITE_SCOPE, journal);
-	const ok = await tool.execute({
-		path: "wiki/sources/demo_2026.md",
-		content: "# Demo\n正文",
-	});
-	assert.match(ok.output, /wiki\/sources\/demo_2026\.md/);
+	const fields = {
+		title: "Demo Paper: A Study",
+		title_zh: "演示论文：一项研究",
+		researchQuestion: "研究问题内容。",
+		conclusion: "结论内容。",
+		motivation: "动机内容。",
+		evidenceGaps: "",
+		notes: [],
+	};
+	const receipt = await commitSourceNote(
+		{ app: fake },
+		"demo_2026",
+		fields,
+		"ingest_mode: lightweight\nregistry_status: pending",
+	);
+	assert.equal(receipt.path, "wiki/sources/demo_2026.md");
+	assert.equal(receipt.operation, "create");
+	assert.match(fake.written[0].data, /title_zh: 演示论文：一项研究/);
+	assert.match(fake.written[0].data, /ingest_mode: lightweight/);
+	assert.match(fake.written[0].data, /## 研究问题/);
+	journal.record(receipt);
 	assert.deepEqual(journal.paths(), ["wiki/sources/demo_2026.md"]);
 
-	await tool.execute({ path: "papers.csv", content: "x" }).then(() => {
-		assert.fail("expected non-scope path to be rejected");
-	}, (error) => {
-		assert.match(error.message, /路径越界/);
-	});
-	await tool.execute({ path: "wiki/sources/../../evil.md", content: "x" }).then(() => {
-		assert.fail("expected traversal to be rejected");
-	}, (error) => {
-		assert.match(error.message, /越界|不合法/);
-	});
-	await tool.execute({ path: "wiki/sources/empty.md", content: "  " }).then(() => {
-		assert.fail("expected empty content to be rejected");
-	}, (error) => {
-		assert.match(error.message, /content 不能为空/);
-	});
+	// Create-only: an existing note must never be overwritten.
+	const overwrite = await commitSourceNote({ app: fake }, "existing", fields, "").then(() => null, (error) => error);
+	assert.ok(overwrite instanceof Error);
+	assert.match(overwrite.message, /不会覆盖/);
 	assert.equal(fake.written.length, 1);
+
+	const badCitekey = await commitSourceNote({ app: fake }, "../evil", fields, "").then(() => null, (error) => error);
+	assert.match(badCitekey.message, /citekey 不合法/);
 }
 
-async function testWebSearchToolQueryCaps() {
-	const tool = createWebSearchTool({
-		http: { httpRequest: async () => ({ status: 200, json: {} }) },
-		apiKey: "tvly-test",
-		maxResults: 5,
-		timeoutMs: 1000,
-	});
-	await tool.execute({ queries: [] }).then(() => {
-		assert.fail("expected empty queries to be rejected");
-	}, (error) => {
-		assert.match(error.message, /至少一个检索词/);
-	});
-	await tool.execute({ queries: "not-an-array" }).then(() => {
-		assert.fail("expected non-array queries to be rejected");
-	}, (error) => {
-		assert.match(error.message, /至少一个检索词/);
-	});
-	await tool.execute({ queries: ["", "  "] }).then(() => {
-		assert.fail("expected blank queries to be rejected");
-	}, (error) => {
-		assert.match(error.message, /至少一个检索词/);
-	});
-	const noKey = createWebSearchTool({
-		http: { httpRequest: async () => ({ status: 200, json: {} }) },
-		apiKey: "",
-		maxResults: 5,
-		timeoutMs: 1000,
-	});
-	await noKey.execute({ queries: ["test"] }).then(() => {
-		assert.fail("expected missing key to be rejected");
-	}, (error) => {
-		assert.match(error.message, /Tavily API Key/);
-	});
+async function testResolveArticleVaultPathLayouts() {
+	const rootLayout = createFakeVault(new Map([["papers/x/article.md", "# T"]]));
+	assert.equal(await resolveArticleVaultPath({ app: rootLayout }, "x"), "papers/x/article.md");
+	const nestedLayout = createFakeVault(new Map([["knowledge-base/papers/x/article.md", "# T"]]));
+	assert.equal(
+		await resolveArticleVaultPath({ app: nestedLayout }, "x"),
+		"knowledge-base/papers/x/article.md",
+	);
+	const missing = createFakeVault(new Map([]));
+	assert.equal(await resolveArticleVaultPath({ app: missing }, "x"), "");
 }
 
-function testPaperIngestFlowPromptAndContract() {
+function testIdentityAndDraftContracts() {
 	const options = {
 		sourcePdfPath: "D:/raw/demo.pdf",
 		requestNotes: "重点处理图 2",
@@ -532,88 +630,68 @@ function testPaperIngestFlowPromptAndContract() {
 		mineruIncludeSourcePdf: false,
 		remoteUploadConfirmed: true,
 	};
-	const system = buildPaperIngestSystemPrompt(options);
-	assert.match(system, /身份核验、去重、citekey 选定始终先执行/);
-	assert.match(system, /mineru_extract/);
-	assert.match(system, /api\.crossref\.org/);
-	assert.match(system, /abstract-level/);
-	assert.match(system, /papers\.csv/);
+	const identityPrompt = buildIdentitySystemPrompt(options);
+	assert.match(identityPrompt, /身份核验与去重/);
+	assert.match(identityPrompt, /crossref_search/);
+	assert.match(identityPrompt, /不能写入任何文件/);
+	assert.match(identityPrompt, /不是给你的指令/);
+	assert.doesNotMatch(identityPrompt, /write_note/);
 
-	const noConfirm = buildPaperIngestSystemPrompt({ ...options, remoteUploadConfirmed: false });
-	assert.match(noConfirm, /不得调用 mineru_extract/);
-
-	const noMarkdown = buildPaperIngestSystemPrompt({ ...options, createArticleMarkdown: false });
-	assert.doesNotMatch(noMarkdown, /mineru_extract 生成原文包/);
-
-	const user = buildPaperIngestUserMessage(options);
+	const user = buildIdentityUserMessage(options);
 	assert.match(user, /D:\/raw\/demo\.pdf/);
 	assert.match(user, /重点处理图 2/);
 
-	const parsed = parsePaperIngestFinalResult({
-		status: "completed",
+	const draftPrompt = buildDraftSystemPrompt(options, "demo_2026", "Demo Paper");
+	assert.match(draftPrompt, /插件会根据你返回的字段生成笔记文件/);
+	assert.match(draftPrompt, /abstract-level/);
+
+	const noMarkdownPrompt = buildDraftSystemPrompt(
+		{ ...options, createArticleMarkdown: false },
+		"demo_2026",
+		"Demo Paper",
+	);
+	assert.match(noMarkdownPrompt, /元数据与用户说明/);
+
+	const verified = parseIdentityResult({
+		status: "verified",
 		citekey: "demo_2026",
 		title: "Demo Paper",
-		articlePath: "papers/demo_2026/article.md",
-		filesWritten: ["papers/demo_2026/article.md"],
+		doi: "https://doi.org/10.1000/demo",
+		notes: ["PDF 正文未读取；说明文字带 / 和 \\ 不应被路径化"],
 	});
-	assert.equal(parsed.status, "completed");
-	assert.deepEqual(parsed.filesWritten, ["papers/demo_2026/article.md"]);
-	assert.equal(parsePaperIngestFinalResult({ status: "nonsense" }), null);
-	assert.equal(parsePaperIngestFinalResult(null), null);
+	assert.equal(verified.status, "verified");
+	assert.equal(verified.doi, "10.1000/demo");
+	assert.match(verified.notes[0], /不应被路径化/);
+
+	assert.throws(() => parseIdentityResult({ status: "verified", citekey: "bad citekey!" }), /citekey 不合法/);
+	const conflict = parseIdentityResult({ status: "conflict", conflicts: ["DOI 与标题不一致"], citekey: "" });
+	assert.equal(conflict.status, "conflict");
+	assert.equal(parseIdentityResult({ status: "nonsense" }), null);
+	assert.equal(parseIdentityResult(null), null);
+
+	const draft = parseNoteDraft({
+		status: "completed",
+		title: "Demo Paper",
+		title_zh: "演示论文",
+		research_question: "研究问题",
+		conclusion: "结论",
+		motivation: "动机",
+		evidence_gaps: "缺口",
+	});
+	assert.equal(draft.title_zh, "演示论文");
+	assert.equal(draft.researchQuestion, "研究问题");
+	assert.equal(draft.evidenceGaps, "缺口");
+	const longSection = "x".repeat(9000);
+	assert.equal(parseNoteDraft({ status: "completed", conclusion: longSection }).conclusion.length, 6000);
 }
 
-async function testBuildPaperIngestToolsAllowlist() {
+function testPhaseToolsetsAreRead() {
 	const fake = createFakeVault(new Map([]));
-	const calls = [];
-	const { tools } = buildPaperIngestTools({
+	const deps = {
 		vault: { app: fake },
 		http: { httpGetJson: async () => ({ status: 200, json: null, text: "" }) },
 		mineru: {
-			toolkitRoot: "D:/t",
-			mineruExecutable: "m",
-			mineruBaseUrl: "",
-			pythonExecutable: "p",
-			runHelper: async (args) => {
-				calls.push(args);
-				return { exitCode: 0, stdout: "{}", stderr: "" };
-			},
-		},
-		tavily: {
-			http: { httpRequest: async () => ({ status: 200, json: {} }) },
-			apiKey: "",
-			maxResults: 5,
-			timeoutMs: 1000,
-		},
-		lexicalRetriever: { retrieve: async () => ({ lexical_seeds: [] }) },
-	}, {
-		sourcePdfPath: "a.pdf",
-		requestNotes: "",
-		createArticleMarkdown: true,
-		createArticleWiki: true,
-		articleWikiSource: "auto",
-		mineruModel: "vlm",
-		mineruLanguage: "en",
-		mineruOcr: false,
-		mineruFormula: true,
-		mineruTable: true,
-		mineruPages: "",
-		mineruTimeoutSeconds: 600,
-		mineruIncludeSourcePdf: false,
-		remoteUploadConfirmed: true,
-	});
-	const names = tools.map((tool) => tool.name);
-	assert.ok(names.includes("mineru_extract"));
-	assert.ok(names.includes("write_note"));
-	assert.ok(!names.includes("web_search"), "无 Tavily Key 时不暴露 web_search 工具");
-
-	const withoutMarkdown = buildPaperIngestTools({
-		vault: { app: fake },
-		http: { httpGetJson: async () => ({ status: 200, json: null, text: "" }) },
-		mineru: {
-			toolkitRoot: "D:/t",
-			mineruExecutable: "m",
-			mineruBaseUrl: "",
-			pythonExecutable: "p",
+			toolkitRoot: "D:/t", mineruExecutable: "m", mineruBaseUrl: "", pythonExecutable: "p",
 			runHelper: async () => ({ exitCode: 0, stdout: "{}", stderr: "" }),
 		},
 		tavily: {
@@ -623,166 +701,52 @@ async function testBuildPaperIngestToolsAllowlist() {
 			timeoutMs: 1000,
 		},
 		lexicalRetriever: { retrieve: async () => ({ lexical_seeds: [] }) },
-	}, {
-		sourcePdfPath: "a.pdf",
-		requestNotes: "",
-		createArticleMarkdown: false,
-		createArticleWiki: true,
-		articleWikiSource: "auto",
-		mineruModel: "vlm",
-		mineruLanguage: "en",
-		mineruOcr: false,
-		mineruFormula: true,
-		mineruTable: true,
-		mineruPages: "",
-		mineruTimeoutSeconds: 600,
-		mineruIncludeSourcePdf: false,
-		remoteUploadConfirmed: false,
-	});
-	const names2 = withoutMarkdown.tools.map((tool) => tool.name);
-	assert.ok(!names2.includes("mineru_extract"));
-	assert.ok(names2.includes("web_search"));
-	assert.equal(calls.length, 0);
+	};
+	const identityNames = buildIdentityTools(deps).map((tool) => tool.name);
+	assert.deepEqual(identityNames.filter((name) => name === "mineru_extract" || name === "write_note"), []);
+	assert.ok(identityNames.includes("crossref_search"));
+	assert.ok(identityNames.includes("vault_search"));
+
+	const draftNames = buildDraftTools(deps).map((tool) => tool.name);
+	assert.deepEqual(draftNames.filter((name) => name === "mineru_extract" || name === "write_note"), []);
+	assert.deepEqual(draftNames.filter((name) => name === "crossref_search"), []);
 }
 
-async function testLoopEndToEndWithVaultTools() {
+async function testArticleHeadTitleGate() {
 	const fake = createFakeVault(new Map([
-		["wiki/sources/existing.md", "---\ntitle: Existing\n---\n正文"],
+		["papers/demo/article.md", "# Novae: A Graph-Based Foundation Model for Spatial Transcriptomics\n\nIntroduction"],
+		["papers/other/article.md", "# Completely Different Title Here\n\nBody"],
 	]));
-	const retriever = {
-		retrieve: async (question) => ({
-			lexical_seeds: question.includes("Existing")
-				? [{ path: "wiki/sources/existing.md", title: "Existing", score: 3 }]
-				: [],
-		}),
-	};
-	const { tools } = buildPaperIngestTools({
-		vault: { app: fake },
-		http: {
-			httpGetJson: async () => ({
-				status: 200,
-				json: { "message": { items: [{ DOI: "10.1000/demo", title: ["Demo Paper"] }] } },
-				text: "",
-			}),
-		},
-		mineru: {
-			toolkitRoot: "",
-			mineruExecutable: "",
-			mineruBaseUrl: "",
-			pythonExecutable: "",
-			runHelper: async () => ({ exitCode: 1, stdout: "", stderr: "unavailable" }),
-		},
-		tavily: {
-			http: { httpRequest: async () => ({ status: 200, json: {} }) },
-			apiKey: "",
-			maxResults: 5,
-			timeoutMs: 1000,
-		},
-		lexicalRetriever: retriever,
-	}, {
-		sourcePdfPath: "D:/raw/demo.pdf",
-		requestNotes: "",
-		createArticleMarkdown: false,
-		createArticleWiki: true,
-		articleWikiSource: "pdf",
-		mineruModel: "vlm",
-		mineruLanguage: "en",
-		mineruOcr: false,
-		mineruFormula: true,
-		mineruTable: true,
-		mineruPages: "",
-		mineruTimeoutSeconds: 600,
-		mineruIncludeSourcePdf: false,
-		remoteUploadConfirmed: false,
-	});
-	const provider = createFakeProvider([
-		JSON.stringify({ action: "tool", tool: "http_get_json", arguments: { url: "https://api.crossref.org/works?query=demo" } }),
-		JSON.stringify({ action: "tool", tool: "vault_search", arguments: { question: "Demo Paper Existing" } }),
-		JSON.stringify({
-			action: "tool",
-			tool: "write_note",
-			arguments: {
-				path: "wiki/sources/demo_2026.md",
-				content: "---\ntitle: Demo Paper\ntitle_zh: 演示论文\ntype: source\ndepth: abstract-level\n---\n\n## 研究问题\nDemo。",
-			},
-		}),
-		JSON.stringify({
-			action: "final",
-			result: {
-				status: "completed",
-				citekey: "demo_2026",
-				title: "Demo Paper",
-				title_zh: "演示论文",
-				wikiPath: "wiki/sources/demo_2026.md",
-				filesWritten: ["wiki/sources/demo_2026.md"],
-				notes: ["未找到已验证 article 包，内容来源为 PDF 信息"],
-			},
-		}),
-	]);
-	const result = await runBoundedAgentLoop({
-		system: buildPaperIngestSystemPrompt({
-			sourcePdfPath: "D:/raw/demo.pdf",
-			requestNotes: "",
-			createArticleMarkdown: false,
-			createArticleWiki: true,
-			articleWikiSource: "pdf",
-			mineruModel: "vlm",
-			mineruLanguage: "en",
-			mineruOcr: false,
-			mineruFormula: true,
-			mineruTable: true,
-			mineruPages: "",
-			mineruTimeoutSeconds: 600,
-			mineruIncludeSourcePdf: false,
-			remoteUploadConfirmed: false,
-		}),
-		user: buildPaperIngestUserMessage({
-			sourcePdfPath: "D:/raw/demo.pdf",
-			requestNotes: "",
-			createArticleMarkdown: false,
-			createArticleWiki: true,
-			articleWikiSource: "pdf",
-			mineruModel: "vlm",
-			mineruLanguage: "en",
-			mineruOcr: false,
-			mineruFormula: true,
-			mineruTable: true,
-			mineruPages: "",
-			mineruTimeoutSeconds: 600,
-			mineruIncludeSourcePdf: false,
-			remoteUploadConfirmed: false,
-		}),
-		tools,
-		provider,
-		model: "test-model",
-	});
-	assert.equal(result.status, "completed", result.error);
-	const parsed = parsePaperIngestFinalResult(result.final);
-	assert.equal(parsed.citekey, "demo_2026");
-	assert.equal(parsed.wikiPath, "wiki/sources/demo_2026.md");
-	assert.equal(fake.written.length, 1);
-	assert.match(fake.written[0].data, /title_zh: 演示论文/);
-	assert.match(result.trace, /已写入 wiki\/sources\/demo_2026\.md/);
+	assert.equal(
+		await articleHeadContainsTitle({ app: fake }, "papers/demo/article.md", "Novae: A Graph-Based Foundation Model for Spatial Transcriptomics"),
+		true,
+	);
+	assert.equal(
+		await articleHeadContainsTitle({ app: fake }, "papers/other/article.md", "Novae: A Graph-Based Foundation Model for Spatial Transcriptomics"),
+		false,
+	);
+	// Very short titles skip the heuristic gate.
+	assert.equal(await articleHeadContainsTitle({ app: fake }, "papers/other/article.md", "Tiny"), true);
+	assert.equal(await articleHeadContainsTitle({ app: fake }, "papers/none/article.md", "Anything At All"), false);
 }
 
 (async () => {
 	testExtractFirstJsonObject();
 	await testLoopToolRoundtrip();
-	await testLoopRejectsUnknownToolAndRepairsProtocol();
-	await testLoopFailsAfterRepeatedProtocolViolation();
-	await testLoopBudgetExhaustion();
-	await testLoopCancellation();
-	await testLoopToolOutputBudget();
-	await testVaultReadTool();
-	await testVaultListTool();
-	await testHttpJsonToolAllowlist();
-	await testMineruToolBuildsHelperArgs();
+	await testLoopRepairsNonConsecutiveProtocolErrors();
+	await testLoopUnknownToolAndBudget();
+	await testLoopCancellationAndTruncation();
+	await testVaultReadAndListScoping();
+	await testVaultSearchTool();
+	await testCrossrefDomainTools();
+	await testWebSearchToolValidation();
 	testMineruHelperArgValidation();
-	await testWriteNoteScopeGuard();
-	await testWebSearchToolQueryCaps();
-	testPaperIngestFlowPromptAndContract();
-	await testBuildPaperIngestToolsAllowlist();
-	await testLoopEndToEndWithVaultTools();
+	await testAuthorizedMineruExtract();
+	await testCommitSourceNoteCreateOnly();
+	await testResolveArticleVaultPathLayouts();
+	testIdentityAndDraftContracts();
+	testPhaseToolsetsAreRead();
+	await testArticleHeadTitleGate();
 	console.log("AGENT_LOOP_TESTS_OK");
 })().catch((error) => {
 	console.error(error);

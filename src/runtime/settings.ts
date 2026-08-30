@@ -191,6 +191,7 @@ export interface DashboardSettings {
 	webSearchMaxResults: number;
 	webSearchTimeoutSeconds: number;
 	lightAgentMaxSteps: number;
+	lightAgentMaxOutputTokens: number;
 }
 
 export function normalizeReaderMarkdownFolders(value: unknown): string[] {
@@ -656,4 +657,5 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	webSearchMaxResults: 5,
 	webSearchTimeoutSeconds: 20,
 	lightAgentMaxSteps: 10,
+	lightAgentMaxOutputTokens: 4096,
 };

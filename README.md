@@ -17,9 +17,10 @@ connecting optional local AI-agent workflows.
 - Creates local Markdown annotations from selected reading text.
 - Provides a vault dashboard, query view, and optional Direct API connections.
 - Runs paper intake through an in-plugin bounded agent loop on a Direct API
-  profile (allowlisted metadata lookups, vault search, MinerU conversion, and
-  write access limited to `papers/` and `wiki/sources/`), with the optional
-  Codex CLI toolkit pipeline remaining available for full registry updates.
+  profile (phase-gated: metadata lookups and vault search for identity/dedup,
+  plugin-driven MinerU conversion of the authorized PDF, and plugin-built
+  create-only wiki notes) — no coding agent required. The optional Codex CLI
+  toolkit pipeline remains available for full registry updates.
 - Detects optional Codex CLI, Claude Code, OpenCode, MinerU, Python, R, and
   Obsidian CLI installations without installing or updating them.
 - Supports optional Research Vault Toolkit workflows for deep reading, code

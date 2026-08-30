@@ -14,7 +14,7 @@ import {
 	type DashboardAction,
 	type DashboardActionOptions,
 } from "../actions";
-import { VIEW_TYPE, isCliBackendId } from "../config";
+import { VIEW_TYPE } from "../config";
 import {
 	ActionInputModal,
 	type ActionRunnerKind,
@@ -55,23 +55,16 @@ const ACTION_ICONS: Record<string, string> = {
 	"okf-export": "package-open",
 };
 
-function describeLightStatus(status: AgentLoopRunOutcome["loopStatus"]): string {
-	return {
-		completed: "已完成",
-		cancelled: "已停止",
-		"budget-exhausted": "达到步数/时间预算",
-		failed: "运行失败",
-	}[status] || status;
-}
-
 interface DashboardHost extends PluginHost {
 	getRunningTaskRun(actionId: string): TaskRun | null;
+	stopTaskRun(runId: string): boolean;
 	stopDirectVaultQuery(runId: string): boolean;
 	stopVaultAction(runId: string): boolean;
 	activateQueryWikiView(initialInput?: string): Promise<void>;
 	activateCodePracticeView(): Promise<void>;
 	supportsFast(model: string): boolean;
 	lightPaperIngestAvailable(): { ready: boolean; reason: string };
+	lightAgentMineruReady(): boolean;
 	getActiveDirectProviderSummary(): { name: string; model: string } | null;
 	runLightPaperIngest(
 		runId: string,
@@ -321,10 +314,9 @@ export class DashboardView extends ItemView {
 
 	requestStopRun(run: TaskRun): void {
 		if (!run || this.stoppingRunIds.has(run.id)) return;
-		const backend = String(run.executionConfig?.backend || "codex-cli");
-		const requested = !isCliBackendId(backend)
-			? this.plugin.stopDirectVaultQuery(run.id)
-			: this.plugin.stopVaultAction(run.id);
+		// Ownership is resolved by the plugin (loop → direct query → process);
+		// the dashboard must not infer it from executionConfig.backend.
+		const requested = this.plugin.stopTaskRun(run.id);
 		if (!requested) {
 			new Notice("任务进程已经结束，正在刷新运行状态");
 			void this.loadAndRender();
@@ -771,6 +763,8 @@ export class DashboardView extends ItemView {
 				: outcome.loopStatus === "cancelled"
 					? "interrupted"
 					: "failed";
+			const failureReason = outcome.result?.conflicts.find(Boolean)
+				|| (outcome.result ? "轻量 Agent 未完成所选输出（详见输出）" : "轻量 Agent 未返回结构化结果");
 			completedRun = await this.plugin.finishTaskRun(run.id, {
 				status,
 				exitCode: outcome.exitCode,
@@ -778,9 +772,7 @@ export class DashboardView extends ItemView {
 				error: status === "failed"
 					? conflict
 						? "发现身份或证据冲突，未生成所选输出（详见输出）"
-						: outcome.result
-							? "轻量 Agent 未按约定返回结构化结果（详见输出）"
-							: `轻量 Agent 未完成：${describeLightStatus(outcome.loopStatus)}`
+						: failureReason
 					: status === "interrupted"
 						? "任务已手动停止"
 						: "",

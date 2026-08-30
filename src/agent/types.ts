@@ -1,6 +1,17 @@
 import type { LLMProvider } from "../providers/adapters";
 
 /**
+ * Execution context handed to every tool call. The loop owns the abort
+ * controller: user cancellation and the wall-clock deadline both abort the
+ * same signal, so long-running tools (MinerU subprocess) can stop promptly.
+ */
+export interface AgentToolContext {
+	signal: AbortSignal;
+	deadline: number;
+	remainingMs(): number;
+}
+
+/**
  * A tool the bounded agent loop may call. Tools are the only way the model
  * can observe the vault or act on it; every capability boundary (path scope,
  * host allowlist, write permission) is enforced inside the tool itself, never
@@ -12,7 +23,7 @@ export interface AgentTool {
 	/** JSON-schema-ish parameter hints rendered into the loop prompt. */
 	parameters: Record<string, string>;
 	required?: string[];
-	execute(args: Record<string, unknown>): Promise<AgentToolResult>;
+	execute(args: Record<string, unknown>, context: AgentToolContext): Promise<AgentToolResult>;
 }
 
 export interface AgentToolResult {
@@ -33,6 +44,7 @@ export interface AgentLoopRequest {
 	tools: readonly AgentTool[];
 	provider: LLMProvider;
 	model: string;
+	/** Explicit per-turn output token cap; never leave it to provider defaults. */
 	maxTokens?: number;
 	/** Hard cap on loop turns; each turn is one provider completion. */
 	maxSteps?: number;

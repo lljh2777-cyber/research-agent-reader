@@ -2255,6 +2255,18 @@ export default class AgentDashboardPlugin extends Plugin {
 		return { ready: true, reason: "" };
 	}
 
+	/** Whether the light agent could run MinerU (toolkit + Python + CLI). */
+	lightAgentMineruReady(): boolean {
+		const toolkitRoot = String(this.settings.toolkitRoot || "").trim();
+		if (!toolkitRoot || !fs.existsSync(toolkitRoot)) return false;
+		if (!fs.existsSync(path.join(toolkitRoot, "tool-library", "scripts", "run_mineru_extract.py"))) {
+			return false;
+		}
+		const python = String(this.settings.pythonExecutable || "").trim();
+		if (!python || !fs.existsSync(python)) return false;
+		return describeCliExecutable("mineru", this.settings.mineruExecutable).found;
+	}
+
 	/**
 	 * Runs 文献入库 through the in-plugin bounded agent loop (Direct API
 	 * brain, allowlisted tools) instead of the Codex CLI toolkit pipeline.
@@ -2298,8 +2310,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	/**
-	 * Spawns the toolkit MinerU helper with an argument array (no shell) and
-	 * resolves with its exit code and captured output.
+	 * Spawns the toolkit MinerU helper with an argument array (no shell),
+	 * honors abort via the run-level signal, and caps captured output.
 	 */
 	private runMineruHelperProcess(args: {
 		pythonExecutable: string;
@@ -2307,8 +2319,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		cliArgs: string[];
 		cwd: string;
 		timeoutMs: number;
+		signal: AbortSignal;
 	}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
 		return new Promise((resolve, reject) => {
+			const MAX_HELPER_OUTPUT_CHARS = 1_000_000;
 			let stdout = "";
 			let stderr = "";
 			let settled = false;
@@ -2318,25 +2332,46 @@ export default class AgentDashboardPlugin extends Plugin {
 				windowsHide: true,
 				env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
 			});
+			const settle = (result: { exitCode: number; stdout: string; stderr: string } | Error) => {
+				if (settled) return;
+				settled = true;
+				args.signal.removeEventListener("abort", onAbort);
+				window.clearTimeout(timer);
+				if (result instanceof Error) reject(result);
+				else resolve(result);
+			};
+			const killTree = (): void => {
+				try {
+					// Windows child from spawn without shell: kill() ends the
+					// direct child; helper itself spawns no grandchildren that
+					// outlive it (MinerU CLI is invoked synchronously by the helper).
+					child.kill();
+				} catch (killError) {
+					console.warn("Could not kill MinerU helper process", killError);
+				}
+			};
+			const onAbort = (): void => {
+				killTree();
+				settle({ exitCode: 130, stdout, stderr: `${stderr}\n已手动停止，MinerU 子进程已终止`.trim() });
+			};
 			const timer = window.setTimeout(() => {
-				if (settled) return;
-				settled = true;
-				child.kill();
-				resolve({ exitCode: 124, stdout, stderr: `${stderr}\nMinerU 提取超时`.trim() });
+				killTree();
+				settle({ exitCode: 124, stdout, stderr: `${stderr}\nMinerU 提取超时`.trim() });
 			}, args.timeoutMs);
-			child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
-			child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
-			child.once("error", (error: Error) => {
-				if (settled) return;
-				settled = true;
-				window.clearTimeout(timer);
-				reject(error);
+			if (args.signal.aborted) {
+				onAbort();
+				return;
+			}
+			args.signal.addEventListener("abort", onAbort);
+			child.stdout.on("data", (chunk: Buffer) => {
+				if (stdout.length < MAX_HELPER_OUTPUT_CHARS) stdout += chunk.toString("utf8");
 			});
+			child.stderr.on("data", (chunk: Buffer) => {
+				if (stderr.length < MAX_HELPER_OUTPUT_CHARS) stderr += chunk.toString("utf8");
+			});
+			child.once("error", (error: Error) => settle(error));
 			child.once("close", (code: number | null) => {
-				if (settled) return;
-				settled = true;
-				window.clearTimeout(timer);
-				resolve({ exitCode: code ?? 1, stdout, stderr });
+				settle({ exitCode: code ?? 1, stdout, stderr });
 			});
 		});
 	}
@@ -2751,6 +2786,16 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	stopVaultAction(runId: string): boolean {
 		if (this.agentLoopService.stop(runId)) return true;
+		return this.processExecution.stopVaultAction(runId);
+	}
+
+	/**
+	 * Single stop entry for any task run: resolves ownership by asking each
+	 * executor in turn instead of inferring from executionConfig.backend.
+	 */
+	stopTaskRun(runId: string): boolean {
+		if (this.agentLoopService.stop(runId)) return true;
+		if (this.directQueryService.stop(runId)) return true;
 		return this.processExecution.stopVaultAction(runId);
 	}
 

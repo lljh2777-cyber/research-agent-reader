@@ -3,6 +3,7 @@ import type {
 	AgentLoopResult,
 	AgentLoopStep,
 	AgentTool,
+	AgentToolContext,
 } from "./types";
 
 const DEFAULT_MAX_STEPS = 10;
@@ -20,9 +21,10 @@ interface ParsedModelTurn {
 }
 
 /**
- * Extract the first balanced JSON object from model text. Handles fenced
- * ```json blocks and prose around the payload without relying on greedy
- * regexes that break on nested braces.
+ * Extract the first valid JSON object from model text. Handles fenced
+ * ```json blocks and prose around the payload; when a balanced object fails
+ * to parse, scanning resumes after its opening brace so a later valid
+ * payload is still found.
  */
 export function extractFirstJsonObject(text: string): {
 	json: Record<string, unknown> | null;
@@ -30,36 +32,43 @@ export function extractFirstJsonObject(text: string): {
 	end: number;
 } {
 	const cleaned = text.replace(/```(?:json)?/gi, "```");
-	const open = cleaned.indexOf("{");
-	if (open === -1) return { json: null, start: -1, end: -1 };
-	let depth = 0;
-	let inString = false;
-	let escaped = false;
-	for (let index = open; index < cleaned.length; index += 1) {
-		const char = cleaned[index];
-		if (inString) {
-			if (escaped) escaped = false;
-			else if (char === "\\") escaped = true;
-			else if (char === '"') inString = false;
-			continue;
-		}
-		if (char === '"') inString = true;
-		else if (char === "{") depth += 1;
-		else if (char === "}") {
-			depth -= 1;
-			if (depth === 0) {
-				const candidate = cleaned.slice(open, index + 1);
-				try {
-					const parsed = JSON.parse(candidate) as unknown;
-					if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-						return { json: parsed as Record<string, unknown>, start: open, end: index + 1 };
-					}
-				} catch {
-					// Keep scanning; a later object may be the valid payload.
+	let searchFrom = 0;
+	while (searchFrom < cleaned.length) {
+		const open = cleaned.indexOf("{", searchFrom);
+		if (open === -1) return { json: null, start: -1, end: -1 };
+		let depth = 0;
+		let inString = false;
+		let escaped = false;
+		let closedAt = -1;
+		for (let index = open; index < cleaned.length; index += 1) {
+			const char = cleaned[index];
+			if (inString) {
+				if (escaped) escaped = false;
+				else if (char === "\\") escaped = true;
+				else if (char === '"') inString = false;
+				continue;
+			}
+			if (char === '"') inString = true;
+			else if (char === "{") depth += 1;
+			else if (char === "}") {
+				depth -= 1;
+				if (depth === 0) {
+					closedAt = index;
+					break;
 				}
-				if (cleaned.indexOf("{", index) === -1) break;
 			}
 		}
+		if (closedAt === -1) return { json: null, start: -1, end: -1 };
+		const candidate = cleaned.slice(open, closedAt + 1);
+		try {
+			const parsed = JSON.parse(candidate) as unknown;
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+				return { json: parsed as Record<string, unknown>, start: open, end: closedAt + 1 };
+			}
+		} catch {
+			// Not valid JSON at this position; resume after this opening brace.
+		}
+		searchFrom = open + 1;
 	}
 	return { json: null, start: -1, end: -1 };
 }
@@ -131,7 +140,8 @@ function buildLoopSystemPrompt(request: AgentLoopRequest): string {
  * Deterministic bounded tool loop over any chat-completion provider. The
  * plugin drives the loop; the model can only request tools from the given
  * allowlist, and every budget (steps, wall clock, tool output) is enforced
- * here rather than trusted to the model.
+ * here rather than trusted to the model. Cancellation and the deadline abort
+ * one shared signal that is also handed to tools.
  */
 export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<AgentLoopResult> {
 	const maxSteps = Math.max(2, Math.min(24, Math.round(request.maxSteps || DEFAULT_MAX_STEPS)));
@@ -140,18 +150,24 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 	const maxToolResultChars = request.maxToolResultChars || DEFAULT_MAX_TOOL_RESULT_CHARS;
 	const toolsByName = new Map(request.tools.map((tool) => [tool.name, tool]));
 	const deadline = Date.now() + timeoutMs;
+	const controller = new AbortController();
 
 	const steps: AgentLoopStep[] = [];
 	const traceLines: string[] = [];
 	const transcript: Array<{ role: "user" | "assistant"; content: string }> = [];
 	let toolOutputBudget = maxToolOutputChars;
-	let repairUsed = false;
+	let consecutiveProtocolFailures = 0;
 	let status: AgentLoopResult["status"] = "failed";
 	let final: Record<string, unknown> | null = null;
 	let finalText = "";
 	let error = "";
 
 	const cancelled = (): boolean => request.isCancelled?.() === true;
+	const context: AgentToolContext = {
+		signal: controller.signal,
+		deadline,
+		remainingMs: () => deadline - Date.now(),
+	};
 
 	const record = (step: AgentLoopStep): void => {
 		steps.push(step);
@@ -163,15 +179,23 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 
 	transcript.push({ role: "user", content: request.user });
 
+	const abortForCancellation = (reason: "cancelled" | "timeout"): void => {
+		if (!controller.signal.aborted) controller.abort();
+		if (reason === "cancelled") status = "cancelled";
+		else {
+			status = "budget-exhausted";
+			error = "轻量 Agent 超过时间预算，已停止";
+		}
+	};
+
 	try {
 		for (let step = 1; step <= maxSteps; step += 1) {
 			if (cancelled()) {
-				status = "cancelled";
+				abortForCancellation("cancelled");
 				break;
 			}
 			if (Date.now() > deadline) {
-				status = "budget-exhausted";
-				error = "轻量 Agent 超过时间预算，已停止";
+				abortForCancellation("timeout");
 				break;
 			}
 
@@ -180,13 +204,18 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 				...transcript,
 			];
 			// Abort the in-flight provider request promptly when the user stops
-			// the run instead of waiting for the next between-turns poll.
+			// the run or the deadline passes instead of waiting for the next
+			// between-turns poll.
 			let activeCancel: (() => void) | null = null;
-			const cancelWatcher = cancelled()
-				? null
-				: setInterval(() => {
-					if (cancelled()) activeCancel?.();
-				}, 500);
+			const cancelWatcher = setInterval(() => {
+				if (cancelled()) {
+					abortForCancellation("cancelled");
+					activeCancel?.();
+				} else if (Date.now() > deadline) {
+					abortForCancellation("timeout");
+					activeCancel?.();
+				}
+			}, 500);
 			let completion: Awaited<ReturnType<typeof request.provider.complete>>;
 			try {
 				completion = await request.provider.complete(
@@ -198,15 +227,15 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 					{
 						registerCancel: (cancel) => {
 							activeCancel = cancel;
-							if (cancelled()) cancel();
+							if (controller.signal.aborted) cancel();
 						},
 					},
 				);
 			} finally {
-				if (cancelWatcher !== null) clearInterval(cancelWatcher);
+				clearInterval(cancelWatcher);
 			}
-			if (cancelled()) {
-				status = "cancelled";
+			if (controller.signal.aborted) {
+				if (cancelled()) status = "cancelled";
 				break;
 			}
 
@@ -220,8 +249,8 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 
 			const turn = parseModelTurn(rawText);
 			if (!turn) {
-				if (!repairUsed) {
-					repairUsed = true;
+				consecutiveProtocolFailures += 1;
+				if (consecutiveProtocolFailures < 2) {
 					trace(`[第 ${step} 轮] 输出不是合法协议 JSON，要求重试`);
 					transcript.push({ role: "assistant", content: rawText });
 					transcript.push({
@@ -234,6 +263,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 				record({ kind: "error", step, title: "协议解析失败" });
 				break;
 			}
+			consecutiveProtocolFailures = 0;
 
 			if (turn.action === FINAL_ACTION) {
 				final = turn.final;
@@ -263,7 +293,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 			let toolResult: string;
 			let toolStatus = "ok";
 			try {
-				const result = await tool.execute(turn.arguments);
+				const result = await tool.execute(turn.arguments, context);
 				toolResult = result.output;
 				if (result.summary) trace(`[第 ${step} 轮] ${tool.name} → ${result.summary}`);
 			} catch (toolError) {
@@ -277,7 +307,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 				: toolResult;
 			const budgeted = toolOutputBudget <= 0
 				? "[工具输出预算已用尽]"
-				: truncated.slice(0, Math.max(200, toolOutputBudget));
+				: truncated.slice(0, toolOutputBudget);
 			toolOutputBudget -= budgeted.length;
 
 			transcript.push({
@@ -293,7 +323,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 	} catch (loopError) {
 		if (cancelled()) {
 			status = "cancelled";
-		} else {
+		} else if (status !== "budget-exhausted") {
 			status = "failed";
 			error = loopError instanceof Error ? loopError.message : String(loopError);
 		}

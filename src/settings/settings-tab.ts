@@ -1931,7 +1931,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		);
 		new Setting(containerEl)
 			.setName("最大工具循环轮数")
-			.setDesc("轻量 Agent 单次任务的模型轮数上限（3-20）。达到上限即停止并报告当前进度。")
+			.setDesc("轻量 Agent 单阶段任务的模型轮数上限（3-20）。达到上限即停止并报告当前进度。")
 			.addText((text) =>
 				text
 					.setPlaceholder("10")
@@ -1940,6 +1940,20 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						const parsed = Number.parseInt(value, 10);
 						if (!Number.isFinite(parsed)) return;
 						this.plugin.settings.lightAgentMaxSteps = Math.max(3, Math.min(20, parsed));
+						await this.plugin.saveSettings();
+					})
+			);
+		new Setting(containerEl)
+			.setName("单轮输出 Token 上限")
+			.setDesc("轻量 Agent 每轮模型输出的最大 Token 数（512-8192）。过低会导致协议 JSON 被截断。")
+			.addText((text) =>
+				text
+					.setPlaceholder("4096")
+					.setValue(String(this.plugin.settings.lightAgentMaxOutputTokens || 4096))
+					.onChange(async (value) => {
+						const parsed = Number.parseInt(value, 10);
+						if (!Number.isFinite(parsed)) return;
+						this.plugin.settings.lightAgentMaxOutputTokens = Math.max(512, Math.min(8192, parsed));
 						await this.plugin.saveSettings();
 					})
 			);
