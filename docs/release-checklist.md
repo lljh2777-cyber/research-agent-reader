@@ -13,6 +13,15 @@ This checklist separates automated repository checks from the manual Obsidian ch
 
 Run `pnpm test-vault:prepare`, open the reported folder as a separate disposable Vault, and follow its generated QA note.
 
+By default the Vault is generated under `%TEMP%`, where system cleanup tools
+(Storage Sense, cleaner utilities) may purge files at any time — if the plugin
+folder or QA note disappears, regenerate it. For a QA Vault that survives
+cleanup runs, pass a path outside Temp:
+
+```powershell
+pnpm test-vault:prepare --output "E:\path\to\test-vault"
+```
+
 Record the following before release:
 
 - Obsidian application and installer versions.
