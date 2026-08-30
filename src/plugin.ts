@@ -46,7 +46,6 @@ import {
 } from "./runtime/persistence";
 import { ProcessExecutionService } from "./runtime/process-execution";
 import { AgentLoopService, type AgentLoopRunOutcome } from "./agent/agent-loop-service";
-import { isSameRealPath } from "./agent/path-binding";
 import type { PaperIngestFlowOptions } from "./agent/paper-ingest-flow";
 import { VaultLintService } from "./services/vault-lint";
 import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./services/vault-evidence";
@@ -227,7 +226,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		getLexicalRetriever: () => this.getLexicalRetriever(),
 		getVaultRoot: () => this.getActiveVaultRoot(),
 		pathExists: (absolutePath) => fs.existsSync(absolutePath),
-		runMineruHelper: (args) => this.runMineruHelperProcess(args),
+		runMineruCommand: (request) => this.runMineruProcess(request),
 	});
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;
@@ -2259,24 +2258,14 @@ export default class AgentDashboardPlugin extends Plugin {
 		return { ready: true, reason: "" };
 	}
 
-	/** Whether the light agent could run MinerU (toolkit + Python + CLI + vault alignment). */
+	/**
+	 * Whether the light agent could run MinerU right now: the native publish
+	 * pipeline only needs the mineru-open-api CLI and a desktop vault root —
+	 * no toolkit project and no Python.
+	 */
 	lightAgentMineruReady(): boolean {
-		const toolkitRoot = String(this.settings.toolkitRoot || "").trim();
-		if (!toolkitRoot || !fs.existsSync(toolkitRoot)) return false;
-		if (!fs.existsSync(path.join(toolkitRoot, "tool-library", "scripts", "run_mineru_extract.py"))) {
-			return false;
-		}
-		const python = String(this.settings.pythonExecutable || "").trim();
-		if (!python || !fs.existsSync(python)) return false;
 		if (!describeCliExecutable("mineru", this.settings.mineruExecutable).found) return false;
-		// The helper publishes under <toolkitRoot>/knowledge-base/papers/; the
-		// active vault must be exactly <toolkitRoot>/knowledge-base so the
-		// published package and the wiki/sources dedup surfaces share one
-		// knowledge-base root (comparing real paths, separator- and
-		// case-safely for the platform).
-		const vaultRoot = this.getActiveVaultRoot();
-		if (!vaultRoot) return false;
-		return isSameRealPath(vaultRoot, path.join(toolkitRoot, "knowledge-base"));
+		return Boolean(this.getActiveVaultRoot());
 	}
 
 	/** Absolute filesystem path of the active vault (desktop adapter only). */
@@ -2340,12 +2329,13 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	/**
-	 * Spawns the toolkit MinerU helper with an argument array (no shell),
-	 * honors abort via the run-level signal, and caps captured output.
+	 * Spawns the resolved MinerU CLI command with argument arrays (no
+	 * shell), honors abort via the run-level signal, and caps captured
+	 * output.
 	 */
-	private runMineruHelperProcess(args: {
-		pythonExecutable: string;
-		helperPath: string;
+	private runMineruProcess(request: {
+		command: string;
+		baseArgs: string[];
 		cliArgs: string[];
 		cwd: string;
 		timeoutMs: number;
@@ -2356,8 +2346,8 @@ export default class AgentDashboardPlugin extends Plugin {
 			let stdout = "";
 			let stderr = "";
 			let settled = false;
-			const child = spawn(args.pythonExecutable, args.cliArgs, {
-				cwd: args.cwd,
+			const child = spawn(request.command, [...request.baseArgs, ...request.cliArgs], {
+				cwd: request.cwd,
 				shell: false,
 				windowsHide: true,
 				// Own process group on POSIX so the negative-pid kill in
@@ -2368,7 +2358,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const settle = (result: { exitCode: number; stdout: string; stderr: string } | Error) => {
 				if (settled) return;
 				settled = true;
-				args.signal.removeEventListener("abort", onAbort);
+				request.signal.removeEventListener("abort", onAbort);
 				window.clearTimeout(timer);
 				if (result instanceof Error) reject(result);
 				else resolve(result);
@@ -2412,12 +2402,12 @@ export default class AgentDashboardPlugin extends Plugin {
 			const timer = window.setTimeout(() => {
 				killTree();
 				settle({ exitCode: 124, stdout, stderr: `${stderr}\nMinerU 提取超时`.trim() });
-			}, args.timeoutMs);
-			if (args.signal.aborted) {
+			}, request.timeoutMs);
+			if (request.signal.aborted) {
 				onAbort();
 				return;
 			}
-			args.signal.addEventListener("abort", onAbort);
+			request.signal.addEventListener("abort", onAbort);
 			child.stdout.on("data", (chunk: Buffer) => {
 				if (stdout.length < MAX_HELPER_OUTPUT_CHARS) stdout += chunk.toString("utf8");
 			});

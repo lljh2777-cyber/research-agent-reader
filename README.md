@@ -19,8 +19,10 @@ connecting optional local AI-agent workflows.
 - Runs paper intake through an in-plugin bounded agent loop on a Direct API
   profile (phase-gated: metadata lookups and vault search for identity/dedup,
   plugin-driven MinerU conversion of the authorized PDF, and plugin-built
-  create-only wiki notes) — no coding agent required. The optional Codex CLI
-  toolkit pipeline remains available for full registry updates.
+  create-only wiki notes) — no coding agent required; PDF conversion needs
+  only the `mineru-open-api` CLI (npm), not Python or the toolkit. The
+  optional Codex CLI toolkit pipeline remains available for full registry
+  updates.
 - Detects optional Codex CLI, Claude Code, OpenCode, MinerU, Python, R, and
   Obsidian CLI installations without installing or updating them.
 - Supports optional Research Vault Toolkit workflows for deep reading, code
@@ -174,8 +176,9 @@ documented in [Third-Party Notices](THIRD_PARTY_NOTICES.md).
 Research Agent Reader 是桌面版 Obsidian 科研阅读与本地智能体工作流插件。核心阅读器
 可直接阅读普通 Markdown、Obsidian Web Clipper 文档和经过验证的 MinerU 文献包。
 AI 能力分三层：只需一个 Direct API 配置即可使用知识库问答、联网搜索、问答落笔记
-和轻量文献入库（身份核验 + 去重 + 初步文章 Wiki）；生成原文 Markdown 还需要
-Research Vault Toolkit（Python + MinerU CLI）；完整登记（papers.csv、references.bib、
+和轻量文献入库（身份核验 + 去重 + 初步文章 Wiki；配置 MinerU CLI 后还可生成原文
+Markdown，无需 Python 或工具包目录）；完整登记（papers.csv、references.bib、
+文献索引）需要 Research Vault Toolkit + Codex CLI；完整登记（papers.csv、references.bib、
 文献索引）以及全文深读、代码分析、综合分析等高级操作使用 Codex CLI + Toolkit 管线。
 知识库体检与 OKF 导出为内置/脚本能力，见文档。插件不会自行安装外部程序，也不会
 包含客户端遥测。
