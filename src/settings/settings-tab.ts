@@ -1877,17 +1877,6 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			});
 		}
 
-		if (!selectedProfile) {
-			const empty = containerEl.createDiv({ cls: "agent-dashboard-provider-empty" });
-			const icon = empty.createSpan();
-			setIcon(icon, "plug-zap");
-			const copy = empty.createDiv();
-			copy.createEl("strong", { text: "从新增配置开始" });
-			copy.createEl("span", {
-				text: "创建后依次填写供应商、SecretStorage 凭据和 endpoint，再获取模型并测试连接。",
-			});
-			return;
-		}
 		this.createProviderSectionHeader(
 			containerEl,
 			"联网搜索（Tavily 兜底）",
@@ -1896,7 +1885,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		if (this.app.secretStorage && typeof SecretComponent === "function") {
 			const tavilySetting = new Setting(containerEl)
 				.setName("Tavily API Key")
-				.setDesc("在 https://tavily.com 免费注册获取；未配置时，无原生联网的供应商（如 DeepSeek）无法使用联网模式。");
+				.setDesc("在 https://tavily.com 免费注册获取；未配置时，不支持原生联网的供应商无法使用联网模式。");
 			tavilySetting.addComponent((element) =>
 				new SecretComponent(this.app, element)
 					.setValue(this.plugin.settings.webSearchTavilySecretId)
@@ -1934,6 +1923,18 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		if (!selectedProfile) {
+			const empty = containerEl.createDiv({ cls: "agent-dashboard-provider-empty" });
+			const icon = empty.createSpan();
+			setIcon(icon, "plug-zap");
+			const copy = empty.createDiv();
+			copy.createEl("strong", { text: "从新增配置开始" });
+			copy.createEl("span", {
+				text: "创建后依次填写供应商、SecretStorage 凭据和 endpoint，再获取模型并测试连接。",
+			});
+			return;
+		}
 		this.renderProviderProfile(containerEl, selectedProfile);
 	}
 

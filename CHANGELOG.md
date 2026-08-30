@@ -27,6 +27,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- The Tavily settings section is now rendered before the profile editor, so the global API key stays visible even when no Direct API profile is selected; its description no longer lists DeepSeek as Tavily-only (DeepSeek web search runs natively through its Responses API).
+- Internals: the Direct API vault and web flows share one completion helper (streaming, fallback, cancellation) and profile loading instead of duplicated blocks.
 - Direct API 的能力边界不再固定显示「不联网」：连接测试结果按 profile 的联网方式显示真实边界（原生联网 / Tavily / 未配置兜底），问答视图的后端说明按知识库/联网模式区分。
 - 批注的浅层联网解释在供应商支持原生联网（OpenRouter / 千问 / 智谱 / DeepSeek）时保留 Direct API 后端并携带服务端联网参数，只有不支持原生联网时才回退 Codex CLI。
 - 设置页不再在控件触发重渲染时跳回顶部：同页重渲染保持滚动位置，切换模块时回到顶部。
