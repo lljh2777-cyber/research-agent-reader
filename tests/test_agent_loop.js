@@ -697,6 +697,11 @@ async function testCommitSourceNoteSafety() {
 		"<a href=../../papers/y.md>y</a>",
 		"<a href = \"../../papers/z.md\">z</a>",
 		"<img src = '../../Clippings/image.png'>",
+		// Fifth round: a later data-href/data-src must not mask the real
+		// internal href/src (both attribute orders).
+		"<a href=\"../../papers/x.md\"\n   data-href=\"https://example.org\">x</a>",
+		"<a data-href=\"https://example.org\"\n   href=\"../../papers/x.md\">x</a>",
+		"<img src=\"../../Clippings/x.png\"\n     data-src=\"https://example.org/x.png\">",
 	]) {
 		const rejected = await commitSourceNote(
 			{ app: fake },
@@ -708,9 +713,9 @@ async function testCommitSourceNoteSafety() {
 		assert.match(rejected.message, /Vault 内部链接/);
 	}
 	// External web links, external reference definitions, and anchors stay
-	// allowed in every spelling.
+	// allowed in every spelling; a lone data-href is metadata, not a link.
 	const external = validateSourceNoteContent(
-		"---\ntitle: \"t\"\ntitle_zh: \"\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n[官网](https://example.org)。\n\n[网站][ref]\n\n[ref]: https://example.org \"Example\"\n\n<a href = \"https://example.org\">Example</a>\n\n[本页章节](#结果)。",
+		"---\ntitle: \"t\"\ntitle_zh: \"\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n[官网](https://example.org)。\n\n[网站][ref]\n\n[ref]: https://example.org \"Example\"\n\n<a href = \"https://example.org\">Example</a>\n\n<div data-href=\"../../papers/x.md\">metadata only</div>\n\n[本页章节](#结果)。",
 	);
 	assert.deepEqual(external, []);
 

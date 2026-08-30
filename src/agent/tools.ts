@@ -450,8 +450,15 @@ function findDisallowedLinkTargets(body: string): string[] {
 	for (const match of body.matchAll(/^[ \t]{0,3}\[[^\]\r\n]+\]:[ \t]*(?:<([^>\r\n]+)>|(\S+))(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^)\r\n]*\)))?[ \t]*$/gm)) {
 		targets.push(match[1] || match[2] || "");
 	}
-	for (const match of body.matchAll(/<\w+\b[^>]*\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>]+))[^>]*>/gi)) {
-		targets.push(match[1] || match[2] || match[3] || "");
+	// HTML: scan each opening tag separately, then collect every TRUE
+	// href/src inside it. A per-tag scan cannot be fooled by a later
+	// data-href/data-src masking the real attribute, and the leading
+	// whitespace guard keeps `data-href` from matching as `href`.
+	for (const tagMatch of body.matchAll(/<\w+\b[^>]*>/g)) {
+		const tag = tagMatch[0];
+		for (const attrMatch of tag.matchAll(/(?:^|[\t\n\f\r ])(?:href|src)[\t\n\f\r ]*=[\t\n\f\r ]*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi)) {
+			targets.push(attrMatch[1] || attrMatch[2] || attrMatch[3] || "");
+		}
 	}
 	return targets.filter((target) => !/^(https?:\/\/|mailto:|#)/i.test(target));
 }
