@@ -683,25 +683,15 @@ async function testCommitSourceNoteSafety() {
 	).then(() => null, (error) => error);
 	assert.ok(crossLink instanceof Error);
 	assert.match(crossLink.message, /Vault 内部链接/);
-	// The full reviewer list: relative wikilinks, Markdown links/images and
-	// reference definitions must all be rejected too.
+	// Markdown-side injections (wikilinks, links/images, reference
+	// definitions with optional titles and angle targets).
 	for (const injection of [
 		"[[../../papers/x]]",
 		"[原文](../../papers/x.md)",
 		"![图](../../Clippings/x.png)",
 		"见 [x][ref]\n\n[ref]: ../../papers/x.md",
-		"<a href=\"../../papers/x.md\">x</a>",
-		// Fourth round: reference titles and unquoted/spaced HTML attributes.
 		"见 [x][ref]\n\n[ref]: ../../papers/x.md \"Paper\"",
 		"见 [x][ref]\n\n[ref]: <../../papers/x.md> 'Paper'",
-		"<a href=../../papers/y.md>y</a>",
-		"<a href = \"../../papers/z.md\">z</a>",
-		"<img src = '../../Clippings/image.png'>",
-		// Fifth round: a later data-href/data-src must not mask the real
-		// internal href/src (both attribute orders).
-		"<a href=\"../../papers/x.md\"\n   data-href=\"https://example.org\">x</a>",
-		"<a data-href=\"https://example.org\"\n   href=\"../../papers/x.md\">x</a>",
-		"<img src=\"../../Clippings/x.png\"\n     data-src=\"https://example.org/x.png\">",
 	]) {
 		const rejected = await commitSourceNote(
 			{ app: fake },
@@ -712,10 +702,35 @@ async function testCommitSourceNoteSafety() {
 		assert.ok(rejected instanceof Error, `must reject: ${injection}`);
 		assert.match(rejected.message, /Vault 内部链接/);
 	}
-	// External web links, external reference definitions, and anchors stay
-	// allowed in every spelling; a lone data-href is metadata, not a link.
+	// Raw HTML is banned outright (sixth round, reviewer option b): quoted
+	// ">" inside attributes, attribute masking, and external HTML alike —
+	// the whole tag is rejected instead of being parsed.
+	for (const htmlInjection of [
+		"<a href=\"../../papers/x.md\">x</a>",
+		"<a href = \"../../papers/z.md\">z</a>",
+		"<img src = '../../Clippings/image.png'>",
+		"<a href=\"../../papers/x.md\"\n   data-href=\"https://example.org\">x</a>",
+		"<a data-href=\"https://example.org\"\n   href=\"../../papers/x.md\">x</a>",
+		"<img src=\"../../Clippings/x.png\"\n     data-src=\"https://example.org/x.png\">",
+		"<a title=\">\" href=\"../../papers/x.md\">x</a>",
+		"<a title='1 > 0' href='../../papers/x.md'>x</a>",
+		"<img alt=\"a > b\" src=\"../../Clippings/x.png\">",
+		"<a title=\">\" href=\"https://example.org\">x</a>",
+		"<div data-href=\"../../papers/x.md\">metadata only</div>",
+	]) {
+		const rejected = await commitSourceNote(
+			{ app: fake },
+			"htmltest",
+			{ ...fields, conclusion: htmlInjection },
+			"",
+		).then(() => null, (error) => error);
+		assert.ok(rejected instanceof Error, `must reject raw HTML: ${htmlInjection}`);
+		assert.match(rejected.message, /原始 HTML/);
+	}
+	// External links stay allowed as Markdown; math prose and autolinks
+	// must not trip the raw-HTML detector.
 	const external = validateSourceNoteContent(
-		"---\ntitle: \"t\"\ntitle_zh: \"\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n[官网](https://example.org)。\n\n[网站][ref]\n\n[ref]: https://example.org \"Example\"\n\n<a href = \"https://example.org\">Example</a>\n\n<div data-href=\"../../papers/x.md\">metadata only</div>\n\n[本页章节](#结果)。",
+		"---\ntitle: \"t\"\ntitle_zh: \"\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n[官网](https://example.org)。\n\n[网站][ref]\n\n[ref]: https://example.org \"Example\"\n\n[本页章节](#结果)。\n\n使用 <p、q> 记号，且 E<mc² 近似成立；自动链接 <https://example.org> 也可用。",
 	);
 	assert.deepEqual(external, []);
 
