@@ -1,6 +1,11 @@
 import { normalizePath, TFile } from "obsidian";
 
 import { searchTavily, type WebSearchHttpDeps } from "../services/web-search";
+import {
+	publishMineruPackage,
+	type MineruCommandRequest,
+	type MineruPublishArgs,
+} from "./mineru-publish";
 import type { AgentTool, AgentToolContext } from "./types";
 
 /** Max characters of one vault file handed to the model per read. */
@@ -32,22 +37,26 @@ export interface HttpToolDeps {
 	): Promise<{ status: number; json: unknown; text: string }>;
 }
 
+/**
+ * Native MinerU bridge for the light agent: only the CLI executable is
+ * required (npm mineru-open-api); no toolkit project and no Python. The
+ * heavy lifting lives in mineru-publish.ts.
+ */
 export interface MineruToolDeps {
-	/** Resolved toolkit project root, or empty when not configured. */
-	toolkitRoot: string;
 	mineruExecutable: string;
-	mineruBaseUrl: string;
-	pythonExecutable: string;
-	/** Spawns the MinerU helper; injectable for tests. */
-	runHelper(args: {
-		pythonExecutable: string;
-		helperPath: string;
-		cliArgs: string[];
-		cwd: string;
-		timeoutMs: number;
-		signal: AbortSignal;
-	}): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+	/** Absolute path of the active vault. */
+	vaultRoot: string;
+	/** Stage parent directory override (tests). */
+	stageRoot?: string;
+	runCommand(request: MineruCommandRequest): Promise<{
+		exitCode: number;
+		stdout: string;
+		stderr: string;
+	}>;
 }
+
+/** Extract arguments accepted by the native publish pipeline. */
+export type MineruExtractArgs = MineruPublishArgs;
 
 function normalizeVaultRelative(raw: string): string {
 	return normalizePath(String(raw || "").trim()).replace(/^\/+/, "");
@@ -296,104 +305,40 @@ export function createWebSearchTool(deps: TavilySearchDeps): AgentTool {
 	};
 }
 
-export interface MineruExtractArgs {
-	source: string;
-	citekey: string;
-	model?: string;
-	language?: string;
-	ocr?: boolean;
-	formula?: boolean;
-	table?: boolean;
-	pages?: string;
-	timeoutSeconds?: number;
-	includeSourcePdf?: boolean;
-}
-
-export function buildMineruHelperArgs(
-	deps: MineruToolDeps,
-	args: MineruExtractArgs,
-): { cliArgs: string[]; helperPath: string; cwd: string } | { error: string } {
-	if (!deps.toolkitRoot.trim()) return { error: "未配置工具包目录（设置 → 工具链与运行环境），无法运行 MinerU 提取" };
-	if (!deps.pythonExecutable.trim()) return { error: "未配置 Python 可执行文件，无法运行 MinerU 提取" };
-	if (!deps.mineruExecutable.trim()) return { error: "未配置 MinerU CLI，无法生成原文 Markdown" };
-	const citekey = String(args.citekey || "").trim();
-	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(citekey)) {
-		return { error: `citekey 不合法（字母数字 ._ -，不以符号开头）：${citekey}` };
-	}
-	const source = String(args.source || "").trim();
-	if (!source.toLowerCase().endsWith(".pdf")) return { error: "source 必须是一个 PDF 路径" };
-	const helperPath = `${deps.toolkitRoot.replace(/[\\/]+$/, "")}/tool-library/scripts/run_mineru_extract.py`;
-	const cliArgs = [
-		helperPath,
-		"--project-root", deps.toolkitRoot,
-		"--source", source,
-		"--citekey", citekey,
-		"--mineru", deps.mineruExecutable,
-		"--model", ["vlm", "pipeline", "auto", "html"].includes(String(args.model)) ? String(args.model) : "vlm",
-		"--language", String(args.language || "en"),
-		"--timeout", String(Math.max(60, Math.min(1800, Math.round(Number(args.timeoutSeconds)) || 600))),
-	];
-	if (args.pages) cliArgs.push("--pages", String(args.pages));
-	if (args.ocr === true) cliArgs.push("--ocr");
-	if (args.formula === false) cliArgs.push("--no-formula");
-	if (args.table === false) cliArgs.push("--no-table");
-	if (args.includeSourcePdf === true) cliArgs.push("--include-source-pdf");
-	if (deps.mineruBaseUrl.trim()) cliArgs.push("--base-url", deps.mineruBaseUrl.trim());
-	return { cliArgs, helperPath, cwd: deps.toolkitRoot };
-}
-
-/** Probes whether the light agent can run the MinerU helper right now. */
+/** Probes whether the native MinerU publish pipeline can run right now. */
 export function mineruReadiness(deps: MineruToolDeps): { ready: boolean; reason: string } {
-	if (!deps.toolkitRoot.trim()) return { ready: false, reason: "未配置工具包目录（设置 → 工具链与运行环境）" };
-	if (!deps.pythonExecutable.trim()) return { ready: false, reason: "未配置 Python 可执行文件" };
-	if (!deps.mineruExecutable.trim()) return { ready: false, reason: "未配置 MinerU CLI" };
+	if (!deps.mineruExecutable.trim()) {
+		return { ready: false, reason: "未配置 MinerU CLI（npm 全局安装 mineru-open-api 后在设置中配置）" };
+	}
 	return { ready: true, reason: "" };
 }
 
 export interface MineruPackageReceipt {
-	/** Absolute filesystem path of the published package (helper output). */
+	/** Absolute filesystem path of the published package inside the vault. */
 	packagePath: string;
-	validation: Record<string, unknown> | null;
+	validation: Record<string, unknown>;
 }
 
 /**
- * Runs the MinerU helper for exactly the user-authorized PDF. The model has
- * no say over the source path — it is bound by the caller — and the helper
- * subprocess is killed promptly when the abort signal fires.
+ * Runs the native publish pipeline for exactly the user-authorized PDF.
+ * The model has no say over the source path — it is bound by the caller —
+ * and the MinerU subprocess is killed promptly when the abort signal fires.
  */
 export async function runAuthorizedMineruExtract(
 	deps: MineruToolDeps,
 	args: MineruExtractArgs,
 	context: { signal: AbortSignal; timeoutMs: number },
 ): Promise<MineruPackageReceipt> {
-	if (context.signal.aborted) throw new Error("任务已取消");
-	const readiness = mineruReadiness(deps);
-	if (!readiness.ready) throw new Error(readiness.reason);
-	const built = buildMineruHelperArgs(deps, args);
-	if ("error" in built) throw new Error(built.error);
-	const result = await deps.runHelper({
-		pythonExecutable: deps.pythonExecutable,
-		helperPath: built.helperPath,
-		cliArgs: built.cliArgs,
-		cwd: built.cwd,
-		timeoutMs: context.timeoutMs,
-		signal: context.signal,
-	});
-	if (result.exitCode !== 0) {
-		const detail = (result.stderr || result.stdout || "").trim().split("\n").pop() || "";
-		throw new Error(`MinerU 提取失败（exit ${result.exitCode}）：${detail.slice(0, 300)}`);
-	}
-	const line = result.stdout.trim().split("\n").filter(Boolean).pop() || "";
-	let payload: { status?: string; package?: string; validation?: Record<string, unknown> } = {};
-	try {
-		payload = JSON.parse(line) as { status?: string; package?: string; validation?: Record<string, unknown> };
-	} catch {
-		throw new Error("MinerU helper 输出无法解析为 JSON");
-	}
-	if (payload.status !== "published" || !payload.package) {
-		throw new Error(`MinerU helper 未发布成功：${line.slice(0, 200)}`);
-	}
-	return { packagePath: payload.package.replace(/\\/g, "/"), validation: payload.validation ?? null };
+	return publishMineruPackage(
+		{
+			runCommand: deps.runCommand,
+			vaultRoot: deps.vaultRoot,
+			mineruExecutable: deps.mineruExecutable,
+			stageRoot: deps.stageRoot,
+		},
+		args,
+		context,
+	);
 }
 
 export interface SourceNoteFields {

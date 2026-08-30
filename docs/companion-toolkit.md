@@ -36,17 +36,15 @@ search, and capped reads restricted to `wiki/sources` and `papers`.
 
 The model never writes files and never chooses extraction paths:
 
-- When the selected output includes original Markdown and the toolkit is
-  configured, the plugin itself spawns
-  `tool-library/scripts/run_mineru_extract.py` for the exact PDF the user
-  authorized. The active vault must be exactly the toolkit's
-  `knowledge-base` folder (verified via real filesystem paths) so the
-  published package, the dedup surfaces, and the wiki share one root. The
-  receipt is then derived from where the helper ACTUALLY published
-  (`packagePath`) and only counts when the article lies inside the active
-  vault — stale same-citekey packages are never claimed, and the run fails
-  honestly when the toolkit publishes elsewhere. The plugin also verifies
-  the article opening against the verified title.
+- When the selected output includes original Markdown, the plugin runs the
+  conversion itself: it spawns the user-configured `mineru-open-api` CLI
+  directly (npm; no Python and no toolkit required), validates the
+  extraction with the same gates as the toolkit helper (single md/json,
+  non-empty article with a title heading, every referenced asset present
+  inside the package), and publishes create-only into the active vault at
+  `papers/<citekey>/` with a reader-compatible `_extraction/manifest.json`
+  and `validation.json`. The source is always the exact PDF the user
+  authorized; a same-citekey package is never overwritten or claimed.
 - The wiki note is written by the plugin from model-supplied *fields* into
   `wiki/sources/<citekey>.md` via the vault's atomic create (never
   overwriting), with safe single-line YAML scalars, bibliographic metadata

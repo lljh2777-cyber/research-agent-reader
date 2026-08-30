@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 
 import {
 	App,
@@ -68,6 +69,7 @@ interface SettingsPluginHost extends PluginHost {
 	probeObsidianCliConnection(): Promise<ObsidianCliConnectionResult>;
 	invalidateCliModelDiscovery(backendId: CliBackendId): void;
 	getProviderErrorLabel(type: string): string;
+	lightAgentMineruReady(): boolean;
 	getProviderProfile(profileId: string): ProviderProfile | null;
 	directApiBoundaryLabel(profileId: string): string;
 	supportsFast(model: string): boolean;
@@ -327,8 +329,44 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		});
 	}
 
-	private renderRuntimeSettings(containerEl: HTMLElement): void {
-		this.createSettingsPageHeader(
+	/**
+	 * Live readiness checklist for the runtime page: each line shows what a
+	 * component unlocks and whether it is currently satisfied, so "为什么不
+	 * 满足" never requires reading the source.
+	 */
+	private renderToolkitReadiness(containerEl: HTMLElement): void {
+		const lines: Array<[string, boolean, string]> = [
+			[
+				"轻量入库 · PDF 转换（MinerU CLI）",
+				this.plugin.lightAgentMineruReady(),
+				"npm 全局安装 mineru-open-api 并在下方 MinerU 可执行文件中配置；无需 Python 或工具包目录",
+			],
+			[
+				"CLI 完整登记与高级操作（工具包目录）",
+				Boolean(this.plugin.settings.toolkitRoot.trim())
+					&& fs.existsSync(this.plugin.settings.toolkitRoot)
+					&& fs.existsSync(path.join(this.plugin.settings.toolkitRoot, "tool-library", "scripts", "run_vault_action.py")),
+				"填写包含 AGENTS.md、tool-library/ 的项目根目录",
+			],
+			[
+				"工具包脚本运行时（Python）",
+				Boolean(this.plugin.settings.pythonExecutable.trim())
+					&& fs.existsSync(this.plugin.settings.pythonExecutable),
+				"运行工具包内的 Python 脚本（统一 runner、MinerU 辅助、代码练习）",
+			],
+			[
+				"Agent 任务（Codex CLI）",
+				this.plugin.isCliBackendAvailable("codex-cli"),
+				"完整入库登记、PDF 深读、综合分析等 Agent 化操作",
+			],
+		];
+		new Setting(containerEl)
+			.setName("组件就绪状态")
+			.setDesc(lines.map(([label, ready, hint]) =>
+				`${ready ? "✓" : "✗"} ${label} — ${ready ? "可用" : hint}`).join("\n"));
+	}
+
+	private renderRuntimeSettings(containerEl: HTMLElement): void {		this.createSettingsPageHeader(
 			containerEl,
 			"工具链与运行环境",
 			"管理可选工具链目录、本地任务的项目路径、运行时和超时限制。",
@@ -349,6 +387,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+		this.renderToolkitReadiness(containerEl);
 		this.renderCliExecutableSetting(containerEl, {
 			kind: "codex",
 			name: "Codex 可执行文件",

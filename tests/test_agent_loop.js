@@ -46,7 +46,6 @@ const hookBuild = esbuild.buildSync({
 			"  createCrossrefSearchTool,",
 			"  createCrossrefDoiTool,",
 			"  createWebSearchTool,",
-			"  buildMineruHelperArgs,",
 			"  runAuthorizedMineruExtract,",
 			"  mineruReadiness,",
 			"  commitSourceNote,",
@@ -54,6 +53,13 @@ const hookBuild = esbuild.buildSync({
 			"  yamlSafeScalar,",
 			"  VaultWriteJournal,",
 			'} from "./src/agent/tools";',
+			"export {",
+			"  publishMineruPackage,",
+			"  resolveMineruCommand,",
+			"  mineruCliArgs,",
+			"  normalizePagesValue,",
+			"  validateStagedPackage,",
+			"} from './src/agent/mineru-publish';",
 			"export {",
 			"  buildIdentitySystemPrompt,",
 			"  buildIdentityUserMessage,",
@@ -73,7 +79,6 @@ const hookBuild = esbuild.buildSync({
 			"  PAPER_INGEST_READ_PREFIXES,",
 			'} from "./src/agent/paper-ingest-flow";',
 			"export { articleHeadContainsTitle } from './src/agent/agent-loop-service';",
-			"export { isSameRealPath, canonicalRealPath } from './src/agent/path-binding';",
 			"export { normalizeTaskRunArtifacts, normalizeStoredTaskRuns } from './src/runtime/persistence';",
 		].join("\n"),
 		resolveDir: pluginRoot,
@@ -101,9 +106,13 @@ const {
 	createCrossrefSearchTool,
 	createCrossrefDoiTool,
 	createWebSearchTool,
-	buildMineruHelperArgs,
 	runAuthorizedMineruExtract,
 	mineruReadiness,
+	resolveMineruCommand,
+	mineruCliArgs,
+	publishMineruPackage,
+	normalizePagesValue,
+	validateStagedPackage,
 	commitSourceNote,
 	validateSourceNoteContent,
 	yamlSafeScalar,
@@ -125,7 +134,6 @@ const {
 	stripMatchingQuotes,
 	PAPER_INGEST_READ_PREFIXES,
 	articleHeadContainsTitle,
-	isSameRealPath,
 	normalizeTaskRunArtifacts,
 	normalizeStoredTaskRuns,
 } = hookModule.exports;
@@ -537,84 +545,270 @@ async function testWebSearchToolValidation() {
 	});
 }
 
-function testMineruHelperArgValidation() {
-	const deps = {
-		toolkitRoot: "D:/t",
-		mineruExecutable: "m",
-		mineruBaseUrl: "",
-		pythonExecutable: "p",
-		runHelper: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-	};
-	const missingToolkit = buildMineruHelperArgs({ ...deps, toolkitRoot: "" }, { source: "a.pdf", citekey: "x" });
-	assert.match(missingToolkit.error, /工具包目录/);
+function testMineruCliArgsAndReadiness() {
+	assert.equal(mineruReadiness({ mineruExecutable: "", vaultRoot: "D:/v", runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }) }).ready, false);
+	assert.equal(
+		mineruReadiness({ mineruExecutable: "mineru-open-api", vaultRoot: "", runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "" }) }).ready,
+		true,
+		"native pipeline needs only the CLI; no toolkit or Python",
+	);
 
-	const badCitekey = buildMineruHelperArgs(deps, { source: "a.pdf", citekey: "../escape" });
-	assert.match(badCitekey.error, /citekey/);
-
-	const badSource = buildMineruHelperArgs(deps, { source: "a.txt", citekey: "ok" });
-	assert.match(badSource.error, /PDF/);
-
-	const built = buildMineruHelperArgs(deps, { source: "a.PDF", citekey: "ok_2026", timeoutSeconds: 99999 });
-	assert.equal(built.error, undefined);
-	assert.ok(built.cliArgs.includes("1800"));
-	assert.ok(built.cliArgs.includes("a.PDF"));
+	const cliArgs = mineruCliArgs({
+		source: "D:/raw/paper.pdf",
+		citekey: "demo_2026",
+		model: "vlm",
+		language: "en",
+		ocr: true,
+		formula: false,
+		table: true,
+		pages: "1-3,7",
+		timeoutSeconds: 900,
+		includeSourcePdf: false,
+	}, "D:/stage/extract");
+	assert.deepEqual(cliArgs, [
+		"extract", "D:/raw/paper.pdf",
+		"--model", "vlm",
+		"--language", "en",
+		"--format", "md,json",
+		"--timeout", "900",
+		"--output", "D:/stage/extract",
+		"--formula=false",
+		"--table",
+		"--ocr",
+		"--pages", "1-3,7",
+	]);
+	const auto = mineruCliArgs({
+		source: "a.pdf", citekey: "x", model: "auto", language: "en", ocr: false,
+		formula: true, table: true, pages: "", timeoutSeconds: 600,
+		includeSourcePdf: false,
+	}, "out");
+	assert.ok(!auto.includes("--model"), "auto model must omit the flag");
+	assert.ok(auto.includes("--formula") && auto.includes("--table"));
+	assert.equal(normalizePagesValue("1-3"), "1-3");
+	assert.throws(() => normalizePagesValue("3-1"), /不能倒序/);
+	assert.throws(() => normalizePagesValue("abc"), /不合法/);
 }
 
-async function testAuthorizedMineruExtract() {
-	const readiness = mineruReadiness({
-		toolkitRoot: "", mineruExecutable: "", mineruBaseUrl: "", pythonExecutable: "",
-		runHelper: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-	});
-	assert.equal(readiness.ready, false);
+function testResolveMineruCommand() {
+	const os = require("node:os");
+	const base = fs.mkdtempSync(path.join(os.tmpdir(), "mineru-cmd-"));
+	try {
+		const entry = path.join(base, "node_modules", "mineru-open-api", "dist", "cli.js");
+		fs.mkdirSync(path.dirname(entry), { recursive: true });
+		fs.writeFileSync(entry, "// entry");
+		const shimPath = path.join(base, "mineru-open-api.cmd");
+		fs.writeFileSync(shimPath, [
+			"@ECHO off",
+			"IF EXIST \"%~dp0\\node.exe\" SET \"_prog=%~dp0\\node.exe\"",
+			"\"%_prog%\"  \"%~dp0\\node_modules\\mineru-open-api\\dist\\cli.js\" %*",
+		].join("\r\n"));
+		const resolved = resolveMineruCommand(shimPath);
+		assert.equal(resolved.command, process.execPath);
+		assert.equal(resolved.baseArgs[0], path.resolve(entry));
 
-	const runs = [];
-	const deps = {
-		toolkitRoot: "D:/toolkit",
-		mineruExecutable: "mineru-open-api",
-		mineruBaseUrl: "https://mineru.example/api",
-		pythonExecutable: "D:/python/python.exe",
-		runHelper: async (args) => {
-			runs.push(args);
-			return {
-				exitCode: 0,
-				stdout: `${JSON.stringify({ status: "published", package: "D:\\vault\\papers\\demo_2026", validation: { ok: true } })}\n`,
-				stderr: "",
-			};
-		},
+		const direct = resolveMineruCommand(entry);
+		assert.equal(direct.command, process.execPath);
+		assert.deepEqual(direct.baseArgs, [path.resolve(entry)]);
+
+		const brokenShim = path.join(base, "broken.cmd");
+		fs.writeFileSync(brokenShim, "@ECHO off\nREM nothing useful");
+		assert.throws(() => resolveMineruCommand(brokenShim), /无法从 npm shim 解析/);
+		assert.throws(() => resolveMineruCommand(path.join(base, "missing.cmd")), /不存在/);
+	} finally {
+		fs.rmSync(base, { recursive: true, force: true });
+	}
+}
+
+/**
+ * Behavioral publish test: a fake MinerU CLI materializes real extraction
+ * outputs into --output, and the pipeline must publish a reader-compatible
+ * package (manifest schema v1 with matching hashes, validation.json passed)
+ * into the vault — create-only.
+ */
+async function testMineruPublishPipeline() {
+	const os = require("node:os");
+	const base = fs.mkdtempSync(path.join(os.tmpdir(), "mineru-publish-"));
+	const stageRoot = path.join(base, "stage");
+	const vaultRoot = path.join(base, "vault");
+	fs.mkdirSync(stageRoot, { recursive: true });
+	fs.mkdirSync(vaultRoot, { recursive: true });
+	const sourcePdf = path.join(base, "demo.pdf");
+	fs.writeFileSync(sourcePdf, Buffer.from("%PDF-1.4 fake"));
+
+	// A fake npm shim + entry, so resolveMineruCommand can verify them.
+	const shimEntry = path.join(base, "node_modules", "mineru-open-api", "dist", "cli.js");
+	fs.mkdirSync(path.dirname(shimEntry), { recursive: true });
+	fs.writeFileSync(shimEntry, "// fake entry");
+	const fakeShim = path.join(base, "mineru-open-api.cmd");
+	fs.writeFileSync(fakeShim, [
+		"@ECHO off",
+		"\"%_prog%\"  \"%~dp0\\node_modules\\mineru-open-api\\dist\\cli.js\" %*",
+	].join("\r\n"));
+
+	const writeExtraction = (outputDir, options = {}) => {
+		const mdDir = path.join(outputDir, "auto", "md");
+		fs.mkdirSync(mdDir, { recursive: true });
+		const imageName = options.imageName || "pic.jpg";
+		fs.mkdirSync(path.join(mdDir, "images"), { recursive: true });
+		if (options.missingImage !== true) {
+			fs.writeFileSync(path.join(mdDir, "images", imageName), Buffer.from("fake-image"));
+		}
+		const body = options.shortMarkdown
+			? "too short"
+			: "# Demo Paper Title\n\n引言内容。\n\n![Fig 1](images/" + imageName + ")\n\n" + "正文".repeat(60);
+		fs.writeFileSync(path.join(mdDir, "article.md"), body, "utf8");
+		const jsonDir = path.join(outputDir, "auto", "json");
+		fs.mkdirSync(jsonDir, { recursive: true });
+		const elements = [[
+			{ type: "title", page_idx: 0 },
+			{
+				type: "image",
+				page_idx: options.escapingAsset === true ? 1 : 0,
+				img_path: options.escapingAsset === true ? "..\\..\\outside.png" : "images/" + imageName,
+			},
+		]];
+		fs.writeFileSync(
+			path.join(jsonDir, "demo_content_list.json"),
+			JSON.stringify(elements),
+			"utf8",
+		);
+		if (options.escapingAsset === true) {
+			fs.writeFileSync(path.join(outputDir, "outside.png"), Buffer.from("outside"));
+		}
 	};
-	const receipt = await runAuthorizedMineruExtract(
-		deps,
-		{
-			// The authorized PDF is bound by the caller (plugin), never by the model.
-			source: "D:/raw/paper.pdf",
-			citekey: "demo_2026",
-			formula: false,
-			includeSourcePdf: true,
+
+	const calls = [];
+	const makeDeps = (options = {}) => ({
+		vaultRoot,
+		mineruExecutable: options.executable || fakeShim,
+		stageRoot,
+		runCommand: async (request) => {
+			calls.push(request);
+			if (request.cliArgs[0] === "version") {
+				return { exitCode: 0, stdout: "mineru-open-api version v0.0.0-test", stderr: "" };
+			}
+			if (options.failExtract === true) {
+				return { exitCode: 2, stdout: "", stderr: "MinerU upstream 500" };
+			}
+			const outputIndex = request.cliArgs.indexOf("--output");
+			const outputDir = request.cliArgs[outputIndex + 1];
+			writeExtraction(outputDir, options);
+			return { exitCode: 0, stdout: "", stderr: "" };
 		},
+	});
+
+	const args = {
+		source: sourcePdf,
+		citekey: "demo_2026",
+		model: "vlm",
+		language: "en",
+		ocr: false,
+		formula: true,
+		table: true,
+		pages: "",
+		timeoutSeconds: 600,
+		includeSourcePdf: false,
+	};
+	const receipt = await publishMineruPackage(makeDeps(), args, {
+		signal: new AbortController().signal,
+		timeoutMs: 600000,
+	});
+	const packagePath = path.join(vaultRoot, "papers", "demo_2026");
+	assert.equal(receipt.packagePath, packagePath);
+	assert.equal(receipt.validation.status, "passed");
+	assert.equal(fs.existsSync(path.join(packagePath, "article.md")), true);
+	assert.equal(fs.existsSync(path.join(packagePath, "mineru-result.json")), true);
+	assert.equal(fs.existsSync(path.join(packagePath, "images", "pic.jpg")), true);
+	const validation = JSON.parse(
+		fs.readFileSync(path.join(packagePath, "_extraction", "validation.json"), "utf8"),
+	);
+	assert.equal(validation.status, "passed");
+	assert.equal(validation.page_count, 1);
+	const manifest = JSON.parse(
+		fs.readFileSync(path.join(packagePath, "_extraction", "manifest.json"), "utf8"),
+	);
+	assert.equal(manifest.schema_version, 1);
+	assert.equal(manifest.extractor, "mineru-open-api");
+	assert.equal(manifest.outputs.length, 3, "article + json + image must be registered");
+	const articleRecord = manifest.outputs.find((record) => record.path === "article.md");
+	const expectedHash = require("node:crypto")
+		.createHash("sha256")
+		.update(fs.readFileSync(path.join(packagePath, "article.md")))
+		.digest("hex");
+	assert.equal(articleRecord.sha256, expectedHash);
+	assert.equal(manifest.derived_contracts.length, 0);
+
+	// Create-only: a second publish for the same citekey must fail.
+	const duplicate = await publishMineruPackage(makeDeps(), args, {
+		signal: new AbortController().signal,
+		timeoutMs: 600000,
+	}).then(() => null, (error) => error);
+	assert.match(duplicate.message, /不会覆盖/);
+
+	// Missing referenced image → validation failure, nothing published.
+	const broken = await publishMineruPackage(
+		makeDeps({ missingImage: true }),
+		{ ...args, citekey: "broken_2026" },
+		{ signal: new AbortController().signal, timeoutMs: 600000 },
+	).then(() => null, (error) => error);
+	assert.match(broken.message, /缺失或为空/);
+	assert.equal(fs.existsSync(path.join(vaultRoot, "papers", "broken_2026")), false);
+
+	// Short markdown fails the title/length gate.
+	const short = await publishMineruPackage(
+		makeDeps({ shortMarkdown: true }),
+		{ ...args, citekey: "short_2026" },
+		{ signal: new AbortController().signal, timeoutMs: 600000 },
+	).then(() => null, (error) => error);
+	assert.match(short.message, /为空或过短|缺少文档标题/);
+
+	// Escaping asset reference is rejected before publish.
+	const escaping = await publishMineruPackage(
+		makeDeps({ escapingAsset: true }),
+		{ ...args, citekey: "escape_2026" },
+		{ signal: new AbortController().signal, timeoutMs: 600000 },
+	).then(() => null, (error) => error);
+	assert.match(escaping.message, /越出包目录/);
+
+	// Upstream failure surfaces the CLI error.
+	const failing = await publishMineruPackage(
+		makeDeps({ failExtract: true }),
+		{ ...args, citekey: "fail_2026" },
+		{ signal: new AbortController().signal, timeoutMs: 600000 },
+	).then(() => null, (error) => error);
+	assert.match(failing.message, /MinerU 退出码 2/);
+
+	// includeSourcePdf registers the PDF with the source hash.
+	const withPdf = await publishMineruPackage(
+		makeDeps(),
+		{ ...args, citekey: "withpdf_2026", includeSourcePdf: true },
 		{ signal: new AbortController().signal, timeoutMs: 600000 },
 	);
-	assert.match(receipt.packagePath, /D:\/vault\/papers\/demo_2026$/);
-	assert.equal(runs.length, 1);
-	assert.ok(runs[0].cliArgs.includes("D:/raw/paper.pdf"));
-	assert.ok(runs[0].cliArgs.includes("--no-formula"));
-	assert.ok(runs[0].cliArgs.includes("--base-url"));
+	assert.equal(fs.existsSync(path.join(withPdf.packagePath, "_extraction", "source.pdf")), true);
+	const pdfManifest = JSON.parse(
+		fs.readFileSync(path.join(withPdf.packagePath, "_extraction", "manifest.json"), "utf8"),
+	);
+	const expectedPdfHash = require("node:crypto")
+		.createHash("sha256")
+		.update(fs.readFileSync(sourcePdf))
+		.digest("hex");
+	assert.equal(pdfManifest.source.sha256, expectedPdfHash);
+	assert.equal(
+		pdfManifest.outputs.some((record) => record.path === "_extraction/source.pdf"),
+		true,
+	);
 
-	const failing = await runAuthorizedMineruExtract(
-		{ ...deps, runHelper: async () => ({ exitCode: 2, stdout: "", stderr: "MinerU upstream 500" }) },
-		{ source: "D:/raw/paper.pdf", citekey: "demo_2026" },
-		{ signal: new AbortController().signal, timeoutMs: 600000 },
-	).then(() => null, (error) => error);
-	assert.ok(failing instanceof Error);
-	assert.match(failing.message, /MinerU 提取失败/);
-
+	// Pre-aborted signal → immediate cancellation.
 	const controller = new AbortController();
 	controller.abort();
-	const aborted = await runAuthorizedMineruExtract(
-		deps,
-		{ source: "D:/raw/paper.pdf", citekey: "demo_2026" },
+	const cancelled = await publishMineruPackage(
+		makeDeps(),
+		{ ...args, citekey: "cancel_2026" },
 		{ signal: controller.signal, timeoutMs: 600000 },
 	).then(() => null, (error) => error);
-	assert.match(aborted.message, /已取消/);
+	assert.match(cancelled.message, /已取消/);
+
+	fs.rmSync(base, { recursive: true, force: true });
 }
 
 async function testCommitSourceNoteSafety() {
@@ -1136,31 +1330,6 @@ function testArtifactsPersistenceRoundTrip() {
 	assert.equal(normalizeTaskRunArtifacts({}), undefined);
 }
 
-function testRealpathVaultAlignment() {
-	const os = require("node:os");
-	const base = fs.mkdtempSync(path.join(os.tmpdir(), "agent-vault-"));
-	const toolkitRoot = path.join(base, "toolkit");
-	const knowledgeBase = path.join(toolkitRoot, "knowledge-base");
-	fs.mkdirSync(knowledgeBase, { recursive: true });
-	try {
-		// Vault = toolkitRoot/knowledge-base (the only supported layout).
-		assert.equal(isSameRealPath(knowledgeBase, path.join(toolkitRoot, "knowledge-base")), true);
-		// Windows-style trailing separators must not break the comparison;
-		// on POSIX a backslash is an ordinary filename character, so only the
-		// platform-native separator variant is asserted there.
-		if (process.platform === "win32") {
-			assert.equal(isSameRealPath(`${knowledgeBase}\\`, path.join(toolkitRoot, "knowledge-base")), true);
-		} else {
-			assert.equal(isSameRealPath(`${knowledgeBase}/`, path.join(toolkitRoot, "knowledge-base")), true);
-		}
-		// Vault = toolkitRoot itself must be rejected.
-		assert.equal(isSameRealPath(toolkitRoot, path.join(toolkitRoot, "knowledge-base")), false);
-		// Unrelated directories are rejected.
-		assert.equal(isSameRealPath(base, knowledgeBase), false);
-	} finally {
-		fs.rmSync(base, { recursive: true, force: true });
-	}
-}
 
 (async () => {
 	testExtractFirstJsonObject();
@@ -1172,8 +1341,9 @@ function testRealpathVaultAlignment() {
 	await testVaultSearchScopeFiltering();
 	await testCrossrefDomainTools();
 	await testWebSearchToolValidation();
-	testMineruHelperArgValidation();
-	await testAuthorizedMineruExtract();
+	testMineruCliArgsAndReadiness();
+	testResolveMineruCommand();
+	await testMineruPublishPipeline();
 	await testCommitSourceNoteSafety();
 	await testArticlePathBinding();
 	await testResolveUniqueCitekey();
@@ -1185,7 +1355,6 @@ function testRealpathVaultAlignment() {
 	testYamlScalarSafety();
 	testParsePaperIngestInput();
 	testArtifactsPersistenceRoundTrip();
-	testRealpathVaultAlignment();
 	console.log("AGENT_LOOP_TESTS_OK");
 })().catch((error) => {
 	console.error(error);

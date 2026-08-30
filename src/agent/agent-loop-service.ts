@@ -55,10 +55,10 @@ export interface AgentLoopServiceDeps {
 	getVaultRoot(): string;
 	/** Filesystem existence probe for toolkit-side paths; injectable for tests. */
 	pathExists(absolutePath: string): boolean;
-	/** Spawns the toolkit MinerU helper; injectable for tests. */
-	runMineruHelper(args: {
-		pythonExecutable: string;
-		helperPath: string;
+	/** Spawns the resolved MinerU CLI command; injectable for tests. */
+	runMineruCommand(request: {
+		command: string;
+		baseArgs: string[];
 		cliArgs: string[];
 		cwd: string;
 		timeoutMs: number;
@@ -542,12 +542,10 @@ export class AgentLoopService {
 			vault: { app: this.deps.app },
 			http: { httpGetJson },
 			mineru: {
-				toolkitRoot: settings.toolkitRoot,
 				mineruExecutable: settings.mineruExecutable,
-				mineruBaseUrl: settings.mineruBaseUrl,
-				pythonExecutable: settings.pythonExecutable,
-				runHelper: (args: Parameters<AgentLoopServiceDeps["runMineruHelper"]>[0]) =>
-					this.deps.runMineruHelper(args),
+				vaultRoot: this.deps.getVaultRoot(),
+				runCommand: (request: Parameters<AgentLoopServiceDeps["runMineruCommand"]>[0]) =>
+					this.deps.runMineruCommand(request),
 			},
 			tavily: {
 				http: {
