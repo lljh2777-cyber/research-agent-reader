@@ -146,7 +146,11 @@ function buildLoopSystemPrompt(request: AgentLoopRequest): string {
  */
 export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<AgentLoopResult> {
 	const maxSteps = Math.max(2, Math.min(24, Math.round(request.maxSteps || DEFAULT_MAX_STEPS)));
-	const timeoutMs = Math.max(30_000, request.timeoutMs || DEFAULT_TIMEOUT_MS);
+	// Callers own the wall clock: an explicit timeout is honored as-is (1s
+	// floor), so the outer budget can never be padded back up.
+	const timeoutMs = request.timeoutMs
+		? Math.max(1_000, request.timeoutMs)
+		: DEFAULT_TIMEOUT_MS;
 	const maxToolOutputChars = request.maxToolOutputChars || DEFAULT_MAX_TOOL_OUTPUT_CHARS;
 	const maxToolResultChars = request.maxToolResultChars || DEFAULT_MAX_TOOL_RESULT_CHARS;
 	const toolsByName = new Map(request.tools.map((tool) => [tool.name, tool]));

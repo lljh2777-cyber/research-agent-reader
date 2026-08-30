@@ -178,6 +178,18 @@ export class AgentLoopService {
 		}
 
 		const abortController = new AbortController();
+		// Hard wall-clock budget: when it fires the run-level signal aborts
+		// everything (loops, HTTP, MinerU). Later phases may only run while
+		// budget remains — never re-added via a minimum floor.
+		const deadline = Date.now() + Math.max(
+			60_000,
+			Math.min(4 * 60 * 60 * 1000, (Math.round(settings.taskTimeoutMinutes) || 60) * 60 * 1000),
+		);
+		let budgetAborted = false;
+		const budgetTimer = setTimeout(() => {
+			budgetAborted = true;
+			abortController.abort();
+		}, Math.max(0, deadline - Date.now()));
 		const state: IngestState = {
 			traces: [],
 			notes: [],
@@ -213,14 +225,17 @@ export class AgentLoopService {
 			const retriever = this.deps.getLexicalRetriever();
 			if (!retriever) throw new Error("知识库检索组件不可用");
 			const toolDeps = this.buildToolDeps(settings, retriever, abortController.signal);
-			const deadline = Date.now() + Math.max(
-				60_000,
-				Math.min(4 * 60 * 60 * 1000, (Math.round(settings.taskTimeoutMinutes) || 60) * 60 * 1000),
-			);
 			const maxStepsPerPhase = Math.max(3, Math.min(20, Math.round(settings.lightAgentMaxSteps) || 10));
 			const maxTokens = Math.max(512, Math.min(8192, Math.round(settings.lightAgentMaxOutputTokens) || 4096));
 			const isCancelled = (): boolean => state.cancelled;
-			const loopTimeout = (): number => Math.max(30_000, deadline - Date.now());
+			// Raw remaining budget — never padded back up to a minimum, so the
+			// total wall clock is a hard ceiling.
+			const loopTimeout = (): number => Math.max(1_000, deadline - Date.now());
+			const ensureBudget = (): boolean => {
+				if (deadline - Date.now() >= 15_000) return true;
+				state.errors.push("任务时间预算已耗尽，停止后续阶段");
+				return false;
+			};
 
 			// ---- Phase 1: identity + dedup (model loop, read-only tools) ----
 			emitStatus("running", "阶段一 · 身份核验与去重");
@@ -289,6 +304,9 @@ export class AgentLoopService {
 			// ---- Phase 2: MinerU extraction (deterministic, authorized PDF only) ----
 			if (options.createArticleMarkdown) {
 				emitStatus("running", "阶段二 · MinerU 原文提取");
+				if (!ensureBudget()) {
+					return this.finish(state, options, profileId, resolved, emitStatus);
+				}
 				if (!options.remoteUploadConfirmed) {
 					state.conflicts.push("用户未确认远程处理，跳过 MinerU 提取");
 				} else if (!options.sourcePdfPath) {
@@ -304,6 +322,9 @@ export class AgentLoopService {
 			}
 
 			// ---- Phase 3: note draft fields (model loop) + plugin commit ----
+			if (!ensureBudget()) {
+				return this.finish(state, options, profileId, resolved, emitStatus);
+			}
 			const draftDecision = evaluateDraftPhase(
 				options,
 				state.receipts.articleVaultPath,
@@ -335,15 +356,19 @@ export class AgentLoopService {
 					state.errors.push(draftLoop.error || describeLoopStatus(draftLoop.status));
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}
-				state.draft = parseNoteDraft(draftLoop.final);
-				if (!state.draft) {
-					state.errors.push("阶段三未返回可解析的笔记字段");
-				} else {
-					state.notes.push(...state.draft.notes);
-					if (!state.draft.title_zh) {
-						state.notes.push("title_zh 未能审校，笔记保留空值");
-					}
-					try {
+					state.draft = parseNoteDraft(draftLoop.final);
+					if (!state.draft) {
+						state.errors.push("阶段三未返回可解析的笔记字段");
+					} else {
+						state.notes.push(...state.draft.notes);
+						// One resolved translation used for both the note and the
+						// final result, so they can never diverge.
+						const resolvedTitleZh = state.draft.title_zh || identity.title_zh || "";
+						if (!resolvedTitleZh) {
+							state.notes.push("title_zh 未能审校，笔记保留空值");
+						}
+						state.draft.title_zh = resolvedTitleZh;
+						try {
 						const receipt = await commitSourceNote(
 							toolDeps.vault,
 							identity.citekey,
@@ -382,6 +407,10 @@ export class AgentLoopService {
 			}
 			return this.finish(state, options, profileId, resolved, emitStatus);
 		} finally {
+			clearTimeout(budgetTimer);
+			if (budgetAborted && !state.cancelled && state.errors.length === 0) {
+				state.errors.push("超过任务时间预算，运行已中止");
+			}
 			this.activeRuns.delete(runId);
 		}
 	}
@@ -397,7 +426,7 @@ export class AgentLoopService {
 	): Promise<void> {
 		const remaining = deadline - Date.now();
 		if (remaining < 60_000) {
-			state.conflicts.push("剩余时间预算不足以运行 MinerU 提取，已跳过");
+			state.errors.push("剩余时间预算不足以运行 MinerU 提取，已跳过");
 			return;
 		}
 		const timeoutMs = Math.min(
@@ -433,7 +462,7 @@ export class AgentLoopService {
 			);
 			if (!state.receipts.articleVaultPath) {
 				state.errors.push(
-					`MinerU 发布位置（${state.receipts.mineruPackage.packagePath}）不在当前 Vault 内；结果未计入本次入库。请确认工具链目录与 Vault 的对应关系（Vault 应为工具链目录本身或其 knowledge-base 子目录）`,
+					`MinerU 发布位置（${state.receipts.mineruPackage.packagePath}）不在当前 Vault 内；结果未计入本次入库。请确认当前 Vault 即工具链目录下的 knowledge-base 文件夹（设置 → 工具链与运行环境）`,
 				);
 				return;
 			}

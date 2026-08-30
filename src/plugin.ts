@@ -46,6 +46,7 @@ import {
 } from "./runtime/persistence";
 import { ProcessExecutionService } from "./runtime/process-execution";
 import { AgentLoopService, type AgentLoopRunOutcome } from "./agent/agent-loop-service";
+import { isSameRealPath } from "./agent/path-binding";
 import type { PaperIngestFlowOptions } from "./agent/paper-ingest-flow";
 import { VaultLintService } from "./services/vault-lint";
 import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./services/vault-evidence";
@@ -2269,13 +2270,13 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!python || !fs.existsSync(python)) return false;
 		if (!describeCliExecutable("mineru", this.settings.mineruExecutable).found) return false;
 		// The helper publishes under <toolkitRoot>/knowledge-base/papers/; the
-		// active vault must be that folder or the toolkit root itself, or the
-		// conversion result would land outside this vault.
-		const vaultRoot = this.getActiveVaultRoot().replace(/[\\/]+$/, "").toLowerCase();
+		// active vault must be exactly <toolkitRoot>/knowledge-base so the
+		// published package and the wiki/sources dedup surfaces share one
+		// knowledge-base root (comparing real paths, separator- and
+		// case-safely for the platform).
+		const vaultRoot = this.getActiveVaultRoot();
 		if (!vaultRoot) return false;
-		const normalizedToolkit = toolkitRoot.replace(/[\\/]+$/, "").toLowerCase();
-		return vaultRoot === normalizedToolkit
-			|| vaultRoot === `${normalizedToolkit}/knowledge-base`;
+		return isSameRealPath(vaultRoot, path.join(toolkitRoot, "knowledge-base"));
 	}
 
 	/** Absolute filesystem path of the active vault (desktop adapter only). */

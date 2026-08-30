@@ -68,9 +68,13 @@ const hookBuild = esbuild.buildSync({
 			"  resolveUniqueCitekey,",
 			"  deriveArticleVaultPath,",
 			"  resolveArticleVaultPath,",
+			"  parsePaperIngestInput,",
+			"  stripMatchingQuotes,",
 			"  PAPER_INGEST_READ_PREFIXES,",
 			'} from "./src/agent/paper-ingest-flow";',
 			"export { articleHeadContainsTitle } from './src/agent/agent-loop-service';",
+			"export { isSameRealPath, canonicalRealPath } from './src/agent/path-binding';",
+			"export { normalizeTaskRunArtifacts, normalizeStoredTaskRuns } from './src/runtime/persistence';",
 		].join("\n"),
 		resolveDir: pluginRoot,
 		sourcefile: hookEntry,
@@ -117,8 +121,13 @@ const {
 	resolveUniqueCitekey,
 	deriveArticleVaultPath,
 	resolveArticleVaultPath,
+	parsePaperIngestInput,
+	stripMatchingQuotes,
 	PAPER_INGEST_READ_PREFIXES,
 	articleHeadContainsTitle,
+	isSameRealPath,
+	normalizeTaskRunArtifacts,
+	normalizeStoredTaskRuns,
 } = hookModule.exports;
 Module._load = originalLoad;
 
@@ -673,7 +682,30 @@ async function testCommitSourceNoteSafety() {
 		"",
 	).then(() => null, (error) => error);
 	assert.ok(crossLink instanceof Error);
-	assert.match(crossLink.message, /跨主目录链接/);
+	assert.match(crossLink.message, /Vault 内部链接/);
+	// The full reviewer list: relative wikilinks, Markdown links/images and
+	// reference definitions must all be rejected too.
+	for (const injection of [
+		"[[../../papers/x]]",
+		"[原文](../../papers/x.md)",
+		"![图](../../Clippings/x.png)",
+		"见 [x][ref]\n\n[ref]: ../../papers/x.md",
+		"<a href=\"../../papers/x.md\">x</a>",
+	]) {
+		const rejected = await commitSourceNote(
+			{ app: fake },
+			"linktest",
+			{ ...fields, conclusion: injection },
+			"",
+		).then(() => null, (error) => error);
+		assert.ok(rejected instanceof Error, `must reject: ${injection}`);
+		assert.match(rejected.message, /Vault 内部链接/);
+	}
+	// External web links and anchors stay allowed.
+	const external = validateSourceNoteContent(
+		"---\ntitle: \"t\"\ntitle_zh: \"\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n见 [官网](https://example.com) 与 [本节](#研究问题)。",
+	);
+	assert.deepEqual(external, []);
 
 	const badCitekey = await commitSourceNote({ app: fake }, "../evil", fields, "").then(() => null, (error) => error);
 	assert.match(badCitekey.message, /citekey 不合法/);
@@ -684,46 +716,6 @@ async function testCommitSourceNoteSafety() {
 		{ app: fake }, "cancelled", fields, "", { signal: cancelledController.signal },
 	).then(() => null, (error) => error);
 	assert.match(cancelled.message, /已取消/);
-}
-
-async function testArticlePathBinding() {
-	// Published inside the vault (knowledge-base layout) → accepted.
-	const vaultRoot = "D:/Obsidian Vault/DemoVault";
-	const inside = deriveArticleVaultPath(
-		"D:/Obsidian Vault/DemoVault/papers/demo_2026",
-		vaultRoot,
-	);
-	assert.equal(inside, "papers/demo_2026/article.md");
-
-	const nested = deriveArticleVaultPath(
-		"D:/Obsidian Vault/DemoVault/knowledge-base/papers/demo_2026",
-		`${vaultRoot}/knowledge-base`,
-	);
-	assert.equal(nested, "papers/demo_2026/article.md");
-
-	// Published in a different toolkit → never claimed as this run's receipt.
-	const outside = deriveArticleVaultPath(
-		"D:/ResearchToolkit/knowledge-base/papers/demo_2026",
-		vaultRoot,
-	);
-	assert.equal(outside, "");
-
-	// A stale same-citekey package in the vault cannot be claimed either —
-	// the path must come from the published location.
-	const vault = createFakeVault(new Map([["papers/demo_2026/article.md", "# 旧包"]]));
-	const claimed = await resolveArticleVaultPath(
-		{ app: vault },
-		"D:/ResearchToolkit/knowledge-base/papers/demo_2026",
-		vaultRoot,
-	);
-	assert.equal(claimed, "", "stale same-citekey vault files must not be claimed");
-
-	const resolvedInside = await resolveArticleVaultPath(
-		{ app: vault },
-		"D:/Obsidian Vault/DemoVault/papers/demo_2026",
-		vaultRoot,
-	);
-	assert.equal(resolvedInside, "papers/demo_2026/article.md");
 }
 
 async function testResolveUniqueCitekey() {
@@ -743,9 +735,12 @@ async function testResolveUniqueCitekey() {
 }
 
 function testIdentityAndDraftContracts() {
+	// The dashboard parses the raw input once; the flow receives the
+	// already-separated path and notes.
+	const parsed = parsePaperIngestInput("D:/Users/someone/PrivateDir/demo.pdf\n重点处理图 2");
 	const options = {
-		sourcePdfPath: "D:/Users/someone/PrivateDir/demo.pdf",
-		requestNotes: "D:/Users/someone/PrivateDir/demo.pdf\n重点处理图 2",
+		sourcePdfPath: parsed.sourcePdfPath,
+		requestNotes: parsed.requestNotes,
 		createArticleMarkdown: true,
 		createArticleWiki: true,
 		articleWikiSource: "auto",
@@ -886,13 +881,22 @@ function testDraftGateAndStatusSemantics() {
 	assert.equal(downgraded.run, true);
 	assert.match(downgraded.downgradeNote, /元数据与用户说明/);
 
-	// Technical errors are "failed", never dressed up as conflicts.
+	// Technical errors are "failed", never dressed up as conflicts — even
+	// when a conflict blocker exists alongside them.
 	assert.equal(
 		computeIngestOutcomeStatus({
 			cancelled: false, conflicts: [], errors: ["Provider timeout"],
 			identityConflict: false, markdownSatisfied: true, wikiSatisfied: true,
 		}),
 		"failed",
+	);
+	assert.equal(
+		computeIngestOutcomeStatus({
+			cancelled: false, conflicts: ["article 模式缺少包"], errors: ["MinerU upstream 500"],
+			identityConflict: false, markdownSatisfied: false, wikiSatisfied: false,
+		}),
+		"failed",
+		"technical errors take precedence over conflict labels",
 	);
 	assert.equal(
 		computeIngestOutcomeStatus({
@@ -977,6 +981,147 @@ function testYamlScalarSafety() {
 	assert.doesNotMatch(yamlSafeScalar("标题\n---"), /真实换行|标题\n/);
 }
 
+async function testArticlePathBinding() {
+	// Published inside the vault (knowledge-base layout) → accepted.
+	const vaultRoot = "D:/Obsidian Vault/DemoVault";
+	const inside = deriveArticleVaultPath(
+		"D:/Obsidian Vault/DemoVault/papers/demo_2026",
+		vaultRoot,
+	);
+	assert.equal(inside, "papers/demo_2026/article.md");
+
+	const nested = deriveArticleVaultPath(
+		"D:/Obsidian Vault/DemoVault/knowledge-base/papers/demo_2026",
+		`${vaultRoot}/knowledge-base`,
+	);
+	assert.equal(nested, "papers/demo_2026/article.md");
+
+	// Windows native separators and case differences fold on win32 only.
+	const winNative = deriveArticleVaultPath(
+		"D:\\Obsidian Vault\\DemoVault\\knowledge-base\\papers\\demo_2026",
+		"d:/obsidian vault/demovault/knowledge-base",
+		"win32",
+	);
+	assert.equal(winNative, "papers/demo_2026/article.md");
+	// On POSIX, differing case is a different directory.
+	const posixCase = deriveArticleVaultPath(
+		"/home/user/Toolkit/papers/demo_2026",
+		"/home/user/toolkit",
+		"linux",
+	);
+	assert.equal(posixCase, "");
+
+	// Published in a different toolkit → never claimed as this run's receipt.
+	const outside = deriveArticleVaultPath(
+		"D:/ResearchToolkit/knowledge-base/papers/demo_2026",
+		vaultRoot,
+	);
+	assert.equal(outside, "");
+
+	// A stale same-citekey package in the vault cannot be claimed either —
+	// the path must come from the published location.
+	const vault = createFakeVault(new Map([["papers/demo_2026/article.md", "# 旧包"]]));
+	const claimed = await resolveArticleVaultPath(
+		{ app: vault },
+		"D:/ResearchToolkit/knowledge-base/papers/demo_2026",
+		vaultRoot,
+	);
+	assert.equal(claimed, "", "stale same-citekey vault files must not be claimed");
+
+	const resolvedInside = await resolveArticleVaultPath(
+		{ app: vault },
+		"D:/Obsidian Vault/DemoVault/papers/demo_2026",
+		vaultRoot,
+	);
+	assert.equal(resolvedInside, "papers/demo_2026/article.md");
+}
+
+function testParsePaperIngestInput() {
+	// Quoted Windows paths (very common when pasting from Explorer).
+	const doubleQuoted = parsePaperIngestInput("\"D:\\Research Papers\\demo.pdf\"\n重点检查图 2");
+	assert.equal(doubleQuoted.sourcePdfPath, "D:\\Research Papers\\demo.pdf");
+	assert.equal(doubleQuoted.requestNotes, "重点检查图 2");
+	assert.equal(parsePaperIngestInput("'D:\\x\\y.pdf'").sourcePdfPath, "D:\\x\\y.pdf");
+	assert.equal(parsePaperIngestInput("`D:\\x\\y.pdf`").sourcePdfPath, "D:\\x\\y.pdf");
+	const posix = parsePaperIngestInput("/home/user/Research Papers/demo.pdf\n备注");
+	assert.equal(posix.sourcePdfPath, "/home/user/Research Papers/demo.pdf");
+	assert.equal(posix.requestNotes, "备注");
+	const fileUrl = parsePaperIngestInput("file:///D:/Research%20Papers/demo.pdf\n说明");
+	assert.equal(fileUrl.sourcePdfPath.replace(/\\\\/g, "\\"), "D:\\Research Papers\\demo.pdf");
+	// A first line that is not a path leaves the whole input as notes.
+	const notes = parsePaperIngestInput("帮我入库一篇关于单细胞测序的论文");
+	assert.equal(notes.sourcePdfPath, "");
+	assert.match(notes.requestNotes, /单细胞测序/);
+	// Unquoted round-trip keeps working.
+	const plain = parsePaperIngestInput("D:\\raw\\demo.pdf\n重点处理图 2");
+	assert.equal(plain.sourcePdfPath, "D:\\raw\\demo.pdf");
+	assert.equal(plain.requestNotes, "重点处理图 2");
+	assert.equal(stripMatchingQuotes("  \"a\"  "), "a");
+}
+
+function testArtifactsPersistenceRoundTrip() {
+	const stored = [{
+		id: "run-1",
+		actionId: "paper-ingest",
+		label: "文献入库",
+		agent: "light-agent",
+		summary: "s",
+		executionConfig: null,
+		status: "done",
+		startedAt: "2026-08-30T00:00:00Z",
+		finishedAt: "2026-08-30T00:01:00Z",
+		exitCode: 0,
+		output: "trace",
+		error: "",
+		artifacts: {
+			articlePath: "papers\\demo_2026\\article.md",
+			wikiPath: "wiki/sources/demo_2026.md",
+			filesWritten: ["wiki/sources/demo_2026.md", "papers\\demo\\article.md"],
+		},
+	}];
+	// Full snapshot round-trip: JSON serialize/deserialize, then normalize.
+	const serialized = JSON.parse(JSON.stringify(stored));
+	const restored = normalizeStoredTaskRuns(serialized);
+	assert.equal(restored.length, 1);
+	assert.equal(restored[0].artifacts.articlePath, "papers/demo_2026/article.md");
+	assert.equal(restored[0].artifacts.wikiPath, "wiki/sources/demo_2026.md");
+	assert.deepEqual(restored[0].artifacts.filesWritten, [
+		"wiki/sources/demo_2026.md",
+		"papers/demo/article.md",
+	]);
+
+	// Malicious or absolute artifacts are dropped on load.
+	const hostile = normalizeTaskRunArtifacts({
+		articlePath: "C:\\evil\\article.md",
+		wikiPath: "wiki/../../evil.md",
+		filesWritten: ["papers/../secrets.md", "/abs/path.md", "ok.md"],
+	});
+	assert.equal(hostile.articlePath, "");
+	assert.equal(hostile.wikiPath, "");
+	assert.deepEqual(hostile.filesWritten, ["ok.md"]);
+	assert.equal(normalizeTaskRunArtifacts({}), undefined);
+}
+
+function testRealpathVaultAlignment() {
+	const os = require("node:os");
+	const base = fs.mkdtempSync(path.join(os.tmpdir(), "agent-vault-"));
+	const toolkitRoot = path.join(base, "toolkit");
+	const knowledgeBase = path.join(toolkitRoot, "knowledge-base");
+	fs.mkdirSync(knowledgeBase, { recursive: true });
+	try {
+		// Vault = toolkitRoot/knowledge-base (the only supported layout).
+		assert.equal(isSameRealPath(knowledgeBase, path.join(toolkitRoot, "knowledge-base")), true);
+		// Windows-style backslashes must not break the comparison.
+		assert.equal(isSameRealPath(`${knowledgeBase}\\`, path.join(toolkitRoot, "knowledge-base")), true);
+		// Vault = toolkitRoot itself must be rejected.
+		assert.equal(isSameRealPath(toolkitRoot, path.join(toolkitRoot, "knowledge-base")), false);
+		// Unrelated directories are rejected.
+		assert.equal(isSameRealPath(base, knowledgeBase), false);
+	} finally {
+		fs.rmSync(base, { recursive: true, force: true });
+	}
+}
+
 (async () => {
 	testExtractFirstJsonObject();
 	await testLoopToolRoundtripAndReceipts();
@@ -998,6 +1143,9 @@ function testYamlScalarSafety() {
 	testPhaseToolsetsAreRead();
 	await testArticleHeadTitleGate();
 	testYamlScalarSafety();
+	testParsePaperIngestInput();
+	testArtifactsPersistenceRoundTrip();
+	testRealpathVaultAlignment();
 	console.log("AGENT_LOOP_TESTS_OK");
 })().catch((error) => {
 	console.error(error);

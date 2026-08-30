@@ -1,3 +1,7 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import type { AgentTool } from "./types";
 import {
 	createCrossrefDoiTool,
@@ -143,12 +147,44 @@ export function describeSourceForModel(sourcePdfPath: string): string {
 	return `本地 PDF「${name}」（完整路径由插件保管）`;
 }
 
+/** Strips one pair of matching surrounding quotes (", ', `). */
+export function stripMatchingQuotes(value: string): string {
+	const trimmed = String(value || "").trim();
+	const match = /^(["'`])([\s\S]*)\1$/.exec(trimmed);
+	return (match?.[2] ?? trimmed).trim();
+}
+
+/**
+ * Single parse of the modal input at the dashboard boundary: the first line
+ * is the PDF path when it ends with .pdf (after stripping one pair of
+ * matching quotes and converting file:// URLs); everything else is the
+ * user's notes. Nothing heuristic happens later at prompt-build time.
+ */
+export function parsePaperIngestInput(input: string): {
+	sourcePdfPath: string;
+	requestNotes: string;
+} {
+	const trimmed = String(input || "").trim();
+	const lines = trimmed.split(/\r?\n/);
+	let first = stripMatchingQuotes(lines[0] || "");
+	if (/^file:\/\//i.test(first)) {
+		try {
+			first = fileURLToPath(first);
+		} catch {
+			// Keep the raw value; the .pdf check below decides.
+		}
+	}
+	const candidate = stripMatchingQuotes(first);
+	const isPdfPath = /\.pdf$/i.test(candidate);
+	return {
+		sourcePdfPath: isPdfPath ? candidate : "",
+		requestNotes: isPdfPath
+			? lines.slice(1).join("\n").trim()
+			: trimmed,
+	};
+}
+
 export function buildIdentityUserMessage(options: PaperIngestFlowOptions): string {
-	const firstLine = options.requestNotes.trim().split(/\r?\n/)[0]?.trim() || "";
-	const isPathLine = /\.pdf$/i.test(firstLine) || /^[A-Za-z]:[\\/]/.test(firstLine) || /^\//.test(firstLine);
-	const notesWithoutPath = isPathLine
-		? options.requestNotes.trim().split(/\r?\n/).slice(1).join("\n").trim()
-		: options.requestNotes.trim();
 	return [
 		"身份核验与去重任务：",
 		`- 来源 PDF：${describeSourceForModel(options.sourcePdfPath)}`,
@@ -158,7 +194,7 @@ export function buildIdentityUserMessage(options: PaperIngestFlowOptions): strin
 		].filter(Boolean).join(" + ") || "仅登记身份"}`,
 		"",
 		"任务说明（用户原文）：",
-		notesWithoutPath || "（无补充说明）",
+		options.requestNotes || "（无补充说明）",
 	].join("\n");
 }
 
@@ -325,37 +361,71 @@ export function parseNoteDraft(final: Record<string, unknown> | null): PaperInge
  * published (receipt.packagePath), not from the citekey. The published
  * article must sit inside the active vault, or there is no receipt — a
  * same-citekey package that already existed in the vault is never claimed.
+ * Case is folded only on case-insensitive platforms (Windows); on POSIX,
+ * /A and /a are different directories.
  */
 export function deriveArticleVaultPath(
 	publishedPackagePath: string,
 	vaultRoot: string,
+	platform: string = process.platform,
 ): string {
 	const normalizedPackage = String(publishedPackagePath || "").replace(/\\/g, "/");
 	const normalizedRoot = String(vaultRoot || "").replace(/\\/g, "/").replace(/\/+$/, "");
 	if (!normalizedPackage || !normalizedRoot) return "";
 	const publishedArticle = `${normalizedPackage.replace(/\/+$/, "")}/article.md`;
 	const prefix = `${normalizedRoot}/`;
-	// Windows paths are case-insensitive; fold case for the containment
-	// check but keep the published casing for the relative slice.
-	if (!publishedArticle.toLowerCase().startsWith(prefix.toLowerCase())) return "";
+	const fold = (value: string): string => platform === "win32" ? value.toLowerCase() : value;
+	if (!fold(publishedArticle).startsWith(fold(prefix))) return "";
 	const relative = publishedArticle.slice(prefix.length);
 	if (relative.split("/").some((segment) => segment === ".." || segment === "")) return "";
 	return relative;
 }
 
 /**
- * Convenience wrapper: derive from the receipt and verify existence in the
- * active vault. Returns "" whenever the helper published outside the vault.
+ * Resolves the vault-relative article path from where the helper ACTUALLY
+ * published (receipt.packagePath), not from the citekey. Binding prefers
+ * real filesystem paths (symlink/case/separator safe via realpath +
+ * path.relative) and falls back to the pure string derivation; the article
+ * must sit inside the active vault, or there is no receipt — a
+ * same-citekey package that already existed in the vault is never claimed.
  */
 export async function resolveArticleVaultPath(
 	deps: VaultToolDeps,
 	publishedPackagePath: string,
 	vaultRoot: string,
+	platform: string = process.platform,
 ): Promise<string> {
-	const relative = deriveArticleVaultPath(publishedPackagePath, vaultRoot);
+	const relative = bindPublishedArticle(publishedPackagePath, vaultRoot, platform);
 	if (!relative) return "";
 	const exists = await deps.app.vault.adapter.exists(normalizeVaultPath(relative), true);
 	return exists ? relative : "";
+}
+
+function bindPublishedArticle(
+	publishedPackagePath: string,
+	vaultRoot: string,
+	platform: string,
+): string {
+	try {
+		const vaultReal = realpathNative(vaultRoot);
+		const articleReal = realpathNative(path.join(publishedPackagePath, "article.md"));
+		const relative = path.relative(vaultReal, articleReal);
+		if (
+			!relative
+			|| relative === ".."
+			|| relative.startsWith(`..${path.sep}`)
+			|| path.isAbsolute(relative)
+		) {
+			return "";
+		}
+		return relative.split(path.sep).join("/");
+	} catch {
+		return deriveArticleVaultPath(publishedPackagePath, vaultRoot, platform);
+	}
+}
+
+function realpathNative(value: string): string {
+	return fs.realpathSync.native(path.resolve(value));
 }
 
 function normalizeVaultPath(value: string): string {
@@ -399,9 +469,9 @@ export function evaluateDraftPhase(
 }
 
 /**
- * Outcome status precedence: user cancellation → conflict (identity/title/
- * extraction blockers only) → technical errors → receipts. Technical
- * failures must never be dressed up as "evidence conflicts".
+ * Outcome status precedence: user cancellation and technical errors are
+ * failures (never dressed up as conflicts); genuine identity/title/
+ * authorization blockers are conflicts; otherwise receipts decide.
  */
 export function computeIngestOutcomeStatus(input: {
 	cancelled: boolean;
@@ -412,8 +482,8 @@ export function computeIngestOutcomeStatus(input: {
 	wikiSatisfied: boolean;
 }): "completed" | "conflict" | "failed" {
 	if (input.cancelled) return "failed";
-	if (input.conflicts.length > 0 || input.identityConflict) return "conflict";
 	if (input.errors.length > 0) return "failed";
+	if (input.conflicts.length > 0 || input.identityConflict) return "conflict";
 	return input.markdownSatisfied && input.wikiSatisfied ? "completed" : "failed";
 }
 

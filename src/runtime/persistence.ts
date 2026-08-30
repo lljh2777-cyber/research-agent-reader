@@ -4,6 +4,7 @@ import type {
 	LintReport,
 	QuerySession,
 	TaskRun,
+	TaskRunArtifacts,
 	TaskRunStatus,
 } from "../types/contracts";
 import { normalizeProviderProfile } from "../providers/profile";
@@ -81,6 +82,47 @@ function normalizeExecutionConfig(value: unknown): ExecutionConfig | null {
 	};
 }
 
+/**
+ * Restores light-agent artifacts from persisted task runs. Paths are
+ * vault-relative only: absolute paths, traversal segments, and oversized
+ * values are dropped so a tampered data.json cannot point result buttons
+ * outside the vault.
+ */
+export function normalizeTaskRunArtifacts(value: unknown): TaskRunArtifacts | undefined {
+	const source = asRecord(value);
+	const normalizeArtifactPath = (raw: unknown): string => {
+		const rawText = String(raw || "").trim();
+		if (!rawText) return "";
+		const candidate = rawText
+			.replace(/\\/g, "/")
+			.replace(/^\/+/, "");
+		// Reject absolute paths (drive-letter or leading slash) and traversal
+		// before they can masquerade as vault-relative artifacts.
+		if (
+			!candidate
+			|| rawText.startsWith("/")
+			|| rawText.startsWith("\\")
+			|| candidate.split("/").includes("..")
+			|| /^[A-Za-z]:\//.test(candidate)
+		) {
+			return "";
+		}
+		return candidate.slice(0, 1000);
+	};
+	const articlePath = normalizeArtifactPath(source.articlePath);
+	const wikiPath = normalizeArtifactPath(source.wikiPath);
+	const filesWritten = Array.isArray(source.filesWritten)
+		? source.filesWritten
+			.map(normalizeArtifactPath)
+			.filter(Boolean)
+			.slice(0, 100)
+		: [];
+	if (!articlePath && !wikiPath && !filesWritten.length) {
+		return undefined;
+	}
+	return { articlePath, wikiPath, filesWritten };
+}
+
 export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 	if (!Array.isArray(value)) return [];
 	return value.slice(0, Math.max(5, Math.min(100, limit))).map((item) => {
@@ -99,6 +141,7 @@ export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 			output: String(source.output || "").slice(0, 12000),
 			outputPath: String(source.outputPath || "") || undefined,
 			error: String(source.error || "").slice(0, 4000),
+			artifacts: normalizeTaskRunArtifacts(source.artifacts),
 		};
 	});
 }

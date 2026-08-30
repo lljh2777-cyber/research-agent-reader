@@ -22,6 +22,7 @@ import {
 } from "../modals/action-input";
 import { TaskResultModal } from "../modals/task-result";
 import type { PaperIngestFlowOptions } from "../agent/paper-ingest-flow";
+import { parsePaperIngestInput } from "../agent/paper-ingest-flow";
 import type { AgentLoopRunOutcome } from "../agent/agent-loop-service";
 import { serializeActionRequest } from "../runtime/action-request";
 import {
@@ -718,9 +719,13 @@ export class DashboardView extends ItemView {
 		const profileId = this.plugin.settings.activeProviderId;
 		const providerSummary = this.plugin.getActiveDirectProviderSummary();
 		const summary = input.trim().split(/\r?\n/)[0].slice(0, 160) || "轻量 Agent 文献入库";
+		// One authoritative parse at the input boundary: quotes stripped,
+		// file:// URLs resolved, the path separated from the notes so local
+		// directories never leak into the model prompt.
+		const parsedInput = parsePaperIngestInput(input);
 		const flowOptions: PaperIngestFlowOptions = {
-			sourcePdfPath: input.trim().split(/\r?\n/)[0]?.trim() || "",
-			requestNotes: input.trim(),
+			sourcePdfPath: parsedInput.sourcePdfPath,
+			requestNotes: parsedInput.requestNotes,
 			createArticleMarkdown: actionOptions.createArticleMarkdown !== false,
 			createArticleWiki: actionOptions.createArticleWiki !== false,
 			articleWikiSource: actionOptions.articleWikiSource === "pdf"
