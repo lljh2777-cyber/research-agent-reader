@@ -1047,7 +1047,12 @@ function testParsePaperIngestInput() {
 	assert.equal(posix.sourcePdfPath, "/home/user/Research Papers/demo.pdf");
 	assert.equal(posix.requestNotes, "备注");
 	const fileUrl = parsePaperIngestInput("file:///D:/Research%20Papers/demo.pdf\n说明");
-	assert.equal(fileUrl.sourcePdfPath.replace(/\\\\/g, "\\"), "D:\\Research Papers\\demo.pdf");
+	// fileURLToPath is platform-dependent (D:\... on Windows, /D:/... on
+	// POSIX); the invariant is decoding + a .pdf path lands in sourcePdfPath.
+	const expectedFileUrlPath = require("node:url").fileURLToPath("file:///D:/Research%20Papers/demo.pdf");
+	assert.equal(fileUrl.sourcePdfPath, expectedFileUrlPath);
+	assert.match(fileUrl.sourcePdfPath, /demo\.pdf$/);
+	assert.equal(fileUrl.requestNotes, "说明");
 	// A first line that is not a path leaves the whole input as notes.
 	const notes = parsePaperIngestInput("帮我入库一篇关于单细胞测序的论文");
 	assert.equal(notes.sourcePdfPath, "");
