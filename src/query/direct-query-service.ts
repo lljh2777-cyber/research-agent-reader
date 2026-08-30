@@ -85,6 +85,89 @@ interface DirectQueryDependencies {
 export class DirectQueryService {
 	constructor(private readonly deps: DirectQueryDependencies) {}
 
+	private loadVerifiedProfile(providerId: string): ProviderProfile {
+		const storedProfile = this.deps.getProviderProfile(providerId);
+		if (!storedProfile || storedProfile.lastTest?.ok !== true) {
+			throw new ProviderConnectionError(
+				"configuration",
+				"Direct API 配置不存在或尚未通过连接测试",
+			);
+		}
+		return normalizeProviderProfile(storedProfile);
+	}
+
+	/**
+	 * One grounded completion with streaming, stream-failure fallback, and
+	 * cancellation — shared by vault and web query flows.
+	 */
+	private async completeAnswer(
+		provider: LLMProvider,
+		request: ProviderChatRequest,
+		profile: ProviderProfile,
+		token: DirectQueryRunToken,
+		hooks: DashboardProcessHooks,
+	): Promise<string> {
+		let streamedText = "";
+		let response: Awaited<ReturnType<LLMProvider["complete"]>> | null = null;
+		const shouldStream = profile.capabilities?.streaming === true
+			&& profile.lastTest?.streamingVerified === true;
+		if (shouldStream) {
+			try {
+				response = await provider.stream(
+					request,
+					(delta) => {
+						streamedText += delta;
+						hooks.onEvent?.({ type: "assistant-delta", delta });
+					},
+					{
+						registerCancel: (cancel) => {
+							token.abort = cancel;
+						},
+					},
+				);
+			} catch (error) {
+				if (
+					token.cancelled
+					|| this.deps.normalizeProviderError(error).type === "cancelled"
+				) {
+					throw error;
+				}
+				if (streamedText) hooks.onEvent?.({ type: "assistant-reset" });
+				hooks.onEvent?.({
+					type: "status",
+					stage: "stream-fallback",
+					label: "流式输出失败，正在切换为普通请求",
+				});
+				streamedText = "";
+				response = null;
+			} finally {
+				token.abort = undefined;
+			}
+		}
+		if (!response || !String(response.text || streamedText).trim()) {
+			response = await provider.complete(request, {
+				registerCancel: (cancel) => {
+					token.abort = cancel;
+				},
+			});
+			token.abort = undefined;
+		}
+		if (token.cancelled) {
+			throw new ProviderConnectionError("cancelled", "已停止本轮查询");
+		}
+		const text = String(response?.text || streamedText || "").trim();
+		if (!text) {
+			throw new ProviderConnectionError("protocol", "Direct API 返回了空回答");
+		}
+		return text;
+	}
+
+	private throwIfCancelled(token: DirectQueryRunToken): void {
+		if (token.cancelled) {
+			throw new ProviderConnectionError("cancelled", "已停止本轮查询");
+		}
+	}
+
 	async run(
 		runId: string,
 		providerId: string,
@@ -94,14 +177,7 @@ export class DirectQueryService {
 		hooks: DashboardProcessHooks = {},
 		attachments: VaultImageAttachment[] = [],
 	): Promise<DashboardProcessResult> {
-		const storedProfile = this.deps.getProviderProfile(providerId);
-		if (!storedProfile || storedProfile.lastTest?.ok !== true) {
-			throw new ProviderConnectionError(
-				"configuration",
-				"Direct API 配置不存在或尚未通过连接测试",
-			);
-		}
-		const profile = normalizeProviderProfile(storedProfile);
+		const profile = this.loadVerifiedProfile(providerId);
 		if (mode === "web") {
 			return this.runWebQuery(runId, providerId, question, priorMessages, hooks);
 		}
@@ -128,9 +204,7 @@ export class DirectQueryService {
 				runId,
 				question,
 			) as RetrievalTrace;
-			if (token.cancelled) {
-				throw new ProviderConnectionError("cancelled", "已停止本轮查询");
-			}
+			this.throwIfCancelled(token);
 			// Expansion triggers on missing candidate paths, not on tokenized
 			// query terms: the in-plugin lexical retriever always yields terms
 			// even when no vault page matched.
@@ -179,9 +253,7 @@ export class DirectQueryService {
 					};
 				}
 			}
-			if (token.cancelled) {
-				throw new ProviderConnectionError("cancelled", "已停止本轮查询");
-			}
+			this.throwIfCancelled(token);
 			const linkedNotePaths = [...new Set(
 				imageAttachments
 					.map((attachment) => attachment.sourceNotePath)
@@ -217,58 +289,7 @@ export class DirectQueryService {
 				),
 				maxTokens: 4096,
 			};
-			let response: Awaited<ReturnType<LLMProvider["complete"]>> | null = null;
-			let streamedText = "";
-			const shouldStream = profile.capabilities?.streaming === true
-				&& profile.lastTest?.streamingVerified === true;
-			if (shouldStream) {
-				try {
-					response = await provider.stream(
-						request,
-						(delta) => {
-							streamedText += delta;
-							hooks.onEvent?.({ type: "assistant-delta", delta });
-						},
-						{
-							registerCancel: (cancel) => {
-								token.abort = cancel;
-							},
-						},
-					);
-				} catch (error) {
-					if (
-						token.cancelled
-						|| this.deps.normalizeProviderError(error).type === "cancelled"
-					) {
-						throw error;
-					}
-					if (streamedText) hooks.onEvent?.({ type: "assistant-reset" });
-					hooks.onEvent?.({
-						type: "status",
-						stage: "stream-fallback",
-						label: "流式输出失败，正在切换为普通请求",
-					});
-					streamedText = "";
-					response = null;
-				} finally {
-					token.abort = undefined;
-				}
-			}
-			if (!response || !String(response.text || streamedText).trim()) {
-				response = await provider.complete(request, {
-					registerCancel: (cancel) => {
-						token.abort = cancel;
-					},
-				});
-				token.abort = undefined;
-			}
-			if (token.cancelled) {
-				throw new ProviderConnectionError("cancelled", "已停止本轮查询");
-			}
-			const text = String(response?.text || streamedText || "").trim();
-			if (!text) {
-				throw new ProviderConnectionError("protocol", "Direct API 返回了空回答");
-			}
+			const text = await this.completeAnswer(provider, request, profile, token, hooks);
 			const retrievalResult = this.buildRetrievalResult(
 				text,
 				evidence,
@@ -367,14 +388,7 @@ export class DirectQueryService {
 		priorMessages: QueryMessage[],
 		hooks: DashboardProcessHooks = {},
 	): Promise<DashboardProcessResult> {
-		const storedProfile = this.deps.getProviderProfile(providerId);
-		if (!storedProfile || storedProfile.lastTest?.ok !== true) {
-			throw new ProviderConnectionError(
-				"configuration",
-				"Direct API 配置不存在或尚未通过连接测试",
-			);
-		}
-		const profile = normalizeProviderProfile(storedProfile);
+		const profile = this.loadVerifiedProfile(providerId);
 		const backend = this.deps.resolveWebSearchBackend(profile);
 		if (backend.kind === "unavailable") {
 			throw new ProviderConnectionError(
@@ -402,9 +416,7 @@ export class DirectQueryService {
 					if (token.cancelled) throw error;
 					// Keyword expansion is best-effort; the raw question still searches.
 				}
-				if (token.cancelled) {
-					throw new ProviderConnectionError("cancelled", "已停止本轮查询");
-				}
+				this.throwIfCancelled(token);
 				const queries = [question, ...expanded]
 					.map((item) => String(item || "").trim())
 					.filter(Boolean)
@@ -420,9 +432,7 @@ export class DirectQueryService {
 				webQueries.push(question.trim().slice(0, 200));
 				verification = "model";
 			}
-			if (token.cancelled) {
-				throw new ProviderConnectionError("cancelled", "已停止本轮查询");
-			}
+			this.throwIfCancelled(token);
 			const request: ProviderChatRequest = {
 				model: profile.model,
 				messages: buildWebSearchMessages(question, priorMessages, sources, webQueries),
@@ -436,58 +446,7 @@ export class DirectQueryService {
 				stage: "direct-api-generation",
 				label: `正在由 ${profile.name} 汇总网络来源`,
 			});
-			let streamedText = "";
-			let response: Awaited<ReturnType<LLMProvider["complete"]>> | null = null;
-			const shouldStream = profile.capabilities?.streaming === true
-				&& profile.lastTest?.streamingVerified === true;
-			if (shouldStream) {
-				try {
-					response = await provider.stream(
-						request,
-						(delta) => {
-							streamedText += delta;
-							hooks.onEvent?.({ type: "assistant-delta", delta });
-						},
-						{
-							registerCancel: (cancel) => {
-								token.abort = cancel;
-							},
-						},
-					);
-				} catch (error) {
-					if (
-						token.cancelled
-						|| this.deps.normalizeProviderError(error).type === "cancelled"
-					) {
-						throw error;
-					}
-					if (streamedText) hooks.onEvent?.({ type: "assistant-reset" });
-					hooks.onEvent?.({
-						type: "status",
-						stage: "stream-fallback",
-						label: "流式输出失败，正在切换为普通请求",
-					});
-					streamedText = "";
-					response = null;
-				} finally {
-					token.abort = undefined;
-				}
-			}
-			if (!response || !String(response.text || streamedText).trim()) {
-				response = await provider.complete(request, {
-					registerCancel: (cancel) => {
-						token.abort = cancel;
-					},
-				});
-				token.abort = undefined;
-			}
-			if (token.cancelled) {
-				throw new ProviderConnectionError("cancelled", "已停止本轮查询");
-			}
-			const answer = String(response?.text || streamedText || "").trim();
-			if (!answer) {
-				throw new ProviderConnectionError("protocol", "Direct API 返回了空回答");
-			}
+			const answer = await this.completeAnswer(provider, request, profile, token, hooks);
 			if (backend.kind === "native") {
 				const linked = extractModelProvidedWebSources(answer).map((source) => ({
 					title: source.title,

@@ -4,6 +4,9 @@ import {
 	type ProviderTypeDefinition,
 	type ProviderTypeId,
 } from "../config";
+import type { NativeWebSearchProtocol } from "../types/contracts";
+
+export type { NativeWebSearchProtocol };
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -28,8 +31,6 @@ export function profileSupportsQueryImage(profile: unknown): boolean {
 }
 
 export type ProfileWebSearchMode = "auto" | "off" | "native" | "tavily";
-
-export type NativeWebSearchProtocol = "qwen" | "openrouter" | "zhipu" | "deepseek";
 
 const WEB_SEARCH_MODES: ReadonlySet<string> = new Set([
 	"auto",

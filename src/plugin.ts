@@ -219,93 +219,6 @@ export default class AgentDashboardPlugin extends Plugin {
 		Promise<CliModelDiscoveryResult>
 	>();
 	private mineruReaderActivationQueue: Promise<void> = Promise.resolve();
-
-	/**
-	 * Resolves how one Direct API profile reaches the web: provider-native
-	 * server search, plugin-side Tavily searches, or nothing (with an
-	 * actionable reason the query view can surface).
-	 */
-	private resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution {
-		const normalized = normalizeProviderProfile(profile);
-		const mode = normalized.webSearch || "auto";
-		if (mode === "off") {
-			return { kind: "unavailable", reason: "该供应商未启用联网搜索（设置 → Direct API → 联网搜索）" };
-		}
-		const protocol = detectNativeWebSearchProtocol(normalized.baseUrl);
-		if (mode === "native") {
-			return protocol
-				? { kind: "native", protocol }
-				: { kind: "unavailable", reason: "未识别出该供应商的原生联网协议，请改用 Tavily" };
-		}
-		if (mode === "auto" && protocol) {
-			return { kind: "native", protocol };
-		}
-		const secretId = String(this.settings.webSearchTavilySecretId || "").trim();
-		const secret = secretId
-			? String(this.app.secretStorage?.getSecret?.(secretId) || "").trim()
-			: "";
-		if (!secret) {
-			return {
-				kind: "unavailable",
-				reason: mode === "tavily"
-					? "未配置 Tavily API Key（设置 → Direct API → 联网搜索）"
-					: "该供应商不支持原生联网，且未配置 Tavily API Key",
-			};
-		}
-		const httpDeps: WebSearchHttpDeps = {
-			httpRequest: async (options) => {
-				const response = await this.providerHttpRequest(options);
-				return { status: response.status, json: response.json };
-			},
-		};
-		const maxResults = Math.max(1, Math.min(8, Math.round(this.settings.webSearchMaxResults) || 5));
-		const timeoutMs = Math.max(
-			5,
-			Math.min(60, Math.round(this.settings.webSearchTimeoutSeconds) || 20),
-		) * 1000;
-		return {
-			kind: "tavily",
-			search: (queries) => searchTavily(httpDeps, secret, queries, { maxResults, timeoutMs }),
-		};
-	}
-
-	/** Whether one Direct API profile can answer web-mode queries right now. */
-	directProfileSupportsWebSearch(profileId: string): boolean {
-		const profile = this.getProviderProfile(profileId);
-		if (!profile) return false;
-		return this.resolveWebSearchBackend(profile).kind !== "unavailable";
-	}
-
-	/**
-	 * Human-readable capability boundary for one Direct API profile, shown in
-	 * the connection test result instead of the legacy "never web" wording.
-	 */
-	directApiBoundaryLabel(profileId: string): string {
-		const profile = this.getProviderProfile(profileId);
-		if (!profile) return "仅知识库上下文，不联网、不写入";
-		const mode = normalizeProviderProfile(profile).webSearch || "auto";
-		if (mode === "off") return "仅知识库上下文，不联网、不写入";
-		const protocol = detectNativeWebSearchProtocol(profile.baseUrl);
-		const protocolLabels: Record<string, string> = {
-			openrouter: "OpenRouter",
-			qwen: "通义千问",
-			zhipu: "智谱",
-			deepseek: "DeepSeek",
-		};
-		if (protocol) {
-			return `知识库上下文 + 联网搜索（原生 · ${protocolLabels[protocol] || protocol}），不写入文件`;
-		}
-		const tavilyReady = Boolean(String(this.settings.webSearchTavilySecretId || "").trim());
-		if (mode === "tavily" || (mode === "auto" && tavilyReady)) {
-			return tavilyReady
-				? "知识库上下文 + 联网搜索（Tavily），不写入文件"
-				: "仅知识库上下文（未配置 Tavily），不联网、不写入";
-		}
-		if (mode === "native") {
-			return "仅知识库上下文（未识别出原生联网协议），不联网、不写入";
-		}
-		return "仅知识库上下文，不联网、不写入";
-	}
 	private readonly readerAutoOpenBypass = new Set<string>();
 	obsidianCliProbeState: ObsidianCliProbeState = { status: "idle" };
 
@@ -2250,6 +2163,93 @@ export default class AgentDashboardPlugin extends Plugin {
 			sessionTitle: session.title,
 			createdAt: message.createdAt,
 		});
+	}
+
+	/**
+	 * Resolves how one Direct API profile reaches the web: provider-native
+	 * server search, plugin-side Tavily searches, or nothing (with an
+	 * actionable reason the query view can surface).
+	 */
+	private resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution {
+		const normalized = normalizeProviderProfile(profile);
+		const mode = normalized.webSearch || "auto";
+		if (mode === "off") {
+			return { kind: "unavailable", reason: "该供应商未启用联网搜索（设置 → Direct API → 联网搜索）" };
+		}
+		const protocol = detectNativeWebSearchProtocol(normalized.baseUrl);
+		if (mode === "native") {
+			return protocol
+				? { kind: "native", protocol }
+				: { kind: "unavailable", reason: "未识别出该供应商的原生联网协议，请改用 Tavily" };
+		}
+		if (mode === "auto" && protocol) {
+			return { kind: "native", protocol };
+		}
+		const secretId = String(this.settings.webSearchTavilySecretId || "").trim();
+		const secret = secretId
+			? String(this.app.secretStorage?.getSecret?.(secretId) || "").trim()
+			: "";
+		if (!secret) {
+			return {
+				kind: "unavailable",
+				reason: mode === "tavily"
+					? "未配置 Tavily API Key（设置 → Direct API → 联网搜索）"
+					: "该供应商不支持原生联网，且未配置 Tavily API Key",
+			};
+		}
+		const httpDeps: WebSearchHttpDeps = {
+			httpRequest: async (options) => {
+				const response = await this.providerHttpRequest(options);
+				return { status: response.status, json: response.json };
+			},
+		};
+		const maxResults = Math.max(1, Math.min(8, Math.round(this.settings.webSearchMaxResults) || 5));
+		const timeoutMs = Math.max(
+			5,
+			Math.min(60, Math.round(this.settings.webSearchTimeoutSeconds) || 20),
+		) * 1000;
+		return {
+			kind: "tavily",
+			search: (queries) => searchTavily(httpDeps, secret, queries, { maxResults, timeoutMs }),
+		};
+	}
+
+	/** Whether one Direct API profile can answer web-mode queries right now. */
+	directProfileSupportsWebSearch(profileId: string): boolean {
+		const profile = this.getProviderProfile(profileId);
+		if (!profile) return false;
+		return this.resolveWebSearchBackend(profile).kind !== "unavailable";
+	}
+
+	/**
+	 * Human-readable capability boundary for one Direct API profile, shown in
+	 * the connection test result instead of the legacy "never web" wording.
+	 */
+	directApiBoundaryLabel(profileId: string): string {
+		const profile = this.getProviderProfile(profileId);
+		if (!profile) return "仅知识库上下文，不联网、不写入";
+		const mode = normalizeProviderProfile(profile).webSearch || "auto";
+		if (mode === "off") return "仅知识库上下文，不联网、不写入";
+		const protocol = detectNativeWebSearchProtocol(profile.baseUrl);
+		const protocolLabels: Record<string, string> = {
+			openrouter: "OpenRouter",
+			qwen: "通义千问",
+			zhipu: "智谱",
+			deepseek: "DeepSeek",
+		};
+		if (protocol) {
+			return `知识库上下文 + 联网搜索（原生 · ${protocolLabels[protocol] || protocol}），不写入文件`;
+		}
+		const tavilyReady = Boolean(String(this.settings.webSearchTavilySecretId || "").trim());
+		if (mode === "tavily" || (mode === "auto" && tavilyReady)) {
+			return tavilyReady
+				? "知识库上下文 + 联网搜索（Tavily），不写入文件"
+				: "仅知识库上下文（未配置 Tavily），不联网、不写入";
+		}
+		if (mode === "native") {
+			return "仅知识库上下文（未识别出原生联网协议），不联网、不写入";
+		}
+		return "仅知识库上下文，不联网、不写入";
 	}
 
 	resolveVaultLinkedFile(rawLink: unknown, sourcePath = ""): TFile | null {
