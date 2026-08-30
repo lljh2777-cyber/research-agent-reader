@@ -32,11 +32,15 @@ export type MineruServiceMode = "official" | "private";
 export type MineruReaderDefaultMode = "pdf" | "visuals";
 export type MineruReaderRenderQuality = "standard" | "high";
 
+export type ActionRunnerPreference = "auto" | "light" | "cli";
+
 export interface ActionExecutionDefault {
 	backend: CliBackendId;
 	model: string;
 	reasoningEffort: ReasoningEffort | "";
 	serviceTier: "default" | "fast";
+	/** Only meaningful for paper-ingest: which runner the modal opens with. */
+	runner: ActionRunnerPreference;
 }
 
 export const CONFIGURABLE_ACTION_IDS = [
@@ -66,12 +70,12 @@ export const MINERU_LANGUAGE_IDS = [
 ] as const;
 
 export const DEFAULT_ACTION_EXECUTION_DEFAULTS: Record<string, ActionExecutionDefault> = {
-	"paper-ingest": { backend: "codex-cli", model: "", reasoningEffort: "high", serviceTier: "default" },
-	"pdf-xray": { backend: "codex-cli", model: "", reasoningEffort: "high", serviceTier: "default" },
-	"code-analysis": { backend: "codex-cli", model: "", reasoningEffort: "medium", serviceTier: "default" },
-	"vault-retrieval": { backend: "codex-cli", model: "", reasoningEffort: "medium", serviceTier: "default" },
-	"synthesis": { backend: "codex-cli", model: "", reasoningEffort: "high", serviceTier: "default" },
-	"vault-lint-fix": { backend: "codex-cli", model: "", reasoningEffort: "high", serviceTier: "default" },
+	"paper-ingest": { backend: "codex-cli", model: "", reasoningEffort: "high", serviceTier: "default", runner: "auto" },
+	"pdf-xray": { backend: "codex-cli", model: "", reasoningEffort: "high", serviceTier: "default", runner: "auto" },
+	"code-analysis": { backend: "codex-cli", model: "", reasoningEffort: "medium", serviceTier: "default", runner: "auto" },
+	"vault-retrieval": { backend: "codex-cli", model: "", reasoningEffort: "medium", serviceTier: "default", runner: "auto" },
+	"synthesis": { backend: "codex-cli", model: "", reasoningEffort: "high", serviceTier: "default", runner: "auto" },
+	"vault-lint-fix": { backend: "codex-cli", model: "", reasoningEffort: "high", serviceTier: "default", runner: "auto" },
 };
 
 function normalizeActionExecutionDefault(
@@ -85,8 +89,10 @@ function normalizeActionExecutionDefault(
 		? source.backend
 		: "codex-cli";
 	const reasoning = String(source.reasoningEffort || "");
+	const runnerRaw = String(source.runner || "auto");
 	return {
 		backend,
+		runner: runnerRaw === "light" || runnerRaw === "cli" ? runnerRaw : "auto",
 		model: String(source.model || "").trim().slice(0, 200),
 		reasoningEffort: ["low", "medium", "high", "xhigh"].includes(reasoning)
 			? reasoning as ReasoningEffort

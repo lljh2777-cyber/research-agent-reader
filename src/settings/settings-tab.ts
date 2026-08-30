@@ -888,6 +888,35 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			|| { ...DEFAULT_ACTION_EXECUTION_DEFAULTS[actionId] };
 	}
 
+	/**
+	 * Models the current backend actually recognizes: the built-in catalog
+	 * and/or CLI discovery, plus any custom model configured for that
+	 * backend. Used instead of a free-text override field.
+	 */
+	private actionModelChoices(backend: CliBackendId): Array<{ id: string; label: string }> {
+		const discovered = (this.plugin.getCliModelDiscovery(backend)?.models || [])
+			.map((model) => ({ id: model.id, label: model.label }));
+		const configuredModel = backend === "claude-code"
+			? this.plugin.settings.claudeModel
+			: backend === "opencode"
+				? this.plugin.settings.openCodeModel
+				: this.plugin.settings.codexModel;
+		const base = backend === "codex-cli" && this.plugin.settings.codexConfigSource !== "cc-switch"
+			? MODEL_OPTIONS.map((option) => ({ id: option.id, label: option.label }))
+			: discovered;
+		const seen = new Set<string>();
+		const choices: Array<{ id: string; label: string }> = [];
+		for (const choice of base) {
+			if (!choice.id || seen.has(choice.id)) continue;
+			seen.add(choice.id);
+			choices.push(choice);
+		}
+		if (configuredModel && !seen.has(configuredModel)) {
+			choices.push({ id: configuredModel, label: configuredModel });
+		}
+		return choices;
+	}
+
 	private renderTaskDefaultsSettings(containerEl: HTMLElement): void {
 		this.createSettingsPageHeader(
 			containerEl,
@@ -900,13 +929,30 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			.filter((action): action is DashboardAction => Boolean(action));
 		actions.forEach((action) => {
 			const value = this.getActionDefault(action.id);
+			const isPaperIngest = action.id === "paper-ingest";
 			this.createProviderSectionHeader(
 				containerEl,
 				action.label,
-				STAGE_WRITE_BACKEND_ACTION_IDS.has(action.id)
-					? "可选择受阶段写入边界约束的 Agent；运行前仍可修改。"
-					: "该操作固定使用 Codex CLI 权限边界；可覆盖模型、推理和速度。",
+				isPaperIngest
+					? "两种运行方式：轻量 Agent · Direct API（无需编码 Agent，轮数与 Token 上限在 Direct API 页配置）和 Codex CLI · 完整入库（登记 papers.csv/references.bib/索引）。下面的模型/推理/速度默认值作用于 Codex CLI 方式。"
+					: STAGE_WRITE_BACKEND_ACTION_IDS.has(action.id)
+						? "可选择受阶段写入边界约束的 Agent；运行前仍可修改。"
+						: "该操作固定使用 Codex CLI 权限边界；可覆盖模型、推理和速度。",
 			);
+			if (isPaperIngest) {
+				new Setting(containerEl)
+					.setName("默认运行方式")
+					.setDesc("任务弹窗将按此预选运行方式；弹窗内仍可临时切换。「自动」在有已通过连接测试的 Direct API 配置时优先轻量 Agent。")
+					.addDropdown((dropdown) => dropdown
+						.addOption("auto", "自动（优先轻量 Agent）")
+						.addOption("light", "轻量 Agent · Direct API")
+						.addOption("cli", "Codex CLI · 完整入库")
+						.setValue(value.runner)
+						.onChange(async (runner) => {
+							value.runner = runner === "light" || runner === "cli" ? runner : "auto";
+							await this.plugin.saveSettings();
+						}));
+			}
 			if (STAGE_WRITE_BACKEND_ACTION_IDS.has(action.id)) {
 				new Setting(containerEl)
 					.setName("默认执行后端")
@@ -924,16 +970,22 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 							this.display();
 						}));
 			}
+			const modelChoices = this.actionModelChoices(value.backend);
+			const knownModel = value.model && modelChoices.some((choice) => choice.id === value.model);
 			new Setting(containerEl)
 				.setName("模型覆盖")
-				.setDesc("留空使用动作推荐模型或当前后端的全局默认模型。")
-				.addText((text) => text
-					.setPlaceholder("留空使用推荐默认")
-					.setValue(value.model)
-					.onChange(async (model) => {
+				.setDesc("从当前后端识别到的模型中选择；留空使用动作推荐模型或后端全局默认模型。")
+				.addDropdown((dropdown) => {
+					dropdown.addOption("", "使用推荐默认");
+					modelChoices.forEach((choice) => dropdown.addOption(choice.id, choice.label));
+					if (value.model && !knownModel) {
+						dropdown.addOption(value.model, `${value.model}（自定义）`);
+					}
+					dropdown.setValue(value.model).onChange(async (model) => {
 						value.model = model.trim().slice(0, 200);
 						await this.plugin.saveSettings();
-					}));
+					});
+				});
 			new Setting(containerEl)
 				.setName("默认推理强度")
 				.setDesc("任务弹窗选择优先；这里控制无临时覆盖时的默认值。")

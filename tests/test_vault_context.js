@@ -43,7 +43,7 @@ const hookEntry = path.join(pluginRoot, "tests", "vault-context-hooks.ts");
 const hookBuild = esbuild.buildSync({
 	stdin: {
 		contents: [
-			'export { migrateLegacySettingsKeys } from "./src/runtime/settings";',
+			'export { migrateLegacySettingsKeys, normalizeActionExecutionDefaults } from "./src/runtime/settings";',
 			"export { LexicalVaultRetriever, tokenizeForLexicalRetrieval }",
 			'  from "./src/query/lexical-retrieval";',
 			'export { readVaultEvidencePackets, makeVaultSourcePathResolver }',
@@ -77,6 +77,7 @@ hookModule.paths = Module._nodeModulePaths(pluginRoot);
 hookModule._compile(hookBuild.outputFiles[0].text, hookEntry);
 const {
 	migrateLegacySettingsKeys,
+	normalizeActionExecutionDefaults,
 	LexicalVaultRetriever,
 	tokenizeForLexicalRetrieval,
 	readVaultEvidencePackets,
@@ -94,6 +95,18 @@ const {
 	MAX_VAULT_IMAGE_BYTES,
 } = hookModule.exports;
 Module._load = originalLoad;
+
+function testNormalizeActionExecutionDefaults() {
+	const normalized = normalizeActionExecutionDefaults({
+		"paper-ingest": { backend: "codex-cli", model: "", reasoningEffort: "high", serviceTier: "default", runner: "light" },
+		"pdf-xray": { runner: "cli" },
+		"code-analysis": { runner: "nonsense" },
+	});
+	assert.equal(normalized["paper-ingest"].runner, "light");
+	assert.equal(normalized["pdf-xray"].runner, "cli");
+	assert.equal(normalized["code-analysis"].runner, "auto", "invalid runner falls back to auto");
+	assert.equal(normalized["synthesis"].runner, "auto", "missing runner defaults to auto");
+}
 
 function testMigrateLegacySettingsKeys() {
 	const migrated = migrateLegacySettingsKeys({
@@ -1168,6 +1181,7 @@ async function testDirectApiWebQuery() {
 Promise.resolve()
 	.then(() => {
 		testMigrateLegacySettingsKeys();
+		testNormalizeActionExecutionDefaults();
 		testTokenizeForLexicalRetrieval();
 	})
 	.then(() => testLexicalRetriever())
