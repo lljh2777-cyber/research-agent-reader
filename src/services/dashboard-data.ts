@@ -628,7 +628,7 @@ export class DashboardDataService {
 	buildPaperGapInput(record: VaultRecord, title: unknown): string {
 		return [
 			`处理知识缺口：对“${title}”执行全文 x-ray 深读。`,
-			`Source note：knowledge-base/${record.path}`,
+			`Source note（Vault 相对路径）：${record.path}`,
 			"请定位对应 PDF 或全文，检查方法、图表、数据/材料、关键结论、局限性和证据链。只有完成全文证据检查后才能升级为 x-ray；若全文不可用，请记录证据缺口并保持当前深度。",
 		].join("\n");
 	}

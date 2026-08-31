@@ -46,6 +46,8 @@ const hookBuild = esbuild.buildSync({
 			'export { migrateLegacySettingsKeys, normalizeActionExecutionDefaults } from "./src/runtime/settings";',
 			"export { LexicalVaultRetriever, tokenizeForLexicalRetrieval }",
 			'  from "./src/query/lexical-retrieval";',
+			'export { createVaultSearchTool } from "./src/agent/tools";',
+			'export { validateIdentityReceipts } from "./src/agent/paper-ingest-flow";',
 			'export { readVaultEvidencePackets, makeVaultSourcePathResolver }',
 			'  from "./src/services/vault-evidence";',
 			'export { saveQueryAnswerNote, sanitizeQueryNoteFilename }',
@@ -80,6 +82,8 @@ const {
 	normalizeActionExecutionDefaults,
 	LexicalVaultRetriever,
 	tokenizeForLexicalRetrieval,
+	createVaultSearchTool,
+	validateIdentityReceipts,
 	readVaultEvidencePackets,
 	makeVaultSourcePathResolver,
 	normalizeQueryVaultSources,
@@ -135,6 +139,14 @@ function testTokenizeForLexicalRetrieval() {
 	assert.ok(tokens.includes("类型"));
 	assert.ok(!tokens.includes("细胞类型"));
 	assert.deepStrictEqual(tokenizeForLexicalRetrieval(""), []);
+	assert.deepStrictEqual(tokenizeForLexicalRetrieval("Анализ данных"), ["анализ", "данных"]);
+	assert.deepStrictEqual(tokenizeForLexicalRetrieval("데이터 분석"), ["데이터", "분석"]);
+	assert.deepStrictEqual(tokenizeForLexicalRetrieval("Ｄｅｍｏ　Ｐａｐｅｒ"), ["demo", "paper"]);
+	const mixedTokens = tokenizeForLexicalRetrieval("p53基因 scRNA-seq分析");
+	assert.ok(mixedTokens.includes("p53"));
+	assert.ok(mixedTokens.includes("scrna-seq"));
+	assert.ok(mixedTokens.includes("基因"));
+	assert.ok(mixedTokens.includes("分析"));
 
 	// The cap is a per-call budget: query side 24, index side may keep more.
 	const manyTokens = Array.from(
@@ -161,7 +173,11 @@ function makeLexicalApp(notes) {
 			getFileCache: (file) => {
 				const note = noteByPath.get(file.path);
 				if (!note) return null;
-				return { frontmatter: { title: note.title || "", tags: note.tags || [] }, tags: [] };
+				return {
+					frontmatter: { title: note.title || "", tags: note.tags || [] },
+					headings: note.h1 ? [{ heading: note.h1, level: 1 }] : [],
+					tags: [],
+				};
 			},
 		},
 	};
@@ -190,6 +206,13 @@ async function testLexicalRetriever() {
 			tags: [],
 			title: "旧文献",
 		},
+		{
+			path: "wiki/sources/demo_2026.md",
+			mtime: 2,
+			body: "Demo Paper 的来源笔记。",
+			tags: [],
+			title: "Demo Paper",
+		},
 	];
 	const retriever = new LexicalVaultRetriever(makeLexicalApp(notes));
 	const trace = await retriever.retrieve("SingleR 细胞类型注释怎么做？");
@@ -203,6 +226,40 @@ async function testLexicalRetriever() {
 	// lexical_seeds must stay page candidates (path/title objects), not tokens.
 	assert.ok(trace.lexical_seeds.length >= 1);
 	assert.ok(trace.lexical_seeds.every((seed) => seed.path && seed.title));
+
+	const demoTrace = await retriever.retrieve("Demo Paper", [], { allowedPrefixes: ["wiki/sources", "papers"] });
+	const demoSeed = demoTrace.lexical_seeds.find((seed) => seed.path === "wiki/sources/demo_2026.md");
+	assert.equal(demoSeed.title, "Demo Paper", "search receipts must expose the canonical frontmatter title only");
+	const dedupTool = createVaultSearchTool(retriever, ["wiki/sources", "papers"]);
+	const dedupResult = await dedupTool.execute({ question: "Demo Paper" }, {
+		signal: new AbortController().signal,
+		deadline: Date.now() + 5_000,
+		remainingMs: () => 5_000,
+	});
+	const duplicateProblems = validateIdentityReceipts({
+		status: "verified",
+		duplicateStatus: "none",
+		citekey: "fresh_2026",
+		title: "Demo Paper",
+		title_zh: "",
+		authors: "",
+		year: "2026",
+		doi: "",
+		duplicates: [],
+		conflicts: [],
+		notes: [],
+	}, [{
+		tool: "crossref_search",
+		ok: true,
+		data: {
+			bibliographicRecords: [{ title: "Demo Paper", doi: "", authors: "Doe Jane", year: "2026" }],
+		},
+	}, {
+		tool: "vault_search",
+		ok: true,
+		data: dedupResult.receiptData,
+	}]);
+	assert.match(duplicateProblems.join("；"), /同标题或同 citekey 候选/);
 
 	const chineseTrace = await retriever.retrieve("信息熵");
 	assert.ok(chineseTrace.candidate_paths.includes("wiki/concepts/entropy.md"));
@@ -237,6 +294,50 @@ async function testBodyTokenLimit() {
 	]));
 	const trace = await retriever.retrieve("late-target-marker");
 	assert.ok(trace.candidate_paths.includes("wiki/long-note.md"));
+}
+
+async function testScopedIndexCoverageAndFailClosed() {
+	const unrelated = Array.from({ length: 5000 }, (_, index) => ({
+		path: `private/new-${index}.md`,
+		mtime: 10_000 - index,
+		body: "无关正文",
+		title: `Private ${index}`,
+		tags: [],
+	}));
+	const oldSource = {
+		path: "wiki/sources/old.md",
+		mtime: 1,
+		body: "Rare Target Paper 的来源笔记。",
+		title: "Rare Target Paper",
+		tags: [],
+	};
+	const retriever = new LexicalVaultRetriever(makeLexicalApp([...unrelated, oldSource]));
+	const scoped = await retriever.retrieve("Rare Target Paper", [], {
+		allowedPrefixes: ["wiki/sources", "papers"],
+	});
+	assert.equal(scoped.scope_complete, true);
+	assert.equal(scoped.scope_total_files, 1);
+	assert.deepEqual(scoped.candidate_paths, ["wiki/sources/old.md"]);
+	assert.ok(scoped.candidate_paths.every((candidate) => !candidate.startsWith("private/")));
+
+	const overLimitNotes = Array.from({ length: 5001 }, (_, index) => ({
+		path: `wiki/sources/source-${index}.md`,
+		mtime: index,
+		body: "来源笔记",
+		title: `Source ${index}`,
+		tags: [],
+	}));
+	const overLimitRetriever = new LexicalVaultRetriever(makeLexicalApp(overLimitNotes));
+	const dedupTool = createVaultSearchTool(overLimitRetriever, ["wiki/sources", "papers"]);
+	await dedupTool.execute({ question: "Missing Paper" }, {
+		signal: new AbortController().signal,
+		deadline: Date.now() + 5_000,
+		remainingMs: () => 5_000,
+	}).then(() => {
+		assert.fail("an over-limit dedup scope must not produce an empty success receipt");
+	}, (error) => {
+		assert.match(error.message, /去重检索范围不完整/);
+	});
 }
 
 async function testBodyIndexBudgetResume() {
@@ -1186,6 +1287,7 @@ Promise.resolve()
 	})
 	.then(() => testLexicalRetriever())
 	.then(() => testBodyTokenLimit())
+	.then(() => testScopedIndexCoverageAndFailClosed())
 	.then(() => testBodyIndexBudgetResume())
 	.then(() => testExpansionTermQuota())
 	.then(() => testReadVaultEvidencePackets())

@@ -33,6 +33,13 @@ export interface MineruPublishDeps {
 	/** Stage parent directory; defaults to os.tmpdir(). */
 	stageRoot?: string;
 	now?: () => Date;
+	/** Injectable filesystem boundary for atomic-publish failure tests. */
+	publishOps?: Partial<MineruPublishOps>;
+}
+
+export interface MineruPublishOps {
+	copyPackage(source: string, destination: string): void;
+	renamePackage(source: string, destination: string): void;
 }
 
 export interface MineruPublishArgs {
@@ -55,6 +62,29 @@ export interface MineruPackageReceipt {
 	validation: Record<string, unknown>;
 }
 
+export interface MineruPublishContext {
+	signal: AbortSignal;
+	timeoutMs: number;
+	/** Synchronous, read-only gate over the exact same-volume copy to commit. */
+	validateBeforeCommit?(articleMarkdown: string): void;
+}
+
+/** Identity/evidence conflicts are distinct from CLI and filesystem failures. */
+export class MineruPreCommitValidationError extends Error {
+	readonly cleanupFailed: boolean;
+	readonly stagingBasename: string;
+
+	constructor(
+		message: string,
+		options: { cleanupFailed?: boolean; stagingBasename?: string } = {},
+	) {
+		super(message);
+		this.name = "MineruPreCommitValidationError";
+		this.cleanupFailed = options.cleanupFailed === true;
+		this.stagingBasename = String(options.stagingBasename || "");
+	}
+}
+
 const CITEKEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 const MAX_PUBLISH_ASSET_BYTES = 256 * 1024 * 1024;
 const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(([^)\s]+)[^)]*\)/g;
@@ -65,6 +95,40 @@ export interface ResolvedMineruCommand {
 	baseArgs: string[];
 }
 
+function resolveNpmShimEntry(shimPath: string, shim: string): string {
+	const shimRoot = path.dirname(shimPath);
+	const realShimRoot = realPathSync(shimRoot);
+	for (const line of String(shim || "").split(/\r?\n/)) {
+		for (const match of line.matchAll(/"([^"\r\n]+)"/g)) {
+			const token = match[1].trim();
+			if (!/^%(?:~dp0|dp0%)[\\/]+/i.test(token)) continue;
+			const relative = token
+				.replace(/^%(?:~dp0|dp0%)[\\/]+/i, "")
+				.replace(/\\/g, "/");
+			const segments = relative.split("/").filter(Boolean);
+			if (segments[0]?.toLowerCase() !== "node_modules" || segments.includes("..")) continue;
+			// A normal npm cmd shim passes only `%*` after the quoted entry. Never
+			// reinterpret shell operators or an appended command tail.
+			const tail = line.slice((match.index || 0) + match[0].length).trim();
+			if (tail && tail !== "%*") continue;
+			const candidate = path.resolve(shimRoot, ...segments);
+			if (!isPathInside(shimRoot, candidate)) continue;
+			const extension = path.extname(candidate).toLowerCase();
+			if (extension && ![".js", ".mjs", ".cjs"].includes(extension)) continue;
+			try {
+				const directStats = fs.lstatSync(candidate);
+				if (directStats.isSymbolicLink() || !directStats.isFile()) continue;
+				const realCandidate = realPathSync(candidate);
+				if (!isPathInside(realShimRoot, realCandidate)) continue;
+				return realCandidate;
+			} catch {
+				continue;
+			}
+		}
+	}
+	return "";
+}
+
 /**
  * Resolves how to launch the configured MinerU CLI without a shell (shell
  * mode is banned in this plugin). npm installs CLIs as .cmd shims that
@@ -72,8 +136,9 @@ export interface ResolvedMineruCommand {
  * launch its node entry script directly.
  */
 export function resolveMineruCommand(executable: string): ResolvedMineruCommand {
-	const resolved = path.resolve(String(executable || "").trim());
-	if (!resolved) throw new Error("未配置 MinerU CLI");
+	const configured = String(executable || "").trim();
+	if (!configured) throw new Error("未配置 MinerU CLI");
+	const resolved = path.resolve(configured);
 	if (!fs.existsSync(resolved)) {
 		throw new Error(`MinerU CLI 不存在：${resolved}（npm 全局安装 mineru-open-api 后在设置中配置）`);
 	}
@@ -84,19 +149,13 @@ export function resolveMineruCommand(executable: string): ResolvedMineruCommand 
 	if (ext !== ".cmd" && ext !== ".bat") {
 		return { command: resolved, baseArgs: [] };
 	}
-	const shim = fs.readFileSync(resolved, "utf8");
-	const quoted = /"%~dp0\\?([^"\r\n]+?\.(?:js|mjs|cjs))"/i.exec(shim);
-	const bare = /node_modules[\\/][^"\r\n]*?\.(?:js|mjs|cjs)/i.exec(shim);
-	const relative = quoted?.[1] || bare?.[0] || "";
-	if (relative) {
-		const entry = path.resolve(
-			path.dirname(resolved),
-			relative.replace(/^%~dp0[\\/]?/, "").replace(/\\/g, "/"),
-		);
-		if (fs.existsSync(entry)) {
-			return { command: process.execPath, baseArgs: [entry] };
-		}
+	const shimStats = fs.lstatSync(resolved);
+	if (shimStats.isSymbolicLink() || !shimStats.isFile()) {
+		throw new Error(`MinerU npm shim 必须是普通文件：${resolved}`);
 	}
+	const shim = fs.readFileSync(resolved, "utf8");
+	const entry = resolveNpmShimEntry(resolved, shim);
+	if (entry) return { command: process.execPath, baseArgs: [entry] };
 	throw new Error(
 		`无法从 npm shim 解析 MinerU 入口脚本：${resolved}。请在设置中直接配置其 node_modules 下的 .js 入口文件`,
 	);
@@ -140,6 +199,23 @@ function sha256File(file: string): string {
 
 function sha256Bytes(bytes: Buffer): string {
 	return createHash("sha256").update(bytes).digest("hex");
+}
+
+function portableBasename(value: string): string {
+	const normalized = String(value || "").trim().replace(/\\/g, "/").replace(/\/+$/, "");
+	return normalized.slice(normalized.lastIndexOf("/") + 1);
+}
+
+function normalizeExtractorVersion(value: string): string {
+	const bounded = String(value || "").slice(0, 1000);
+	const candidate = /(?:^|[^0-9A-Za-z.+-])v?([0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?=$|[^0-9A-Za-z.+-])/i.exec(bounded)?.[1] || "";
+	const identifier = "(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)";
+	const strictSemver = new RegExp(
+		`^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)`
+		+ `(?:-${identifier}(?:\\.${identifier})*)?`
+		+ "(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$",
+	);
+	return candidate && strictSemver.test(candidate) ? candidate : "unknown";
 }
 
 function listFilesRecursive(root: string): string[] {
@@ -346,11 +422,12 @@ function buildManifest(inputs: {
 		schema_version: 1,
 		extractor: "mineru-open-api",
 		extractor_version: inputs.extractorVersion,
-		extractor_executable: inputs.extractorExecutable,
+		// Keep the manifest portable and avoid persisting host-specific paths.
+		extractor_executable: portableBasename(inputs.extractorExecutable),
 		created_at: inputs.createdIso,
 		processing_depth: "conversion-only",
 		source: {
-			path: inputs.sourcePdf,
+			path: portableBasename(inputs.sourcePdf),
 			size: sourceStat.size,
 			sha256: sha256File(inputs.sourcePdf),
 		},
@@ -374,6 +451,182 @@ function buildManifest(inputs: {
 	};
 }
 
+function createOnlyError(citekey: string, concurrent = false, stagingDetail = ""): Error {
+	const detail = concurrent ? "（发布期间出现并发目标）" : "";
+	return new Error(`papers/${citekey} 已存在${detail}${stagingDetail}，轻量入库不会覆盖（请更换 citekey 或使用完整入库）`);
+}
+
+function isPathInside(rootPath: string, candidatePath: string): boolean {
+	const relative = path.relative(rootPath, candidatePath);
+	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function realPathSync(targetPath: string): string {
+	return fs.realpathSync.native
+		? fs.realpathSync.native(targetPath)
+		: fs.realpathSync(targetPath);
+}
+
+/**
+ * Resolve papers/ only after proving that the direct Vault child is a normal
+ * directory whose real path remains inside the real Vault root. In particular,
+ * a pre-existing Windows junction must never redirect staging/source.pdf to a
+ * location outside the active Vault.
+ */
+function ensureTrustedPapersRoot(vaultRoot: string): string {
+	const configuredVaultRoot = path.resolve(vaultRoot);
+	let vaultStats: fs.Stats;
+	try {
+		vaultStats = fs.lstatSync(configuredVaultRoot);
+	} catch {
+		throw new Error("当前 Vault 根目录不存在或不可访问");
+	}
+	if (!vaultStats.isDirectory() && !vaultStats.isSymbolicLink()) {
+		throw new Error("当前 Vault 根路径不是目录");
+	}
+	const realVaultRoot = realPathSync(configuredVaultRoot);
+	const papersRoot = path.join(configuredVaultRoot, "papers");
+	try {
+		fs.mkdirSync(papersRoot);
+	} catch (error) {
+		const code = error && typeof error === "object" && "code" in error
+			? String(error.code)
+			: "";
+		if (code !== "EEXIST") throw error;
+	}
+	const directStats = fs.lstatSync(papersRoot);
+	if (directStats.isSymbolicLink()) {
+		throw new Error("Vault 的 papers 目录不能是符号链接或 junction");
+	}
+	if (!directStats.isDirectory()) throw new Error("Vault 的 papers 路径不是目录");
+	const realPapersRoot = realPathSync(papersRoot);
+	if (!isPathInside(realVaultRoot, realPapersRoot)) {
+		throw new Error("Vault 的 papers 目录解析到当前 Vault 之外");
+	}
+	return papersRoot;
+}
+
+function errorDetail(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function cleanPublishStaging(
+	stagingContainer: string,
+	papersRoot: string,
+	citekey: string,
+): boolean {
+	const relative = path.relative(papersRoot, stagingContainer);
+	if (
+		!relative
+		|| path.dirname(relative) !== "."
+		|| !path.basename(relative).startsWith(`.${citekey}.staging-`)
+	) {
+		console.warn("Refused to clean an unexpected MinerU publish staging path", stagingContainer);
+		return false;
+	}
+	try {
+		if (fs.existsSync(stagingContainer) && fs.lstatSync(stagingContainer).isSymbolicLink()) {
+			console.warn("Refused to recursively clean a symlinked MinerU staging directory", stagingContainer);
+			return false;
+		}
+		fs.rmSync(stagingContainer, { recursive: true, force: true });
+		return !fs.existsSync(stagingContainer);
+	} catch (cleanupError) {
+		console.warn("Could not clean failed MinerU vault staging directory", cleanupError);
+		return false;
+	}
+}
+
+function retainedStagingDetail(cleaned: boolean, stagingContainer: string): string {
+	return cleaned ? "" : `；staging 清理失败并保留：${path.basename(stagingContainer)}`;
+}
+
+/**
+ * Copies a fully validated package into a hidden staging directory on the
+ * same filesystem as papers/, then exposes it with one directory rename.
+ * Failed copies/renames are cleaned on a best-effort basis; if cleanup itself
+ * fails, only the named hidden staging directory can remain. The final citekey
+ * directory is never populated incrementally.
+ */
+function publishValidatedPackageAtomically(
+	packageRoot: string,
+	papersRoot: string,
+	citekey: string,
+	context: MineruPublishContext,
+	customOps?: Partial<MineruPublishOps>,
+): string {
+	const packageTarget = path.join(papersRoot, citekey);
+	if (fs.existsSync(packageTarget)) throw createOnlyError(citekey, true);
+
+	const stagingContainer = fs.mkdtempSync(path.join(papersRoot, `.${citekey}.staging-`));
+	const stagedPackage = path.join(stagingContainer, "package");
+	const copyPackage = customOps?.copyPackage
+		|| ((source: string, destination: string): void => {
+			fs.cpSync(source, destination, { recursive: true, force: false, errorOnExist: true });
+		});
+	const renamePackage = customOps?.renamePackage
+		|| ((source: string, destination: string): void => fs.renameSync(source, destination));
+
+	try {
+		copyPackage(packageRoot, stagedPackage);
+	} catch (error) {
+		const cleaned = cleanPublishStaging(stagingContainer, papersRoot, citekey);
+		throw new Error(
+			`MinerU 包复制到同卷 staging 失败；最终目录未创建${retainedStagingDetail(cleaned, stagingContainer)}；${errorDetail(error)}`,
+		);
+	}
+
+	try {
+		if (context.signal.aborted) throw new Error("任务已取消");
+		if (context.validateBeforeCommit) {
+			const articleMarkdown = fs.readFileSync(path.join(stagedPackage, "article.md"), "utf8");
+			context.validateBeforeCommit(articleMarkdown);
+		}
+		if (context.signal.aborted) throw new Error("任务已取消");
+	} catch (error) {
+		const cleaned = cleanPublishStaging(stagingContainer, papersRoot, citekey);
+		const detail = retainedStagingDetail(cleaned, stagingContainer);
+		if (error instanceof MineruPreCommitValidationError) {
+			throw new MineruPreCommitValidationError(error.message, {
+				cleanupFailed: !cleaned,
+				stagingBasename: cleaned ? "" : path.basename(stagingContainer),
+			});
+		}
+		throw new Error(
+			`MinerU 包发布前校验失败；最终目录未创建${detail}；${errorDetail(error)}`,
+		);
+	}
+
+	// Re-check after the potentially long copy. Correct concurrent publishers
+	// expose a complete, non-empty directory with rename, so a later rename
+	// also fails without replacing their package on supported desktop hosts.
+	if (fs.existsSync(packageTarget)) {
+		const cleaned = cleanPublishStaging(stagingContainer, papersRoot, citekey);
+		throw createOnlyError(citekey, true, retainedStagingDetail(cleaned, stagingContainer));
+	}
+	try {
+		renamePackage(stagedPackage, packageTarget);
+	} catch (error) {
+		const targetExists = fs.existsSync(packageTarget);
+		const cleaned = cleanPublishStaging(stagingContainer, papersRoot, citekey);
+		if (targetExists) {
+			throw createOnlyError(citekey, true, retainedStagingDetail(cleaned, stagingContainer));
+		}
+		throw new Error(
+			`MinerU 包原子提交失败；最终目录未创建${retainedStagingDetail(cleaned, stagingContainer)}；${errorDetail(error)}`,
+		);
+	}
+
+	// rename moved the only child away; removing an empty container is safe and
+	// non-recursive. Failure here does not invalidate the committed package.
+	try {
+		fs.rmdirSync(stagingContainer);
+	} catch (cleanupError) {
+		console.warn("Could not clean empty MinerU vault staging directory", cleanupError);
+	}
+	return packageTarget;
+}
+
 /**
  * Runs MinerU on the user-authorized PDF and publishes a reader-compatible
  * package into the active vault — create-only, abortable, no Python and no
@@ -382,7 +635,7 @@ function buildManifest(inputs: {
 export async function publishMineruPackage(
 	deps: MineruPublishDeps,
 	args: MineruPublishArgs,
-	context: { signal: AbortSignal; timeoutMs: number },
+	context: MineruPublishContext,
 ): Promise<MineruPackageReceipt> {
 	if (context.signal.aborted) throw new Error("任务已取消");
 	if (!deps.mineruExecutable.trim()) throw new Error("未配置 MinerU CLI（npm 全局安装 mineru-open-api 后在设置中配置）");
@@ -395,9 +648,10 @@ export async function publishMineruPackage(
 		throw new Error(`来源 PDF 不存在：${source}`);
 	}
 	const pages = normalizePagesValue(args.pages);
-	const packageTarget = path.join(deps.vaultRoot, "papers", args.citekey);
+	const initialPapersRoot = ensureTrustedPapersRoot(deps.vaultRoot);
+	const packageTarget = path.join(initialPapersRoot, args.citekey);
 	if (fs.existsSync(packageTarget)) {
-		throw new Error(`papers/${args.citekey} 已存在，轻量入库不会覆盖（请更换 citekey 或使用完整入库）`);
+		throw createOnlyError(args.citekey);
 	}
 	const resolved = resolveMineruCommand(deps.mineruExecutable);
 	const stageRoot = deps.stageRoot || os.tmpdir();
@@ -414,8 +668,7 @@ export async function publishMineruPackage(
 			timeoutMs: 15_000,
 			signal: context.signal,
 		}).catch(() => ({ exitCode: 1, stdout: "", stderr: "" }));
-		const extractorVersion = versionResult.stdout.trim().split(/\r?\n/)
-			.find((line) => line.trim()) || "unknown";
+		const extractorVersion = normalizeExtractorVersion(versionResult.stdout);
 
 		const publishTimeoutMs = Math.min(
 			context.timeoutMs,
@@ -472,8 +725,17 @@ export async function publishMineruPackage(
 			"utf8",
 		);
 
-		fs.cpSync(packageRoot, packageTarget, { recursive: true, force: false, errorOnExist: true });
-		return { packagePath: packageTarget, validation };
+		// Re-resolve immediately before creating same-volume staging: a papers/
+		// junction introduced during the long remote extraction must fail closed.
+		const commitPapersRoot = ensureTrustedPapersRoot(deps.vaultRoot);
+		const committedPath = publishValidatedPackageAtomically(
+			packageRoot,
+			commitPapersRoot,
+			args.citekey,
+			context,
+			deps.publishOps,
+		);
+		return { packagePath: committedPath, validation };
 	} finally {
 		try {
 			fs.rmSync(stage, { recursive: true, force: true });

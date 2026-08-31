@@ -5,6 +5,7 @@ import type {
 	AgentTool,
 	AgentToolCallReceipt,
 	AgentToolContext,
+	AgentToolReceiptData,
 } from "./types";
 
 const DEFAULT_MAX_STEPS = 10;
@@ -12,6 +13,16 @@ const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_TOOL_OUTPUT_CHARS = 60000;
 const DEFAULT_MAX_TOOL_RESULT_CHARS = 12000;
 const FINAL_ACTION = "final";
+const ARGUMENT_VALUE_CHAR_LIMIT = 400;
+const RECEIPT_QUERY_CHAR_LIMIT = 1200;
+const RECEIPT_VALUE_CHAR_LIMIT = 1200;
+const RECEIPT_PATH_LIMIT = 200;
+const RECEIPT_VALUE_LIST_LIMIT = 50;
+const RECEIPT_QUERY_TERM_LIMIT = 50;
+const RECEIPT_CANDIDATE_LIMIT = 50;
+const RECEIPT_BIBLIOGRAPHIC_RECORD_LIMIT = 20;
+const RECEIPT_YEAR_CHAR_LIMIT = 32;
+const RECEIPT_EVIDENCE_CHAR_LIMIT = 12000;
 
 interface ParsedModelTurn {
 	action: string;
@@ -106,10 +117,104 @@ function describeToolArguments(args: Record<string, unknown>): string {
 	return entries
 		.map(([key, value]) => {
 			const text = typeof value === "string" ? value : JSON.stringify(value);
-			const compact = String(text || "").replace(/\s+/g, " ").slice(0, 80);
+			const compact = String(text || "").replace(/\s+/g, " ").slice(0, ARGUMENT_VALUE_CHAR_LIMIT);
 			return `${key}=${compact}`;
 		})
 		.join(" · ");
+}
+
+function boundedReceiptString(value: unknown, maxChars: number): string {
+	if (typeof value !== "string") return "";
+	return value
+		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.trim()
+		.slice(0, maxChars);
+}
+
+function boundedReceiptList(value: unknown, limit: number): string[] {
+	if (!Array.isArray(value)) return [];
+	const seen = new Set<string>();
+	const normalized: string[] = [];
+	for (const item of value) {
+		const text = boundedReceiptString(item, RECEIPT_VALUE_CHAR_LIMIT);
+		if (!text || seen.has(text)) continue;
+		seen.add(text);
+		normalized.push(text);
+		if (normalized.length >= limit) break;
+	}
+	return normalized;
+}
+
+/** Defensively copy and bound tool-owned facts before recording a receipt. */
+export function normalizeToolReceiptData(value: unknown): AgentToolReceiptData | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const raw = value as Partial<AgentToolReceiptData>;
+	const query = boundedReceiptString(raw.query, RECEIPT_QUERY_CHAR_LIMIT);
+	const queryTerms = boundedReceiptList(raw.queryTerms, RECEIPT_QUERY_TERM_LIMIT);
+	const titles = boundedReceiptList(raw.titles, RECEIPT_VALUE_LIST_LIMIT);
+	const dois = boundedReceiptList(raw.dois, RECEIPT_VALUE_LIST_LIMIT);
+	const paths = boundedReceiptList(raw.paths, RECEIPT_PATH_LIMIT);
+	const candidates: NonNullable<AgentToolReceiptData["candidates"]> = [];
+	if (Array.isArray(raw.candidates)) {
+		const seen = new Set<string>();
+		for (const item of raw.candidates) {
+			if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+			const record = item as { path?: unknown; title?: unknown };
+			const path = boundedReceiptString(record.path, RECEIPT_VALUE_CHAR_LIMIT);
+			const title = boundedReceiptString(record.title, RECEIPT_VALUE_CHAR_LIMIT);
+			if (!path) continue;
+			const key = `${path}\u0000${title}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			candidates.push({ path, title });
+			if (candidates.length >= RECEIPT_CANDIDATE_LIMIT) break;
+		}
+	}
+	const bibliographicRecords: NonNullable<AgentToolReceiptData["bibliographicRecords"]> = [];
+	if (Array.isArray(raw.bibliographicRecords)) {
+		const seen = new Set<string>();
+		for (const item of raw.bibliographicRecords) {
+			if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+			const record = item as {
+				title?: unknown;
+				doi?: unknown;
+				authors?: unknown;
+				year?: unknown;
+			};
+			const normalized = {
+				title: boundedReceiptString(record.title, RECEIPT_VALUE_CHAR_LIMIT),
+				doi: boundedReceiptString(record.doi, RECEIPT_VALUE_CHAR_LIMIT),
+				authors: boundedReceiptString(record.authors, RECEIPT_VALUE_CHAR_LIMIT),
+				year: boundedReceiptString(record.year, RECEIPT_YEAR_CHAR_LIMIT),
+			};
+			if (!normalized.title && !normalized.doi && !normalized.authors && !normalized.year) continue;
+			const key = [normalized.title, normalized.doi, normalized.authors, normalized.year].join("\u0000");
+			if (seen.has(key)) continue;
+			seen.add(key);
+			bibliographicRecords.push(normalized);
+			if (bibliographicRecords.length >= RECEIPT_BIBLIOGRAPHIC_RECORD_LIMIT) break;
+		}
+	}
+	if (
+		!query
+		&& !queryTerms.length
+		&& !titles.length
+		&& !dois.length
+		&& !paths.length
+		&& !candidates.length
+		&& !bibliographicRecords.length
+	) {
+		return undefined;
+	}
+	return {
+		...(query ? { query } : {}),
+		...(queryTerms.length ? { queryTerms } : {}),
+		...(titles.length ? { titles } : {}),
+		...(dois.length ? { dois } : {}),
+		...(paths.length ? { paths } : {}),
+		...(candidates.length ? { candidates } : {}),
+		...(bibliographicRecords.length ? { bibliographicRecords } : {}),
+	};
 }
 
 export function renderToolCatalog(tools: readonly AgentTool[]): string {
@@ -312,17 +417,28 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 			}
 
 			let toolResult: string;
+			let toolResultSummary = "";
+			let toolReceiptData: AgentToolReceiptData | undefined;
 			let toolStatus = "ok";
 			try {
 				const result = await tool.execute(turn.arguments, context);
 				toolResult = result.output;
-				if (result.summary) trace(`[第 ${step} 轮] ${tool.name} → ${result.summary}`);
+				toolResultSummary = String(result.summary || "").slice(0, 500);
+				toolReceiptData = normalizeToolReceiptData(result.receiptData);
+				if (toolResultSummary) trace(`[第 ${step} 轮] ${tool.name} → ${toolResultSummary}`);
 			} catch (toolError) {
 				toolStatus = "error";
 				toolResult = toolError instanceof Error ? toolError.message : String(toolError);
 				trace(`[第 ${step} 轮] ${tool.name} 失败：${toolResult.slice(0, 200)}`);
 			}
-			toolCallReceipts.push({ tool: tool.name, ok: toolStatus === "ok", argsSummary: argSummary });
+			toolCallReceipts.push({
+				tool: tool.name,
+				ok: toolStatus === "ok",
+				argsSummary: argSummary,
+				resultSummary: toolResultSummary,
+				evidencePreview: toolStatus === "ok" ? toolResult.slice(0, RECEIPT_EVIDENCE_CHAR_LIMIT) : "",
+				...(toolStatus === "ok" && toolReceiptData ? { data: toolReceiptData } : {}),
+			});
 
 			const truncated = toolResult.length > maxToolResultChars
 				? `${toolResult.slice(0, maxToolResultChars)}\n…[结果过长，已截断]`

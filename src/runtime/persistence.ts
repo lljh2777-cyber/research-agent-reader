@@ -125,7 +125,8 @@ export function normalizeTaskRunArtifacts(value: unknown): TaskRunArtifacts | un
 
 export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 	if (!Array.isArray(value)) return [];
-	return value.slice(0, Math.max(5, Math.min(100, limit))).map((item) => {
+	const boundedLimit = Math.max(5, Math.min(100, limit));
+	const normalized = value.slice(0, 300).map((item) => {
 		const source = asRecord(item);
 		return {
 			id: String(source.id || ""),
@@ -141,9 +142,23 @@ export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 			output: String(source.output || "").slice(0, 12000),
 			outputPath: String(source.outputPath || "") || undefined,
 			error: String(source.error || "").slice(0, 4000),
+			cleanupPending: source.cleanupPending === true || undefined,
+			completionPending: source.completionPending === true || undefined,
 			artifacts: normalizeTaskRunArtifacts(source.artifacts),
 		};
 	});
+	return selectTaskRunsForPersistence(normalized, boundedLimit);
+}
+
+function selectTaskRunsForPersistence(taskRuns: TaskRun[], limit: number): TaskRun[] {
+	const primary = taskRuns.slice(0, limit);
+	const exceptional = taskRuns.slice(limit).filter((run) => (
+		run.status === "running"
+		|| run.status === "queued"
+		|| run.cleanupPending === true
+		|| run.completionPending === true
+	));
+	return [...primary, ...exceptional].slice(0, 300);
 }
 
 export function hasPlaintextCredentialFields(value: unknown): boolean {
@@ -186,7 +201,7 @@ export function createPersistenceSnapshot(state: DashboardPersistenceState): Das
 	const queryMessageLimit = Math.max(10, Math.min(100, state.settings.queryMessageLimit || 30));
 	return JSON.parse(JSON.stringify({
 		settings: sanitizeSettingsForStorage(state.settings),
-		taskRuns: state.taskRuns.slice(0, taskHistoryLimit).map((run) => ({
+		taskRuns: selectTaskRunsForPersistence(state.taskRuns, taskHistoryLimit).map((run) => ({
 			...run,
 			output: String(run.output || "").slice(0, 12000),
 			error: String(run.error || "").slice(0, 4000),

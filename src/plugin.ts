@@ -41,9 +41,17 @@ import { DashboardLifecycleState } from "./runtime/lifecycle-state";
 import {
 	DashboardPersistence,
 	hasPlaintextCredentialFields,
+	normalizeTaskRunArtifacts,
 	normalizeStoredTaskRuns,
 	sanitizeSettingsForStorage,
 } from "./runtime/persistence";
+import {
+	cleanupTaskRunStorage,
+	deleteTaskRunOutput as deletePersistedTaskRunOutput,
+	readTaskRunCompletion,
+	readTaskRunOutput,
+	writeTaskRunOutput,
+} from "./runtime/task-output-persistence";
 import { ProcessExecutionService } from "./runtime/process-execution";
 import { AgentLoopService, type AgentLoopRunOutcome } from "./agent/agent-loop-service";
 import type { PaperIngestFlowOptions } from "./agent/paper-ingest-flow";
@@ -225,7 +233,6 @@ export default class AgentDashboardPlugin extends Plugin {
 		getTavilySecret: () => this.getTavilySecretValue(),
 		getLexicalRetriever: () => this.getLexicalRetriever(),
 		getVaultRoot: () => this.getActiveVaultRoot(),
-		pathExists: (absolutePath) => fs.existsSync(absolutePath),
 		runMineruCommand: (request) => this.runMineruProcess(request),
 	});
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
@@ -244,6 +251,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	>();
 	private mineruReaderActivationQueue: Promise<void> = Promise.resolve();
 	private readonly readerAutoOpenBypass = new Set<string>();
+	private readonly finishingTaskRunIds = new Set<string>();
+	private taskRunMutationQueue: Promise<void> = Promise.resolve();
 	obsidianCliProbeState: ObsidianCliProbeState = { status: "idle" };
 
 	get providerRuntimeState(): Map<string, ProviderRuntimeEntry> {
@@ -272,6 +281,61 @@ export default class AgentDashboardPlugin extends Plugin {
 			}),
 		});
 		return this.persistence;
+	}
+
+	private withTaskRunMutation<T>(operation: () => Promise<T>): Promise<T> {
+		const result = this.taskRunMutationQueue.then(operation, operation);
+		this.taskRunMutationQueue = result.then(() => undefined, () => undefined);
+		return result;
+	}
+
+	private async persistTaskRunRetention(
+		candidates: TaskRun[],
+		limit: number,
+	): Promise<void> {
+		const kept = candidates.slice(0, limit);
+		const overflow = candidates.slice(limit);
+		const evictable = overflow.filter((oldRun) => (
+			oldRun.status !== "running"
+			&& oldRun.status !== "queued"
+			&& !oldRun.cleanupPending
+		));
+		const protectedOverflow = overflow.filter((oldRun) => !evictable.includes(oldRun));
+		if (!evictable.length) {
+			this.taskRuns = [...kept, ...protectedOverflow];
+			await this.saveSettings();
+			return;
+		}
+
+		// Phase 1: keep every to-be-deleted run discoverable with a durable
+		// cleanup marker. A crash before/during unlink can resume safely on load.
+		const evictableIds = new Set(evictable.map((run) => run.id));
+		this.taskRuns = candidates.map((run) => (
+			evictableIds.has(run.id) ? { ...run, cleanupPending: true } : run
+		));
+		await this.saveSettings();
+
+		const cleanupFailures: TaskRun[] = [];
+		for (const oldRun of evictable) {
+			try {
+				await this.deleteTaskRunOutput(oldRun.id, oldRun.outputPath);
+			} catch (error) {
+				cleanupFailures.push({ ...oldRun, cleanupPending: true });
+				console.warn(`Could not reclaim Dashboard task output for ${oldRun.id}`, error);
+			}
+		}
+		const protectedIds = new Set([...kept, ...protectedOverflow].map((run) => run.id));
+		const failedById = new Map(cleanupFailures.map((item) => [item.id, item]));
+		this.taskRuns = candidates
+			.filter((item) => protectedIds.has(item.id) || failedById.has(item.id))
+			.map((item) => failedById.get(item.id) || item);
+		try {
+			await this.saveSettings();
+		} catch (error) {
+			// Disk still has phase-1 markers, so startup can converge even though
+			// this final reference-removal save failed.
+			console.warn("Could not finalize Dashboard task-output cleanup markers", error);
+		}
 	}
 
 	async onload(): Promise<void> {
@@ -862,6 +926,11 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.settings.queryMessageLimit = Number.isFinite(queryMessageLimit)
 			? Math.max(10, Math.min(100, queryMessageLimit))
 			: DEFAULT_SETTINGS.queryMessageLimit;
+		const storedTaskRunRecords = new Map<string, Record<string, unknown>>(
+			(Array.isArray(stored.taskRuns) ? stored.taskRuns.slice(0, 300) : [])
+				.map((item) => asRecord(item))
+				.map((record) => [String(record.id || ""), record]),
+		);
 		this.taskRuns = normalizeStoredTaskRuns(stored.taskRuns, this.settings.taskHistoryLimit);
 		this.querySessions = Array.isArray(stored.querySessions)
 			? stored.querySessions
@@ -876,6 +945,80 @@ export default class AgentDashboardPlugin extends Plugin {
 			this.settings.toolkitRoot = this.inferToolkitRoot();
 		}
 		let changed = migratedLegacyKeys;
+		// Resume only explicitly journaled cleanup. A canonical sidecar without a
+		// matching marker remains recovery data and is never swept merely because
+		// data.json is temporarily incomplete or restored from an older copy.
+		const retainedTaskRuns: TaskRun[] = [];
+		for (const run of this.taskRuns) {
+			if (!run.cleanupPending) {
+				retainedTaskRuns.push(run);
+				continue;
+			}
+			try {
+				await this.deleteTaskRunOutput(run.id, run.outputPath);
+				changed = true;
+			} catch (error) {
+				retainedTaskRuns.push(run);
+				console.warn(`Could not resume Dashboard task-output cleanup for ${run.id}`, error);
+			}
+		}
+		this.taskRuns = retainedTaskRuns;
+		try {
+			const cleanup = await cleanupTaskRunStorage(
+				this.settings.toolkitRoot,
+				new Set(this.taskRuns.map((run) => run.id)),
+			);
+			if (cleanup.failures.length) {
+				console.warn("Could not reclaim some Dashboard task-output files", cleanup.failures);
+			}
+		} catch (error) {
+			console.warn("Could not inspect Dashboard task-output storage", error);
+		}
+		// A terminal output sidecar is committed before data.json. Reconcile it
+		// before the generic running→interrupted recovery so a failed final
+		// settings save cannot erase a real completion or its artifacts.
+		for (const run of this.taskRuns) {
+			if (run.cleanupPending) continue;
+			if (run.completionPending) {
+				run.completionPending = undefined;
+				changed = true;
+			}
+			const completion = readTaskRunCompletion(this.settings.toolkitRoot, run.id);
+			const activeRun = run.status === "running" || run.status === "queued";
+			if (
+				!completion
+				|| completion.actionId !== run.actionId
+				|| completion.startedAt !== run.startedAt
+				|| (!activeRun && (
+					run.finishedAt !== completion.finishedAt
+					|| run.status !== completion.status
+					|| run.exitCode !== completion.exitCode
+				))
+			) continue;
+			const recoveredArtifacts = normalizeTaskRunArtifacts(completion.artifacts);
+			const recoveredOutput = completion.output.slice(0, 12000);
+			const recoveredError = completion.error.slice(0, 4000);
+			const recoveredSummary = completion.summary.slice(0, 4000);
+			const differs = run.status !== completion.status
+				|| run.exitCode !== completion.exitCode
+				|| run.finishedAt !== completion.finishedAt
+				|| run.output !== recoveredOutput
+				|| run.outputPath !== completion.relativePath
+				|| run.error !== recoveredError
+				|| run.summary !== recoveredSummary
+				|| JSON.stringify(run.artifacts) !== JSON.stringify(recoveredArtifacts);
+			if (differs) {
+				run.status = completion.status;
+				run.exitCode = completion.exitCode;
+				run.finishedAt = completion.finishedAt;
+				run.output = recoveredOutput;
+				run.outputPath = completion.relativePath;
+				run.error = recoveredError;
+				run.summary = recoveredSummary;
+				run.artifacts = recoveredArtifacts;
+				changed = true;
+			}
+		}
 		const normalizedReaderFolders = normalizeReaderMarkdownFolders(
 			storedSettings.readerMarkdownFolders ?? DEFAULT_SETTINGS.readerMarkdownFolders,
 		);
@@ -884,16 +1027,6 @@ export default class AgentDashboardPlugin extends Plugin {
 			!== JSON.stringify(normalizedReaderFolders)
 		) changed = true;
 		this.settings.readerMarkdownFolders = normalizedReaderFolders;
-		for (const run of this.taskRuns) {
-			if (!run.outputPath && String(run.output || "").length > 12000) {
-				try {
-					run.outputPath = await this.persistTaskRunOutput(run);
-					changed = true;
-				} catch (error) {
-					console.warn("Could not migrate Dashboard run output", error);
-				}
-			}
-		}
 		if (
 			JSON.stringify(storedSettings.providerProfiles || []) !== JSON.stringify(normalizedProfiles)
 			|| this.hasPlaintextCredentialFields(storedSettings)
@@ -1143,6 +1276,35 @@ export default class AgentDashboardPlugin extends Plugin {
 				error: "Obsidian 或插件在任务完成前关闭，运行状态已标记为中断。",
 			};
 		});
+		// Migrate legacy inline outputs only after every TaskRun state migration.
+		// Schema-v2 sidecars bind status/timestamps, so writing them earlier would
+		// make a subsequently interrupted/normalized run unreadable on reload.
+		for (const run of this.taskRuns) {
+			if (run.cleanupPending) continue;
+			const legacyFullOutput = String(storedTaskRunRecords.get(run.id)?.output || "");
+			if (!run.outputPath && legacyFullOutput.length > 12000) {
+				try {
+					const outputPath = await this.persistTaskRunOutput({
+						...run,
+						output: legacyFullOutput,
+					});
+					if (!outputPath) throw new Error("插件本地任务输出目录不可用");
+					run.outputPath = outputPath;
+					changed = true;
+				} catch (error) {
+					console.warn("Could not migrate Dashboard run output", error);
+					throw new Error(
+						`无法安全迁移旧版完整任务输出（${run.id}）；为避免截断原 data.json，本次加载已停止。`,
+					);
+				}
+			}
+		}
+		if (this.taskRuns.length > this.settings.taskHistoryLimit) {
+			await this.persistTaskRunRetention(
+				[...this.taskRuns],
+				this.settings.taskHistoryLimit,
+			);
+		}
 		if (changed || !stored.settings) {
 			await this.saveSettings();
 		}
@@ -1420,10 +1582,58 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async clearCompletedTaskHistory(): Promise<number> {
-		const before = this.taskRuns.length;
-		this.taskRuns = this.taskRuns.filter((run) => run.status === "running" || run.status === "queued");
-		await this.saveSettings();
-		return before - this.taskRuns.length;
+		return this.withTaskRunMutation(async () => {
+			const originalRuns = [...this.taskRuns];
+			const removable = originalRuns.filter((run) => (
+				run.status !== "running"
+				&& run.status !== "queued"
+				&& !this.finishingTaskRunIds.has(run.id)
+			));
+			const removableIds = new Set(removable.map((run) => run.id));
+			// Phase 1 marker: never remove the only discoverable reference before
+			// its sidecar unlink has completed.
+			this.taskRuns = originalRuns.map((run) => (
+				removableIds.has(run.id) ? { ...run, cleanupPending: true } : run
+			));
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				this.taskRuns = originalRuns;
+				throw error;
+			}
+
+			const cleanupFailures: TaskRun[] = [];
+			let removed = 0;
+			for (const run of removable) {
+				try {
+					await this.deleteTaskRunOutput(run.id, run.outputPath);
+					removed += 1;
+				} catch (error) {
+					cleanupFailures.push({ ...run, cleanupPending: true });
+					console.warn(`Could not delete Dashboard task output for ${run.id}`, error);
+				}
+			}
+			const failedById = new Map(cleanupFailures.map((run) => [run.id, run]));
+			this.taskRuns = originalRuns
+				.filter((run) => !removableIds.has(run.id) || failedById.has(run.id))
+				.map((run) => failedById.get(run.id) || run);
+			let finalizeError: unknown = null;
+			try {
+				await this.saveSettings();
+			} catch (error) {
+				finalizeError = error;
+			}
+			if (cleanupFailures.length) {
+				throw new Error(
+					`已清理 ${removed} 条；另有 ${cleanupFailures.length} 条输出文件删除失败，记录已保留以便重试。`,
+				);
+			}
+			if (finalizeError) {
+				console.warn("Could not finalize cleared Dashboard task history", finalizeError);
+				throw new Error("输出文件已清理，但历史收尾保存失败；下次启动会继续完成对账。");
+			}
+			return removed;
+		});
 	}
 
 	async resetQueryHistory(): Promise<void> {
@@ -1711,46 +1921,22 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	getTaskRunOutput(run: TaskRun): string {
 		if (run?.outputPath) {
-			const absolutePath = path.join(
+			const output = readTaskRunOutput(
 				this.settings.toolkitRoot,
-				...String(run.outputPath).split("/"),
+				run,
+				String(run.outputPath),
 			);
-			try {
-				const payload = JSON.parse(fs.readFileSync(absolutePath, "utf8"));
-				if (typeof payload.output === "string") return payload.output;
-			} catch (error) {
-				console.warn("Could not read persisted Dashboard run output", error);
-			}
+			if (output !== null) return output;
 		}
 		return String(run?.output || "");
 	}
 
+	async deleteTaskRunOutput(runId: string, storedRelativePath = ""): Promise<boolean> {
+		return deletePersistedTaskRunOutput(this.settings.toolkitRoot, runId, storedRelativePath);
+	}
+
 	async persistTaskRunOutput(run: TaskRun): Promise<string> {
-		const output = String(run?.output || "");
-		if (!output) return "";
-		const relativePath = `tool-library/output/dashboard-runs/${run.id}.json`;
-		const absolutePath = path.join(
-			this.settings.toolkitRoot,
-			...relativePath.split("/"),
-		);
-		const temporaryPath = `${absolutePath}.tmp`;
-		await fs.promises.mkdir(path.dirname(absolutePath), { recursive: true });
-		await fs.promises.writeFile(
-			temporaryPath,
-			JSON.stringify({
-				schema_version: 1,
-				run_id: run.id,
-				action_id: run.actionId,
-				status: run.status,
-				exit_code: run.exitCode,
-				started_at: run.startedAt,
-				finished_at: run.finishedAt,
-				output,
-			}, null, 2),
-			"utf8",
-		);
-		await fs.promises.rename(temporaryPath, absolutePath);
-		return relativePath;
+		return writeTaskRunOutput(this.settings.toolkitRoot, run);
 	}
 
 	isActionRunning(actionId: string): boolean {
@@ -1900,45 +2086,114 @@ export default class AgentDashboardPlugin extends Plugin {
 		summary: string,
 		executionConfig: ExecutionConfig | null = null,
 	): Promise<TaskRun> {
-		const now = new Date().toISOString();
-		const run: TaskRun = {
-			id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-			actionId: action.id,
-			label: action.label,
-			agent: action.agent,
-			summary,
-			executionConfig,
-			status: "running",
-			startedAt: now,
-			finishedAt: "",
-			exitCode: null,
-			output: "",
-			error: "",
-		};
-		this.taskRuns = [run, ...this.taskRuns].slice(
-			0,
-			this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit,
-		);
-		await this.saveSettings();
-		return run;
+		return this.withTaskRunMutation(async () => {
+			const now = new Date().toISOString();
+			const run: TaskRun = {
+				id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+				actionId: action.id,
+				label: action.label,
+				agent: action.agent,
+				summary,
+				executionConfig,
+				status: "running",
+				startedAt: now,
+				finishedAt: "",
+				exitCode: null,
+				output: "",
+				error: "",
+			};
+			const originalRuns = [...this.taskRuns];
+			const limit = this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit;
+			const candidates = [run, ...originalRuns];
+			// Commit the new history before reclaiming any old sidecar. A failed
+			// start save restores the previous history and leaves every old output.
+			try {
+				await this.persistTaskRunRetention(candidates, limit);
+			} catch (error) {
+				this.taskRuns = originalRuns;
+				throw error;
+			}
+			return run;
+		});
+	}
+
+	async setTaskHistoryLimit(value: number): Promise<void> {
+		return this.withTaskRunMutation(async () => {
+			const nextLimit = Math.max(5, Math.min(100, Math.round(value) || 30));
+			const previousLimit = this.settings.taskHistoryLimit;
+			const previousRuns = [...this.taskRuns];
+			this.settings.taskHistoryLimit = nextLimit;
+			try {
+				await this.persistTaskRunRetention(previousRuns, nextLimit);
+			} catch (error) {
+				this.settings.taskHistoryLimit = previousLimit;
+				this.taskRuns = previousRuns;
+				throw error;
+			}
+		});
 	}
 
 	async finishTaskRun(
 		runId: string,
 		updates: TaskRunUpdate,
 	): Promise<TaskRun | null> {
-		const index = this.taskRuns.findIndex((run) => run.id === runId);
-		if (index === -1) return null;
-		this.taskRuns[index] = {
-			...this.taskRuns[index],
-			...updates,
-			finishedAt: new Date().toISOString(),
-		};
-		if (this.taskRuns[index].output && this.taskRuns[index].actionId !== "vault-lint") {
-			this.taskRuns[index].outputPath = await this.persistTaskRunOutput(this.taskRuns[index]);
-		}
-		await this.saveSettings();
-		return this.taskRuns[index];
+		return this.withTaskRunMutation(async () => {
+			const index = this.taskRuns.findIndex((run) => run.id === runId);
+			if (index === -1) return null;
+			const existingRun = this.taskRuns[index];
+			if (["done", "failed", "interrupted"].includes(existingRun.status)) {
+				return existingRun;
+			}
+			let completedRun: TaskRun = {
+				...existingRun,
+				...updates,
+				finishedAt: new Date().toISOString(),
+				completionPending: true,
+			};
+			// A newly supplied inline result supersedes any older external file.
+			// Restore outputPath only after the new full-output write succeeds.
+			if (updates.output !== undefined) completedRun.outputPath = undefined;
+			this.taskRuns[index] = completedRun;
+			this.finishingTaskRunIds.add(runId);
+			try {
+				const terminalStatus = ["done", "failed", "interrupted"].includes(completedRun.status);
+				if (terminalStatus) {
+					try {
+						const outputPath = await this.persistTaskRunOutput(completedRun);
+						if (outputPath) completedRun = { ...completedRun, outputPath };
+					} catch (error) {
+						// Keep the real in-memory outcome and bounded inline snapshot if the
+						// completion journal cannot be written. data.json is still attempted.
+						console.warn("Could not persist Dashboard completion journal; using inline snapshot", error);
+					}
+				}
+
+				// Never write through a stale array index after an awaited sidecar
+				// operation. Another task may have been prepended in the meantime.
+				completedRun = { ...completedRun, completionPending: undefined };
+				const liveIndex = this.taskRuns.findIndex((run) => (
+					run.id === completedRun.id
+						&& run.startedAt === completedRun.startedAt
+						&& run.finishedAt === completedRun.finishedAt
+				));
+				if (liveIndex !== -1) this.taskRuns[liveIndex] = completedRun;
+				const beforeRetention = [...this.taskRuns];
+				try {
+					await this.persistTaskRunRetention(
+						beforeRetention,
+						this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit,
+					);
+				} catch (error) {
+					// The sidecar is already durable. Restore the in-memory completion;
+					// stale on-disk running state can recover from that journal next load.
+					this.taskRuns = beforeRetention;
+					console.warn("Could not persist completed Dashboard task history", error);
+				}
+				return this.taskRuns.find((run) => run.id === completedRun.id) || completedRun;
+			} finally {
+				this.finishingTaskRunIds.delete(runId);
+			}
+		});
 	}
 
 	getOkfExportStatus(): OkfExportStatus {

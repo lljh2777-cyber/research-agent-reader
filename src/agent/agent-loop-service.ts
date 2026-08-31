@@ -9,6 +9,7 @@ import type {
 } from "../types/contracts";
 import type { DashboardSettings } from "../runtime/settings";
 import { runBoundedAgentLoop } from "./loop";
+import { MineruPreCommitValidationError } from "./mineru-publish";
 import {
 	buildDraftSystemPrompt,
 	buildDraftTools,
@@ -16,6 +17,7 @@ import {
 	buildIdentitySystemPrompt,
 	buildIdentityTools,
 	buildIdentityUserMessage,
+	bindIdentityMetadataFromReceipts,
 	commitSourceNote,
 	evaluateDraftPhase,
 	computeIngestOutcomeStatus,
@@ -53,8 +55,6 @@ export interface AgentLoopServiceDeps {
 	} | null;
 	/** Absolute filesystem path of the active vault, or "" when unavailable. */
 	getVaultRoot(): string;
-	/** Filesystem existence probe for toolkit-side paths; injectable for tests. */
-	pathExists(absolutePath: string): boolean;
 	/** Spawns the resolved MinerU CLI command; injectable for tests. */
 	runMineruCommand(request: {
 		command: string;
@@ -276,13 +276,16 @@ export class AgentLoopService {
 			state.duplicates.push(...identity.duplicates);
 			state.notes.push(...identity.notes);
 
+			// Bind canonical bibliographic fields before dedup validation so the
+			// searched identity and the identity eventually committed are identical.
+			bindIdentityMetadataFromReceipts(identity, identityLoop.toolCalls);
+
 			// Gate: the model must have actually done the verification work.
 			const receiptProblems = validateIdentityReceipts(identity, identityLoop.toolCalls);
 			if (receiptProblems.length) {
 				state.errors.push(`阶段一未满足插件侧凭据要求：${receiptProblems.join("；")}`);
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
-
 			if (identity.status === "conflict") {
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
@@ -297,7 +300,7 @@ export class AgentLoopService {
 			}
 			emitStatus("running", `阶段一完成 · citekey ${identity.citekey}`);
 
-			// Deterministic citekey uniqueness across vault and toolkit target.
+			// Deterministic citekey uniqueness inside the active Vault.
 			const citekeyCheck = await this.resolveCitekeyUniqueness(identity.citekey);
 			if (citekeyCheck.renamed) {
 				identity.citekey = citekeyCheck.citekey;
@@ -325,9 +328,6 @@ export class AgentLoopService {
 			}
 
 			// ---- Phase 3: note draft fields (model loop) + plugin commit ----
-			if (!ensureBudget()) {
-				return this.finish(state, options, profileId, resolved, emitStatus);
-			}
 			const draftDecision = evaluateDraftPhase(
 				options,
 				state.receipts.articleVaultPath,
@@ -339,6 +339,9 @@ export class AgentLoopService {
 				state.notes.push(draftDecision.downgradeNote);
 			}
 			if (draftDecision.run) {
+				if (!ensureBudget()) {
+					return this.finish(state, options, profileId, resolved, emitStatus);
+				}
 				emitStatus("running", "阶段三 · 整理文章 Wiki 字段");
 				const draftLoop = await runBoundedAgentLoop({
 					system: buildDraftSystemPrompt(options, identity.citekey, identity.title),
@@ -359,45 +362,47 @@ export class AgentLoopService {
 					state.errors.push(deriveStopError(state, draftLoop));
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}
-					state.draft = parseNoteDraft(draftLoop.final);
-					if (!state.draft) {
-						state.errors.push("阶段三未返回可解析的笔记字段");
+				state.draft = parseNoteDraft(draftLoop.final);
+				if (!state.draft) {
+					state.errors.push("阶段三未返回可解析的笔记字段");
+				} else {
+					state.notes.push(...state.draft.notes);
+					// One resolved translation is used for both the note and final
+					// result. Empty title_zh is a hard schema failure: never create a
+					// source note that violates the public vault contract.
+					const resolvedTitleZh = state.draft.title_zh || identity.title_zh || "";
+					if (!resolvedTitleZh) {
+						state.errors.push("title_zh 未能审校，未创建文章 Wiki");
 					} else {
-						state.notes.push(...state.draft.notes);
-						// One resolved translation used for both the note and the
-						// final result, so they can never diverge.
-						const resolvedTitleZh = state.draft.title_zh || identity.title_zh || "";
-						if (!resolvedTitleZh) {
-							state.notes.push("title_zh 未能审校，笔记保留空值");
-						}
 						state.draft.title_zh = resolvedTitleZh;
 						try {
-						const receipt = await commitSourceNote(
-							toolDeps.vault,
-							identity.citekey,
-							{
-								title: identity.title || state.draft.title,
-								title_zh: state.draft.title_zh,
-								authors: identity.authors,
-								year: identity.year,
-								doi: identity.doi,
-								researchQuestion: state.draft.researchQuestion,
-								conclusion: state.draft.conclusion,
-								motivation: state.draft.motivation,
-								evidenceGaps: state.draft.evidenceGaps,
-								notes: [],
-							},
-							"",
-							{ signal: abortController.signal },
-						);
-						state.journal.record(receipt);
-						state.receipts.writes = state.journal.receipts();
-					} catch (commitError) {
-						const message = commitError instanceof Error ? commitError.message : String(commitError);
-						if (message.includes("已存在同名文件")) {
-							state.conflicts.push(`笔记写入未完成：${message}`);
-						} else {
-							state.errors.push(`笔记写入失败：${message}`);
+							const receipt = await commitSourceNote(
+								toolDeps.vault,
+								identity.citekey,
+								{
+									title: identity.title || state.draft.title,
+									title_zh: state.draft.title_zh,
+									authors: identity.authors,
+									year: identity.year,
+									doi: identity.doi,
+									researchQuestion: state.draft.researchQuestion,
+									conclusion: state.draft.conclusion,
+									motivation: state.draft.motivation,
+									evidenceGaps: state.draft.evidenceGaps,
+									notes: [],
+								},
+								"",
+								{ signal: abortController.signal },
+							);
+							state.journal.record(receipt);
+							state.receipts.writes = state.journal.receipts();
+						} catch (commitError) {
+							const message = commitError instanceof Error ? commitError.message : String(commitError);
+							if (message.includes("已存在同名文件")) {
+								state.conflicts.push(`笔记写入未完成：${message}`);
+							} else {
+								state.errors.push(`笔记写入失败：${message}`);
+							}
 						}
 					}
 				}
@@ -448,7 +453,17 @@ export class AgentLoopService {
 					timeoutSeconds: Math.round(timeoutMs / 1000),
 					includeSourcePdf: options.mineruIncludeSourcePdf,
 				},
-				{ signal: abortController.signal, timeoutMs },
+				{
+					signal: abortController.signal,
+					timeoutMs,
+					validateBeforeCommit: (articleMarkdown) => {
+						if (!articleMarkdownTitleMatches(articleMarkdown, identity.title)) {
+							throw new MineruPreCommitValidationError(
+								`article.md 开头与核验标题不一致：${identity.title}`,
+							);
+						}
+					},
+				},
 			);
 			const vaultRoot = this.deps.getVaultRoot();
 			if (!vaultRoot) {
@@ -462,48 +477,43 @@ export class AgentLoopService {
 			);
 			if (!state.receipts.articleVaultPath) {
 				state.errors.push(
-					`MinerU 发布位置（${state.receipts.mineruPackage.packagePath}）不在当前 Vault 内；结果未计入本次入库。请确认当前 Vault 即工具链目录下的 knowledge-base 文件夹（设置 → 工具链与运行环境）`,
+					`MinerU 发布位置（${state.receipts.mineruPackage.packagePath}）不在当前 Vault 内；结果未计入本次入库。请检查当前 Vault 与发布回执路径。`,
 				);
 				return;
 			}
 			state.notes.push(`原文包已发布：${state.receipts.articleVaultPath.replace(/\/article\.md$/, "")}`);
-			state.titleConflict = !(await articleHeadContainsTitle(
-				toolDeps.vault,
-				state.receipts.articleVaultPath,
-				identity.title,
-			));
-			if (state.titleConflict) {
-				state.conflicts.push(`article.md 开头与核验标题不一致：${identity.title}`);
-			}
+			// The exact same-volume package copy was title-validated synchronously
+			// immediately before its atomic rename. Do not re-read through Obsidian's
+			// asynchronous TFile index here: a just-published article may not be in
+			// metadataCache yet even though the committed package is complete.
 		} catch (mineruError) {
 			if (state.cancelled) return;
+			if (mineruError instanceof MineruPreCommitValidationError) {
+				state.titleConflict = true;
+				state.conflicts.push(mineruError.message);
+				if (mineruError.cleanupFailed) {
+					state.errors.push(
+						`MinerU 标题冲突后 staging 清理失败并保留：${mineruError.stagingBasename}`,
+					);
+				}
+				return;
+			}
 			state.errors.push(
 				`MinerU 提取失败：${mineruError instanceof Error ? mineruError.message : String(mineruError)}`,
 			);
 		}
 	}
 
-	/** Vault + toolkit publish target existence check for the citekey. */
+	/** Active-Vault note/package existence check for the citekey. */
 	private async resolveCitekeyUniqueness(
 		base: string,
 	): Promise<{ citekey: string; renamed: boolean }> {
 		const vault = this.deps.app.vault;
-		const toolkitRoot = String(this.deps.getSettings().toolkitRoot || "").replace(/[\\/]+$/, "");
 		const exists = async (citekey: string): Promise<boolean> => {
 			const notePath = `wiki/sources/${citekey}.md`;
-			const packagePaths = [
-				`papers/${citekey}/article.md`,
-				`knowledge-base/papers/${citekey}/article.md`,
-			];
+			const packagePath = `papers/${citekey}/article.md`;
 			if (vault.getAbstractFileByPath(notePath)) return true;
-			for (const candidate of packagePaths) {
-				if (await vault.adapter.exists(candidate, true)) return true;
-			}
-			if (toolkitRoot) {
-				const toolkitPackage = `${toolkitRoot}/knowledge-base/papers/${citekey}`;
-				if (this.deps.pathExists(toolkitPackage)) return true;
-			}
-			return false;
+			return vault.adapter.exists(packagePath, true);
 		};
 		return resolveUniqueCitekey(base, exists);
 	}
@@ -616,14 +626,18 @@ export class AgentLoopService {
 				? "completed"
 				: "failed";
 
+		const filesWritten = [
+			...(state.receipts.articleVaultPath ? [state.receipts.articleVaultPath] : []),
+			...state.journal.paths(),
+		];
 		const result: PaperIngestFinalResult = {
 			status,
 			citekey: state.identity?.citekey || "",
 			title: state.identity?.title || state.draft?.title || "",
-			title_zh: state.identity?.title_zh || state.draft?.title_zh || "",
+			title_zh: resolvePaperTitleZh(state.identity, state.draft),
 			articlePath: state.receipts.articleVaultPath,
 			wikiPath: state.receipts.writes[0]?.path || "",
-			filesWritten: [...state.journal.paths()],
+			filesWritten,
 			duplicates: [...state.duplicates],
 			conflicts,
 			errors,
@@ -656,7 +670,7 @@ export class AgentLoopService {
 			events: [],
 			result,
 			loopStatus,
-			filesWritten: [...state.journal.paths()],
+			filesWritten: [...result.filesWritten],
 			artifacts,
 			executionConfig: {
 				backend: "direct-api",
@@ -668,6 +682,14 @@ export class AgentLoopService {
 			},
 		};
 	}
+}
+
+/** Draft normalization owns the translation committed to the Wiki note. */
+export function resolvePaperTitleZh(
+	identity: Pick<PaperIngestIdentity, "title_zh"> | null,
+	draft: Pick<PaperIngestNoteDraft, "title_zh"> | null,
+): string {
+	return draft?.title_zh || identity?.title_zh || "";
 }
 
 /** Loop-level stop reason, reclassified when the budget timer fired. */
@@ -700,19 +722,64 @@ export async function articleHeadContainsTitle(
 	articleVaultPath: string,
 	title: string,
 ): Promise<boolean> {
-	const normalizedTitle = normalizeTitle(title);
-	// Empty or very short titles cannot pass the gate on their own.
-	if (normalizedTitle.replace(/\s/g, "").length < 8) return false;
 	const file = deps.app.vault.getAbstractFileByPath(articleVaultPath);
 	if (!file) return false;
 	const content = await deps.app.vault.read(file);
-	const head = normalizeTitle(content.slice(0, 6000));
-	const prefixLength = Math.min(48, normalizedTitle.length);
-	return head.includes(normalizedTitle.slice(0, prefixLength));
+	return articleMarkdownTitleMatches(content, title);
+}
+
+/** Pure title gate shared by pre-commit staging and post-publish read-back. */
+export function articleMarkdownTitleMatches(content: string, title: string): boolean {
+	const normalizedTitle = normalizeTitle(title);
+	// Match an actual H1, not an incidental mention in the article body.
+	if (normalizedTitle.replace(/\s/g, "").length < 4) return false;
+	const firstH1 = firstMarkdownH1(String(content || "").slice(0, 6000));
+	return normalizeTitle(firstH1 || "") === normalizedTitle;
+}
+
+function firstMarkdownH1(content: string): string {
+	const lines = String(content || "").split(/\r?\n/);
+	let inFrontmatter = lines[0]?.trim() === "---";
+	let fence: { marker: "`" | "~"; length: number } | null = null;
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index];
+		if (inFrontmatter) {
+			if (index > 0 && line.trim() === "---") inFrontmatter = false;
+			continue;
+		}
+		if (fence) {
+			const closingFence = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(line);
+			if (closingFence) {
+				const run = closingFence[1];
+				const marker = run[0] as "`" | "~";
+				if (fence.marker === marker && run.length >= fence.length) fence = null;
+			}
+			continue;
+		}
+		const openingFence = /^[ \t]*(`{3,}|~{3,})/.exec(line);
+		if (openingFence) {
+			const run = openingFence[1];
+			fence = { marker: run[0] as "`" | "~", length: run.length };
+			continue;
+		}
+		const heading = /^#[ \t]+(.+?)\s*$/.exec(line)?.[1] || "";
+		if (heading) return heading;
+	}
+	return "";
 }
 
 function normalizeTitle(value: string): string {
-	return String(value || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ").trim();
+	return String(value || "")
+		.replace(/<[^>]*>/g, " ")
+		.replace(/&amp;/gi, "&")
+		.replace(/&quot;/gi, '"')
+		.replace(/&apos;|&#39;/gi, "'")
+		.replace(/&lt;/gi, "<")
+		.replace(/&gt;/gi, ">")
+		.normalize("NFKC")
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
+		.trim();
 }
 
 function formatStructuredResult(result: PaperIngestFinalResult): string {

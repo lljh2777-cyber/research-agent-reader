@@ -96,6 +96,10 @@ export interface TaskRun {
 	output: string;
 	outputPath?: string;
 	error: string;
+	/** Terminal sidecar deletion failed; keep this record beyond the soft limit. */
+	cleanupPending?: boolean;
+	/** Completion sidecar/data.json transaction is currently in flight. */
+	completionPending?: boolean;
 	/** Light-agent runs: receipt-based paths, so result actions survive reloads. */
 	artifacts?: TaskRunArtifacts;
 }

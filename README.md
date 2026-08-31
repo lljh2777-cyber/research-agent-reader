@@ -64,8 +64,9 @@ Then enable **Research Agent Reader** under **Settings → Community plugins**.
 
 ### Beta install
 
-After the first GitHub release is published, beta users will be able to install
-the repository through BRAT. Release tags must exactly match the version in
+Install the BRAT community plugin, add
+`https://github.com/lljh2777-cyber/research-agent-reader`, and select the latest
+release of Research Agent Reader. Release tags exactly match the version in
 `manifest.json`, without a `v` prefix.
 
 ## Reader setup
@@ -123,7 +124,14 @@ Depending on features the user explicitly configures or starts, the plugin can:
 - send selected prompts, retrieved note excerpts, and explicitly attached images
   to a configured model provider;
 - upload a selected document to the configured MinerU service after confirmation;
-- save bounded task and query history in the plugin's local `data.json` file.
+- save bounded task and query records in the plugin's local `data.json` file;
+- save completed-task full output, including any model/tool trace or Vault
+  excerpts present in that run, in plugin-local sidecars under
+  `.obsidian/plugins/research-agent-reader/task-output/dashboard-runs/`.
+
+The **Clear completed tasks** action removes completed history records and
+their registered sidecars. Unreferenced compatibility outputs created by older
+beta versions inside an optional Toolkit are not deleted automatically.
 
 Direct API credentials are referenced through Obsidian SecretStorage. The plugin
 stores the secret name, not the secret value, in `data.json`. CLI credentials
@@ -178,7 +186,6 @@ Research Agent Reader 是桌面版 Obsidian 科研阅读与本地智能体工作
 AI 能力分三层：只需一个 Direct API 配置即可使用知识库问答、联网搜索、问答落笔记
 和轻量文献入库（身份核验 + 去重 + 初步文章 Wiki；配置 MinerU CLI 后还可生成原文
 Markdown，无需 Python 或工具包目录）；完整登记（papers.csv、references.bib、
-文献索引）需要 Research Vault Toolkit + Codex CLI；完整登记（papers.csv、references.bib、
-文献索引）以及全文深读、代码分析、综合分析等高级操作使用 Codex CLI + Toolkit 管线。
-知识库体检与 OKF 导出为内置/脚本能力，见文档。插件不会自行安装外部程序，也不会
-包含客户端遥测。
+文献索引）以及全文深读、代码分析、综合分析等高级操作使用 Research Vault Toolkit +
+Codex CLI 管线。知识库体检内置可用，OKF 导出仍是 Toolkit 脚本能力。插件不会自行
+安装外部程序，也不会包含客户端遥测。

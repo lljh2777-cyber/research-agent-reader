@@ -139,8 +139,10 @@ async function main() {
 	assert.ok(pluginSource.includes("visionConfigured"));
 	assert.ok(!pluginSource.includes('.setName("Qwen3.7-Plus 联网搜索")'));
 	assert.ok(
-		pluginSource.includes("Direct API 固定为知识库内只读推理"),
-		"Direct API settings should expose the vault-only boundary",
+		pluginSource.includes("联网与轻量 Agent 工具按具体功能单独授权")
+			&& pluginSource.includes("任何 Vault 写入都由插件侧安全边界执行")
+			&& pluginSource.includes("知识问答、联网搜索与轻量 Agent 的供应商"),
+		"Direct API settings should distinguish read-only queries from explicitly authorized tools",
 	);
 	assert.ok(pluginSource.includes("this.app.metadataCache?.getFileCache?.(file)?.frontmatter"));
 	assert.ok(!pluginSource.includes('wiki/methods/single-cell-rna-seq'));
@@ -250,7 +252,7 @@ async function main() {
 	assert.strictEqual(result.pdf.supported, true);
 	assert.strictEqual(result.responsePreview, "OK");
 	assert.ok(calls.every((call) => call.headers.Authorization === "Bearer sk-test-secret"));
-	assert.ok(calls.every((call) => !String(call.body || "").includes("paper-knowledge-base")));
+	assert.ok(calls.every((call) => !String(call.body || "").includes("confidential-research-workspace")));
 
 	plugin.settings.activeProviderId = "";
 	const persistedResult = await plugin.testProviderConnection("provider-openai");

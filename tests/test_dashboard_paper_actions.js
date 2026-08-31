@@ -84,6 +84,8 @@ assert.match(actions, /知识库体检[\s\S]*papers 与 Clippings 不参与常�
 assert.match(actions, /三主目录链接边界/);
 assert.match(dashboardData, /isExcludedMaintenancePath/);
 assert.match(dashboardData, /isExcludedVaultHealthPath\(value\)/);
+assert.match(dashboardData, /Source note（Vault 相对路径）：\$\{record\.path\}/);
+assert.doesNotMatch(dashboardData, /Source note：knowledge-base\/\$\{record\.path\}/);
 assert.match(processExecution, /tool-library[\s\S]*scripts[\s\S]*run_vault_action\.py/);
 
 console.log("DASHBOARD_OPTIONAL_WORKFLOW_CONTRACT_TESTS_OK");

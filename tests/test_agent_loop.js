@@ -43,6 +43,7 @@ const hookBuild = esbuild.buildSync({
 			"  createVaultReadTool,",
 			"  createVaultListTool,",
 			"  createVaultSearchTool,",
+			"  createVaultDoiSearchTool,",
 			"  createCrossrefSearchTool,",
 			"  createCrossrefDoiTool,",
 			"  createWebSearchTool,",
@@ -69,6 +70,7 @@ const hookBuild = esbuild.buildSync({
 			"  parseIdentityResult,",
 			"  parseNoteDraft,",
 			"  validateIdentityReceipts,",
+			"  bindIdentityMetadataFromReceipts,",
 			"  evaluateDraftPhase,",
 			"  computeIngestOutcomeStatus,",
 			"  resolveUniqueCitekey,",
@@ -78,7 +80,7 @@ const hookBuild = esbuild.buildSync({
 			"  stripMatchingQuotes,",
 			"  PAPER_INGEST_READ_PREFIXES,",
 			'} from "./src/agent/paper-ingest-flow";',
-			"export { articleHeadContainsTitle } from './src/agent/agent-loop-service';",
+			"export { articleHeadContainsTitle, articleMarkdownTitleMatches, resolvePaperTitleZh } from './src/agent/agent-loop-service';",
 			"export { normalizeTaskRunArtifacts, normalizeStoredTaskRuns } from './src/runtime/persistence';",
 		].join("\n"),
 		resolveDir: pluginRoot,
@@ -103,6 +105,7 @@ const {
 	createVaultReadTool,
 	createVaultListTool,
 	createVaultSearchTool,
+	createVaultDoiSearchTool,
 	createCrossrefSearchTool,
 	createCrossrefDoiTool,
 	createWebSearchTool,
@@ -125,6 +128,7 @@ const {
 	parseIdentityResult,
 	parseNoteDraft,
 	validateIdentityReceipts,
+	bindIdentityMetadataFromReceipts,
 	evaluateDraftPhase,
 	computeIngestOutcomeStatus,
 	resolveUniqueCitekey,
@@ -134,6 +138,8 @@ const {
 	stripMatchingQuotes,
 	PAPER_INGEST_READ_PREFIXES,
 	articleHeadContainsTitle,
+	articleMarkdownTitleMatches,
+	resolvePaperTitleZh,
 	normalizeTaskRunArtifacts,
 	normalizeStoredTaskRuns,
 } = hookModule.exports;
@@ -247,7 +253,11 @@ async function testLoopToolRoundtripAndReceipts() {
 		parameters: { value: "任意字符串" },
 		required: ["value"],
 		async execute(args) {
-			return { output: `echo:${args.value}`, summary: "echoed" };
+			return {
+				output: `echo:${args.value}`,
+				summary: "echoed",
+				receiptData: { query: String(args.value), titles: ["Echo Result"] },
+			};
 		},
 	}, {
 		name: "boom",
@@ -276,8 +286,13 @@ async function testLoopToolRoundtripAndReceipts() {
 	assert.equal(result.toolCalls[0].tool, "echo");
 	assert.equal(result.toolCalls[0].ok, true);
 	assert.match(result.toolCalls[0].argsSummary, /value=hi/);
+	assert.equal(result.toolCalls[0].resultSummary, "echoed");
+	assert.equal(result.toolCalls[0].evidencePreview, "echo:hi");
+	assert.deepEqual(result.toolCalls[0].data, { query: "hi", titles: ["Echo Result"] });
 	assert.equal(result.toolCalls[1].tool, "boom");
 	assert.equal(result.toolCalls[1].ok, false);
+	assert.equal(result.toolCalls[1].evidencePreview, "");
+	assert.equal(result.toolCalls[1].data, undefined);
 }
 
 async function testLoopRepairsNonConsecutiveProtocolErrors() {
@@ -368,7 +383,16 @@ async function testLoopBudgetAndTruncation() {
 		system: "s", user: "u",
 		tools: [{
 			name: "firehose", description: "d", parameters: {},
-			async execute() { return { output: "x".repeat(5000), summary: "big" }; },
+			async execute() {
+				return {
+					output: "x".repeat(20000),
+					summary: "s".repeat(1000),
+					receiptData: {
+						query: "q".repeat(2000),
+						titles: ["Repeated", "Repeated", "Observed"],
+					},
+				};
+			},
 		}],
 		provider: truncationProvider, model: "m", maxTokens: 2048,
 		maxToolResultChars: 500,
@@ -379,6 +403,10 @@ async function testLoopBudgetAndTruncation() {
 		.find((message) => message.startsWith("user:<tool_result tool=\"firehose\""));
 	assert.ok(toolResultMessage, "tool result message missing from transcript");
 	assert.ok(toolResultMessage.includes("已截断"));
+	assert.equal(truncation.toolCalls[0].resultSummary.length, 500);
+	assert.equal(truncation.toolCalls[0].evidencePreview.length, 12000);
+	assert.equal(truncation.toolCalls[0].data.query.length, 1200);
+	assert.deepEqual(truncation.toolCalls[0].data.titles, ["Repeated", "Observed"]);
 
 	const budgetProvider = createFakeProvider([
 		JSON.stringify({ action: "tool", tool: "f", arguments: {} }),
@@ -410,6 +438,7 @@ async function testVaultReadAndListScoping() {
 	const readTool = createVaultReadTool({ app: fake }, PAPER_INGEST_READ_PREFIXES);
 	const ok = await readTool.execute({ path: "papers/demo/article.md" }, createContext());
 	assert.match(ok.output, /共 200 字符/);
+	assert.deepEqual(ok.receiptData.paths, ["papers/demo/article.md"]);
 	await readTool.execute({ path: "diary/private.md" }, createContext()).then(() => {
 		assert.fail("expected out-of-scope read to be rejected");
 	}, (error) => {
@@ -430,6 +459,7 @@ async function testVaultReadAndListScoping() {
 	const listed = await listTool.execute({ folder: "wiki/sources" }, createContext());
 	assert.match(listed.output, /wiki\/sources\/a\.md/);
 	assert.doesNotMatch(listed.output, /diary/);
+	assert.deepEqual(listed.receiptData.paths, ["wiki/sources/a.md"]);
 	await listTool.execute({ folder: "diary" }, createContext()).then(() => {
 		assert.fail("expected out-of-scope listing to be rejected");
 	}, (error) => {
@@ -444,7 +474,13 @@ async function testVaultSearchScopeFiltering() {
 			calls.push(options);
 			// The private result would outrank the in-scope one globally.
 			return {
-				lexical_seeds: question.includes("secret")
+				lexical_terms: question.toLowerCase().split(/\s+/),
+				lexical_seeds: question.includes("limit")
+					? [
+						{ path: "wiki/sources/review.md", title: "Demo Paper Review", score: 10 },
+						{ path: "wiki/sources/demo.md", title: "Demo Paper", score: 9 },
+					]
+					: question.includes("secret")
 					? [
 						{ path: "private/secret.md", title: "个人计划", score: 9 },
 						{ path: "wiki/sources/a.md", title: "Demo", score: 2 },
@@ -457,12 +493,48 @@ async function testVaultSearchScopeFiltering() {
 	const found = await tool.execute({ question: "secret Demo" }, createContext());
 	assert.doesNotMatch(found.output, /private\/secret\.md/, "out-of-scope paths must never reach the model");
 	assert.match(found.output, /wiki\/sources\/a\.md/);
+	assert.deepEqual(found.receiptData.candidates, [{ path: "wiki/sources/a.md", title: "Demo" }]);
+	assert.deepEqual(found.receiptData.queryTerms, ["secret", "demo"]);
 	assert.equal(calls[0] && calls[0].allowedPrefixes[0], "wiki/sources", "retriever must be asked to scope ranking itself");
+	const limited = await tool.execute({ question: "limit Demo Paper", limit: 1 }, createContext());
+	assert.match(limited.output, /review\.md/);
+	assert.doesNotMatch(limited.output, /demo\.md/, "model-visible output should honor the display limit");
+	assert.deepEqual(
+		limited.receiptData.candidates.map((candidate) => candidate.path),
+		["wiki/sources/review.md", "wiki/sources/demo.md"],
+		"security receipt must retain every bounded hit despite a smaller model display limit",
+	);
 	await tool.execute({ question: "" }, createContext()).then(() => {
 		assert.fail("expected empty question to be rejected");
 	}, (error) => {
 		assert.match(error.message, /question/);
 	});
+}
+
+async function testVaultDoiExactSearch() {
+	const fake = createFakeVault(new Map([
+		["wiki/sources/exact.md", "---\ntitle: Exact Existing Note\ndoi: 10.1000/demo\n---\n正文"],
+		["wiki/sources/same-registrar.md", "---\ntitle: Other Note\ndoi: 10.1000/other\n---\n正文"],
+		["wiki/sources/legal-dot.md", "---\ntitle: Legal Trailing Dot\ndoi: 10.1000/legal.\n---\n正文"],
+		["wiki/sources/legal-no-dot.md", "---\ntitle: No Trailing Dot\ndoi: 10.1000/legal\n---\n正文"],
+		["papers/body-hit/article.md", "# Body Hit Only\n\n正文引用 https://doi.org/10.1000/demo"],
+	]));
+	const tool = createVaultDoiSearchTool({ app: fake }, PAPER_INGEST_READ_PREFIXES);
+	const found = await tool.execute({ doi: "https://doi.org/10.1000/DEMO" }, createContext());
+	assert.deepEqual(found.receiptData.candidates, [{
+		path: "wiki/sources/exact.md",
+		title: "Exact Existing Note",
+	}]);
+	assert.deepEqual(found.receiptData.dois, ["10.1000/DEMO"]);
+	assert.doesNotMatch(found.output, /same-registrar|body-hit/);
+	const missing = await tool.execute({ doi: "10.1000/missing" }, createContext());
+	assert.deepEqual(missing.receiptData.candidates, []);
+	assert.equal(missing.receiptData.dois, undefined);
+	const legalTrailingDot = await tool.execute({ doi: "10.1000/legal." }, createContext());
+	assert.deepEqual(legalTrailingDot.receiptData.candidates, [{
+		path: "wiki/sources/legal-dot.md",
+		title: "Legal Trailing Dot",
+	}], "legal DOI suffix punctuation must not be stripped or merged with another DOI");
 }
 
 async function testCrossrefDomainTools() {
@@ -502,11 +574,25 @@ async function testCrossrefDomainTools() {
 	assert.ok(requests[0].startsWith("https://api.crossref.org/works?query.bibliographic="));
 	assert.match(decoded, /Demo Paper & Special\/Chars/);
 	assert.match(searchResult.output, /10\.1000\/demo/);
+	assert.deepEqual(searchResult.receiptData.titles, ["Demo Paper: A Study"]);
+	assert.deepEqual(searchResult.receiptData.dois, ["10.1000/demo"]);
+	assert.deepEqual(searchResult.receiptData.bibliographicRecords, [{
+		title: "Demo Paper: A Study",
+		doi: "10.1000/demo",
+		authors: "Wang J.",
+		year: "2026",
+	}]);
 	assert.equal(signals[0], context.signal, "crossref requests must carry the run signal");
 
 	const doi = createCrossrefDoiTool(deps);
 	const doiResult = await doi.execute({ doi: "https://doi.org/10.1000/found" }, createContext());
 	assert.match(doiResult.output, /10\.1000\/found/);
+	assert.deepEqual(doiResult.receiptData, {
+		query: "10.1000/found",
+		titles: ["Found"],
+		dois: ["10.1000/found"],
+		bibliographicRecords: [{ title: "Found", doi: "10.1000/found", authors: "", year: "" }],
+	});
 	assert.ok(requests[1].startsWith("https://api.crossref.org/works/10.1000%2Ffound"));
 	await doi.execute({ doi: "10.1000/missing" }, createContext()).then(() => {
 		assert.fail("expected 404 DOI to be rejected");
@@ -603,12 +689,21 @@ function testResolveMineruCommand() {
 			"\"%_prog%\"  \"%~dp0\\node_modules\\mineru-open-api\\dist\\cli.js\" %*",
 		].join("\r\n"));
 		const resolved = resolveMineruCommand(shimPath);
+		const canonicalEntry = fs.realpathSync.native
+			? fs.realpathSync.native(entry)
+			: fs.realpathSync(entry);
 		assert.equal(resolved.command, process.execPath);
-		assert.equal(resolved.baseArgs[0], path.resolve(entry));
+		assert.equal(resolved.baseArgs[0], canonicalEntry);
 
 		const direct = resolveMineruCommand(entry);
 		assert.equal(direct.command, process.execPath);
-		assert.deepEqual(direct.baseArgs, [path.resolve(entry)]);
+		assert.equal(direct.baseArgs.length, 1);
+		assert.equal(
+			fs.realpathSync.native
+				? fs.realpathSync.native(direct.baseArgs[0])
+				: fs.realpathSync(direct.baseArgs[0]),
+			canonicalEntry,
+		);
 
 		const brokenShim = path.join(base, "broken.cmd");
 		fs.writeFileSync(brokenShim, "@ECHO off\nREM nothing useful");
@@ -843,6 +938,17 @@ async function testCommitSourceNoteSafety() {
 	assert.match(content, /registry_status: "pending"/);
 	assert.match(content, /## 研究问题/);
 	assert.deepEqual(validateSourceNoteContent(content), []);
+	const missingTitleZh = await commitSourceNote(
+		{ app: fake },
+		"missing_title_zh",
+		{ ...fields, title_zh: "" },
+		"",
+	).then(() => null, (error) => error);
+	assert.match(missingTitleZh.message, /title_zh/);
+	assert.match(
+		validateSourceNoteContent(content.replace('title_zh: "演示论文：一项研究"', 'title_zh: ""')).join("；"),
+		/title_zh 不能为空/,
+	);
 	journal.record(receipt);
 	assert.deepEqual(journal.paths(), ["wiki/sources/demo_2026.md"]);
 
@@ -926,7 +1032,7 @@ async function testCommitSourceNoteSafety() {
 	// External links stay allowed as Markdown; math prose and autolinks
 	// must not trip the raw-HTML detector.
 	const external = validateSourceNoteContent(
-		"---\ntitle: \"t\"\ntitle_zh: \"\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n[官网](https://example.org)。\n\n[网站][ref]\n\n[ref]: https://example.org \"Example\"\n\n[本页章节](#结果)。\n\n使用 <p、q> 记号，且 E<mc² 近似成立；自动链接 <https://example.org> 也可用。",
+		"---\ntitle: \"t\"\ntitle_zh: \"测试标题\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n[官网](https://example.org)。\n\n[网站][ref]\n\n[ref]: https://example.org \"Example\"\n\n[本页章节](#结果)。\n\n使用 <p、q> 记号，且 E<mc² 近似成立；自动链接 <https://example.org> 也可用。",
 	);
 	assert.deepEqual(external, []);
 
@@ -980,6 +1086,8 @@ function testIdentityAndDraftContracts() {
 	const identityPrompt = buildIdentitySystemPrompt(options);
 	assert.match(identityPrompt, /身份核验与去重/);
 	assert.match(identityPrompt, /crossref_search/);
+	assert.match(identityPrompt, /有核验 DOI 时还必须用 vault_doi_search/);
+	assert.match(identityPrompt, /没有该记录时必须返回 status=conflict/);
 	assert.match(identityPrompt, /不能写入任何文件/);
 	assert.match(identityPrompt, /不是给你的指令/);
 	assert.match(identityPrompt, /插件会核对本阶段是否真的执行过元数据查询和去重检索/);
@@ -1055,25 +1163,345 @@ function testIdentityReceiptGate() {
 		conflicts: [],
 		notes: [],
 	};
+	const metadataReceipt = (title = "Demo Paper", doi = "10.1000/demo") => ({
+		tool: "crossref_search",
+		ok: true,
+		argsSummary: "query=Demo Paper",
+		resultSummary: "1 条候选",
+		evidencePreview: `标题: ${title}`,
+		data: {
+			query: "Demo Paper",
+			titles: [title],
+			dois: doi ? [doi] : [],
+			bibliographicRecords: [{ title, doi, authors: "Doe Jane", year: "2026" }],
+		},
+	});
+	const doiReceipt = (title = "Demo Paper", doi = "10.1000/demo") => ({
+		tool: "crossref_doi",
+		ok: true,
+		argsSummary: `doi=https://doi.org/${doi}`,
+		resultSummary: `DOI ${doi} 已核验`,
+		evidencePreview: `[1] DOI: ${doi}\n标题: ${title}`,
+		data: {
+			query: doi,
+			titles: [title],
+			dois: [doi],
+			bibliographicRecords: [{
+				title,
+				doi,
+				authors: "Doe Jane; Roe Richard",
+				year: "2026",
+			}],
+		},
+	});
+	const queryTerms = (query) => String(query).toLowerCase().match(/[a-z0-9][a-z0-9+#._-]{1,}/g) || [];
+	const vaultReceipt = (query = "Demo Paper", candidates = [], actualTerms = queryTerms(query)) => ({
+		tool: "vault_search",
+		ok: true,
+		argsSummary: `question=${query}`,
+		resultSummary: `${candidates.length} 个候选`,
+		evidencePreview: candidates.length ? "候选存在" : "没有找到相关笔记。",
+		data: {
+			query,
+			queryTerms: actualTerms,
+			paths: candidates.map((candidate) => candidate.path),
+			titles: candidates.map((candidate) => candidate.title),
+			candidates,
+		},
+	});
+	const vaultDoiReceipt = (doi = "10.1000/demo", candidates = []) => ({
+		tool: "vault_doi_search",
+		ok: true,
+		resultSummary: `${candidates.length} 个同 DOI source note`,
+		data: {
+			query: doi,
+			...(candidates.length ? { dois: [doi] } : {}),
+			paths: candidates.map((candidate) => candidate.path),
+			titles: candidates.map((candidate) => candidate.title),
+			candidates,
+		},
+	});
 	// First-round "verified" without any tool work must be rejected.
 	assert.match(
 		validateIdentityReceipts(identity, [])[0],
 		/元数据查询/,
 	);
-	const missingDedup = validateIdentityReceipts(identity, [
-		{ tool: "crossref_search", ok: true, argsSummary: "query=demo" },
-	]);
+	const missingDedup = validateIdentityReceipts(identity, [metadataReceipt()]);
 	assert.equal(missingDedup.length, 2, "missing dedup lookup AND unverified DOI must both be rejected");
 	assert.match(missingDedup[0], /去重检索/);
 	assert.match(missingDedup[1], /crossref_doi/);
 	assert.deepEqual(
 		validateIdentityReceipts(identity, [
-			{ tool: "crossref_search", ok: true, argsSummary: "query=demo" },
-			{ tool: "vault_search", ok: true, argsSummary: "question=demo" },
-			{ tool: "crossref_doi", ok: true, argsSummary: "doi=https://doi.org/10.1000/DEMO · " },
+			metadataReceipt(),
+			vaultReceipt(),
+			vaultDoiReceipt(),
+			doiReceipt(),
 		]),
 		[],
 		"full receipts must pass (doi.org prefix and casing normalized)",
+	);
+	const emptyMetadata = validateIdentityReceipts({ ...identity, doi: "" }, [
+		{
+			tool: "crossref_search",
+			ok: true,
+			argsSummary: "query=Demo Paper",
+			resultSummary: "0 条候选",
+			evidencePreview: "Crossref 没有返回候选。",
+			data: { query: "Demo Paper" },
+		},
+		vaultReceipt(),
+	]);
+	assert.match(emptyMetadata.join("；"), /没有返回任何.*候选/);
+	const unsupportedTitle = validateIdentityReceipts({ ...identity, doi: "", title: "Different Paper" }, [
+		metadataReceipt("Demo Paper", ""),
+		vaultReceipt("Different Paper"),
+	]);
+	assert.match(unsupportedTitle.join("；"), /不包含模型声明的原文标题/);
+	const zeroResultTitleSpoof = validateIdentityReceipts({
+		...identity,
+		doi: "",
+		title: "Crossref 没有返回候选",
+	}, [
+		metadataReceipt("Demo Paper", ""),
+		{
+			tool: "crossref_search",
+			ok: true,
+			argsSummary: "query=missing",
+			resultSummary: "0 条候选",
+			evidencePreview: "Crossref 没有返回候选。",
+			data: { query: "missing" },
+		},
+		vaultReceipt("Crossref 没有返回候选"),
+	]);
+	assert.match(zeroResultTitleSpoof.join("；"), /不包含模型声明的原文标题/);
+	const bodyTextTitleSpoof = validateIdentityReceipts({ ...identity, doi: "", title: "Journal of Tests" }, [
+		{
+			...metadataReceipt("Demo Paper", ""),
+			evidencePreview: "标题: Demo Paper\n期刊: Journal of Tests",
+		},
+		vaultReceipt("Journal of Tests"),
+	]);
+	assert.match(bodyTextTitleSpoof.join("；"), /不包含模型声明的原文标题/);
+	const unrelatedNoneLookup = validateIdentityReceipts({ ...identity, doi: "" }, [
+		metadataReceipt("Demo Paper", ""),
+		vaultReceipt("Unrelated Paper"),
+	]);
+	assert.match(unrelatedNoneLookup.join("；"), /完整原文标题/);
+	const exactWithoutBoundPath = validateIdentityReceipts({
+		...identity,
+		doi: "",
+		duplicateStatus: "exact",
+		duplicates: ["wiki/sources/demo_2026.md"],
+	}, [metadataReceipt("Demo Paper", ""), vaultReceipt()]);
+	assert.match(exactWithoutBoundPath.join("；"), /未被 Vault 检索回执支持/);
+	const exactWithSpoofedArgument = validateIdentityReceipts({
+		...identity,
+		doi: "",
+		duplicateStatus: "exact",
+		duplicates: ["wiki/sources/demo_2026.md"],
+	}, [metadataReceipt("Demo Paper", ""), {
+		...vaultReceipt("wiki/sources/demo_2026.md", [
+			{ path: "wiki/sources/other_2026.md", title: "Other Paper" },
+		]),
+		argsSummary: "question=wiki/sources/demo_2026.md",
+	}]);
+	assert.match(exactWithSpoofedArgument.join("；"), /未被 Vault 检索回执支持/);
+	const exactWithWrongCandidateTitle = validateIdentityReceipts({
+		...identity,
+		doi: "",
+		duplicateStatus: "exact",
+		duplicates: ["wiki/sources/demo_2026.md"],
+	}, [metadataReceipt("Demo Paper", ""), vaultReceipt("Demo Paper", [
+		{ path: "wiki/sources/demo_2026.md", title: "Unrelated Paper" },
+	])]);
+	assert.match(exactWithWrongCandidateTitle.join("；"), /标题或 DOI 一致证据/);
+	assert.deepEqual(validateIdentityReceipts({
+		...identity,
+		doi: "",
+		duplicateStatus: "exact",
+		duplicates: ["wiki/sources/demo_2026.md（标题一致）"],
+	}, [metadataReceipt("Demo Paper", ""), vaultReceipt("Demo Paper", [
+		{ path: "wiki/sources/demo_2026.md", title: "Demo Paper" },
+	])]), []);
+	assert.deepEqual(validateIdentityReceipts({
+		...identity,
+		doi: "",
+		duplicateStatus: "exact",
+		duplicates: ["`wiki/sources/My Paper.md`（标题一致）"],
+	}, [metadataReceipt("Demo Paper", ""), vaultReceipt("Demo Paper", [
+		{ path: "wiki/sources/My Paper.md", title: "Demo Paper" },
+	])]), [], "backtick-wrapped paths with spaces must remain intact");
+	assert.deepEqual(validateIdentityReceipts({
+		...identity,
+		doi: "",
+		duplicateStatus: "possible",
+		duplicates: ["wiki/sources/张三.md（疑似同一文献）"],
+	}, [metadataReceipt("Demo Paper", ""), vaultReceipt("Demo Paper", [
+		{ path: "wiki/sources/张三.md", title: "旧标题" },
+	])]), [], "legacy unquoted Unicode Markdown paths should remain compatible");
+	const exactDoiFromSearchOnly = validateIdentityReceipts({
+		...identity,
+		duplicateStatus: "exact",
+		duplicates: ["wiki/sources/demo_2026.md"],
+	}, [metadataReceipt(), doiReceipt(), vaultReceipt("10.1000/demo", [
+		{ path: "wiki/sources/demo_2026.md", title: "Demo Paper" },
+	])]);
+	assert.match(exactDoiFromSearchOnly.join("；"), /标题或 DOI 一致证据/);
+	assert.deepEqual(validateIdentityReceipts({
+		...identity,
+		duplicateStatus: "exact",
+		duplicates: ["wiki/sources/demo_2026.md"],
+	}, [metadataReceipt(), doiReceipt(), vaultDoiReceipt("10.1000/demo", [
+		{ path: "wiki/sources/demo_2026.md", title: "Legacy Title" },
+	])]), [], "an authoritative exact DOI receipt should prove the duplicate directly");
+	assert.deepEqual(validateIdentityReceipts({
+		...identity,
+		duplicateStatus: "exact",
+		duplicates: ["wiki/sources/demo_2026.md"],
+	}, [metadataReceipt(), doiReceipt(), {
+		tool: "vault_read",
+		ok: true,
+		argsSummary: "path=wiki/sources/demo_2026.md",
+		data: {
+			query: "wiki/sources/demo_2026.md",
+			paths: ["wiki/sources/demo_2026.md"],
+			titles: ["Demo Paper"],
+			dois: ["10.1000/demo"],
+		},
+	}]), []);
+	const mismatchedDoiTitle = validateIdentityReceipts(identity, [
+		metadataReceipt(),
+		doiReceipt("Unrelated Paper"),
+		vaultReceipt(),
+	]);
+	assert.match(mismatchedDoiTitle.join("；"), /对应标题的 crossref_doi/);
+	const inconsistentNone = validateIdentityReceipts({
+		...identity,
+		doi: "",
+		duplicateStatus: "none",
+		duplicates: ["wiki/sources/demo_2026.md"],
+	}, [metadataReceipt("Demo Paper", ""), vaultReceipt()]);
+	assert.match(inconsistentNone.join("；"), /duplicateStatus 为 none/);
+
+	const omittedDoi = validateIdentityReceipts({ ...identity, doi: "" }, [
+		metadataReceipt(),
+		vaultReceipt(),
+	]);
+	assert.match(omittedDoi.join("；"), /对应标题的 crossref_doi/);
+
+	const webOnly = validateIdentityReceipts({ ...identity, doi: "" }, [{
+		tool: "web_search",
+		ok: true,
+		data: {
+			bibliographicRecords: [{ title: "Demo Paper", doi: "", authors: "", year: "" }],
+		},
+	}, vaultReceipt()]);
+	assert.match(webOnly.join("；"), /网页结果不能单独作为 verified/);
+
+	const noneWithExactCandidate = validateIdentityReceipts({ ...identity, doi: "" }, [
+		metadataReceipt("Demo Paper", ""),
+		vaultReceipt("Demo Paper", [{ path: "wiki/sources/existing_2026.md", title: "Demo Paper" }]),
+	]);
+	assert.match(noneWithExactCandidate.join("；"), /同标题或同 citekey 候选/);
+
+	const emptyThenExact = validateIdentityReceipts({ ...identity, doi: "" }, [
+		metadataReceipt("Demo Paper", ""),
+		vaultReceipt("Demo Paper"),
+		vaultReceipt("Demo Paper", [{ path: "wiki/sources/existing_2026.md", title: "Demo Paper" }]),
+	]);
+	assert.match(emptyThenExact.join("；"), /同标题或同 citekey 候选/);
+	const nonqualifyingSearchCannotHideExact = validateIdentityReceipts({ ...identity, doi: "" }, [
+		metadataReceipt("Demo Paper", ""),
+		vaultReceipt("Demo Paper"),
+		vaultReceipt("other lookup", [{ path: "wiki/sources/existing_2026.md", title: "Demo Paper" }]),
+	]);
+	assert.match(nonqualifyingSearchCannotHideExact.join("；"), /同标题或同 citekey 候选/);
+	const globalReadConflict = validateIdentityReceipts({ ...identity, doi: "" }, [
+		metadataReceipt("Demo Paper", ""),
+		vaultReceipt("Demo Paper"),
+		{
+			tool: "vault_read",
+			ok: true,
+			data: { paths: ["wiki/sources/existing_2026.md"], titles: ["Demo Paper"] },
+		},
+	]);
+	assert.match(globalReadConflict.join("；"), /Vault 读取回执冲突/);
+
+	const noisyTerms = Array.from({ length: 24 }, (_, index) => `noise${index}`);
+	const noisyQueryBypass = validateIdentityReceipts({ ...identity, doi: "" }, [
+		metadataReceipt("Demo Paper", ""),
+		vaultReceipt(`${noisyTerms.join(" ")} Demo Paper`, [], noisyTerms),
+	]);
+	assert.match(noisyQueryBypass.join("；"), /实际使用.*检索词/);
+
+	const punctuationVariantBypass = validateIdentityReceipts({
+		...identity,
+		doi: "",
+		title: "Demo-Paper",
+	}, [
+		metadataReceipt("Demo Paper", ""),
+		vaultReceipt("Demo-Paper", [], ["demo-paper"]),
+	]);
+	assert.match(
+		punctuationVariantBypass.join("；"),
+		/实际使用.*检索词/,
+		"dedup must use the Crossref-bound canonical title, not the model punctuation variant",
+	);
+
+	const doiCandidate = { path: "wiki/sources/other_2025.md", title: "Wrong Title" };
+	const titleOnlyDoiDedup = validateIdentityReceipts(identity, [
+		metadataReceipt(),
+		doiReceipt(),
+		vaultReceipt(),
+	]);
+	assert.match(titleOnlyDoiDedup.join("；"), /没有用 vault_doi_search/);
+	const exactDoiCandidate = validateIdentityReceipts(identity, [
+		metadataReceipt(),
+		doiReceipt(),
+		vaultReceipt(),
+		vaultDoiReceipt("10.1000/demo", [doiCandidate]),
+	]);
+	assert.match(exactDoiCandidate.join("；"), /DOI 精确查重回执冲突/);
+	assert.deepEqual(validateIdentityReceipts(identity, [
+		metadataReceipt(),
+		doiReceipt(),
+		vaultReceipt(),
+		vaultDoiReceipt(),
+	]), [], "an empty authoritative DOI lookup plus an empty title lookup may be none");
+
+	const cyrillicIdentity = { ...identity, doi: "", title: "Анализ данных", citekey: "ivanov_2026" };
+	assert.deepEqual(validateIdentityReceipts(cyrillicIdentity, [
+		metadataReceipt("Анализ данных", ""),
+		vaultReceipt("Анализ данных", [], ["анализ", "данных"]),
+	]), []);
+
+	const boundIdentity = bindIdentityMetadataFromReceipts({
+		...identity,
+		title: "Demo & Paper",
+		authors: "Invented Author",
+		year: "1999",
+	}, [metadataReceipt("Demo &amp; Paper"), doiReceipt("Demo &amp; Paper")]);
+	assert.equal(boundIdentity.title, "Demo & Paper");
+	assert.equal(boundIdentity.authors, "Doe Jane; Roe Richard");
+	assert.equal(boundIdentity.year, "2026");
+	assert.equal(boundIdentity.doi, "10.1000/demo");
+
+	const punctuationDoiIdentity = {
+		...identity,
+		title: "Punctuation DOI",
+		doi: "10.1000/legal.",
+	};
+	const punctuationDoiReceipts = [
+		metadataReceipt("Punctuation DOI", "10.1000/legal."),
+		doiReceipt("Punctuation DOI", "10.1000/legal."),
+		vaultReceipt("Punctuation DOI"),
+		vaultDoiReceipt("10.1000/legal."),
+	];
+	assert.deepEqual(validateIdentityReceipts(punctuationDoiIdentity, punctuationDoiReceipts), []);
+	assert.equal(
+		bindIdentityMetadataFromReceipts({ ...punctuationDoiIdentity }, punctuationDoiReceipts).doi,
+		"10.1000/legal.",
+		"binding must preserve legal trailing DOI punctuation",
 	);
 }
 
@@ -1151,6 +1579,15 @@ function testDraftGateAndStatusSemantics() {
 	);
 }
 
+function testResolvedTitleTranslationMatchesCommittedDraft() {
+	assert.equal(
+		resolvePaperTitleZh({ title_zh: "身份阶段译名" }, { title_zh: "笔记阶段审校译名" }),
+		"笔记阶段审校译名",
+	);
+	assert.equal(resolvePaperTitleZh({ title_zh: "身份阶段译名" }, { title_zh: "" }), "身份阶段译名");
+	assert.equal(resolvePaperTitleZh(null, null), "");
+}
+
 function testPhaseToolsetsAreRead() {
 	const fake = createFakeVault(new Map([]));
 	const deps = {
@@ -1172,6 +1609,7 @@ function testPhaseToolsetsAreRead() {
 	assert.deepEqual(identityNames.filter((name) => name === "mineru_extract" || name === "write_note"), []);
 	assert.ok(identityNames.includes("crossref_search"));
 	assert.ok(identityNames.includes("vault_search"));
+	assert.ok(identityNames.includes("vault_doi_search"));
 
 	const draftNames = buildDraftTools(deps).map((tool) => tool.name);
 	assert.deepEqual(draftNames.filter((name) => name === "mineru_extract" || name === "write_note"), []);
@@ -1179,6 +1617,11 @@ function testPhaseToolsetsAreRead() {
 }
 
 async function testArticleHeadTitleGate() {
+	assert.equal(
+		articleMarkdownTitleMatches("# Cells &amp; Systems\n\nBody", "Cells & Systems"),
+		true,
+		"the pure pre-commit title gate must share entity normalization with read-back",
+	);
 	const fake = createFakeVault(new Map([
 		["papers/demo/article.md", "# Novae: A Graph-Based Foundation Model for Spatial Transcriptomics\n\nIntroduction"],
 		["papers/other/article.md", "# Completely Different Title Here\n\nBody"],
@@ -1190,6 +1633,51 @@ async function testArticleHeadTitleGate() {
 	assert.equal(
 		await articleHeadContainsTitle({ app: fake }, "papers/other/article.md", "Novae: A Graph-Based Foundation Model for Spatial Transcriptomics"),
 		false,
+	);
+	const multilingual = createFakeVault(new Map([
+		["papers/korean/article.md", "# 공간 전사체학을 위한 그래프 기반 기초 모델\n\n서론"],
+		["papers/arabic/article.md", "# نموذج تأسيسي قائم على الرسوم البيانية\n\nمقدمة"],
+		["papers/chinese-short/article.md", "# 细胞命运\n\n正文"],
+		["papers/entity/article.md", "# Cells &amp; Systems\n\nBody"],
+		["papers/body-only/article.md", "# Other Title\n\nThe claimed Demo Paper appears only in body text."],
+		["papers/later-h1/article.md", "# Wrong Package Title\n\n# Demo Paper\n\nBody"],
+		["papers/fenced-h1/article.md", "---\ntitle: Wrong Package\n---\n\n```markdown\n# Demo Paper\n```\n\n# Wrong Package Title"],
+		["papers/fake-close/article.md", "```text\n```not-a-close\n# Demo Paper\n```\n\n# Wrong Package Title"],
+	]));
+	assert.equal(
+		await articleHeadContainsTitle({ app: multilingual }, "papers/korean/article.md", "공간 전사체학을 위한 그래프 기반 기초 모델"),
+		true,
+	);
+	assert.equal(
+		await articleHeadContainsTitle({ app: multilingual }, "papers/arabic/article.md", "نموذج تأسيسي قائم على الرسوم البيانية"),
+		true,
+	);
+	assert.equal(
+		await articleHeadContainsTitle({ app: multilingual }, "papers/chinese-short/article.md", "细胞命运"),
+		true,
+	);
+	assert.equal(
+		await articleHeadContainsTitle({ app: multilingual }, "papers/entity/article.md", "Cells & Systems"),
+		true,
+	);
+	assert.equal(
+		await articleHeadContainsTitle({ app: multilingual }, "papers/body-only/article.md", "Demo Paper"),
+		false,
+	);
+	assert.equal(
+		await articleHeadContainsTitle({ app: multilingual }, "papers/later-h1/article.md", "Demo Paper"),
+		false,
+		"a later matching H1 must not override a conflicting package title",
+	);
+	assert.equal(
+		await articleHeadContainsTitle({ app: multilingual }, "papers/fenced-h1/article.md", "Demo Paper"),
+		false,
+		"an H1 inside YAML or a fenced code block must not satisfy the package title gate",
+	);
+	assert.equal(
+		await articleHeadContainsTitle({ app: multilingual }, "papers/fake-close/article.md", "Demo Paper"),
+		false,
+		"a fenced line with trailing info is not a CommonMark closing fence",
 	);
 	// Empty/short titles fail the gate instead of passing it.
 	assert.equal(await articleHeadContainsTitle({ app: fake }, "papers/other/article.md", "Tiny"), false);
@@ -1339,6 +1827,7 @@ function testArtifactsPersistenceRoundTrip() {
 	await testLoopBudgetAndTruncation();
 	await testVaultReadAndListScoping();
 	await testVaultSearchScopeFiltering();
+	await testVaultDoiExactSearch();
 	await testCrossrefDomainTools();
 	await testWebSearchToolValidation();
 	testMineruCliArgsAndReadiness();
@@ -1350,6 +1839,7 @@ function testArtifactsPersistenceRoundTrip() {
 	testIdentityAndDraftContracts();
 	testIdentityReceiptGate();
 	testDraftGateAndStatusSemantics();
+	testResolvedTitleTranslationMatchesCommittedDraft();
 	testPhaseToolsetsAreRead();
 	await testArticleHeadTitleGate();
 	testYamlScalarSafety();

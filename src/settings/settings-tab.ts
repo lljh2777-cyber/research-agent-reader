@@ -74,6 +74,7 @@ interface SettingsPluginHost extends PluginHost {
 	directApiBoundaryLabel(profileId: string): string;
 	supportsFast(model: string): boolean;
 	clearCompletedTaskHistory(): Promise<number>;
+	setTaskHistoryLimit(value: number): Promise<void>;
 	resetQueryHistory(): Promise<void>;
 	buildDiagnosticsSummary(): string;
 }
@@ -187,7 +188,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			page: "direct-api",
 			icon: "plug-zap",
 			title: "Direct API 知识助手",
-			description: "只读知识库助手的供应商、凭据、模型能力和连接测试。",
+			description: "知识问答、联网搜索与轻量 Agent 的供应商、凭据、模型能力和连接测试。",
 			status: activeProfile
 				? `${activeProfile.name} · 已启用`
 				: profiles.length
@@ -1114,15 +1115,21 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				}));
 		new Setting(containerEl)
 			.setName("任务历史保留数量")
-			.setDesc("范围 5–100；正在运行的任务不会被清理按钮移除。")
-			.addText((text) => text
-				.setValue(String(this.plugin.settings.taskHistoryLimit))
-				.onChange(async (value) => {
-					const parsed = Number.parseInt(value, 10);
-					if (!Number.isFinite(parsed)) return;
-					this.plugin.settings.taskHistoryLimit = Math.max(5, Math.min(100, parsed));
-					await this.plugin.saveSettings();
-				}));
+			.setDesc("选择 5–100 条；缩减数量会安全回收超出的已结束任务输出，正在运行的任务会保留。")
+			.addDropdown((dropdown) => {
+				const current = this.plugin.settings.taskHistoryLimit;
+				const options = [...new Set([5, 10, 20, 30, 50, 100, current])]
+					.sort((left, right) => left - right);
+				for (const option of options) dropdown.addOption(String(option), `${option} 条`);
+				dropdown.setValue(String(current)).onChange(async (value) => {
+					try {
+						await this.plugin.setTaskHistoryLimit(Number.parseInt(value, 10));
+					} catch (error) {
+						dropdown.setValue(String(this.plugin.settings.taskHistoryLimit));
+						new Notice(error instanceof Error ? error.message : String(error));
+					}
+				});
+			});
 		new Setting(containerEl)
 			.setName("查询会话保留数量")
 			.setDesc("范围 1–30。")
@@ -1180,10 +1187,14 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		);
 		new Setting(containerEl)
 			.setName("清理本地历史")
-			.setDesc("任务清理只移除已结束记录；查询清理会新建一个空白对话。")
+			.setDesc("任务清理只移除已结束记录及其已登记输出；早期版本遗留且未被历史引用的 Toolkit 输出不会自动删除。查询清理会新建一个空白对话。")
 			.addButton((button) => button.setButtonText("清理已完成任务").onClick(async () => {
-				const count = await this.plugin.clearCompletedTaskHistory();
-				new Notice(`已清理 ${count} 条已完成任务记录。`);
+				try {
+					const count = await this.plugin.clearCompletedTaskHistory();
+					new Notice(`已清理 ${count} 条已完成任务记录及其输出文件。`);
+				} catch (error) {
+					new Notice(error instanceof Error ? error.message : String(error));
+				}
 			}))
 			.addButton((button) => button.setButtonText("重置查询历史").setWarning().onClick(async () => {
 				if (!window.confirm("重置全部查询历史？此操作不会删除知识库文件。")) return;
@@ -1901,7 +1912,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.createSettingsPageHeader(
 			containerEl,
 			"Direct API 知识助手",
-			"管理只读知识库助手使用的模型服务。Direct API 只接收插件筛选出的 Vault 上下文，不联网、不执行 Skill、不调用工具，也不写入文件。",
+			"管理知识库问答、联网搜索与轻量 Agent 使用的模型服务。知识库模式只发送插件筛选出的 Vault 上下文；联网和工具调用仅在用户显式选择对应功能时启用。模型不能直接写 Vault，文件变更始终由插件校验并提交。",
 			true,
 		);
 		this.createProviderSectionHeader(
@@ -2382,7 +2393,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		new Setting(modelForm)
 			.setName("模型能力")
 			.setDesc(
-				`流式输出：${profile.capabilities.streaming ? "支持" : "不支持"}；PDF：${profile.capabilities.pdf ? "支持" : "不支持"}；视觉：${profile.capabilities.vision ? "支持" : "不支持"}。Direct API 固定为知识库内只读推理，不开放联网工具。`,
+				`流式输出：${profile.capabilities.streaming ? "支持" : "不支持"}；PDF：${profile.capabilities.pdf ? "支持" : "不支持"}；视觉：${profile.capabilities.vision ? "支持" : "不支持"}。联网与轻量 Agent 工具按具体功能单独授权；任何 Vault 写入都由插件侧安全边界执行。`,
 			);
 		new Setting(modelForm)
 			.setName("视觉输入")

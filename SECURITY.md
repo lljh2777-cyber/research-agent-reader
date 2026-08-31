@@ -2,16 +2,16 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest published release. Until the first
-public release, the `main` branch is the only supported development line.
+Security fixes are applied to the latest published beta release and the `main`
+branch. Older beta releases are not maintained after a newer release is
+published.
 
 ## Reporting a vulnerability
 
 Do not disclose a vulnerability in a public issue before the maintainer has had
-an opportunity to assess it. Contact the maintainer through GitHub private
-vulnerability reporting after the public repository is created. If private
-reporting is unavailable, open a minimal issue requesting a private contact
-channel without including exploit details.
+an opportunity to assess it. Use GitHub private vulnerability reporting. If
+private reporting is unavailable, open a minimal issue requesting a private
+contact channel without including exploit details.
 
 ## Trust boundaries
 
@@ -24,6 +24,14 @@ validation, and rollback contracts.
 The plugin does not install or update external executables. Users must install
 and authenticate optional CLI backends themselves. Direct API keys are selected
 through Obsidian SecretStorage and are not stored in plugin `data.json`.
+
+Completed task output can include model/tool traces, command output, and Vault
+excerpts selected for that run. Full output is stored locally beside the plugin
+under `task-output/dashboard-runs/`; `data.json` keeps only a bounded snapshot
+and the registered sidecar path. Clearing completed task history removes those
+registered sidecars. The plugin does not infer deletion permission merely from
+an unreferenced file, so compatibility outputs from older beta versions may
+require explicit manual review.
 
 ## Light agent (Direct API tool loop)
 
