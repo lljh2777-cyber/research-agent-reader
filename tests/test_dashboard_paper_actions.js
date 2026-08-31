@@ -46,6 +46,9 @@ assert.match(serializer, /mineruBaseUrl:/);
 assert.match(settings, /MINERU_CLI_PATH/);
 assert.match(settings, /mineru-open-api\.cmd/);
 assert.match(settingsTab, /MinerU 可执行文件/);
+assert.match(settingsTab, /MinerU API Token/);
+assert.match(settingsTab, /SecretComponent/);
+assert.match(settings, /mineruSecretId/);
 assert.match(settingsTab, /MinerU 私有服务地址/);
 assert.match(settingsTab, /MinerU 文献解析/);
 assert.match(settingsTab, /每次确认远程上传/);
@@ -87,5 +90,11 @@ assert.match(dashboardData, /isExcludedVaultHealthPath\(value\)/);
 assert.match(dashboardData, /Source note（Vault 相对路径）：\$\{record\.path\}/);
 assert.doesNotMatch(dashboardData, /Source note：knowledge-base\/\$\{record\.path\}/);
 assert.match(processExecution, /tool-library[\s\S]*scripts[\s\S]*run_vault_action\.py/);
+assert.match(processExecution, /probeMineruCli[\s\S]*child\.stdin\.end\(\)/);
+
+const pluginSource = readPlugin("src/plugin.ts");
+assert.match(pluginSource, /getMineruToken\(\)/);
+assert.match(pluginSource, /mineruEnv\.MINERU_TOKEN = mineruToken/);
+assert.match(pluginSource, /mineruEnv\.ELECTRON_RUN_AS_NODE = "1"/);
 
 console.log("DASHBOARD_OPTIONAL_WORKFLOW_CONTRACT_TESTS_OK");

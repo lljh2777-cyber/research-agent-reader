@@ -161,6 +161,7 @@ export interface DashboardSettings {
 	annotationWebSearchEnabled: boolean;
 	annotationWebSearchTimeoutSeconds: number;
 	mineruExecutable: string;
+	mineruSecretId: string;
 	mineruServiceMode: MineruServiceMode;
 	mineruBaseUrl: string;
 	mineruDefaultModel: MineruModel;
@@ -627,6 +628,7 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	annotationWebSearchEnabled: false,
 	annotationWebSearchTimeoutSeconds: 30,
 	mineruExecutable: findPreferredMineruExecutable(),
+	mineruSecretId: "",
 	mineruServiceMode: "official",
 	mineruBaseUrl: "",
 	mineruDefaultModel: "vlm",

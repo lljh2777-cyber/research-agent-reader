@@ -22,8 +22,11 @@ actions may modify vault files and therefore use bounded paths, task history,
 validation, and rollback contracts.
 
 The plugin does not install or update external executables. Users must install
-and authenticate optional CLI backends themselves. Direct API keys are selected
-through Obsidian SecretStorage and are not stored in plugin `data.json`.
+optional CLI backends themselves. Direct API keys and an optional MinerU API
+token are selected through Obsidian SecretStorage and are not stored in plugin
+`data.json`; only their secret IDs are persisted. A selected MinerU token is
+passed to the launched CLI as `MINERU_TOKEN`. MinerU CLI-managed authentication
+and an existing environment variable remain supported alternatives.
 
 Completed task output can include model/tool traces, command output, and Vault
 excerpts selected for that run. Full output is stored locally beside the plugin

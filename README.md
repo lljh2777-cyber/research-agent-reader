@@ -133,10 +133,13 @@ The **Clear completed tasks** action removes completed history records and
 their registered sidecars. Unreferenced compatibility outputs created by older
 beta versions inside an optional Toolkit are not deleted automatically.
 
-Direct API credentials are referenced through Obsidian SecretStorage. The plugin
-stores the secret name, not the secret value, in `data.json`. CLI credentials
-remain under the control of the corresponding CLI. Users are responsible for
-reviewing the terms and privacy policy of every configured external service.
+Direct API credentials and an optional MinerU API token are referenced through
+Obsidian SecretStorage. The plugin stores the secret name, not the secret value,
+in `data.json`; the selected MinerU token is passed only to the launched CLI as
+`MINERU_TOKEN`. MinerU can instead continue using its own CLI authentication or
+an existing process environment variable. Other CLI credentials remain under
+the control of the corresponding CLI. Users are responsible for reviewing the
+terms and privacy policy of every configured external service.
 
 See [SECURITY.md](SECURITY.md) for reporting vulnerabilities and additional
 trust-boundary details.

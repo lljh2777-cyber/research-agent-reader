@@ -644,7 +644,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.createProviderSectionHeader(
 			containerEl,
 			"连接与认证",
-			"插件不保存 MinerU Token；认证继续由 mineru-open-api 配置或 MINERU_TOKEN 环境变量管理。",
+			"MinerU Token 可保存在 Obsidian SecretStorage，也可继续使用 mineru-open-api CLI 配置或 MINERU_TOKEN 环境变量。插件配置只保存凭据名称。",
 		);
 		this.renderCliExecutableSetting(containerEl, {
 			kind: "mineru",
@@ -657,6 +657,23 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				this.plugin.providerRuntimeState.delete("mineru");
 			},
 		});
+		const mineruSecretSetting = new Setting(containerEl)
+			.setName("MinerU API Token")
+			.setDesc("用于 precision extract。选择或创建 Obsidian SecretStorage 凭据；真实 Token 不写入 data.json。");
+		if (this.app.secretStorage && typeof SecretComponent === "function") {
+			mineruSecretSetting.addComponent((element) =>
+				new SecretComponent(this.app, element)
+					.setValue(this.plugin.settings.mineruSecretId)
+					.onChange(async (value) => {
+						this.plugin.settings.mineruSecretId = String(value || "").trim().slice(0, 160);
+						this.plugin.providerRuntimeState.delete("mineru");
+						await this.plugin.saveSettings();
+						this.display();
+					})
+			);
+		} else {
+			mineruSecretSetting.setDesc("当前 Obsidian 版本不支持 SecretStorage；请升级 Obsidian，或继续使用 mineru-open-api auth / MINERU_TOKEN。插件不会把 Token 明文写入 data.json。");
+		}
 		new Setting(containerEl)
 			.setName("服务类型")
 			.setDesc("官方服务不传入自定义 Base URL；私有部署使用下方地址。")
@@ -684,12 +701,21 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}));
 		}
+		const selectedSecretId = String(this.plugin.settings.mineruSecretId || "").trim();
+		const selectedSecretReady = Boolean(
+			selectedSecretId
+			&& this.app.secretStorage?.getSecret?.(selectedSecretId),
+		);
 		const tokenDetected = Boolean(String(process.env.MINERU_TOKEN || "").trim());
 		new Setting(containerEl)
 			.setName("认证来源")
-			.setDesc(tokenDetected
-				? "已检测到 MINERU_TOKEN 环境变量。真实 Token 不会写入插件配置或诊断信息。"
-				: "未检测到 MINERU_TOKEN；如已使用 mineru-open-api auth 登录，认证仍可能保存在 CLI 配置中。插件不会读取或复制该凭据。"
+			.setDesc(selectedSecretReady
+				? `Obsidian SecretStorage：${selectedSecretId}。运行时通过 MINERU_TOKEN 传给 CLI，真实 Token 不进入插件配置或诊断信息。`
+				: selectedSecretId
+					? `SecretStorage 中未找到“${selectedSecretId}”；请重新选择或创建凭据。若 CLI 已通过 auth 登录，仍可使用其配置。`
+					: tokenDetected
+						? "已检测到 MINERU_TOKEN 环境变量。真实 Token 不会写入插件配置或诊断信息。"
+						: "未选择 SecretStorage 凭据，也未检测到 MINERU_TOKEN；如已使用 mineru-open-api auth 登录，认证仍可能保存在 CLI 配置中。插件不会读取或复制 CLI 凭据。"
 			);
 		const mineruResult = this.plugin.providerRuntimeState.get("mineru") || null;
 		new Setting(containerEl)

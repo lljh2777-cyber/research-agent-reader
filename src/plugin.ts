@@ -1124,6 +1124,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			this.settings.mineruExecutable = preferredMineruExecutable;
 			changed = true;
 		}
+		this.settings.mineruSecretId = String(storedSettings.mineruSecretId || "").trim().slice(0, 160);
 		this.settings.mineruServiceMode = storedSettings.mineruServiceMode === "private"
 			|| (!storedSettings.mineruServiceMode && Boolean(String(storedSettings.mineruBaseUrl || "").trim()))
 			? "private"
@@ -1566,6 +1567,12 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	probeMineruCliConnection(): Promise<ProviderConnectionTestResult> {
 		return this.processExecution.probeMineruCli(this.settings);
+	}
+
+	private getMineruToken(): string {
+		const secretId = String(this.settings.mineruSecretId || "").trim();
+		if (!secretId) return "";
+		return String(this.app.secretStorage?.getSecret?.(secretId) || "").trim();
 	}
 
 	async probeObsidianCliConnection(): Promise<ObsidianCliConnectionResult> {
@@ -2601,6 +2608,19 @@ export default class AgentDashboardPlugin extends Plugin {
 			let stdout = "";
 			let stderr = "";
 			let settled = false;
+			const mineruEnv: NodeJS.ProcessEnv = {
+				...process.env,
+				PYTHONUTF8: "1",
+				PYTHONIOENCODING: "utf-8",
+			};
+			const mineruToken = this.getMineruToken();
+			if (mineruToken) mineruEnv.MINERU_TOKEN = mineruToken;
+			if (
+				path.resolve(request.command) === path.resolve(process.execPath)
+				&& request.baseArgs.some((value) => /\.(?:c|m)?js$/i.test(value))
+			) {
+				mineruEnv.ELECTRON_RUN_AS_NODE = "1";
+			}
 			const child = spawn(request.command, [...request.baseArgs, ...request.cliArgs], {
 				cwd: request.cwd,
 				shell: false,
@@ -2608,7 +2628,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				// Own process group on POSIX so the negative-pid kill in
 				// killTree() reaches the MinerU CLI subprocess as well.
 				detached: process.platform !== "win32",
-				env: { ...process.env, PYTHONUTF8: "1", PYTHONIOENCODING: "utf-8" },
+				env: mineruEnv,
 			});
 			const settle = (result: { exitCode: number; stdout: string; stderr: string } | Error) => {
 				if (settled) return;

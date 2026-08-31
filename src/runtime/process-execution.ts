@@ -1002,6 +1002,9 @@ export class ProcessExecutionService {
 				}
 				finish(false, "local-service-offline", stderr.trim() || stdout.trim() || `MinerU CLI 退出码 ${code}`);
 			});
+			// npm's PowerShell shim pipes stdin to its Node child and will wait
+			// forever unless the parent closes the pipe. The probe has no input.
+			child.stdin.end();
 			timer = window.setTimeout(() => {
 				if (!child.killed) child.kill();
 				finish(false, "timeout", "MinerU CLI 版本检查超过 10 秒");
