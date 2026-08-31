@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 文献阅读器首次打开含图片的 Markdown 时，正文现在固定从顶部开始；右侧「图片与图注」仍可默认展示第一张图，但该参考栏默认值不再冒充已保存的正文阅读锚点并触发 `scrollIntoView`。已有真实阅读锚点或 PDF 页码的恢复行为保持不变。
 - MinerU 设置现在可通过 Obsidian SecretStorage 选择或创建 API Token，插件只在 `data.json` 中保存凭据名称，并在运行时通过 `MINERU_TOKEN` 传给 CLI；CLI 配置和系统环境变量仍可继续使用。Windows npm PowerShell shim 的版本检查会主动关闭标准输入，不再等待 10 秒超时；从 npm shim 解析出的 JavaScript 入口在 Obsidian/Electron 中以 Node 模式启动。
 - 轻量入库的身份核验和去重现在只接受工具生成的有界结构化回执：声明标题必须命中元数据候选，DOI 与标题必须来自同一精确 Crossref 回执，`none` 查重必须绑定完整标题或 DOI，`exact` 还必须由同一路径下的标题或 DOI 一致证据支持。
 - MinerU 包先在 Vault 同卷唯一 staging 中完整复制，再以单次目录 rename 暴露；复制、提交或并发失败会精确清理 staging（清理本身失败时报告唯一残留），不会暴露半包或覆盖既有包。manifest 不再记录宿主机绝对 PDF/CLI 路径，CLI 版本输出也只保留可识别的 SemVer。

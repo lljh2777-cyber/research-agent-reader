@@ -37,6 +37,17 @@ function loadTsModule(relativePath) {
 const normalization = loadTsModule("src/mineru/normalization.ts");
 const markdown = loadTsModule("src/mineru/reader-markdown.ts");
 
+assert.deepEqual(markdown.readerMarkdownRestoreTarget("visuals", "", 1), { kind: "top" });
+assert.deepEqual(markdown.readerMarkdownRestoreTarget("pdf", "", 1), { kind: "top" });
+assert.deepEqual(markdown.readerMarkdownRestoreTarget("pdf", "", 4), {
+	kind: "page",
+	pageNumber: 4,
+});
+assert.deepEqual(markdown.readerMarkdownRestoreTarget("visuals", "figure-2", 1), {
+	kind: "visual",
+	visualId: "figure-2",
+});
+
 const v1 = [
 	{
 		type: "image",
@@ -2609,6 +2620,8 @@ assert.doesNotMatch(view, /visualTargets/);
 assert.match(view, /markdown_text_range/);
 assert.match(view, /syncStateForMode/);
 assert.match(view, /alignedReaderScrollTop/);
+assert.match(view, /readerMarkdownRestoreTarget/);
+assert.doesNotMatch(view, /sourceKind === "mineru" \? this\.readerState\.currentVisualId/);
 assert.match(view, /this\.readerState\.mode !== "pdf" \|\| this\.readerState\.followPdfReading/);
 assert.match(view, /window\.getSelection\(\)/);
 assert.match(view, /!selection\.isCollapsed && selection\.toString\(\)\.trim\(\)/);

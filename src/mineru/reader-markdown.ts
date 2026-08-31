@@ -132,6 +132,30 @@ export function alignedReaderScrollTop(
 	);
 }
 
+export type ReaderMarkdownRestoreTarget =
+	| { kind: "top" }
+	| { kind: "page"; pageNumber: number }
+	| { kind: "visual"; visualId: string }
+	| { kind: "none" };
+
+/**
+ * Resolve only a persisted Markdown reading position. The reference rail may
+ * independently default to its first visual, but that selection is not proof
+ * that the user read or navigated to the corresponding body anchor.
+ */
+export function readerMarkdownRestoreTarget(
+	mode: "pdf" | "visuals",
+	markdownAnchor: string,
+	markdownPage: number,
+): ReaderMarkdownRestoreTarget {
+	const visualId = String(markdownAnchor || "").trim();
+	const pageNumber = Math.max(1, Math.floor(Number(markdownPage) || 1));
+	if (!visualId && pageNumber === 1) return { kind: "top" };
+	if (mode === "pdf") return { kind: "page", pageNumber };
+	if (visualId) return { kind: "visual", visualId };
+	return { kind: "none" };
+}
+
 type SamePageCaptionProjection = NonNullable<
 	MineruReaderVisual["samePageCaptionProjections"]
 >[number];

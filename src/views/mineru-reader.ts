@@ -22,6 +22,7 @@ import {
 	pdfCaptionContinuationRegions,
 	prepareReaderMarkdown,
 	readerElementOffset,
+	readerMarkdownRestoreTarget,
 	readerPageBoundaryIndex,
 	readerPageAtViewportTop,
 } from "../mineru/reader-markdown";
@@ -451,11 +452,14 @@ export class MineruReaderView extends ItemView {
 				}
 			});
 		});
-		if (readerPackage.sourceKind === "markdown" && !this.readerState.markdownAnchor) {
-			this.restoreMarkdownPosition(article);
-		}
+		const restoreTarget = readerMarkdownRestoreTarget(
+			this.readerState.mode,
+			this.readerState.markdownAnchor,
+			this.readerState.markdownPage,
+		);
+		if (restoreTarget.kind === "top") this.restoreMarkdownPosition(article, restoreTarget);
 		this.observeReadingAnchors(article, scroller);
-		window.requestAnimationFrame(() => this.restoreMarkdownPosition(article));
+		window.requestAnimationFrame(() => this.restoreMarkdownPosition(article, restoreTarget));
 	}
 
 	private materializePageAnchors(article: HTMLElement): number {
@@ -1380,24 +1384,29 @@ export class MineruReaderView extends ItemView {
 		schedulePageUpdate();
 	}
 
-	private restoreMarkdownPosition(article: HTMLElement): void {
-		if (this.readerPackage?.sourceKind === "markdown" && !this.readerState.markdownAnchor) {
+	private restoreMarkdownPosition(
+		article: HTMLElement,
+		target = readerMarkdownRestoreTarget(
+			this.readerState.mode,
+			this.readerState.markdownAnchor,
+			this.readerState.markdownPage,
+		),
+	): void {
+		if (target.kind === "top") {
 			this.markdownScroller?.scrollTo({ top: 0, behavior: "auto" });
 			return;
 		}
-		if (this.readerState.mode === "pdf") {
+		if (target.kind === "page") {
 			const pageAnchor = article.querySelector<HTMLElement>(
-				`[data-reader-page="${this.readerState.markdownPage}"]`,
+				`[data-reader-page="${target.pageNumber}"]`,
 			);
 			if (pageAnchor) {
 				pageAnchor.scrollIntoView({ block: "start" });
-				return;
 			}
+			return;
 		}
-		const anchorId = this.readerState.markdownAnchor
-			|| (this.readerPackage?.sourceKind === "mineru" ? this.readerState.currentVisualId : "");
-		if (!anchorId) return;
-		const anchor = article.querySelector<HTMLElement>(`[data-visual-id="${CSS.escape(anchorId)}"]`);
+		if (target.kind !== "visual") return;
+		const anchor = article.querySelector<HTMLElement>(`[data-visual-id="${CSS.escape(target.visualId)}"]`);
 		anchor?.scrollIntoView({ block: "center" });
 	}
 
