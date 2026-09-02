@@ -210,7 +210,7 @@ function testCmdShimTraversalAndCommandTailAreRejected() {
 	fs.rmSync(originalEntry, { force: true });
 	try {
 		fs.symlinkSync(realEntry, originalEntry, "file");
-		assert.throws(() => resolveMineruCommand(identityShim), /普通文件|符号链接/);
+		assert.throws(() => resolveMineruCommand(identityShim), /普通文件|符号链接|无法从 npm shim 解析/);
 	} catch (error) {
 		if (!error || error.code !== "EPERM") throw error;
 		// Windows without Developer Mode cannot create a symlink fixture. The
