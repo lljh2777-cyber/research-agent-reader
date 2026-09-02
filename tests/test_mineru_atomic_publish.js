@@ -129,6 +129,22 @@ function testRealNpmExtensionlessCmdShimResolution() {
 		resolveMineruCommand(tildeShim).baseArgs[0],
 		fs.realpathSync.native ? fs.realpathSync.native(entry) : fs.realpathSync(entry),
 	);
+
+	const platformPackage = `mineru-open-api-${process.platform}-${process.arch}`;
+	if (["darwin", "linux", "win32"].includes(process.platform) && ["arm64", "x64"].includes(process.arch)) {
+		const packageRoot = path.join(root, "node_modules", "mineru-open-api");
+		fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "mineru-open-api" }));
+		const platformRoot = path.join(packageRoot, "node_modules", platformPackage);
+		const nativeName = process.platform === "win32" ? "mineru-open-api.exe" : "mineru-open-api";
+		const nativeBinary = path.join(platformRoot, "bin", nativeName);
+		fs.mkdirSync(path.dirname(nativeBinary), { recursive: true });
+		fs.writeFileSync(path.join(platformRoot, "package.json"), JSON.stringify({ name: platformPackage }));
+		fs.writeFileSync(nativeBinary, "native fixture");
+		assert.deepEqual(resolveMineruCommand(shim), {
+			command: fs.realpathSync.native ? fs.realpathSync.native(nativeBinary) : fs.realpathSync(nativeBinary),
+			baseArgs: [],
+		});
+	}
 }
 
 function testCmdShimTraversalAndCommandTailAreRejected() {

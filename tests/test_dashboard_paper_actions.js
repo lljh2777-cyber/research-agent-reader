@@ -15,6 +15,8 @@ const settingsTab = readPlugin("src/settings/settings-tab.ts");
 const dashboard = readPlugin("src/views/dashboard.ts");
 const dashboardData = readPlugin("src/services/dashboard-data.ts");
 const processExecution = readPlugin("src/runtime/process-execution.ts");
+const pluginSource = readPlugin("src/plugin.ts");
+const mineruPublish = readPlugin("src/agent/mineru-publish.ts");
 
 assert.match(actions, /id:\s*"paper-ingest"[\s\S]*agent:\s*"paper-intake-pipeline"/);
 assert.match(actions, /id:\s*"pdf-xray"[\s\S]*已有 MinerU article\.md/);
@@ -65,11 +67,20 @@ assert.match(dashboard, /serializeActionRequest\(/);
 assert.match(dashboard, /requestStopRun\(run: TaskRun\): void[\s\S]*?stopTaskRun\(run\.id\)/);
 assert.doesNotMatch(dashboard, /isCliBackendId\(backend\)[\s\S]{0,200}stopDirectVaultQuery\(run\.id\)/);
 // Light-agent modal contract: runner choice, MinerU readiness gate, and the
-// honest no-PDF-reading disclaimer.
+// honest source-layer separation and no-silent-downgrade disclaimer.
 assert.match(modal, /运行方式/);
 assert.match(modal, /lightPaperIngestAvailable\(\)/);
 assert.match(modal, /lightAgentMineruReady\(\)/);
-assert.match(modal, /不会读取 PDF 正文/);
+assert.match(modal, /原文层（papers \+ Clippings）和分析层（wiki\/sources）/);
+assert.match(modal, /两层相互独立且均不覆盖已有内容/);
+assert.match(modal, /原文层 Markdown（papers \/ Clippings）/);
+assert.match(modal, /提取失败不会静默改用元数据/);
+assert.match(
+	mineruPublish,
+	/mineru-open-api-\$\{process\.platform\}-\$\{process\.arch\}/,
+	"npm MinerU launchers must resolve the platform-native binary without Electron",
+);
+assert.match(mineruPublish, /resolvePackagedMineruBinary\(entry\)[\s\S]{0,200}return \{ command: nativeBinary, baseArgs: \[\] \}/);
 // 任务默认策略: paper-ingest gains a default-runner dropdown and the model
 // override is a recognized-model list, not free text.
 assert.match(settingsTab, /默认运行方式/);
@@ -91,10 +102,10 @@ assert.match(dashboardData, /Source note（Vault 相对路径）：\$\{record\.p
 assert.doesNotMatch(dashboardData, /Source note：knowledge-base\/\$\{record\.path\}/);
 assert.match(processExecution, /tool-library[\s\S]*scripts[\s\S]*run_vault_action\.py/);
 assert.match(processExecution, /probeMineruCli[\s\S]*child\.stdin\.end\(\)/);
+assert.match(processExecution, /probeMineruCli[\s\S]*resolveMineruCommand\(executable\)/);
 
-const pluginSource = readPlugin("src/plugin.ts");
 assert.match(pluginSource, /getMineruToken\(\)/);
 assert.match(pluginSource, /mineruEnv\.MINERU_TOKEN = mineruToken/);
-assert.match(pluginSource, /mineruEnv\.ELECTRON_RUN_AS_NODE = "1"/);
+assert.doesNotMatch(pluginSource, /mineruEnv\.ELECTRON_RUN_AS_NODE/);
 
 console.log("DASHBOARD_OPTIONAL_WORKFLOW_CONTRACT_TESTS_OK");

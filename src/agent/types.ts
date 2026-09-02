@@ -88,6 +88,8 @@ export interface AgentLoopRequest {
 	maxToolOutputChars?: number;
 	/** Max characters per single tool result. */
 	maxToolResultChars?: number;
+	/** Optional timeout for each provider turn; still capped by the loop deadline. */
+	providerTimeoutMs?: number;
 	/**
 	 * Run-level abort signal owned by the caller. When it fires, the loop's
 	 * internal signal aborts too — including while a tool is executing — so

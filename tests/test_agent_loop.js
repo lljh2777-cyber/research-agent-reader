@@ -41,6 +41,8 @@ const hookBuild = esbuild.buildSync({
 			'  from "./src/agent/loop";',
 			"export {",
 			"  createVaultReadTool,",
+			"  createBoundArticleReadTool,",
+			"  buildArticleEvidencePacket,",
 			"  createVaultListTool,",
 			"  createVaultSearchTool,",
 			"  createVaultDoiSearchTool,",
@@ -70,9 +72,13 @@ const hookBuild = esbuild.buildSync({
 			"  parseIdentityResult,",
 			"  parseNoteDraft,",
 			"  validateIdentityReceipts,",
+			"  validateDraftReceipts,",
 			"  bindIdentityMetadataFromReceipts,",
 			"  evaluateDraftPhase,",
 			"  computeIngestOutcomeStatus,",
+			"  planExactDuplicateOutputs,",
+			"  resolveExactDuplicateLayers,",
+			"  resolveExactDuplicateCitekey,",
 			"  resolveUniqueCitekey,",
 			"  deriveArticleVaultPath,",
 			"  resolveArticleVaultPath,",
@@ -80,6 +86,7 @@ const hookBuild = esbuild.buildSync({
 			"  stripMatchingQuotes,",
 			"  PAPER_INGEST_READ_PREFIXES,",
 			'} from "./src/agent/paper-ingest-flow";',
+			"export { extractLocalPdfIdentityEvidence, extractPdfDoiCandidates } from './src/agent/pdf-identity';",
 			"export { articleHeadContainsTitle, articleMarkdownTitleMatches, resolvePaperTitleZh } from './src/agent/agent-loop-service';",
 			"export { normalizeTaskRunArtifacts, normalizeStoredTaskRuns } from './src/runtime/persistence';",
 		].join("\n"),
@@ -103,6 +110,8 @@ const {
 	runBoundedAgentLoop,
 	extractFirstJsonObject,
 	createVaultReadTool,
+	createBoundArticleReadTool,
+	buildArticleEvidencePacket,
 	createVaultListTool,
 	createVaultSearchTool,
 	createVaultDoiSearchTool,
@@ -128,15 +137,21 @@ const {
 	parseIdentityResult,
 	parseNoteDraft,
 	validateIdentityReceipts,
+	validateDraftReceipts,
 	bindIdentityMetadataFromReceipts,
 	evaluateDraftPhase,
 	computeIngestOutcomeStatus,
+	planExactDuplicateOutputs,
+	resolveExactDuplicateLayers,
+	resolveExactDuplicateCitekey,
 	resolveUniqueCitekey,
 	deriveArticleVaultPath,
 	resolveArticleVaultPath,
 	parsePaperIngestInput,
 	stripMatchingQuotes,
 	PAPER_INGEST_READ_PREFIXES,
+	extractLocalPdfIdentityEvidence,
+	extractPdfDoiCandidates,
 	articleHeadContainsTitle,
 	articleMarkdownTitleMatches,
 	resolvePaperTitleZh,
@@ -214,11 +229,14 @@ function createFakeVault(files, options = {}) {
 function createFakeProvider(turns) {
 	let call = 0;
 	const calls = [];
+	const requestOptions = [];
 	return {
 		calls,
+		requestOptions,
 		turnCount: () => call,
-		async complete(request) {
+		async complete(request, options = {}) {
 			calls.push(request.messages.map((message) => `${message.role}:${String(message.content)}`));
+			requestOptions.push(options);
 			assert.ok(request.maxTokens >= 512, "loop must pass an explicit maxTokens >= 512");
 			const turn = turns[Math.min(call, turns.length - 1)];
 			call += 1;
@@ -279,9 +297,11 @@ async function testLoopToolRoundtripAndReceipts() {
 		provider,
 		model: "test-model",
 		maxTokens: 4096,
+		providerTimeoutMs: 45000,
 	});
 	assert.equal(result.status, "completed");
 	assert.equal(result.final.ok, true);
+	assert.equal(provider.requestOptions[0].timeoutMs, 45000, "loop must pass the light-agent provider turn timeout");
 	assert.equal(result.toolCalls.length, 2, "plugin must record one receipt per tool execution");
 	assert.equal(result.toolCalls[0].tool, "echo");
 	assert.equal(result.toolCalls[0].ok, true);
@@ -432,6 +452,7 @@ async function testVaultReadAndListScoping() {
 	const fake = createFakeVault(new Map([
 		["wiki/sources/a.md", "---\ntitle: A\n---\n正文"],
 		["papers/demo/article.md", "A".repeat(200)],
+		["Clippings/Original Paper.md", "# Original Paper\n\nClipping 正文"],
 		["papers/demo/image.png", "binary"],
 		["diary/private.md", "隐私内容"],
 	]));
@@ -439,6 +460,8 @@ async function testVaultReadAndListScoping() {
 	const ok = await readTool.execute({ path: "papers/demo/article.md" }, createContext());
 	assert.match(ok.output, /共 200 字符/);
 	assert.deepEqual(ok.receiptData.paths, ["papers/demo/article.md"]);
+	const clipping = await readTool.execute({ path: "Clippings/Original Paper.md" }, createContext());
+	assert.match(clipping.output, /Clipping 正文/);
 	await readTool.execute({ path: "diary/private.md" }, createContext()).then(() => {
 		assert.fail("expected out-of-scope read to be rejected");
 	}, (error) => {
@@ -465,6 +488,80 @@ async function testVaultReadAndListScoping() {
 	}, (error) => {
 		assert.match(error.message, /超出读取范围/);
 	});
+}
+
+async function testBoundArticleReadBypassesIndexLag() {
+	const articlePath = "papers/demo_2026/article.md";
+	const article = [
+		"# Demo Paper",
+		"",
+		"## Abstract",
+		"This study asks whether a path-bound reader can summarize a newly published article.",
+		"",
+		"## 1. Introduction",
+		"The Obsidian file index may lag behind an atomic filesystem publish.",
+		"",
+		"## 2. Methods",
+		"The plugin reads through the Vault adapter and binds the path to the MinerU receipt.",
+		"",
+		"## 3. Results",
+		"The article is available before getAbstractFileByPath can resolve it.",
+		"",
+		"# 4. Conclusion",
+		"Receipt-bound adapter reads remove the same-run indexing race.",
+	].join("\n") + "\n" + "Supplementary detail. ".repeat(900);
+	const fake = createFakeVault(new Map([[articlePath, article]]));
+	// Simulate a package written directly to disk in this run: adapter sees it,
+	// while Obsidian's asynchronous TFile index still returns null.
+	fake.vault.getAbstractFileByPath = () => null;
+	const tool = createBoundArticleReadTool({ app: fake }, articlePath);
+	const result = await tool.execute({ mode: "overview", path: "diary/private.md" }, createContext());
+	assert.match(result.output, /path=papers\/demo_2026\/article\.md mode=overview/);
+	assert.match(result.output, /This study asks whether/);
+	assert.match(result.output, /Receipt-bound adapter reads/);
+	assert.deepEqual(result.receiptData.paths, [articlePath]);
+	assert.ok(result.receiptData.queryTerms.includes("overview"));
+	assert.ok(result.output.length < 24000, "overview packet must stay within the draft tool result budget");
+
+	const page = await tool.execute({ mode: "page", offset: article.indexOf("## 3. Results") }, createContext());
+	assert.match(page.output, /mode=page/);
+	assert.match(page.output, /## 3\. Results/);
+	assert.deepEqual(page.receiptData.paths, [articlePath]);
+
+	assert.throws(
+		() => createBoundArticleReadTool({ app: fake }, "wiki/sources/demo.md"),
+		/原文回执路径不合法/,
+	);
+	const clippingPath = "Clippings/Demo Paper.md";
+	const clippingFake = createFakeVault(new Map([[clippingPath, article]]));
+	const clippingTool = createBoundArticleReadTool({ app: clippingFake }, clippingPath);
+	const clippingOverview = await clippingTool.execute({ mode: "overview" }, createContext());
+	assert.deepEqual(clippingOverview.receiptData.paths, [clippingPath]);
+	assert.match(clippingOverview.output, /Demo Paper/);
+
+	const packet = buildArticleEvidencePacket(article);
+	assert.ok(packet.sections.includes("摘要小节"));
+	assert.ok(packet.sections.includes("结论小节"));
+	assert.match(packet.content, /文章目录/);
+	assert.ok(packet.selectedChars <= 22500);
+
+	const goodReceipt = [{
+		tool: "article_read",
+		ok: true,
+		argsSummary: "mode=overview",
+		data: { paths: [articlePath], queryTerms: ["overview", "摘要小节"], titles: ["Demo Paper"] },
+	}];
+	assert.deepEqual(validateDraftReceipts(articlePath, "Demo Paper", goodReceipt), []);
+	assert.match(validateDraftReceipts(articlePath, "Demo Paper", [{
+		...goodReceipt[0], tool: "vault_read",
+	}]).join("；"), /未成功读取/);
+	assert.match(validateDraftReceipts(articlePath, "Demo Paper", [{
+		...goodReceipt[0], data: { paths: [articlePath], queryTerms: ["page"] },
+	}]).join("；"), /未成功读取/);
+	assert.match(validateDraftReceipts(articlePath, "Demo Paper", [{
+		...goodReceipt[0], data: { paths: ["papers/other/article.md"], queryTerms: ["overview"] },
+	}]).join("；"), /未成功读取/);
+	assert.match(validateDraftReceipts(articlePath, "Different Paper", goodReceipt).join("；"), /标题一致/);
 }
 
 async function testVaultSearchScopeFiltering() {
@@ -514,6 +611,7 @@ async function testVaultSearchScopeFiltering() {
 async function testVaultDoiExactSearch() {
 	const fake = createFakeVault(new Map([
 		["wiki/sources/exact.md", "---\ntitle: Exact Existing Note\ndoi: 10.1000/demo\n---\n正文"],
+		["Clippings/Exact Original.md", "---\ntitle: Exact Original\ndoi: 10.1000/demo\n---\n原文"],
 		["wiki/sources/same-registrar.md", "---\ntitle: Other Note\ndoi: 10.1000/other\n---\n正文"],
 		["wiki/sources/legal-dot.md", "---\ntitle: Legal Trailing Dot\ndoi: 10.1000/legal.\n---\n正文"],
 		["wiki/sources/legal-no-dot.md", "---\ntitle: No Trailing Dot\ndoi: 10.1000/legal\n---\n正文"],
@@ -521,10 +619,10 @@ async function testVaultDoiExactSearch() {
 	]));
 	const tool = createVaultDoiSearchTool({ app: fake }, PAPER_INGEST_READ_PREFIXES);
 	const found = await tool.execute({ doi: "https://doi.org/10.1000/DEMO" }, createContext());
-	assert.deepEqual(found.receiptData.candidates, [{
-		path: "wiki/sources/exact.md",
-		title: "Exact Existing Note",
-	}]);
+	assert.deepEqual(found.receiptData.candidates, [
+		{ path: "Clippings/Exact Original.md", title: "Exact Original" },
+		{ path: "wiki/sources/exact.md", title: "Exact Existing Note" },
+	]);
 	assert.deepEqual(found.receiptData.dois, ["10.1000/DEMO"]);
 	assert.doesNotMatch(found.output, /same-registrar|body-hit/);
 	const missing = await tool.execute({ doi: "10.1000/missing" }, createContext());
@@ -574,6 +672,7 @@ async function testCrossrefDomainTools() {
 	assert.ok(requests[0].startsWith("https://api.crossref.org/works?query.bibliographic="));
 	assert.match(decoded, /Demo Paper & Special\/Chars/);
 	assert.match(searchResult.output, /10\.1000\/demo/);
+	assert.match(searchResult.output, /下一步.*crossref_doi/);
 	assert.deepEqual(searchResult.receiptData.titles, ["Demo Paper: A Study"]);
 	assert.deepEqual(searchResult.receiptData.dois, ["10.1000/demo"]);
 	assert.deepEqual(searchResult.receiptData.bibliographicRecords, [{
@@ -669,6 +768,7 @@ function testMineruCliArgsAndReadiness() {
 		includeSourcePdf: false,
 	}, "out");
 	assert.ok(!auto.includes("--model"), "auto model must omit the flag");
+	assert.equal(auto[auto.indexOf("--format") + 1], "md,json");
 	assert.ok(auto.includes("--formula") && auto.includes("--table"));
 	assert.equal(normalizePagesValue("1-3"), "1-3");
 	assert.throws(() => normalizePagesValue("3-1"), /不能倒序/);
@@ -695,6 +795,19 @@ function testResolveMineruCommand() {
 		assert.equal(resolved.command, process.execPath);
 		assert.equal(resolved.baseArgs[0], canonicalEntry);
 
+		const extensionlessEntry = path.join(base, "node_modules", "mineru-open-api", "bin", "mineru-open-api");
+		fs.mkdirSync(path.dirname(extensionlessEntry), { recursive: true });
+		fs.writeFileSync(extensionlessEntry, "#!/usr/bin/env node\nconsole.log('wrapper');\n");
+		const currentNpmShim = path.join(base, "current-mineru-open-api.cmd");
+		fs.writeFileSync(currentNpmShim, [
+			"@ECHO off",
+			'"%_prog%"  "%~dp0\\node_modules\\mineru-open-api\\bin\\mineru-open-api" %*',
+		].join("\r\n"));
+		const currentResolved = resolveMineruCommand(currentNpmShim);
+		assert.equal(currentResolved.command, process.execPath);
+		assert.equal(path.basename(currentResolved.baseArgs[0]), "mineru-open-api");
+		assert.equal(path.extname(currentResolved.baseArgs[0]), "", "current npm launcher is extensionless");
+
 		const direct = resolveMineruCommand(entry);
 		assert.equal(direct.command, process.execPath);
 		assert.equal(direct.baseArgs.length, 1);
@@ -704,6 +817,23 @@ function testResolveMineruCommand() {
 				: fs.realpathSync(direct.baseArgs[0]),
 			canonicalEntry,
 		);
+
+		const platformPackage = `mineru-open-api-${process.platform}-${process.arch}`;
+		if (["darwin", "linux", "win32"].includes(process.platform) && ["arm64", "x64"].includes(process.arch)) {
+			const packageRoot = path.join(base, "node_modules", "mineru-open-api");
+			fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "mineru-open-api" }));
+			const platformRoot = path.join(packageRoot, "node_modules", platformPackage);
+			const nativeName = process.platform === "win32" ? "mineru-open-api.exe" : "mineru-open-api";
+			const nativeBinary = path.join(platformRoot, "bin", nativeName);
+			fs.mkdirSync(path.dirname(nativeBinary), { recursive: true });
+			fs.writeFileSync(path.join(platformRoot, "package.json"), JSON.stringify({ name: platformPackage }));
+			fs.writeFileSync(nativeBinary, "native fixture");
+			const nativeResolved = resolveMineruCommand(currentNpmShim);
+			assert.equal(nativeResolved.command, fs.realpathSync.native
+				? fs.realpathSync.native(nativeBinary)
+				: fs.realpathSync(nativeBinary));
+			assert.deepEqual(nativeResolved.baseArgs, [], "npm platform binary must bypass Electron/Node wrapper");
+		}
 
 		const brokenShim = path.join(base, "broken.cmd");
 		fs.writeFileSync(brokenShim, "@ECHO off\nREM nothing useful");
@@ -754,7 +884,11 @@ async function testMineruPublishPipeline() {
 		fs.writeFileSync(path.join(mdDir, "article.md"), body, "utf8");
 		const jsonDir = path.join(outputDir, "auto", "json");
 		fs.mkdirSync(jsonDir, { recursive: true });
-		const elements = [[
+		const elements = options.excessiveElements === true
+			? Array.from({ length: 8193 }, (_value, index) => ({ type: "text", page_idx: index }))
+			: options.invalidPageIdx === true
+				? [{ type: "title", page_idx: 2048 }]
+			: [[
 			{ type: "title", page_idx: 0 },
 			{
 				type: "image",
@@ -831,7 +965,54 @@ async function testMineruPublishPipeline() {
 		.update(fs.readFileSync(path.join(packagePath, "article.md")))
 		.digest("hex");
 	assert.equal(articleRecord.sha256, expectedHash);
-	assert.equal(manifest.derived_contracts.length, 0);
+	assert.equal(manifest.derived_contracts.length, 3);
+	for (const relativePath of [
+		"_extraction/viewer-index.json",
+		"_extraction/visual-repair.json",
+		"_extraction/visual-candidates.json",
+	]) {
+		const contractPath = path.join(packagePath, ...relativePath.split("/"));
+		assert.equal(fs.existsSync(contractPath), true, `${relativePath} must be persisted`);
+		const contractRecord = manifest.derived_contracts.find((record) => record.path === relativePath);
+		assert.ok(contractRecord, `${relativePath} must be registered`);
+		assert.equal(
+			contractRecord.sha256,
+			require("node:crypto").createHash("sha256").update(fs.readFileSync(contractPath)).digest("hex"),
+		);
+	}
+	assert.equal(validation.checks.viewer_index_contract_valid, true);
+	assert.equal(validation.checks.visual_repair_contract_valid, true);
+	assert.equal(validation.checks.visual_candidates_contract_valid, true);
+	const viewerContract = JSON.parse(
+		fs.readFileSync(path.join(packagePath, "_extraction", "viewer-index.json"), "utf8"),
+	);
+	assert.equal(viewerContract.inputs.article.sha256, expectedHash);
+	const repairContract = JSON.parse(
+		fs.readFileSync(path.join(packagePath, "_extraction", "visual-repair.json"), "utf8"),
+	);
+	assert.equal(repairContract.algorithm_version, "visual-repair-v1.11");
+	assert.equal(repairContract.inputs.article.sha256, expectedHash);
+	const candidateContract = JSON.parse(
+		fs.readFileSync(path.join(packagePath, "_extraction", "visual-candidates.json"), "utf8"),
+	);
+	assert.equal(candidateContract.contract, "mineru-visual-candidates");
+	assert.equal(candidateContract.status, "empty");
+	assert.equal(candidateContract.inputs.article.sha256, expectedHash);
+	assert.deepEqual(candidateContract.policy.allowed_verdicts, ["accept", "reject", "abstain"]);
+
+	// Pure derived contracts are deterministic across equivalent publishes.
+	const deterministic = await publishMineruPackage(
+		makeDeps(),
+		{ ...args, citekey: "deterministic_2026" },
+		{ signal: new AbortController().signal, timeoutMs: 600000 },
+	);
+	for (const relativePath of ["viewer-index.json", "visual-repair.json", "visual-candidates.json"]) {
+		assert.deepEqual(
+			fs.readFileSync(path.join(deterministic.packagePath, "_extraction", relativePath)),
+			fs.readFileSync(path.join(packagePath, "_extraction", relativePath)),
+			`${relativePath} must be byte-deterministic`,
+		);
+	}
 
 	// Create-only: a second publish for the same citekey must fail.
 	const duplicate = await publishMineruPackage(makeDeps(), args, {
@@ -848,6 +1029,24 @@ async function testMineruPublishPipeline() {
 	).then(() => null, (error) => error);
 	assert.match(broken.message, /缺失或为空/);
 	assert.equal(fs.existsSync(path.join(vaultRoot, "papers", "broken_2026")), false);
+
+	// Structural resource limits fail inside staging and expose no final package.
+	const excessive = await publishMineruPackage(
+		makeDeps({ excessiveElements: true }),
+		{ ...args, citekey: "excessive_2026" },
+		{ signal: new AbortController().signal, timeoutMs: 600000 },
+	).then(() => null, (error) => error);
+	assert.match(excessive.message, /超过安全上限/);
+	assert.equal(fs.existsSync(path.join(vaultRoot, "papers", "excessive_2026")), false);
+
+	// A sparse but out-of-range flat page index is rejected before contracts are written.
+	const invalidPage = await publishMineruPackage(
+		makeDeps({ invalidPageIdx: true }),
+		{ ...args, citekey: "invalid_page_2026" },
+		{ signal: new AbortController().signal, timeoutMs: 600000 },
+	).then(() => null, (error) => error);
+	assert.match(invalidPage.message, /page_idx/);
+	assert.equal(fs.existsSync(path.join(vaultRoot, "papers", "invalid_page_2026")), false);
 
 	// Short markdown fails the title/length gate.
 	const short = await publishMineruPackage(
@@ -1086,6 +1285,8 @@ function testIdentityAndDraftContracts() {
 	const identityPrompt = buildIdentitySystemPrompt(options);
 	assert.match(identityPrompt, /身份核验与去重/);
 	assert.match(identityPrompt, /crossref_search/);
+	assert.match(identityPrompt, /最多两次/);
+	assert.match(identityPrompt, /输出前检查清单/);
 	assert.match(identityPrompt, /有核验 DOI 时还必须用 vault_doi_search/);
 	assert.match(identityPrompt, /没有该记录时必须返回 status=conflict/);
 	assert.match(identityPrompt, /不能写入任何文件/);
@@ -1094,10 +1295,23 @@ function testIdentityAndDraftContracts() {
 	assert.doesNotMatch(identityPrompt, /write_note/);
 
 	// Path privacy: only the basename reaches the model prompt.
-	const user = buildIdentityUserMessage(options);
+	const user = buildIdentityUserMessage(options, {
+		status: "available",
+		fileName: "demo.pdf",
+		pageCount: 12,
+		metadataTitle: "Complete Demo Paper Title",
+		metadataAuthors: "Demo Author",
+		doiCandidates: ["10.1000/demo"],
+		firstPageText: "Complete Demo Paper Title\nDemo Author\ndoi: 10.1000/demo",
+		warning: "",
+	});
 	assert.match(user, /demo\.pdf/);
 	assert.doesNotMatch(user, /PrivateDir/);
 	assert.match(user, /重点处理图 2/);
+	assert.match(user, /Complete Demo Paper Title/);
+	assert.match(user, /10\.1000\/demo/);
+	assert.match(identityPrompt, /本地 PDF 身份预检/);
+	assert.match(identityPrompt, /全部本地 DOI 均已尝试/);
 
 	const draftPrompt = buildDraftSystemPrompt(options, "demo_2026", "Demo Paper");
 	assert.match(draftPrompt, /插件会根据你返回的字段生成笔记文件/);
@@ -1147,6 +1361,51 @@ function testIdentityAndDraftContracts() {
 	assert.equal(draft.evidenceGaps, "缺口");
 	const longSection = "x".repeat(9000);
 	assert.equal(parseNoteDraft({ status: "completed", conclusion: longSection }).conclusion.length, 6000);
+}
+
+async function testLocalPdfIdentityPreflight() {
+	let destroyed = false;
+	let pageCleaned = false;
+	const result = await extractLocalPdfIdentityEvidence("D:/private/research/demo.pdf", {
+		deps: {
+			readFile: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+			loadPdfJs: async () => ({
+				getDocument(options) {
+					assert.equal(options.isEvalSupported, false);
+					return {
+						promise: Promise.resolve({
+							numPages: 9,
+							getMetadata: async () => ({
+								info: { Title: "Metadata Paper Title", Author: "A. Author", Subject: "10.1000/local" },
+								metadata: null,
+							}),
+							getPage: async () => ({
+								getTextContent: async () => ({ items: [
+									{ str: "Full First Page Paper Title", hasEOL: true },
+									{ str: "https://doi.org/10.1000/local", hasEOL: true },
+								] }),
+								cleanup: () => { pageCleaned = true; },
+							}),
+							destroy: async () => { destroyed = true; },
+						}),
+					};
+				},
+			}),
+		},
+	});
+	assert.equal(result.status, "available");
+	assert.equal(result.fileName, "demo.pdf");
+	assert.equal(result.metadataTitle, "Metadata Paper Title");
+	assert.equal(result.metadataAuthors, "A. Author");
+	assert.equal(result.pageCount, 9);
+	assert.deepEqual(result.doiCandidates, ["10.1000/local"]);
+	assert.match(result.firstPageText, /Full First Page Paper Title/);
+	assert.doesNotMatch(JSON.stringify(result), /private|D:\//i, "absolute source path must not reach model evidence");
+	assert.equal(pageCleaned, true);
+	assert.equal(destroyed, true);
+	assert.deepEqual(extractPdfDoiCandidates([
+		"doi: 10.1000/One and https://doi.org/10.1000/one",
+	]), ["10.1000/One"]);
 }
 
 function testIdentityReceiptGate() {
@@ -1525,12 +1784,19 @@ function testDraftGateAndStatusSemantics() {
 	// Strict article mode without a verified package must not draft.
 	const blocked = evaluateDraftPhase(options, "", false);
 	assert.equal(blocked.run, false);
-	assert.match(blocked.blocker, /已有 article\.md/);
+	assert.match(blocked.blocker, /有效 article\.md 回执/);
 	const allowed = evaluateDraftPhase(options, "papers/x/article.md", false);
 	assert.equal(allowed.run, true);
-	const downgraded = evaluateDraftPhase({ ...options, articleWikiSource: "auto" }, "", false);
-	assert.equal(downgraded.run, true);
-	assert.match(downgraded.downgradeNote, /元数据与用户说明/);
+	const noSilentDowngrade = evaluateDraftPhase({ ...options, articleWikiSource: "auto" }, "", false);
+	assert.equal(noSilentDowngrade.run, false);
+	assert.match(noSilentDowngrade.blocker, /不做静默降级/);
+	const metadataOnly = evaluateDraftPhase({
+		...options,
+		createArticleMarkdown: false,
+		articleWikiSource: "auto",
+	}, "", false);
+	assert.equal(metadataOnly.run, true);
+	assert.match(metadataOnly.downgradeNote, /元数据与用户说明/);
 
 	// Technical errors are "failed", never dressed up as conflicts — even
 	// when a conflict blocker exists alongside them.
@@ -1579,6 +1845,62 @@ function testDraftGateAndStatusSemantics() {
 	);
 }
 
+function testExactDuplicateCompletesMissingOutputs() {
+	const options = { createArticleMarkdown: true, createArticleWiki: true };
+	assert.deepEqual(planExactDuplicateOutputs(options, {
+		sourcePath: "",
+		analysisPath: "wiki/sources/cho_pan-cancer_2026.md",
+	}), { needsMarkdown: true, needsWiki: false, noOp: false });
+	assert.deepEqual(planExactDuplicateOutputs(options, {
+		sourcePath: "papers/cho_pan-cancer_2026/article.md",
+		analysisPath: "",
+	}), { needsMarkdown: false, needsWiki: true, noOp: false });
+	assert.deepEqual(planExactDuplicateOutputs(options, {
+		sourcePath: "Clippings/Pan-cancer spatial atlas.md",
+		analysisPath: "wiki/sources/cho_pan-cancer_2026.md",
+	}), { needsMarkdown: false, needsWiki: false, noOp: true });
+	assert.deepEqual(planExactDuplicateOutputs(options, {
+		sourcePath: "",
+		analysisPath: "",
+	}), { needsMarkdown: true, needsWiki: true, noOp: false });
+	const identity = {
+		title: "Pan-cancer spatial atlas of tertiary lymphoid structures",
+		doi: "10.1126/science.adz2742",
+		citekey: "cho_pan-cancer_2026",
+	};
+	const receipts = [
+		{
+			tool: "vault_search", ok: true, argsSummary: "title",
+			data: { candidates: [
+				{ path: "Clippings/Pan-cancer spatial atlas.md", title: identity.title },
+				{ path: "wiki/sources/unrelated.md", title: "Unrelated paper" },
+			] },
+		},
+		{
+			tool: "vault_doi_search", ok: true, argsSummary: "doi",
+			data: {
+				query: identity.doi, dois: [identity.doi],
+				candidates: [{ path: "wiki/sources/cho_pan-cancer_2026.md", title: identity.title }],
+			},
+		},
+	];
+	assert.deepEqual(resolveExactDuplicateLayers(identity, receipts), {
+		sourcePath: "Clippings/Pan-cancer spatial atlas.md",
+		analysisPath: "wiki/sources/cho_pan-cancer_2026.md",
+	});
+	assert.equal(resolveExactDuplicateCitekey({
+		citekey: "new_candidate_2026",
+		duplicates: ["`wiki/sources/cho_pan-cancer_2026.md` — DOI 完全一致"],
+	}), "cho_pan-cancer_2026");
+	assert.equal(resolveExactDuplicateCitekey({
+		citekey: "cho_pan-cancer_2026",
+		duplicates: [
+			"`wiki/sources/cho_pan-cancer_2026.md` — DOI 完全一致",
+			"`papers/cho_pan-cancer_2026/article.md` — 同一记录",
+		],
+	}), "cho_pan-cancer_2026");
+}
+
 function testResolvedTitleTranslationMatchesCommittedDraft() {
 	assert.equal(
 		resolvePaperTitleZh({ title_zh: "身份阶段译名" }, { title_zh: "笔记阶段审校译名" }),
@@ -1588,7 +1910,7 @@ function testResolvedTitleTranslationMatchesCommittedDraft() {
 	assert.equal(resolvePaperTitleZh(null, null), "");
 }
 
-function testPhaseToolsetsAreRead() {
+async function testPhaseToolsetsAreRead() {
 	const fake = createFakeVault(new Map([]));
 	const deps = {
 		vault: { app: fake },
@@ -1605,15 +1927,57 @@ function testPhaseToolsetsAreRead() {
 		},
 		lexicalRetriever: { retrieve: async () => ({ lexical_seeds: [] }) },
 	};
-	const identityNames = buildIdentityTools(deps).map((tool) => tool.name);
+	const identityTools = buildIdentityTools(deps);
+	const identityNames = identityTools.map((tool) => tool.name);
 	assert.deepEqual(identityNames.filter((name) => name === "mineru_extract" || name === "write_note"), []);
 	assert.ok(identityNames.includes("crossref_search"));
 	assert.ok(identityNames.includes("vault_search"));
 	assert.ok(identityNames.includes("vault_doi_search"));
+	assert.equal(identityNames[0], "vault_search", "local identity preflight must be the first exposed tool");
+	const limitedCrossref = identityTools.find((tool) => tool.name === "crossref_search");
+	const blockedBeforeVault = await limitedCrossref.execute({ query: "premature" }, createContext())
+		.then(() => null, (error) => error);
+	assert.match(blockedBeforeVault.message, /必须先调用 vault_search/);
+	const gatedDoi = identityTools.find((tool) => tool.name === "crossref_doi");
+	const blockedDoi = await gatedDoi.execute({ doi: "10.1000/demo" }, createContext())
+		.then(() => null, (error) => error);
+	assert.match(blockedDoi.message, /必须先调用 vault_search/);
+	const identityVaultSearch = identityTools.find((tool) => tool.name === "vault_search");
+	await identityVaultSearch.execute({ question: "local title first" }, createContext());
+	await limitedCrossref.execute({ query: "first" }, createContext());
+	await limitedCrossref.execute({ query: "second" }, createContext());
+	const exhausted = await limitedCrossref.execute({ query: "third" }, createContext())
+		.then(() => null, (error) => error);
+	assert.match(exhausted.message, /最多调用两次/);
+
+	const localDoiDeps = {
+		...deps,
+		http: {
+			httpGetJson: async () => ({
+				status: 200,
+				json: { message: { DOI: "10.1000/local", title: ["Local PDF Paper"] } },
+				text: "",
+			}),
+		},
+	};
+	const localDoiTools = buildIdentityTools(localDoiDeps, { doiCandidates: ["10.1000/local"] });
+	await localDoiTools.find((tool) => tool.name === "vault_search")
+		.execute({ question: "Local PDF Paper" }, createContext());
+	const localDoiSearch = localDoiTools.find((tool) => tool.name === "crossref_search");
+	const blockedFuzzy = await localDoiSearch.execute({ query: "Local PDF Paper" }, createContext())
+		.then(() => null, (error) => error);
+	assert.match(blockedFuzzy.message, /必须先逐个调用 crossref_doi/);
+	await localDoiTools.find((tool) => tool.name === "crossref_doi")
+		.execute({ doi: "10.1000/local" }, createContext());
+	const blockedAfterExact = await localDoiSearch.execute({ query: "Local PDF Paper" }, createContext())
+		.then(() => null, (error) => error);
+	assert.match(blockedAfterExact.message, /已被 Crossref 精确查到/);
 
 	const draftNames = buildDraftTools(deps).map((tool) => tool.name);
 	assert.deepEqual(draftNames.filter((name) => name === "mineru_extract" || name === "write_note"), []);
 	assert.deepEqual(draftNames.filter((name) => name === "crossref_search"), []);
+	const boundDraftNames = buildDraftTools(deps, "papers/demo_2026/article.md").map((tool) => tool.name);
+	assert.deepEqual(boundDraftNames, ["article_read"]);
 }
 
 async function testArticleHeadTitleGate() {
@@ -1826,6 +2190,7 @@ function testArtifactsPersistenceRoundTrip() {
 	await testLoopCancellationAbortsSignalDuringTools();
 	await testLoopBudgetAndTruncation();
 	await testVaultReadAndListScoping();
+	await testBoundArticleReadBypassesIndexLag();
 	await testVaultSearchScopeFiltering();
 	await testVaultDoiExactSearch();
 	await testCrossrefDomainTools();
@@ -1837,10 +2202,12 @@ function testArtifactsPersistenceRoundTrip() {
 	await testArticlePathBinding();
 	await testResolveUniqueCitekey();
 	testIdentityAndDraftContracts();
+	await testLocalPdfIdentityPreflight();
 	testIdentityReceiptGate();
 	testDraftGateAndStatusSemantics();
+	testExactDuplicateCompletesMissingOutputs();
 	testResolvedTitleTranslationMatchesCommittedDraft();
-	testPhaseToolsetsAreRead();
+	await testPhaseToolsetsAreRead();
 	await testArticleHeadTitleGate();
 	testYamlScalarSafety();
 	testParsePaperIngestInput();

@@ -3,6 +3,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
+import { buildRuntimeViewerIndex, MINERU_VIEWER_LIMITS } from "../mineru/normalization";
+import { buildVisualCandidates, validateVisualCandidates } from "../mineru/visual-candidates";
+import { buildRuntimeVisualRepair, validateVisualContracts } from "../mineru/visual-repair";
+
 /**
  * Native (Python/toolkit-free) MinerU publish pipeline for the light agent.
  * It spawns the mineru-open-api CLI directly, validates the extraction with
@@ -95,6 +99,81 @@ export interface ResolvedMineruCommand {
 	baseArgs: string[];
 }
 
+function packagedMineruPlatformName(): string {
+	if (!["darwin", "linux", "win32"].includes(process.platform)) return "";
+	if (!["arm64", "x64"].includes(process.arch)) return "";
+	return `mineru-open-api-${process.platform}-${process.arch}`;
+}
+
+/**
+ * npm 0.5.x ships a tiny Node launcher whose only job is to find and execute
+ * an optional platform package. Resolve that native binary ourselves so the
+ * desktop plugin never tries to use Obsidian/Electron as a Node runtime.
+ */
+function resolvePackagedMineruBinary(entry: string): string {
+	const packageRoot = path.dirname(path.dirname(entry));
+	const packageJson = path.join(packageRoot, "package.json");
+	try {
+		const rootRecord = JSON.parse(fs.readFileSync(packageJson, "utf8")) as { name?: string };
+		if (rootRecord.name !== "mineru-open-api") return "";
+	} catch {
+		return "";
+	}
+	const platformPackage = packagedMineruPlatformName();
+	if (!platformPackage) return "";
+	const binaryName = process.platform === "win32" ? "mineru-open-api.exe" : "mineru-open-api";
+	const packageCandidates = [
+		path.join(packageRoot, "node_modules", platformPackage),
+		path.join(path.dirname(packageRoot), platformPackage),
+	];
+	for (const platformRoot of packageCandidates) {
+		try {
+			const platformRecord = JSON.parse(
+				fs.readFileSync(path.join(platformRoot, "package.json"), "utf8"),
+			) as { name?: string };
+			if (platformRecord.name !== platformPackage) continue;
+			const stats = fs.lstatSync(path.join(platformRoot, "bin", binaryName));
+			if (stats.isSymbolicLink() || !stats.isFile()) continue;
+			const realPlatformRoot = realPathSync(platformRoot);
+			const realBinary = realPathSync(path.join(platformRoot, "bin", binaryName));
+			if (!isPathInside(realPlatformRoot, realBinary)) continue;
+			return realBinary;
+		} catch {
+			continue;
+		}
+	}
+	return "";
+}
+
+function resolveNodeRuntime(shimRoot: string): string {
+	const executableName = process.platform === "win32" ? "node.exe" : "node";
+	const candidates = [
+		path.join(shimRoot, executableName),
+		...(process.env.PATH || "")
+			.split(path.delimiter)
+			.filter(Boolean)
+			.map((directory) => path.join(directory, executableName)),
+	];
+	if (/^node(?:\.exe)?$/i.test(path.basename(process.execPath))) candidates.unshift(process.execPath);
+	for (const candidate of candidates) {
+		try {
+			const stats = fs.lstatSync(candidate);
+			if (stats.isFile()) return realPathSync(candidate);
+		} catch {
+			continue;
+		}
+	}
+	return "";
+}
+
+function resolveNodeLauncher(entry: string, shimRoot: string): ResolvedMineruCommand {
+	const nativeBinary = resolvePackagedMineruBinary(entry);
+	if (nativeBinary) return { command: nativeBinary, baseArgs: [] };
+	const nodeRuntime = resolveNodeRuntime(shimRoot);
+	if (nodeRuntime) return { command: nodeRuntime, baseArgs: [entry] };
+	throw new Error("MinerU npm 包需要 Node.js，但插件未找到 node 可执行文件；请重新安装 Node.js 或 mineru-open-api");
+}
+
 function resolveNpmShimEntry(shimPath: string, shim: string): string {
 	const shimRoot = path.dirname(shimPath);
 	const realShimRoot = realPathSync(shimRoot);
@@ -144,7 +223,16 @@ export function resolveMineruCommand(executable: string): ResolvedMineruCommand 
 	}
 	const ext = path.extname(resolved).toLowerCase();
 	if (ext === ".js" || ext === ".mjs" || ext === ".cjs") {
-		return { command: process.execPath, baseArgs: [resolved] };
+		return resolveNodeLauncher(realPathSync(resolved), path.dirname(resolved));
+	}
+	if (!ext) {
+		const stats = fs.lstatSync(resolved);
+		if (stats.isFile()) {
+			const head = fs.readFileSync(resolved, "utf8").slice(0, 200);
+			if (/^#!.*\bnode\b/i.test(head)) {
+				return resolveNodeLauncher(realPathSync(resolved), path.dirname(resolved));
+			}
+		}
 	}
 	if (ext !== ".cmd" && ext !== ".bat") {
 		return { command: resolved, baseArgs: [] };
@@ -155,7 +243,7 @@ export function resolveMineruCommand(executable: string): ResolvedMineruCommand 
 	}
 	const shim = fs.readFileSync(resolved, "utf8");
 	const entry = resolveNpmShimEntry(resolved, shim);
-	if (entry) return { command: process.execPath, baseArgs: [entry] };
+	if (entry) return resolveNodeLauncher(entry, path.dirname(resolved));
 	throw new Error(
 		`无法从 npm shim 解析 MinerU 入口脚本：${resolved}。请在设置中直接配置其 node_modules 下的 .js 入口文件`,
 	);
@@ -234,9 +322,12 @@ function listFilesRecursive(root: string): string[] {
 /** Mirrors the toolkit helper: exactly one .md, one unambiguous MinerU JSON. */
 function locateMineruOutputs(extractDir: string): { markdown: string; json: string } {
 	const files = listFilesRecursive(extractDir);
+	const inventory = files.length
+		? files.slice(0, 20).map((file) => path.relative(extractDir, file).replace(/\\/g, "/")).join("、")
+		: "（空）";
 	const markdownFiles = files.filter((file) => file.toLowerCase().endsWith(".md"));
 	if (markdownFiles.length !== 1) {
-		throw new Error(`MinerU 输出应只有一个 .md，实际 ${markdownFiles.length} 个`);
+		throw new Error(`MinerU 输出应只有一个 .md，实际 ${markdownFiles.length} 个；暂存文件：${inventory}`);
 	}
 	const jsonFiles = files.filter((file) => file.toLowerCase().endsWith(".json"));
 	let jsonFile = jsonFiles.length === 1 ? jsonFiles[0] : "";
@@ -247,7 +338,7 @@ function locateMineruOutputs(extractDir: string): { markdown: string; json: stri
 		jsonFile = preferred?.[0] || "";
 	}
 	if (!jsonFile) {
-		throw new Error(`MinerU 输出应有唯一无歧义的 JSON，实际 ${jsonFiles.length} 个`);
+		throw new Error(`MinerU 输出应有唯一无歧义的 JSON，实际 ${jsonFiles.length} 个；暂存文件：${inventory}`);
 	}
 	return { markdown: markdownFiles[0], json: jsonFile };
 }
@@ -276,22 +367,39 @@ function flattenMineruElements(payload: unknown): MineruElement[] {
 	if (!Array.isArray(payload) || payload.length === 0) {
 		throw new Error("mineru-result.json 必须是非空元素数组");
 	}
+	if (payload.length > MINERU_VIEWER_LIMITS.maxSourceElements) {
+		throw new Error("mineru-result.json 元素或页数超过安全上限");
+	}
 	const flattened: MineruElement[] = [];
 	const push = (item: unknown, pageIdx: number): void => {
+		if (flattened.length >= MINERU_VIEWER_LIMITS.maxSourceElements) {
+			throw new Error("mineru-result.json 元素数超过安全上限");
+		}
 		if (!item || typeof item !== "object" || Array.isArray(item)) {
 			throw new Error("mineru-result.json 含非对象元素");
 		}
 		const record = item as Record<string, unknown>;
 		const page = pageIdx >= 0 ? pageIdx : record.page_idx;
-		if (typeof page !== "number" || !Number.isInteger(page) || page < 0) {
+		if (
+			typeof page !== "number"
+			|| !Number.isInteger(page)
+			|| page < 0
+			|| page >= MINERU_VIEWER_LIMITS.maxPages
+		) {
 			throw new Error("mineru-result.json 元素缺少有效 page_idx");
 		}
 		const asset = collectAssetFromItem(record);
 		flattened.push({ pageIdx: page, assetPaths: asset ? [asset] : [] });
 	};
 	if (payload.every((page) => Array.isArray(page))) {
+		if (payload.length > MINERU_VIEWER_LIMITS.maxPages) {
+			throw new Error("mineru-result.json 页数超过安全上限");
+		}
 		for (let pageIndex = 0; pageIndex < (payload as unknown[][]).length; pageIndex += 1) {
 			const page = (payload as unknown[][])[pageIndex];
+			if (page.length > MINERU_VIEWER_LIMITS.maxBlocksPerPage) {
+				throw new Error(`mineru-result.json 第 ${pageIndex + 1} 页元素数超过安全上限`);
+			}
 			if (!page.length) continue;
 			for (const item of page) push(item, pageIndex);
 		}
@@ -365,6 +473,9 @@ export function validateStagedPackage(packageRoot: string): Record<string, unkno
 	}
 
 	const markdownAssets = markdownAssetRefs(markdown);
+	if (markdownAssets.length > MINERU_VIEWER_LIMITS.maxMarkdownImages) {
+		throw new Error("article.md 图片引用数超过安全上限");
+	}
 	for (const rawAsset of markdownAssets) {
 		const assetPath = safePackageAssetPath(packageRoot, rawAsset);
 		if (!fs.existsSync(assetPath) || fs.statSync(assetPath).size === 0) {
@@ -400,14 +511,16 @@ function buildManifest(inputs: {
 	createdIso: string;
 }): Record<string, unknown> {
 	const outputs: Array<Record<string, unknown>> = [];
-	const register = (absolutePath: string): void => {
+	const derivedContracts: Array<Record<string, unknown>> = [];
+	const fileRecord = (absolutePath: string): Record<string, unknown> => {
 		const relative = path.relative(inputs.packageRoot, absolutePath).split(path.sep).join("/");
 		const size = fs.statSync(absolutePath).size;
 		if (size > MAX_PUBLISH_ASSET_BYTES) {
 			throw new Error(`包内文件超过发布上限（256MiB）：${relative}`);
 		}
-		outputs.push({ path: relative, size, sha256: sha256File(absolutePath) });
+		return { path: relative, size, sha256: sha256File(absolutePath) };
 	};
+	const register = (absolutePath: string): void => { outputs.push(fileRecord(absolutePath)); };
 	register(path.join(inputs.packageRoot, "article.md"));
 	register(path.join(inputs.packageRoot, "mineru-result.json"));
 	const imagesDir = path.join(inputs.packageRoot, "images");
@@ -416,6 +529,14 @@ function buildManifest(inputs: {
 	}
 	if (inputs.includeSourcePdf) {
 		register(path.join(inputs.packageRoot, "_extraction", "source.pdf"));
+	}
+	for (const relativePath of [
+		"_extraction/viewer-index.json",
+		"_extraction/visual-repair.json",
+		"_extraction/visual-candidates.json",
+	]) {
+		const absolutePath = path.join(inputs.packageRoot, ...relativePath.split("/"));
+		if (fs.existsSync(absolutePath)) derivedContracts.push(fileRecord(absolutePath));
 	}
 	const sourceStat = fs.statSync(inputs.sourcePdf);
 	return {
@@ -447,7 +568,74 @@ function buildManifest(inputs: {
 			include_source_pdf: inputs.includeSourcePdf,
 		},
 		outputs,
-		derived_contracts: [],
+		derived_contracts: derivedContracts,
+	};
+}
+
+function writeDerivedViewerContracts(
+	packageRoot: string,
+	includeSourcePdf: boolean,
+): {
+	viewerStatus: string;
+	repairStatus: string;
+	candidateStatus: string;
+	groupCount: number;
+	autoGroupCount: number;
+	candidateCount: number;
+} {
+	const articlePath = path.join(packageRoot, "article.md");
+	const mineruPath = path.join(packageRoot, "mineru-result.json");
+	const articleBytes = fs.readFileSync(articlePath);
+	const mineruBytes = fs.readFileSync(mineruPath);
+	const articleMarkdown = articleBytes.toString("utf8");
+	const mineruPayload = JSON.parse(mineruBytes.toString("utf8")) as unknown;
+	const articleHash = sha256Bytes(articleBytes);
+	const mineruHash = sha256Bytes(mineruBytes);
+	const viewerIndex = buildRuntimeViewerIndex(mineruPayload, articleMarkdown, {
+		articleSha256: articleHash,
+		mineruResultSha256: mineruHash,
+		packagedSourcePdf: includeSourcePdf,
+	});
+	const visualRepair = buildRuntimeVisualRepair(viewerIndex);
+	const contractErrors = validateVisualContracts({
+		viewerIndex,
+		visualRepair,
+		sourceIndex: viewerIndex,
+		articleHash,
+		mineruHash,
+	});
+	if (contractErrors.length) {
+		throw new Error(`生成的 MinerU 视觉派生契约未通过来源绑定：${contractErrors.slice(0, 5).join("；")}`);
+	}
+	const visualCandidates = buildVisualCandidates(viewerIndex, visualRepair);
+	const candidateErrors = validateVisualCandidates(visualCandidates, viewerIndex, visualRepair);
+	if (candidateErrors.length) {
+		throw new Error(`生成的 MinerU 视觉候选契约未通过来源绑定：${candidateErrors.slice(0, 5).join("；")}`);
+	}
+	const extractionDir = path.join(packageRoot, "_extraction");
+	fs.mkdirSync(extractionDir, { recursive: true });
+	fs.writeFileSync(
+		path.join(extractionDir, "viewer-index.json"),
+		JSON.stringify(viewerIndex, null, 2) + "\n",
+		"utf8",
+	);
+	fs.writeFileSync(
+		path.join(extractionDir, "visual-repair.json"),
+		JSON.stringify(visualRepair, null, 2) + "\n",
+		"utf8",
+	);
+	fs.writeFileSync(
+		path.join(extractionDir, "visual-candidates.json"),
+		JSON.stringify(visualCandidates, null, 2) + "\n",
+		"utf8",
+	);
+	return {
+		viewerStatus: viewerIndex.status,
+		repairStatus: visualRepair.status,
+		candidateStatus: visualCandidates.status,
+		groupCount: visualRepair.groups.length,
+		autoGroupCount: visualRepair.groups.filter((group) => group.decision === "auto").length,
+		candidateCount: visualCandidates.candidates.length,
 	};
 }
 
@@ -703,8 +891,24 @@ export async function publishMineruPackage(
 			fs.copyFileSync(source, path.join(extractionDir, "source.pdf"));
 		}
 
-		const validation = validateStagedPackage(packageRoot);
 		fs.mkdirSync(extractionDir, { recursive: true });
+		const baseValidation = validateStagedPackage(packageRoot);
+		const contractSummary = writeDerivedViewerContracts(packageRoot, args.includeSourcePdf);
+		const validation = {
+			...baseValidation,
+			checks: {
+				...(baseValidation.checks as Record<string, unknown>),
+				viewer_index_contract_valid: true,
+				visual_repair_contract_valid: true,
+				visual_candidates_contract_valid: true,
+			},
+			viewer_index_status: contractSummary.viewerStatus,
+			visual_repair_status: contractSummary.repairStatus,
+			visual_candidates_status: contractSummary.candidateStatus,
+			visual_repair_group_count: contractSummary.groupCount,
+			visual_repair_auto_group_count: contractSummary.autoGroupCount,
+			visual_candidates_count: contractSummary.candidateCount,
+		};
 		fs.writeFileSync(
 			path.join(extractionDir, "validation.json"),
 			JSON.stringify(validation, null, 2) + "\n",

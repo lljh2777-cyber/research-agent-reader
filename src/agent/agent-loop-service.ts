@@ -10,6 +10,7 @@ import type {
 import type { DashboardSettings } from "../runtime/settings";
 import { runBoundedAgentLoop } from "./loop";
 import { MineruPreCommitValidationError } from "./mineru-publish";
+import { extractLocalPdfIdentityEvidence } from "./pdf-identity";
 import {
 	buildDraftSystemPrompt,
 	buildDraftTools,
@@ -24,10 +25,14 @@ import {
 	mineruReadiness,
 	parseIdentityResult,
 	parseNoteDraft,
+	planExactDuplicateOutputs,
 	resolveArticleVaultPath,
+	resolveExactDuplicateCitekey,
+	resolveExactDuplicateLayers,
 	resolveUniqueCitekey,
 	runAuthorizedMineruExtract,
 	validateIdentityReceipts,
+	validateDraftReceipts,
 	VaultWriteJournal,
 	type PaperIngestFlowOptions,
 	type PaperIngestIdentity,
@@ -131,6 +136,8 @@ interface IngestState {
 	draft: PaperIngestNoteDraft | null;
 	titleConflict: boolean;
 	duplicateNoOp: boolean;
+	existingSourcePath: string;
+	existingAnalysisPath: string;
 	cancelled: boolean;
 	/** Set when the total wall-clock budget timer aborted the run. */
 	budgetAborted: boolean;
@@ -200,6 +207,8 @@ export class AgentLoopService {
 			draft: null,
 			titleConflict: false,
 			duplicateNoOp: false,
+			existingSourcePath: "",
+			existingAnalysisPath: "",
 			cancelled: false,
 			budgetAborted: false,
 		};
@@ -230,6 +239,14 @@ export class AgentLoopService {
 			const toolDeps = this.buildToolDeps(settings, retriever, abortController.signal);
 			const maxStepsPerPhase = Math.max(3, Math.min(20, Math.round(settings.lightAgentMaxSteps) || 10));
 			const maxTokens = Math.max(512, Math.min(8192, Math.round(settings.lightAgentMaxOutputTokens) || 4096));
+			// Agent turns carry a growing tool transcript and often need longer
+			// than a connection probe. Keep the profile's larger value, but give
+			// light-agent turns a practical 60-second floor; the phase/run wall
+			// deadline remains the hard upper bound inside runBoundedAgentLoop.
+			const providerTurnTimeoutMs = Math.max(
+				60_000,
+				Math.min(120_000, resolved.provider.config.timeoutSeconds * 1000),
+			);
 			const isCancelled = (): boolean => state.cancelled;
 			// Raw remaining budget — never padded back up to a minimum, so the
 			// total wall clock is a hard ceiling.
@@ -240,18 +257,30 @@ export class AgentLoopService {
 				return false;
 			};
 
-			// ---- Phase 1: identity + dedup (model loop, read-only tools) ----
+			// ---- Phase 1: local PDF preflight + identity/dedup model loop ----
+			emitStatus("running", "阶段一 · 本地 PDF 身份预检");
+			const localPdfEvidence = await extractLocalPdfIdentityEvidence(options.sourcePdfPath, {
+				signal: abortController.signal,
+			});
+			if (localPdfEvidence.status === "available") {
+				emitStatus("running", localPdfEvidence.doiCandidates.length
+					? `阶段一 · 本地 PDF 已提取 ${localPdfEvidence.doiCandidates.length} 个 DOI 候选`
+					: "阶段一 · 本地 PDF 元数据与第一页已读取");
+			} else if (options.sourcePdfPath) {
+				state.notes.push(localPdfEvidence.warning);
+			}
 			emitStatus("running", "阶段一 · 身份核验与去重");
 			const identityLoop = await runBoundedAgentLoop({
 				system: buildIdentitySystemPrompt(options),
-				user: buildIdentityUserMessage(options),
-				tools: buildIdentityTools(toolDeps),
+				user: buildIdentityUserMessage(options, localPdfEvidence),
+				tools: buildIdentityTools(toolDeps, localPdfEvidence),
 				provider: resolved.provider,
 				model: resolved.model,
 				maxTokens,
 				maxSteps: maxStepsPerPhase,
 				timeoutMs: loopTimeout(),
 				maxToolOutputChars: 60000,
+				providerTimeoutMs: providerTurnTimeoutMs,
 				signal: abortController.signal,
 				isCancelled,
 				onStep: onStep("身份核验"),
@@ -274,7 +303,6 @@ export class AgentLoopService {
 			const identity = state.identity;
 			state.conflicts.push(...identity.conflicts);
 			state.duplicates.push(...identity.duplicates);
-			state.notes.push(...identity.notes);
 
 			// Bind canonical bibliographic fields before dedup validation so the
 			// searched identity and the identity eventually committed are identical.
@@ -287,28 +315,51 @@ export class AgentLoopService {
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
 			if (identity.status === "conflict") {
+				state.notes.push(...identity.notes);
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
 			if (identity.duplicateStatus === "possible") {
+				state.notes.push(...identity.notes);
 				state.conflicts.push(`疑似重复，需要人工确认：${identity.duplicates.join("；") || "见检索结果"}`);
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
 			if (identity.duplicateStatus === "exact") {
-				state.duplicateNoOp = true;
-				state.notes.push(`已存在完全相同文献，跳过生成：${identity.duplicates.join("；") || "见检索结果"}`);
-				return this.finish(state, options, profileId, resolved, emitStatus);
+				const observedLayers = resolveExactDuplicateLayers(identity, identityLoop.toolCalls);
+				const existingCitekey = resolveExactDuplicateCitekey(identity);
+				if (existingCitekey && existingCitekey !== identity.citekey) {
+					state.notes.push(`沿用现有重复记录的 citekey：${existingCitekey}`);
+					identity.citekey = existingCitekey;
+				}
+				const existing = await this.resolveExistingOutputs(identity.citekey, observedLayers);
+				state.existingSourcePath = existing.sourcePath;
+				state.existingAnalysisPath = existing.analysisPath;
+				const duplicatePlan = planExactDuplicateOutputs(options, existing);
+				if (duplicatePlan.noOp) {
+					state.duplicateNoOp = true;
+					state.notes.push(...identity.notes);
+					state.notes.push(`相同文献的所需输出均已存在，跳过生成：${identity.duplicates.join("；") || "见检索结果"}`);
+					return this.finish(state, options, profileId, resolved, emitStatus);
+				}
+				const missing = [
+					duplicatePlan.needsMarkdown ? "MinerU 原文包" : "",
+					duplicatePlan.needsWiki ? "文章 Wiki" : "",
+				].filter(Boolean).join("、");
+				state.notes.push(`已确认相同文献；保留既有输出，仅补全缺失的${missing}`);
 			}
+			if (identity.duplicateStatus === "none") state.notes.push(...identity.notes);
 			emitStatus("running", `阶段一完成 · citekey ${identity.citekey}`);
 
 			// Deterministic citekey uniqueness inside the active Vault.
-			const citekeyCheck = await this.resolveCitekeyUniqueness(identity.citekey);
-			if (citekeyCheck.renamed) {
-				identity.citekey = citekeyCheck.citekey;
-				state.notes.push(`citekey 已被占用，自动改为 ${citekeyCheck.citekey}`);
+			if (identity.duplicateStatus === "none") {
+				const citekeyCheck = await this.resolveCitekeyUniqueness(identity.citekey);
+				if (citekeyCheck.renamed) {
+					identity.citekey = citekeyCheck.citekey;
+					state.notes.push(`citekey 已被占用，自动改为 ${citekeyCheck.citekey}`);
+				}
 			}
 
 			// ---- Phase 2: MinerU extraction (deterministic, authorized PDF only) ----
-			if (options.createArticleMarkdown) {
+			if (options.createArticleMarkdown && !state.existingSourcePath) {
 				emitStatus("running", "阶段二 · MinerU 原文提取");
 				if (!ensureBudget()) {
 					return this.finish(state, options, profileId, resolved, emitStatus);
@@ -328,9 +379,13 @@ export class AgentLoopService {
 			}
 
 			// ---- Phase 3: note draft fields (model loop) + plugin commit ----
+			const draftArticlePath = state.receipts.articleVaultPath || state.existingSourcePath;
+			const draftOptions = state.existingAnalysisPath
+				? { ...options, createArticleWiki: false }
+				: options;
 			const draftDecision = evaluateDraftPhase(
-				options,
-				state.receipts.articleVaultPath,
+				draftOptions,
+				draftArticlePath,
 				state.titleConflict,
 			);
 			if (draftDecision.blocker) {
@@ -344,15 +399,22 @@ export class AgentLoopService {
 				}
 				emitStatus("running", "阶段三 · 整理文章 Wiki 字段");
 				const draftLoop = await runBoundedAgentLoop({
-					system: buildDraftSystemPrompt(options, identity.citekey, identity.title),
+					system: buildDraftSystemPrompt(
+						options,
+						identity.citekey,
+						identity.title,
+						draftArticlePath,
+					),
 					user: buildDraftUserMessage(identity.citekey, identity.title),
-					tools: buildDraftTools(toolDeps),
+					tools: buildDraftTools(toolDeps, draftArticlePath),
 					provider: resolved.provider,
 					model: resolved.model,
 					maxTokens,
 					maxSteps: Math.min(maxStepsPerPhase, 8),
 					timeoutMs: loopTimeout(),
 					maxToolOutputChars: 60000,
+					maxToolResultChars: 24000,
+					providerTimeoutMs: providerTurnTimeoutMs,
 					signal: abortController.signal,
 					isCancelled,
 					onStep: onStep("文章 Wiki"),
@@ -360,6 +422,15 @@ export class AgentLoopService {
 				state.traces.push(draftLoop.trace);
 				if (draftLoop.status !== "completed") {
 					state.errors.push(deriveStopError(state, draftLoop));
+					return this.finish(state, options, profileId, resolved, emitStatus);
+				}
+				const draftReceiptProblems = validateDraftReceipts(
+					draftArticlePath,
+					identity.title,
+					draftLoop.toolCalls,
+				);
+				if (draftReceiptProblems.length) {
+					state.errors.push(`阶段三未满足插件侧原文凭据要求：${draftReceiptProblems.join("；")}`);
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}
 				state.draft = parseNoteDraft(draftLoop.final);
@@ -518,6 +589,25 @@ export class AgentLoopService {
 		return resolveUniqueCitekey(base, exists);
 	}
 
+	private async resolveExistingOutputs(
+		citekey: string,
+		observed: { sourcePath: string; analysisPath: string },
+	): Promise<{ sourcePath: string; analysisPath: string }> {
+		const articlePath = `papers/${citekey}/article.md`;
+		const wikiPath = `wiki/sources/${citekey}.md`;
+		const adapter = this.deps.app.vault.adapter;
+		const observedSource = observed.sourcePath && await adapter.exists(observed.sourcePath, true)
+			? observed.sourcePath
+			: "";
+		const observedAnalysis = observed.analysisPath && await adapter.exists(observed.analysisPath, true)
+			? observed.analysisPath
+			: "";
+		return {
+			sourcePath: observedSource || (await adapter.exists(articlePath, true) ? articlePath : ""),
+			analysisPath: observedAnalysis || (await adapter.exists(wikiPath, true) ? wikiPath : ""),
+		};
+	}
+
 	private buildToolDeps(
 		settings: DashboardSettings,
 		lexicalRetriever: { retrieve(
@@ -604,11 +694,13 @@ export class AgentLoopService {
 
 		const markdownSatisfied = state.duplicateNoOp
 			|| !options.createArticleMarkdown
+			|| Boolean(state.existingSourcePath)
 			|| (state.receipts.mineruPackage !== null
 				&& Boolean(state.receipts.articleVaultPath)
 				&& !state.titleConflict);
 		const wikiSatisfied = state.duplicateNoOp
 			|| !options.createArticleWiki
+			|| Boolean(state.existingAnalysisPath)
 			|| state.receipts.writes.length > 0;
 		const identityConflict = state.identity?.status === "conflict";
 
@@ -635,8 +727,8 @@ export class AgentLoopService {
 			citekey: state.identity?.citekey || "",
 			title: state.identity?.title || state.draft?.title || "",
 			title_zh: resolvePaperTitleZh(state.identity, state.draft),
-			articlePath: state.receipts.articleVaultPath,
-			wikiPath: state.receipts.writes[0]?.path || "",
+			articlePath: state.receipts.articleVaultPath || state.existingSourcePath,
+			wikiPath: state.receipts.writes[0]?.path || state.existingAnalysisPath,
 			filesWritten,
 			duplicates: [...state.duplicates],
 			conflicts,

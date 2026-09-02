@@ -2615,12 +2615,6 @@ export default class AgentDashboardPlugin extends Plugin {
 			};
 			const mineruToken = this.getMineruToken();
 			if (mineruToken) mineruEnv.MINERU_TOKEN = mineruToken;
-			if (
-				path.resolve(request.command) === path.resolve(process.execPath)
-				&& request.baseArgs.some((value) => /\.(?:c|m)?js$/i.test(value))
-			) {
-				mineruEnv.ELECTRON_RUN_AS_NODE = "1";
-			}
 			const child = spawn(request.command, [...request.baseArgs, ...request.cliArgs], {
 				cwd: request.cwd,
 				shell: false,

@@ -9,11 +9,16 @@ import {
 	reclassifyRuntimeRunningHeaders,
 } from "./normalization";
 import {
-	captionLinkMatchesBlocks,
 	mergeStandaloneCaptionRepairGroups,
 	resolveVisualCaptionDetails,
 	visualLabelFromCaption,
 } from "./reader-markdown";
+import {
+	buildRuntimeVisualRepair,
+	CURRENT_VISUAL_REPAIR_ALGORITHM,
+	isSupportedVisualRepairAlgorithm,
+	validateVisualContracts,
+} from "./visual-repair";
 import type {
 	MineruReaderPackage,
 	MineruReaderVisual,
@@ -262,6 +267,9 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 	const captionNextPageFigureKeys = asStringArray(captionRecord.next_page_figure_keys).length
 		? asStringArray(captionRecord.next_page_figure_keys)
 		: [...(fallback?.caption?.next_page_figure_keys || [])];
+	const captionFormalFigureKeys = asStringArray(captionRecord.formal_figure_caption_keys).length
+		? asStringArray(captionRecord.formal_figure_caption_keys)
+		: [...(fallback?.caption?.formal_figure_caption_keys || [])];
 	const textRecord = asRecord(record.text);
 	const blockText = String(textRecord.text || fallback?.text?.text || "").trim();
 	const textFigureKeys = asStringArray(textRecord.figure_keys).length
@@ -270,6 +278,9 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 	const textLeadingFigureKey = String(
 		textRecord.leading_figure_key || fallback?.text?.leading_figure_key || "",
 	).trim().toLowerCase();
+	const textFormalFigureKeys = asStringArray(textRecord.formal_figure_caption_keys).length
+		? asStringArray(textRecord.formal_figure_caption_keys)
+		: [...(fallback?.text?.formal_figure_caption_keys || [])];
 	const assetPath = normalizeAssetPath(record.asset_path ?? fallback?.asset_path);
 	const bbox = normalizeBbox(record.bbox_norm ?? record.bbox, false) || fallback?.bbox_norm || null;
 	const rawRole = String(record.role || fallback?.role || "other");
@@ -293,6 +304,12 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 					item_count: Number(captionRecord.item_count || fallback?.caption?.item_count || 0),
 					figure_keys: captionFigureKeys,
 					leading_figure_key: captionLeadingFigureKey || undefined,
+					formal_figure_caption_keys: captionFormalFigureKeys,
+					leading_formal_figure_caption_key: String(
+						captionRecord.leading_formal_figure_caption_key
+						|| fallback?.caption?.leading_formal_figure_caption_key
+						|| "",
+					).trim().toLowerCase() || undefined,
 					next_page_marker: captionNextPageMarker,
 					next_page_figure_keys: captionNextPageFigureKeys,
 					next_page_placeholders: captionNextPagePlaceholders,
@@ -305,6 +322,9 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 					starts_with_panel_label: typeof captionRecord.starts_with_panel_label === "boolean"
 						? captionRecord.starts_with_panel_label
 						: fallback?.caption?.starts_with_panel_label,
+					long_item_count: Number(captionRecord.long_item_count ?? fallback?.caption?.long_item_count ?? 0),
+					figure_anchor_count: Number(captionRecord.figure_anchor_count ?? fallback?.caption?.figure_anchor_count ?? 0),
+					panel_label_count: Number(captionRecord.panel_label_count ?? fallback?.caption?.panel_label_count ?? 0),
 					next_page_reference_count: Number(
 						captionRecord.next_page_reference_count
 						?? fallback?.caption?.next_page_reference_count
@@ -321,6 +341,12 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 					item_count: Number(textRecord.item_count || fallback?.text?.item_count || 0),
 					figure_keys: textFigureKeys,
 					leading_figure_key: textLeadingFigureKey || undefined,
+					formal_figure_caption_keys: textFormalFigureKeys,
+					leading_formal_figure_caption_key: String(
+						textRecord.leading_formal_figure_caption_key
+						|| fallback?.text?.leading_formal_figure_caption_key
+						|| "",
+					).trim().toLowerCase() || undefined,
 					next_page_marker: typeof textRecord.next_page_marker === "boolean"
 						? textRecord.next_page_marker
 						: Boolean(fallback?.text?.next_page_marker),
@@ -375,6 +401,8 @@ function normalizeViewerIndex(value: unknown, fallback: MineruViewerIndex): Mine
 				order: Number(image.order ?? order),
 				asset_path: normalizeAssetPath(image.asset_path),
 				occurrence: Number(image.occurrence || 0),
+				char_start: Number.isInteger(image.char_start) ? Number(image.char_start) : undefined,
+				char_end: Number.isInteger(image.char_end) ? Number(image.char_end) : undefined,
 			};
 		}).filter((image) => image.asset_path)
 		: fallback.markdown_images;
@@ -385,6 +413,9 @@ function normalizeViewerIndex(value: unknown, fallback: MineruViewerIndex): Mine
 		coordinate_system: asRecord(record.coordinate_system) as MineruViewerIndex["coordinate_system"],
 		pdf_source: asRecord(record.pdf_source) as MineruViewerIndex["pdf_source"],
 		markdown_images: markdownImages,
+		// Markdown caption ranges are always rebuilt from the verified article.md;
+		// a stored sidecar cannot introduce or rewrite logical figure ownership.
+		markdown_captions: [...(fallback.markdown_captions || [])],
 		pages: pages.sort((a, b) => a.page_idx - b.page_idx),
 		issues: Array.isArray(record.issues) ? record.issues.map(issueText) : [],
 	};
@@ -393,6 +424,7 @@ function normalizeViewerIndex(value: unknown, fallback: MineruViewerIndex): Mine
 function normalizeDecision(value: unknown): MineruRepairDecision {
 	if (value === "auto") return "auto";
 	if (value === "review") return "review";
+	if (value === "skip") return "skip";
 	return "keep-original";
 }
 
@@ -437,7 +469,7 @@ function normalizeRepair(value: unknown): MineruVisualRepair | null {
 	const record = asRecord(value);
 	if (Number(record.schema_version) !== 1 || !Array.isArray(record.groups)) return null;
 	const algorithmVersion = String(record.algorithm_version || "");
-	if (!["visual-repair-v1.1", "visual-repair-v1.2", "visual-repair-v1.3", "visual-repair-v1.4", "visual-repair-v1.5", "visual-repair-v1.6"].includes(algorithmVersion)) return null;
+	if (!isSupportedVisualRepairAlgorithm(algorithmVersion)) return null;
 	const groups = record.groups.map((value): MineruVisualRepairGroup | null => {
 		const group = asRecord(value);
 		const replacement = asRecord(group.replacement);
@@ -452,7 +484,9 @@ function normalizeRepair(value: unknown): MineruVisualRepair | null {
 		return {
 			id,
 			page_idx: pageIdx,
+			figure_key: String(group.figure_key || "").trim().toLowerCase() || undefined,
 			member_block_ids: memberBlockIds,
+			member_asset_paths: asStringArray(group.member_asset_paths),
 			member_markdown_image_ids: asStringArray(group.member_markdown_image_ids),
 			decision: normalizeDecision(group.decision),
 			confidence: Math.max(0, Math.min(1, Number(group.confidence || 0))),
@@ -466,6 +500,7 @@ function normalizeRepair(value: unknown): MineruVisualRepair | null {
 			caption_anchor_block_ids: asStringArray(group.caption_anchor_block_ids),
 			signals: asRecord(group.signals),
 			reason_codes: asStringArray(group.reason_codes),
+			warning_codes: asStringArray(group.warning_codes),
 			fallback: String(group.fallback || "original_assets"),
 		};
 	}).filter((group): group is MineruVisualRepairGroup => Boolean(group));
@@ -608,7 +643,7 @@ function buildVisuals(
 		const orderedAssets = [...assetPaths].sort(
 			(a, b) => markdownOrderForAsset(index, a) - markdownOrderForAsset(index, b),
 		);
-		const captions = resolveVisualCaptionDetails(members, blocks, repair, group.page_idx);
+		const captions = resolveVisualCaptionDetails(members, blocks, repair, group.page_idx, index);
 		visuals.push({
 			id: group.id,
 			pageIdx: group.page_idx,
@@ -643,6 +678,7 @@ function buildVisuals(
 				blocks,
 				repair,
 				index.pages.find((page) => page.blocks.includes(block))?.page_idx || 0,
+				index,
 			),
 			memberBlockIds: [block.id],
 			memberAssetPaths: [assetPath],
@@ -682,80 +718,13 @@ function viewerHashesMatch(
 		&& expectedMineru === mineruHash.toLowerCase();
 }
 
-function bboxContains(container: NormalizedBbox, child: NormalizedBbox): boolean {
-	return container[0] <= child[0] + 0.01
-		&& container[1] <= child[1] + 0.01
-		&& container[2] + 0.01 >= child[2]
-		&& container[3] + 0.01 >= child[3];
-}
-
-function repairMatchesIndex(
-	repair: MineruVisualRepair,
-	index: MineruViewerIndex,
-	articleHash: string,
-	mineruHash: string,
+function visualRepairPlanMatches(
+	stored: MineruVisualRepair,
+	active: MineruVisualRepair,
 ): boolean {
-	if (!viewerHashesMatch({ ...index, inputs: repair.inputs }, articleHash, mineruHash)) return false;
-	const blockById = new Map<string, { block: MineruViewerBlock; pageIdx: number }>();
-	index.pages.forEach((page) => page.blocks.forEach((block) => {
-		blockById.set(block.id, { block, pageIdx: page.page_idx });
-	}));
-	const markdownImageIds = new Set(index.markdown_images.map((image) => image.id));
-	const consumed = new Set<string>();
-	for (const group of repair.groups) {
-		const memberIds = group.member_block_ids;
-		if (memberIds.length < 2 || new Set(memberIds).size !== memberIds.length) return false;
-		const members = memberIds.map((id) => blockById.get(id));
-		if (members.some((member) => !member || member.pageIdx !== group.page_idx)) return false;
-		if (memberIds.some((id) => consumed.has(id))) return false;
-		memberIds.forEach((id) => consumed.add(id));
-		if ((group.member_markdown_image_ids || []).some((id) => !markdownImageIds.has(id))) return false;
-		if ((group.caption_anchor_block_ids || []).some((id) => !memberIds.includes(id))) return false;
-		if (group.replacement.mode === "existing_asset") {
-			if (!group.replacement.block_id || !memberIds.includes(group.replacement.block_id)) return false;
-			const memberAssets = new Set(members.map((member) => member?.block.asset_path).filter(Boolean));
-			if (!group.replacement.asset_path || !memberAssets.has(group.replacement.asset_path)) return false;
-		} else if (group.replacement.mode === "pdf_crop") {
-			const crop = group.replacement.bbox_norm;
-			if (!crop || members.some((member) => member?.block.bbox_norm && !bboxContains(crop, member.block.bbox_norm))) {
-				return false;
-			}
-		} else {
-			return false;
-		}
-	}
-	const linkedVisuals = new Set<string>();
-	const linkedCaptionBlocks = new Set<string>();
-	for (const link of repair.caption_links || []) {
-		if (linkedVisuals.has(link.visual_block_id)) return false;
-		linkedVisuals.add(link.visual_block_id);
-		const visual = blockById.get(link.visual_block_id);
-		if (
-			!visual
-			|| visual.pageIdx !== link.source_page_idx
-			|| visual.block.role !== "visual"
-			|| link.target_page_idx !== link.source_page_idx + 1
-			|| new Set(link.caption_block_ids).size !== link.caption_block_ids.length
-		) return false;
-		const captionBlocks = link.caption_block_ids.map((id) => blockById.get(id));
-		if (
-			captionBlocks.some((entry) => (
-				!entry
-				|| entry.pageIdx !== link.target_page_idx
-				|| !["text", "title"].includes(entry.block.role)
-				|| !String(entry.block.text?.text || "").trim()
-			))
-			|| link.caption_block_ids.some((id) => consumed.has(id))
-			|| link.caption_block_ids.some((id) => linkedCaptionBlocks.has(id))
-			|| !captionLinkMatchesBlocks(
-				link,
-				visual.block,
-				index.pages.find((page) => page.page_idx === link.target_page_idx)?.blocks || [],
-			)
-		) return false;
-		link.caption_block_ids.forEach((id) => linkedCaptionBlocks.add(id));
-	}
-	return true;
+	return stored.algorithm_version === active.algorithm_version
+		&& JSON.stringify(stored.groups) === JSON.stringify(active.groups)
+		&& JSON.stringify(stored.caption_links || []) === JSON.stringify(active.caption_links || []);
 }
 
 export class MineruPackageLoader {
@@ -792,11 +761,15 @@ export class MineruPackageLoader {
 		const pdfPathCandidate = `${packagePath}/_extraction/source.pdf`;
 		const pdfPath = findTFile(this.app, pdfPathCandidate) ? pdfPathCandidate : null;
 		await verifyManifestOutputs(this.app, packagePath, manifest, article, mineru, pdfPath);
-		const mineruPayload = parseJson(mineru.text, "mineru-result.json");
-		const fallbackIndex = buildRuntimeViewerIndex(mineruPayload, article.text);
-		const issues = [...fallbackIndex.issues];
 		const articleHash = sha256(article.bytes);
 		const mineruHash = sha256(mineru.bytes);
+		const mineruPayload = parseJson(mineru.text, "mineru-result.json");
+		const fallbackIndex = buildRuntimeViewerIndex(mineruPayload, article.text, {
+			articleSha256: articleHash,
+			mineruResultSha256: mineruHash,
+			packagedSourcePdf: Boolean(pdfPath),
+		});
+		const issues = [...fallbackIndex.issues];
 		const contractValue = await readOptionalDerivedJson(
 			this.app,
 			`${packagePath}/_extraction/viewer-index.json`,
@@ -820,13 +793,61 @@ export class MineruPackageLoader {
 			issues,
 			derivedRecords.get("_extraction/visual-repair.json"),
 		);
-		let visualRepair = repairValue ? normalizeRepair(repairValue) : null;
-		if (repairValue && !visualRepair) {
+		const storedVisualRepair = repairValue ? normalizeRepair(repairValue) : null;
+		if (repairValue && !storedVisualRepair) {
 			issues.push("visual-repair.json 结构或算法版本不受支持，已保留 MinerU 原图显示");
 		}
-		if (visualRepair && !repairMatchesIndex(visualRepair, viewerIndex, articleHash, mineruHash)) {
-			issues.push("visual-repair.json 与当前原文或阅读索引不一致，已保留 MinerU 原图显示");
+		if (storedVisualRepair && storedVisualRepair.algorithm_version !== CURRENT_VISUAL_REPAIR_ALGORITHM) {
+			issues.push(`visual-repair.json 使用旧逻辑（${storedVisualRepair.algorithm_version}），已按当前规则重新计算 Figure 所有权`);
+		}
+		if (storedVisualRepair?.algorithm_version === CURRENT_VISUAL_REPAIR_ALGORITHM) {
+			const storedErrors = validateVisualContracts({
+				viewerIndex,
+				visualRepair: storedVisualRepair,
+				sourceIndex: fallbackIndex,
+				articleHash,
+				mineruHash,
+			});
+			if (storedErrors.length) {
+				issues.push(`visual-repair.json 来源绑定失败，已忽略该缓存：${storedErrors.slice(0, 3).join("；")}`);
+			}
+		}
+
+		// visual-repair.json is a cache, never a second source of truth. Always
+		// derive the active plan from the verified article.md + MinerU JSON so a
+		// package created by an older plugin cannot keep old grouping behavior.
+		let visualRepair: MineruVisualRepair | null = buildRuntimeVisualRepair(viewerIndex);
+		let runtimeErrors = validateVisualContracts({
+			viewerIndex,
+			visualRepair,
+			sourceIndex: fallbackIndex,
+			articleHash,
+			mineruHash,
+		});
+		if (runtimeErrors.length && viewerIndex !== fallbackIndex) {
+			issues.push(`Viewer Index 派生数据未通过来源绑定，已从原始 MinerU JSON 重建：${runtimeErrors.slice(0, 3).join("；")}`);
+			viewerIndex = fallbackIndex;
+			visualRepair = buildRuntimeVisualRepair(viewerIndex);
+			runtimeErrors = validateVisualContracts({
+				viewerIndex,
+				visualRepair,
+				sourceIndex: fallbackIndex,
+				articleHash,
+				mineruHash,
+			});
+		}
+		if (runtimeErrors.length) {
+			issues.push(`运行时视觉重建未通过来源绑定，已保留 MinerU 原图：${runtimeErrors.slice(0, 3).join("；")}`);
 			visualRepair = null;
+		} else if (!storedVisualRepair) {
+			issues.push(pdfPath
+				? "未找到视觉修复缓存，阅读器已从已验证的 MinerU 产物生成当前显示计划"
+				: "未找到视觉修复缓存，阅读器已生成当前碎图组合计划（无 source.pdf，不启用 PDF 裁剪）");
+		} else if (
+			storedVisualRepair.algorithm_version === CURRENT_VISUAL_REPAIR_ALGORITHM
+			&& !visualRepairPlanMatches(storedVisualRepair, visualRepair)
+		) {
+			issues.push("visual-repair.json 与当前确定性规则不一致，已忽略缓存并使用运行时计划");
 		}
 		if (visualRepair) issues.push(...visualRepair.issues);
 		const externalPdfRecorded = Boolean(asRecord(manifest.source).path);

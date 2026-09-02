@@ -339,6 +339,9 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 			}, 500);
 			let completion: Awaited<ReturnType<typeof request.provider.complete>>;
 			try {
+				const providerTimeoutMs = request.providerTimeoutMs
+					? Math.max(3_000, Math.min(request.providerTimeoutMs, Math.max(3_000, deadline - Date.now())))
+					: undefined;
 				completion = await request.provider.complete(
 					{
 						model: request.model,
@@ -346,6 +349,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 						maxTokens: request.maxTokens,
 					},
 					{
+						timeoutMs: providerTimeoutMs,
 						registerCancel: (cancel) => {
 							activeCancel = cancel;
 							if (controller.signal.aborted) cancel();

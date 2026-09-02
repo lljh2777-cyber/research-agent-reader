@@ -7,6 +7,18 @@ import {
 	nextPageCaptionPlaceholderFromText,
 	normalizeAssetPath,
 } from "./normalization";
+import { logicalFigureOwnershipForPage } from "./figure-ownership";
+export {
+	alignedReaderScrollTop,
+	readerElementOffset,
+	readerMarkdownRestoreTarget,
+	readerPageAtViewportTop,
+	readerPageBoundaryIndex,
+} from "./reader-position";
+export type {
+	MineruReaderViewportBlock,
+	ReaderMarkdownRestoreTarget,
+} from "./reader-position";
 import type {
 	MineruCaptionLink,
 	MineruReaderVisual,
@@ -48,112 +60,6 @@ export interface PdfCaptionContinuationRegion {
 
 export interface PdfCaptionContinuationText extends PdfCaptionContinuationRegion {
 	text: string;
-}
-
-export interface MineruReaderViewportBlock {
-	pageNumber: number;
-	top: number;
-	bottom: number;
-}
-
-/**
- * Pick one monotonic DOM boundary for a source page. An inline marker survived
- * the same Markdown suppression/rendering pipeline as the visible text, so it
- * is stronger evidence than a later normalized-text search. The latter is a
- * compatibility fallback for older or partially indexed packages only.
- */
-export function readerPageBoundaryIndex(
-	exactIndices: readonly number[],
-	fallbackIndices: readonly number[],
-	previousIndex: number,
-	allowDocumentStart = false,
-): number {
-	const firstAfterPrevious = (values: readonly number[]): number => [...values]
-		.filter((value) => Number.isInteger(value) && value > previousIndex)
-		.sort((left, right) => left - right)[0] ?? -1;
-	const exact = firstAfterPrevious(exactIndices);
-	if (exact >= 0) return exact;
-	const fallback = firstAfterPrevious(fallbackIndices);
-	if (fallback >= 0) return fallback;
-	return allowDocumentStart && previousIndex < 0 ? 0 : -1;
-}
-
-/**
- * Resolve the page owned by the first visible Markdown line. Blocks crossing
- * the viewport top win over later blocks, so a partially visible paragraph is
- * still attributed to the page where that rendered block begins.
- */
-export function readerPageAtViewportTop(
-	blocks: readonly MineruReaderViewportBlock[],
-	viewportTop: number,
-	viewportBottom: number,
-	fallbackPage = 1,
-): number {
-	const top = Number.isFinite(viewportTop) ? viewportTop : 0;
-	const bottom = Number.isFinite(viewportBottom)
-		? Math.max(top, viewportBottom)
-		: Number.POSITIVE_INFINITY;
-	const visible = blocks
-		.filter((block) => (
-			Number.isFinite(block.pageNumber)
-			&& block.pageNumber > 0
-			&& Number.isFinite(block.top)
-			&& Number.isFinite(block.bottom)
-			&& block.bottom > top + 0.5
-			&& block.top < bottom - 0.5
-		))
-		.sort((left, right) => {
-			const leftVisibleTop = Math.max(top, left.top);
-			const rightVisibleTop = Math.max(top, right.top);
-			return leftVisibleTop - rightVisibleTop
-				|| left.top - right.top
-				|| left.bottom - right.bottom;
-		});
-	return Math.max(1, Math.floor(visible[0]?.pageNumber || fallbackPage));
-}
-
-export function readerElementOffset(
-	scrollTop: number,
-	elementTop: number,
-	scrollerTop: number,
-): number {
-	return Math.max(0, scrollTop + elementTop - scrollerTop);
-}
-
-export function alignedReaderScrollTop(
-	scrollTop: number,
-	elementTop: number,
-	scrollerTop: number,
-	leadingInset = 0,
-): number {
-	return Math.max(
-		0,
-		readerElementOffset(scrollTop, elementTop, scrollerTop) - Math.max(0, leadingInset),
-	);
-}
-
-export type ReaderMarkdownRestoreTarget =
-	| { kind: "top" }
-	| { kind: "page"; pageNumber: number }
-	| { kind: "visual"; visualId: string }
-	| { kind: "none" };
-
-/**
- * Resolve only a persisted Markdown reading position. The reference rail may
- * independently default to its first visual, but that selection is not proof
- * that the user read or navigated to the corresponding body anchor.
- */
-export function readerMarkdownRestoreTarget(
-	mode: "pdf" | "visuals",
-	markdownAnchor: string,
-	markdownPage: number,
-): ReaderMarkdownRestoreTarget {
-	const visualId = String(markdownAnchor || "").trim();
-	const pageNumber = Math.max(1, Math.floor(Number(markdownPage) || 1));
-	if (!visualId && pageNumber === 1) return { kind: "top" };
-	if (mode === "pdf") return { kind: "page", pageNumber };
-	if (visualId) return { kind: "visual", visualId };
-	return { kind: "none" };
 }
 
 type SamePageCaptionProjection = NonNullable<
@@ -640,6 +546,9 @@ export function mergeNestedVisualRepairGroups(
 		const merged: MineruVisualRepairGroup = {
 			...outer,
 			member_block_ids: memberBlockIds,
+			member_asset_paths: [...new Set(memberBlockIds
+				.map((id) => blockById.get(id)?.asset_path || "")
+				.filter(Boolean))].sort(),
 			member_markdown_image_ids: memberMarkdownImageIds,
 			caption_anchor_block_ids: [...new Set([
 				...(outer.caption_anchor_block_ids || []),
@@ -792,6 +701,9 @@ export function mergeStandaloneCaptionRepairGroups(
 		result.push({
 			...primary.group,
 			member_block_ids: memberIds,
+			member_asset_paths: [...new Set(memberIds
+				.map((id) => blockById.get(id)?.asset_path || "")
+				.filter(Boolean))].sort(),
 			member_markdown_image_ids: markdownIds,
 			confidence: Math.min(...component.map((entry) => entry.group.confidence)),
 			replacement: {
@@ -1150,12 +1062,14 @@ function verifiedSourceProjectionRanges(
 		const projections = visual.captionSourceProjections || [];
 		const bounds = visual.captionSourceImageBounds;
 		const beforeImage = bounds ? occurrences.get(bounds.beforeMarkdownImageId) : undefined;
-		const afterImage = bounds ? occurrences.get(bounds.afterMarkdownImageId) : undefined;
+		const afterImage = bounds?.afterMarkdownImageId
+			? occurrences.get(bounds.afterMarkdownImageId)
+			: undefined;
 		if (
 			!projections.length
 			|| !beforeImage
-			|| !afterImage
-			|| beforeImage.start >= afterImage.start
+			|| (Boolean(bounds?.afterMarkdownImageId) && !afterImage)
+			|| beforeImage.start >= (afterImage?.start ?? markdown.length)
 		) continue;
 		const verified: Array<{ start: number; end: number }> = [];
 		let valid = true;
@@ -1188,7 +1102,7 @@ function verifiedSourceProjectionRanges(
 		if (!valid || verified.length !== projections.length) continue;
 		if (
 			verified[0].start < beforeImage.end
-			|| verified[verified.length - 1].end > afterImage.start
+			|| verified[verified.length - 1].end > (afterImage?.start ?? markdown.length)
 		) continue;
 		for (let index = 1; index < verified.length; index += 1) {
 			const previous = verified[index - 1];
@@ -1206,8 +1120,12 @@ function verifiedSourceProjectionRanges(
 		const occurrenceBound = verified.length === 1
 			&& (localRangesByVisual.get(visual.id) || []).some((localRange) =>
 				localRange.end <= verified[0].start
-				&& !markdown.slice(localRange.end, verified[0].start).trim());
-		if (!targetChainBound && !occurrenceBound) continue;
+					&& !markdown.slice(localRange.end, verified[0].start).trim());
+		const exactFormalCaptionBound = verified.length === 1
+			&& Boolean(formalFigureCaptionKeyFromText(projections[0].text))
+			&& formalFigureCaptionKeyFromText(projections[0].text)
+				=== formalFigureCaptionKeyFromText(visual.caption);
+		if (!targetChainBound && !occurrenceBound && !exactFormalCaptionBound) continue;
 		verified.forEach((range, index) => {
 			if (projections[index].suppress !== false) ranges.push(range);
 		});
@@ -1430,10 +1348,10 @@ function sourceImageBoundsForProjectionBlocks(
 		.reverse()
 		.find((entry) => entry.block.source_index < firstSourceIndex);
 	const after = mappedVisuals.find((entry) => entry.block.source_index > lastSourceIndex);
-	if (!before || !after) return null;
+	if (!before) return null;
 	const intervalTextBlocks = allBlocks.filter((block) =>
 		block.source_index > before.block.source_index
-		&& block.source_index < after.block.source_index
+		&& block.source_index < (after?.block.source_index ?? Number.POSITIVE_INFINITY)
 		&& ["text", "title"].includes(block.role)
 		&& Boolean(blockText(block)));
 	for (const projectionBlock of projectionBlocks) {
@@ -1442,7 +1360,7 @@ function sourceImageBoundsForProjectionBlocks(
 	}
 	return {
 		beforeMarkdownImageId: before.markdownImageId,
-		afterMarkdownImageId: after.markdownImageId,
+		...(after ? { afterMarkdownImageId: after.markdownImageId } : {}),
 	};
 }
 
@@ -2069,16 +1987,185 @@ export function prepareReaderMarkdown(
 	return prepared;
 }
 
+/**
+ * A full-page composite sometimes has no "see next page" placeholder because
+ * the page contains only figure pixels. Bind the following-page caption only
+ * under the stricter page-level repair proof: the caption must be the first
+ * meaningful target-page block, be a complete formal caption with several
+ * panel markers, and be followed by one independently ranged body block. The
+ * second block is retained as a non-suppressed boundary so caption removal is
+ * exact and cannot consume the following paragraph.
+ */
+function followingPageFullCompositeCaptionDetails(
+	blocks: readonly MineruViewerBlock[],
+	allBlocks: readonly MineruViewerBlock[],
+	pageIdx: number,
+): Pick<
+	MineruReaderVisual,
+	"caption" | "captionParts" | "captionSourceBlockIds" | "captionSourceProjections" | "captionInlineProjections" | "captionSourceImageBounds" | "captionPageIdx" | "captionStatus"
+> | null {
+	if (!blocks.length || blocks.some((block) => block.role !== "visual" || blockPageIdx(block) !== pageIdx)) {
+		return null;
+	}
+	const memberIds = new Set(blocks.map((block) => block.id));
+	const pageMeaningful = allBlocks.filter((block) => (
+		blockPageIdx(block) === pageIdx && block.role !== "discarded"
+	));
+	if (pageMeaningful.length !== memberIds.size || pageMeaningful.some((block) => !memberIds.has(block.id))) {
+		return null;
+	}
+	const targetPageIdx = pageIdx + 1;
+	const targetMeaningful = allBlocks
+		.filter((block) => blockPageIdx(block) === targetPageIdx && block.role !== "discarded")
+		.filter((block) => !["text", "title"].includes(block.role) || Boolean(blockText(block)))
+		.sort((left, right) => left.page_order - right.page_order || left.source_index - right.source_index);
+	const anchor = targetMeaningful[0];
+	const anchorText = blockText(anchor);
+	if (
+		!anchor
+		|| !isTopTextBlock(anchor)
+		|| !formalFigureCaptionKeyFromText(anchorText)
+		|| anchorText.length < 80
+		|| captionPanelMarkers(anchorText).length < 3
+		|| !endsWithTerminalPunctuation(anchorText)
+		|| !anchor.markdown_text_range
+		|| anchor.markdown_text_range.offset_unit !== "utf16-code-unit"
+	) return null;
+	const boundary = targetMeaningful[1];
+	const boundaryText = blockText(boundary);
+	if (
+		!boundary
+		|| !["text", "title"].includes(boundary.role)
+		|| !boundaryText
+		|| Boolean(figureKeyFromText(boundaryText))
+		|| !boundary.markdown_text_range
+		|| boundary.markdown_text_range.offset_unit !== "utf16-code-unit"
+	) return null;
+	const bounds = sourceImageBoundsForProjectionBlocks([anchor, boundary], allBlocks);
+	if (!bounds) return null;
+	const lastMemberMarkdownId = blocks
+		.flatMap((block) => block.markdown_image_ids || [])
+		.sort((left, right) => (markdownImageOrder(right) ?? -1) - (markdownImageOrder(left) ?? -1))[0];
+	if (!lastMemberMarkdownId || bounds.beforeMarkdownImageId !== lastMemberMarkdownId) return null;
+	return {
+		caption: anchorText,
+		captionParts: [anchorText],
+		captionSourceBlockIds: [anchor.id],
+		captionSourceProjections: [{
+			start: anchor.markdown_text_range.start,
+			end: anchor.markdown_text_range.end,
+			text: anchorText,
+			suppress: true,
+		}, {
+			start: boundary.markdown_text_range.start,
+			end: boundary.markdown_text_range.end,
+			text: boundaryText,
+			suppress: false,
+		}],
+		captionInlineProjections: [],
+		captionSourceImageBounds: bounds,
+		captionPageIdx: targetPageIdx,
+		captionStatus: "complete",
+	};
+}
+
 export function resolveVisualCaptionDetails(
 	blocks: readonly MineruViewerBlock[],
 	allBlocks: readonly MineruViewerBlock[],
 	repair: MineruVisualRepair | null,
 	pageIdx: number,
+	viewerIndex?: MineruViewerIndex,
 ): Pick<
 	MineruReaderVisual,
 	"caption" | "captionParts" | "captionSourceBlockIds" | "captionSourceProjections" | "captionInlineProjections" | "captionSourceImageBounds" | "captionPageIdx" | "captionStatus" | "pageRange" | "panelLabelProjections" | "samePageCaptionProjections" | "atomicBlockProjection" | "boundedHeadingProjections"
 > {
 	const memberIds = new Set(blocks.map((block) => block.id));
+	const logicalOwnership = viewerIndex
+		? logicalFigureOwnershipForPage(
+			viewerIndex,
+			viewerIndex.pages.find((page) => page.page_idx === pageIdx)?.blocks || [],
+		)
+		: null;
+	const exactLogicalOwnership = logicalOwnership
+		&& logicalOwnership.members.length === memberIds.size
+		&& logicalOwnership.members.every((block) => memberIds.has(block.id))
+		? logicalOwnership
+		: null;
+	if (exactLogicalOwnership) {
+		const { figureKey, caption: markdownCaption } = exactLogicalOwnership;
+		const matchingSourceBlocks = allBlocks.filter((block) => (
+			block.caption?.formal_figure_caption_keys?.includes(figureKey)
+			|| block.text?.formal_figure_caption_keys?.includes(figureKey)
+			|| block.caption?.leading_formal_figure_caption_key === figureKey
+			|| block.text?.leading_formal_figure_caption_key === figureKey
+		));
+		const sourceParts = matchingSourceBlocks.flatMap((block) => [
+			String(block.caption?.text || "").trim(),
+			String(block.text?.text || "").trim(),
+		]).filter((text) => formalFigureCaptionKeyFromText(text) === figureKey);
+		const samePageCaption = samePageCaptionDetails(blocks, allBlocks, pageIdx);
+		const captionPageIndices = matchingSourceBlocks
+			.map(blockPageIdx)
+			.filter((value): value is number => value !== null);
+		const captionPageIdx = captionPageIndices.length
+			? Math.min(...captionPageIndices)
+			: pageIdx;
+		const hasSourceBounds = Boolean(markdownCaption.before_markdown_image_id);
+		return {
+			caption: selectVisualCaption([
+				...sourceParts,
+				samePageCaption.caption,
+				markdownCaption.text,
+			]),
+			captionParts: [markdownCaption.text],
+			captionSourceBlockIds: matchingSourceBlocks.map((block) => block.id),
+			captionSourceProjections: hasSourceBounds ? [{
+				start: markdownCaption.char_start,
+				end: markdownCaption.char_end,
+				text: markdownCaption.text,
+				suppress: true,
+			}] : [],
+			captionInlineProjections: [],
+			captionSourceImageBounds: hasSourceBounds ? {
+				beforeMarkdownImageId: markdownCaption.before_markdown_image_id!,
+				...(markdownCaption.after_markdown_image_id
+					? { afterMarkdownImageId: markdownCaption.after_markdown_image_id }
+					: {}),
+			} : undefined,
+			captionPageIdx,
+			captionStatus: "complete",
+			panelLabelProjections: panelLabelProjectionsForBlocks(blocks, allBlocks, pageIdx),
+			boundedHeadingProjections: runningHeaderProjectionsForPages(
+				allBlocks,
+				new Set([pageIdx, captionPageIdx]),
+			),
+			samePageCaptionProjections: samePageCaption.samePageCaptionProjections,
+			...(samePageCaption.atomicBlockProjection
+				? { atomicBlockProjection: samePageCaption.atomicBlockProjection }
+				: {}),
+			pageRange: [Math.min(pageIdx, captionPageIdx), Math.max(pageIdx, captionPageIdx)],
+		};
+	}
+	const exactPageGroups = (repair?.groups || []).filter((group) => (
+		group.page_idx === pageIdx
+		&& group.decision === "auto"
+		&& group.member_block_ids.length === memberIds.size
+		&& group.member_block_ids.every((id) => memberIds.has(id))
+	));
+	const hasVerifiedPageGroup = exactPageGroups.length === 1 && exactPageGroups[0].reason_codes?.some((reason) => [
+		"visual_only_page_full_coverage",
+		"visual_only_page_exact_coverage",
+		"complete_enclosing_asset_exact_aliases",
+	].includes(reason));
+	const singleFullPageVisual = blocks.length === 1
+		&& Boolean(blocks[0].bbox_norm)
+		&& bboxArea(blocks[0].bbox_norm!) / 1_000_000 >= 0.6;
+	const pageMeaningful = allBlocks.filter((block) => blockPageIdx(block) === pageIdx && block.role !== "discarded");
+	const ownsWholeVisualPage = pageMeaningful.length === memberIds.size
+		&& pageMeaningful.every((block) => block.role === "visual" && memberIds.has(block.id));
+	const fullPageCaption = ownsWholeVisualPage && (hasVerifiedPageGroup || singleFullPageVisual)
+		? followingPageFullCompositeCaptionDetails(blocks, allBlocks, pageIdx)
+		: null;
 	const storedLinks = (repair?.caption_links || []).filter((candidate) => memberIds.has(candidate.visual_block_id));
 	const link = storedLinks.length === 1
 		? storedLinks[0]
@@ -2091,6 +2178,19 @@ export function resolveVisualCaptionDetails(
 	const samePageCaption = samePageCaptionDetails(blocks, allBlocks, pageIdx);
 	const panelLabelProjections = panelLabelProjectionsForBlocks(blocks, allBlocks, pageIdx);
 	const samePageHeadingProjections = runningHeaderProjectionsForPages(allBlocks, new Set([pageIdx]));
+	if (fullPageCaption) {
+		return {
+			...samePageCaption,
+			...fullPageCaption,
+			panelLabelProjections,
+			boundedHeadingProjections: runningHeaderProjectionsForPages(
+				allBlocks,
+				new Set([pageIdx, pageIdx + 1]),
+			),
+			samePageCaptionProjections: samePageCaption.samePageCaptionProjections,
+			pageRange: [pageIdx, pageIdx + 1],
+		};
+	}
 	const targetPageBlocks = allBlocks.filter((block) => blockPageIdx(block) === link?.target_page_idx);
 	if (!link) {
 		return {
@@ -2192,8 +2292,11 @@ export function selectVisualCaption(captions: readonly string[]): string {
 	if (figureCaptions.length) {
 		return figureCaptions.sort((left, right) => right.length - left.length)[0];
 	}
-	const safeFallbacks = unique.filter((caption) => !figureKeyFromText(caption));
+	const safeFallbacks = unique.filter((caption) => (
+		!figureKeyFromText(caption)
+		&& !isPanelLabelText(caption)
+	));
 	const longCaptions = safeFallbacks.filter((caption) => caption.length >= 24);
 	if (longCaptions.length) return longCaptions.join(" ");
-	return safeFallbacks.sort((left, right) => right.length - left.length)[0] || "";
+	return "";
 }

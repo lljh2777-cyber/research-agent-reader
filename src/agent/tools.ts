@@ -11,6 +11,9 @@ import type { AgentTool, AgentToolContext } from "./types";
 
 /** Max characters of one vault file handed to the model per read. */
 const VAULT_READ_CHAR_LIMIT = 16000;
+const ARTICLE_OVERVIEW_CHAR_LIMIT = 22000;
+const ARTICLE_HEAD_CHAR_LIMIT = 4000;
+const ARTICLE_PAGE_CHAR_LIMIT = 16000;
 const VAULT_LIST_LIMIT = 200;
 const VAULT_DOI_SCAN_FILE_LIMIT = 5000;
 
@@ -168,6 +171,178 @@ export function createVaultReadTool(deps: VaultToolDeps, allowedPrefixes: readon
 	};
 }
 
+interface MarkdownSection {
+	level: number;
+	title: string;
+	start: number;
+	end: number;
+}
+
+export interface ArticleEvidencePacket {
+	content: string;
+	sections: string[];
+	selectedChars: number;
+}
+
+function markdownSections(content: string): MarkdownSection[] {
+	const headings = [...content.matchAll(/^(#{1,6})[ \t]+(.+?)\s*$/gm)].map((match) => ({
+		level: match[1].length,
+		title: match[2].trim(),
+		start: match.index || 0,
+	}));
+	return headings.map((heading, index) => {
+		let end = content.length;
+		for (let next = index + 1; next < headings.length; next += 1) {
+			if (headings[next].level <= heading.level) {
+				end = headings[next].start;
+				break;
+			}
+		}
+		return { ...heading, end };
+	});
+}
+
+function normalizeHeading(value: string): string {
+	return String(value || "")
+		.toLowerCase()
+		.replace(/^\s*(?:\d+(?:\.\d+)*|[ivxlcdm]+)[.)、:\s-]+/i, "")
+		.replace(/&/g, " and ")
+		.replace(/[\s_–—-]+/g, " ")
+		.replace(/[：:。.]\s*$/g, "")
+		.trim();
+}
+
+const ARTICLE_SECTION_GROUPS: ReadonlyArray<{ label: string; terms: readonly string[]; cap: number }> = [
+	{ label: "摘要", terms: ["abstract", "summary", "摘要"], cap: 5000 },
+	{ label: "引言", terms: ["introduction", "background", "引言", "前言", "研究背景"], cap: 3000 },
+	{ label: "方法", terms: ["methods", "methodology", "materials and methods", "方法", "材料与方法"], cap: 2500 },
+	{ label: "结果", terms: ["results", "findings", "结果", "研究结果"], cap: 3500 },
+	{ label: "讨论", terms: ["discussion", "讨论"], cap: 3500 },
+	{ label: "结论", terms: ["conclusion", "conclusions", "总结", "结论"], cap: 3500 },
+	{ label: "局限", terms: ["limitations", "limitation", "局限", "局限性"], cap: 2500 },
+];
+
+/**
+ * Builds a deterministic, bounded abstract-level evidence packet from a
+ * MinerU article. This avoids asking the model to guess offsets in a long
+ * document while preserving the paper's own section text and headings.
+ */
+export function buildArticleEvidencePacket(content: string): ArticleEvidencePacket {
+	const source = String(content || "");
+	const sections = markdownSections(source);
+	const outline = sections
+		.filter((section) => section.level <= 3)
+		.slice(0, 80)
+		.map((section) => `${"  ".repeat(Math.max(0, section.level - 1))}- ${section.title}`)
+		.join("\n")
+		.slice(0, 3500);
+	const selectedRanges: Array<{ start: number; end: number; label: string }> = [];
+	const documentTitleStart = sections[0]?.start ?? -1;
+	for (const group of ARTICLE_SECTION_GROUPS) {
+		const match = sections.find((section) => {
+			// The first heading is the document title; later H1 headings may be
+			// legitimate top-level article sections in MinerU output.
+			if (section.start === documentTitleStart) return false;
+			const heading = normalizeHeading(section.title);
+			return group.terms.some((term) => heading === term || heading.startsWith(`${term} `));
+		});
+		if (!match) continue;
+		selectedRanges.push({
+			start: match.start,
+			end: Math.min(match.end, match.start + group.cap),
+			label: group.label,
+		});
+	}
+	selectedRanges.sort((left, right) => left.start - right.start);
+
+	const blocks: string[] = [];
+	const labels: string[] = [];
+	let remaining = ARTICLE_OVERVIEW_CHAR_LIMIT;
+	const append = (label: string, text: string): void => {
+		const cleaned = text.trim();
+		if (!cleaned || remaining <= 0) return;
+		const value = cleaned.slice(0, remaining);
+		blocks.push(`### ${label}\n${value}`);
+		labels.push(label);
+		remaining -= value.length;
+	};
+	if (outline) append("文章目录", outline);
+	append("文首摘录", source.slice(0, ARTICLE_HEAD_CHAR_LIMIT));
+	for (const range of selectedRanges) {
+		append(`${range.label}小节`, source.slice(range.start, range.end));
+	}
+	if (!selectedRanges.some((range) => range.label === "讨论" || range.label === "结论")) {
+		append("文末摘录", source.slice(Math.max(0, source.length - 3000)));
+	}
+	if (!blocks.length) append("正文摘录", source.slice(0, ARTICLE_OVERVIEW_CHAR_LIMIT));
+	const packet = blocks.join("\n\n");
+	return { content: packet, sections: labels, selectedChars: packet.length };
+}
+
+/**
+ * Read tool bound to one plugin-verified source Markdown. The model cannot
+ * supply or alter the path. The source may be papers/<citekey>/article.md or
+ * an existing Clippings/*.md document. Adapter reads also avoid Obsidian's
+ * asynchronous index race after an atomic MinerU publish.
+ */
+export function createBoundArticleReadTool(deps: VaultToolDeps, articleVaultPath: string): AgentTool {
+	const path = normalizeVaultRelative(articleVaultPath);
+	const sourcePath = /^papers\/[^/]+\/article\.md$/i.test(path)
+		|| /^Clippings\/.+\.md$/i.test(path);
+	if (pathEscapesScope(path) || !sourcePath) {
+		throw new Error(`原文回执路径不合法：${articleVaultPath}`);
+	}
+	return {
+		name: "article_read",
+		description: "读取插件已核验并固定绑定的原文层 Markdown（papers article.md 或 Clippings 文档）。overview 返回摘要级证据包；page 可按 offset 补读原文。生成文章 Wiki 前必须先成功调用 overview。",
+		parameters: {
+			mode: "可选：overview（默认，标题/目录/摘要/主要章节证据包）或 page（原文分页）",
+			offset: "mode=page 时可选，从第几个字符开始读，默认 0",
+		},
+		required: [],
+		async execute(args, context) {
+			if (context.signal.aborted) throw new Error("任务已取消");
+			if (!(await deps.app.vault.adapter.exists(path, true))) {
+				throw new Error(`已发布原文不存在：${path}`);
+			}
+			const content = await deps.app.vault.adapter.read(path);
+			if (context.signal.aborted) throw new Error("任务已取消");
+			const mode = String(args.mode || "overview").trim().toLowerCase();
+			const identity = extractVaultIdentity(content);
+			if (mode === "overview") {
+				const packet = buildArticleEvidencePacket(content);
+				const header = `path=${path} mode=overview 共 ${content.length} 字符，证据包 ${packet.selectedChars} 字符，小节：${packet.sections.join("、") || "正文摘录"}`;
+				return {
+					output: `${header}\n\n${packet.content}`,
+					summary: header,
+					receiptData: {
+						query: path,
+						queryTerms: ["overview", ...packet.sections],
+						paths: [path],
+						...(identity.title ? { titles: [identity.title], candidates: [{ path, title: identity.title }] } : {}),
+						...(identity.doi ? { dois: [identity.doi] } : {}),
+					},
+				};
+			}
+			if (mode !== "page") throw new Error(`article_read mode 不支持：${mode}`);
+			const offset = Math.max(0, Math.min(content.length, Math.round(Number(args.offset)) || 0));
+			const slice = content.slice(offset, offset + ARTICLE_PAGE_CHAR_LIMIT);
+			const header = `path=${path} mode=page 共 ${content.length} 字符，本次返回 ${slice.length}（offset ${offset}）`;
+			return {
+				output: `${header}\n\n${slice}${offset + slice.length < content.length ? "\n…[未完，用 offset 继续读]" : ""}`,
+				summary: header,
+				receiptData: {
+					query: path,
+					queryTerms: ["page", `offset:${offset}`],
+					paths: [path],
+					...(identity.title ? { titles: [identity.title], candidates: [{ path, title: identity.title }] } : {}),
+					...(identity.doi ? { dois: [identity.doi] } : {}),
+				},
+			};
+		},
+	};
+}
+
 export function createVaultListTool(deps: VaultToolDeps, allowedPrefixes: readonly string[]): AgentTool {
 	return {
 		name: "vault_list",
@@ -206,7 +381,7 @@ export function createVaultListTool(deps: VaultToolDeps, allowedPrefixes: readon
 }
 
 /**
- * Exact DOI lookup over authoritative source-note frontmatter. A DOI must not
+ * Exact DOI lookup over authoritative Markdown frontmatter in both layers. A DOI must not
  * use the generic lexical tokenizer: shared registrar prefixes otherwise
  * create unrelated candidates that cannot be safely cleared.
  */
@@ -216,7 +391,7 @@ export function createVaultDoiSearchTool(
 ): AgentTool {
 	return {
 		name: "vault_doi_search",
-		description: "在 wiki/sources 笔记的 frontmatter 中按完整 DOI 精确查重；只比较权威 doi 字段，不扫描正文引用。",
+		description: "在 wiki/sources 分析层及 papers/Clippings 原文层的 Markdown frontmatter 中按完整 DOI 精确查重；只比较 doi 字段，不扫描正文引用。",
 		parameters: { doi: "已由 Crossref 核验的完整 DOI，例如 10.1000/example" },
 		required: ["doi"],
 		async execute(args, context) {
@@ -225,12 +400,11 @@ export function createVaultDoiSearchTool(
 			const sourceNotes = deps.app.vault.getMarkdownFiles()
 				.filter((file) => {
 					const filePath = String(file.path || "").replace(/\\/g, "/");
-					return withinPrefixes(filePath, allowedPrefixes)
-						&& filePath.startsWith("wiki/sources/");
+					return withinPrefixes(filePath, allowedPrefixes);
 				})
 				.sort((a, b) => String(a.path).localeCompare(String(b.path)));
 			if (sourceNotes.length > VAULT_DOI_SCAN_FILE_LIMIT) {
-				throw new Error(`source note 数量超过 DOI 精确查重上限 ${VAULT_DOI_SCAN_FILE_LIMIT}，不能安全判定 none`);
+				throw new Error(`原文与分析 Markdown 数量超过 DOI 精确查重上限 ${VAULT_DOI_SCAN_FILE_LIMIT}，不能安全判定 none`);
 			}
 			const candidates: Array<{ path: string; title: string }> = [];
 			for (const file of sourceNotes) {
@@ -244,8 +418,8 @@ export function createVaultDoiSearchTool(
 				`${index + 1}. ${candidate.path} — ${candidate.title || "（无标题）"}`
 			));
 			return {
-				output: lines.length ? `找到 ${lines.length} 个同 DOI source note：\n${lines.join("\n")}` : "没有找到同 DOI source note。",
-				summary: `${candidates.length} 个同 DOI source note`,
+				output: lines.length ? `找到 ${lines.length} 个同 DOI 的原文或分析 Markdown：\n${lines.join("\n")}` : "没有找到同 DOI 的原文或分析 Markdown。",
+				summary: `${candidates.length} 个同 DOI Markdown`,
 				receiptData: {
 					query: doi,
 					...(candidates.length ? { dois: [doi] } : {}),
@@ -266,7 +440,7 @@ export function createVaultDoiSearchTool(
 export function createCrossrefSearchTool(deps: HttpToolDeps): AgentTool {
 	return {
 		name: "crossref_search",
-		description: "在 Crossref 中按标题/关键词检索文献元数据（DOI、作者、年份、期刊）。返回前 5 条候选。",
+		description: "在 Crossref 中按标题/关键词检索文献元数据（DOI、作者、年份、期刊）。返回前 5 条候选；找到匹配候选后应改用 crossref_doi 精确核验，不要重复搜索。",
 		parameters: {
 			query: "标题或书目关键词，例如：Novae a graph-based foundation model",
 		},
@@ -287,7 +461,7 @@ export function createCrossrefSearchTool(deps: HttpToolDeps): AgentTool {
 				};
 			}
 			return {
-				output: items.join("\n\n"),
+				output: `${items.join("\n\n")}\n\n下一步：选择标题相符候选的 DOI，调用 crossref_doi 精确核验；然后执行 Vault 标题与 DOI 查重。除非候选均不匹配，不要再次调用 crossref_search。`,
 				summary: `${items.length} 条候选`,
 				receiptData: {
 					query,

@@ -17,8 +17,10 @@ connecting optional local AI-agent workflows.
 - Creates local Markdown annotations from selected reading text.
 - Provides a vault dashboard, query view, and optional Direct API connections.
 - Runs paper intake through an in-plugin bounded agent loop on a Direct API
-  profile (phase-gated: metadata lookups and vault search for identity/dedup,
-  plugin-driven MinerU conversion of the authorized PDF, and plugin-built
+  profile (phase-gated: local PDF metadata/first-page identity preflight,
+  exact DOI verification before any fuzzy lookup, and independent dedup for the source
+  layer (`papers/` + `Clippings/`) and analysis layer (`wiki/sources/`),
+  plugin-driven MinerU conversion only when source Markdown is missing, and plugin-built
   create-only wiki notes) — no coding agent required; PDF conversion needs
   only the `mineru-open-api` CLI (npm), not Python or the toolkit. The
   optional Codex CLI toolkit pipeline remains available for full registry
@@ -92,8 +94,19 @@ papers/<citekey>/
 ├─ images/
 └─ _extraction/
    ├─ manifest.json
-   └─ validation.json
+   ├─ validation.json
+   ├─ viewer-index.json
+   ├─ visual-repair.json
+   ├─ visual-candidates.json  # bounded review packet; never auto-applied
+   └─ source.pdf            # optional; enables PDF crop reconstruction
 ```
+
+Native MinerU intake generates the versioned viewer sidecars inside the
+same atomic staging directory and binds them in `manifest.json` by size and
+SHA-256. Older validated packages without sidecars are reconstructed in memory;
+any stale or malformed relationship fails closed to the original assets. The
+candidate packet contains only deterministic review IDs and structural evidence;
+it is not consumed as an automatic repair decision.
 
 ## Optional workflow toolkit
 
@@ -121,8 +134,10 @@ Depending on features the user explicitly configures or starts, the plugin can:
 - read a configured project directory outside the vault;
 - launch local Codex CLI, Claude Code, OpenCode, MinerU, Python, R, or Obsidian
   CLI processes;
-- send selected prompts, retrieved note excerpts, and explicitly attached images
-  to a configured model provider;
+- send selected prompts, retrieved note excerpts, explicitly attached images,
+  and a bounded first-page text excerpt used by paper-intake identity checks to
+  a configured model provider; PDF preflight parsing itself remains local and
+  never sends the absolute source path;
 - upload a selected document to the configured MinerU service after confirmation;
 - save bounded task and query records in the plugin's local `data.json` file;
 - save completed-task full output, including any model/tool trace or Vault
@@ -187,8 +202,10 @@ documented in [Third-Party Notices](THIRD_PARTY_NOTICES.md).
 Research Agent Reader 是桌面版 Obsidian 科研阅读与本地智能体工作流插件。核心阅读器
 可直接阅读普通 Markdown、Obsidian Web Clipper 文档和经过验证的 MinerU 文献包。
 AI 能力分三层：只需一个 Direct API 配置即可使用知识库问答、联网搜索、问答落笔记
-和轻量文献入库（身份核验 + 去重 + 初步文章 Wiki；配置 MinerU CLI 后还可生成原文
-Markdown，无需 Python 或工具包目录）；完整登记（papers.csv、references.bib、
+和轻量文献入库（身份核验 + 去重 + 初步文章 Wiki；配置 MinerU CLI 后可生成完整原文
+Markdown 包，并由轻量 Agent 读取已验证的 `article.md` 生成摘要级 Wiki，无需 Python、
+工具包目录或 Codex CLI）。身份核验会先在本机读取 PDF 元数据与第一页文本；提取到 DOI
+时先精确核验，只有本地证据不足时才使用 Crossref 模糊搜索；完整登记（papers.csv、references.bib、
 文献索引）以及全文深读、代码分析、综合分析等高级操作使用 Research Vault Toolkit +
 Codex CLI 管线。知识库体检内置可用，OKF 导出仍是 Toolkit 脚本能力。插件不会自行
 安装外部程序，也不会包含客户端遥测。
