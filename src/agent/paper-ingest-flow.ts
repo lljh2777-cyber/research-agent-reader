@@ -17,10 +17,8 @@ import {
 	createCrossrefDoiTool,
 	createCrossrefSearchTool,
 	createBoundArticleReadTool,
+	createIdentityVaultCandidateTools,
 	createVaultDoiSearchTool,
-	createVaultListTool,
-	createVaultReadTool,
-	createVaultSearchTool,
 	createWebSearchTool,
 	mineruReadiness,
 	runAuthorizedMineruExtract,
@@ -106,20 +104,49 @@ export const PAPER_INGEST_READ_PREFIXES = ["wiki/sources", "papers", "Clippings"
 
 export function buildIdentityTools(
 	deps: PaperIngestToolDeps,
-	localPdfEvidence?: Pick<LocalPdfIdentityEvidence, "doiCandidates">,
+	localPdfEvidence?: LocalPdfIdentityEvidence,
 ): AgentTool[] {
 	let vaultSearchCompleted = false;
-	const localDoiCandidates = [...new Set((localPdfEvidence?.doiCandidates || [])
+	const exactDoiCandidates = new Set((localPdfEvidence?.doiCandidates || [])
 		.map((doi) => String(doi || "").trim().toLowerCase())
-		.filter(Boolean))];
-	const attemptedLocalDois = new Set<string>();
-	const vaultSearchBase = createVaultSearchTool(deps.lexicalRetriever, PAPER_INGEST_READ_PREFIXES);
-	const vaultSearch: AgentTool = {
-		...vaultSearchBase,
-		description: `${vaultSearchBase.description} 身份阶段必须首先调用本工具，再访问 Crossref。`,
+		.filter(Boolean));
+	const attemptedExactDois = new Set<string>();
+	const trustedTitles = localPdfEvidence ? localPdfTitleCandidates(localPdfEvidence) : [];
+	const fileHint = String(localPdfEvidence?.fileName || "")
+		.replace(/\.pdf$/i, "")
+		.replace(/[_-]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	const fixedQueries = trustedTitles.length ? trustedTitles : fileHint ? [fileHint] : [];
+	const candidateTools = createIdentityVaultCandidateTools(
+		deps.vault,
+		deps.lexicalRetriever,
+		fixedQueries,
+		PAPER_INGEST_READ_PREFIXES,
+	);
+	const vaultCandidatesBase = candidateTools[0];
+	const vaultCandidates: AgentTool = {
+		...vaultCandidatesBase,
+		description: `${vaultCandidatesBase.description} 身份阶段必须首先调用本工具，再访问 Crossref。`,
 		async execute(args, context) {
-			const result = await vaultSearchBase.execute(args, context);
+			const result = await vaultCandidatesBase.execute(args, context);
+			for (const doi of result.receiptData?.dois || []) {
+				const normalized = String(doi || "").trim().toLowerCase();
+				if (normalized) exactDoiCandidates.add(normalized);
+			}
 			vaultSearchCompleted = true;
+			return result;
+		},
+	};
+	const vaultCandidateReadBase = candidateTools[1];
+	const vaultCandidateRead: AgentTool = {
+		...vaultCandidateReadBase,
+		async execute(args, context) {
+			const result = await vaultCandidateReadBase.execute(args, context);
+			for (const doi of result.receiptData?.dois || []) {
+				const normalized = String(doi || "").trim().toLowerCase();
+				if (normalized) exactDoiCandidates.add(normalized);
+			}
 			return result;
 		},
 	};
@@ -127,7 +154,7 @@ export function buildIdentityTools(
 		...tool,
 		async execute(args, context) {
 			if (!vaultSearchCompleted) {
-				throw new Error(`必须先调用 vault_search 检查本地原文层与分析层，再调用 ${tool.name}`);
+				throw new Error(`必须先调用 vault_candidates 检查本地原文层与分析层，再调用 ${tool.name}`);
 			}
 			return tool.execute(args, context);
 		},
@@ -140,7 +167,10 @@ export function buildIdentityTools(
 				.trim()
 				.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "")
 				.toLowerCase();
-			if (localDoiCandidates.includes(doi)) attemptedLocalDois.add(doi);
+			if (!exactDoiCandidates.has(doi)) {
+				throw new Error("crossref_doi 只接受本地 PDF、当前 Vault 候选或本次 crossref_search 回执中的 DOI");
+			}
+			if (exactDoiCandidates.has(doi)) attemptedExactDois.add(doi);
 			const result = await crossrefDoiBase.execute(args, context);
 			return result;
 		},
@@ -153,20 +183,50 @@ export function buildIdentityTools(
 	const crossrefSearch: AgentTool = afterVaultPreflight({
 		...crossrefSearchBase,
 		async execute(args, context) {
-			const pending = localDoiCandidates.filter((doi) => !attemptedLocalDois.has(doi));
+			const pending = [...exactDoiCandidates].filter((doi) => !attemptedExactDois.has(doi));
 			if (pending.length) {
 				throw new Error(`本地 PDF 已提取 DOI 候选 ${pending.join("、")}；必须先逐个调用 crossref_doi 精确核验，不能提前模糊搜索`);
 			}
-			return crossrefSearchBase.execute(args, context);
+			const result = await crossrefSearchBase.execute(args, context);
+			for (const doi of [
+				...(result.receiptData?.dois || []),
+				...(result.receiptData?.bibliographicRecords || []).map((record) => record.doi),
+			]) {
+				const normalized = String(doi || "").trim().toLowerCase();
+				if (normalized) exactDoiCandidates.add(normalized);
+			}
+			return result;
 		},
 	});
+	const verifiedCrossrefDois = new Set<string>();
+	const crossrefDoiTracked: AgentTool = {
+		...crossrefDoi,
+		async execute(args, context) {
+			const result = await crossrefDoi.execute(args, context);
+			const doi = String(args.doi || "").trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").toLowerCase();
+			if ((result.receiptData?.bibliographicRecords || []).some((record) => (
+				String(record.doi || "").trim().toLowerCase() === doi
+			))) verifiedCrossrefDois.add(doi);
+			return result;
+		},
+	};
+	const vaultDoiBase = createVaultDoiSearchTool(deps.vault, PAPER_INGEST_READ_PREFIXES);
+	const vaultDoi: AgentTool = {
+		...vaultDoiBase,
+		async execute(args, context) {
+			const doi = String(args.doi || "").trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").toLowerCase();
+			if (!verifiedCrossrefDois.has(doi)) {
+				throw new Error("vault_doi_search 只接受本次已由 crossref_doi 精确核验的 DOI");
+			}
+			return vaultDoiBase.execute(args, context);
+		},
+	};
 	const tools: AgentTool[] = [
-		vaultSearch,
-		createVaultReadTool(deps.vault, PAPER_INGEST_READ_PREFIXES),
+		vaultCandidates,
+		vaultCandidateRead,
 		crossrefSearch,
-		crossrefDoi,
-		createVaultDoiSearchTool(deps.vault, PAPER_INGEST_READ_PREFIXES),
-		createVaultListTool(deps.vault, PAPER_INGEST_READ_PREFIXES),
+		crossrefDoiTracked,
+		vaultDoi,
 	];
 	if (deps.tavily.apiKey) tools.push(afterVaultPreflight(createWebSearchTool(deps.tavily)));
 	return tools;
@@ -190,10 +250,7 @@ export function buildDraftTools(deps: PaperIngestToolDeps, articleVaultPath = ""
 	if (articleVaultPath) {
 		return [createBoundArticleReadTool(deps.vault, articleVaultPath)];
 	}
-	return [
-		createVaultReadTool(deps.vault, PAPER_INGEST_READ_PREFIXES),
-		createVaultSearchTool(deps.lexicalRetriever, PAPER_INGEST_READ_PREFIXES),
-	];
+	return [];
 }
 
 /**
@@ -287,19 +344,11 @@ export function validateIdentityReceipts(
 			normalizeBibliographicTitle(observation.record.title)
 			=== normalizeBibliographicTitle(identity.title)
 		));
-	const dedupCalls = successful(["vault_search", "vault_doi_search", "vault_list", "vault_read"]);
+	const dedupCalls = successful(["vault_candidates", "vault_candidate_read", "vault_doi_search"]);
 	if (localPdfEvidence) {
-		const metadataTitle = String(localPdfEvidence.metadataTitle || "").trim();
-		const intrinsicTitles = localPdfTitleCandidates({
-			...localPdfEvidence,
-			fileName: "paper.pdf",
-		});
-		const firstPageTitles = localPdfTitleCandidates({
-			...localPdfEvidence,
-			metadataTitle: "",
-			fileName: "paper.pdf",
-		});
-		const bindingTitles = intrinsicTitles.length ? intrinsicTitles : localPdfTitleCandidates(localPdfEvidence);
+		const metadataTitle = String(localPdfEvidence.trustedMetadataTitle || "").trim();
+		const firstPageTitles = [...(localPdfEvidence.firstPageTitleCandidates || [])];
+		const bindingTitles = localPdfTitleCandidates(localPdfEvidence);
 		if (localPdfEvidence.status !== "available" || !bindingTitles.length) {
 			problems.push("本地 PDF 没有可用于确定性身份绑定的标题证据");
 		} else if (metadataTitle && firstPageTitles.length
@@ -309,7 +358,7 @@ export function validateIdentityReceipts(
 			problems.push("Crossref 最终标题与本地 PDF 标题证据不一致");
 		} else if (!toolCalls.some((call) => (
 			call.ok
-			&& call.tool === "vault_search"
+			&& call.tool === "vault_candidates"
 			&& bindingTitles.some((candidate) => receiptQuerySupportsTitle(call, candidate))
 		))) {
 			problems.push("Vault 预检没有实际使用本地 PDF 的标题证据");
@@ -389,30 +438,9 @@ function localPdfTitleCandidates(evidence: LocalPdfIdentityEvidence): string[] {
 		if (normalized.length < 12 || candidates.some((item) => normalizeBibliographicTitle(item) === normalized)) return;
 		candidates.push(text.slice(0, 500));
 	};
-	add(evidence.metadataTitle);
-	const lines = String(evidence.firstPageText || "")
-		.split(/\r?\n/)
-		.map((line) => line.replace(/\s+/g, " ").trim())
-		.filter((line) => (
-			line.length >= 12
-			&& line.length <= 350
-			&& !/^(?:abstract|article|research|review|received|accepted|published|doi\b|https?:|www\.)/i.test(line)
-			&& !/^10\.\d{4,9}\//i.test(line)
-		))
-		.slice(0, 8);
-	for (let start = 0; start < Math.min(lines.length, 4); start += 1) {
-		let joined = "";
-		for (let count = 0; count < 3 && start + count < lines.length; count += 1) {
-			joined = `${joined} ${lines[start + count]}`.trim();
-			if (joined.length <= 500) add(joined);
-		}
-	}
-	const stem = String(evidence.fileName || "")
-		.replace(/\.pdf$/i, "")
-		.replace(/[_-]+/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-	if (!/^(?:paper|article|download|document|fulltext|manuscript)(?:\s*\d*)?$/i.test(stem)) add(stem);
+	// Metadata is useful as a search/corroboration hint, but it is writable PDF
+	// metadata and cannot by itself bind a scanned or image-only document.
+	for (const candidate of evidence.firstPageTitleCandidates || []) add(candidate);
 	return candidates;
 }
 
@@ -537,7 +565,7 @@ function receiptQuerySupportsTitle(
 	call: AgentToolCallReceipt,
 	title: string,
 ): boolean {
-	if (call.tool !== "vault_search") return false;
+	if (call.tool !== "vault_candidates") return false;
 	const expectedTitleTerms = tokenizeForLexicalRetrieval(title, 24).map(normalizeLexicalTerm);
 	return receiptTermsCover(call, expectedTitleTerms);
 }
@@ -589,7 +617,7 @@ function receiptReadMatchesIdentity(
 	call: AgentToolCallReceipt,
 	identity: Pick<PaperIngestIdentity, "title" | "doi">,
 ): boolean {
-	if (call.tool !== "vault_read" || !call.ok) return false;
+	if (call.tool !== "vault_candidate_read" || !call.ok) return false;
 	const normalizedTitle = normalizeBibliographicTitle(identity.title);
 	const normalizedDoi = normalizeIdentityDoi(identity.doi);
 	const titleMatches = (call.data?.titles || [])
@@ -606,18 +634,18 @@ function receiptSupportsExactDuplicate(
 ): boolean {
 	const normalizedDoi = normalizeIdentityDoi(identity.doi);
 	if (normalizedDoi) {
-		return ["vault_read", "vault_doi_search"].includes(call.tool)
+		return ["vault_candidate_read", "vault_doi_search"].includes(call.tool)
 			&& receiptContainsPath(call, declaredPath)
 			&& (call.data?.dois || [])
 				.some((doi) => normalizeIdentityDoi(doi) === normalizedDoi);
 	}
-	if (call.tool === "vault_search") {
+	if (call.tool === "vault_candidates") {
 		return (call.data?.candidates || []).some((candidate) => (
 			pathsReferToSameRecord(candidate.path, declaredPath)
 			&& normalizeIdentityText(candidate.title) === normalizeIdentityText(identity.title)
 		));
 	}
-	if (call.tool !== "vault_read" || !receiptContainsPath(call, declaredPath)) return false;
+	if (call.tool !== "vault_candidate_read" || !receiptContainsPath(call, declaredPath)) return false;
 	return (call.data?.titles || [])
 		.some((title) => normalizeIdentityText(title) === normalizeIdentityText(identity.title));
 }
@@ -849,14 +877,14 @@ export function collectTrustedExactDuplicateRecords(
 			(call.data?.candidates || []).forEach((candidate) => add(candidate.path, "doi"));
 			continue;
 		}
-		if (call.tool === "vault_search") {
+		if (call.tool === "vault_candidates") {
 			if (!receiptQuerySupportsTitle(call, identity.title)) continue;
 			(call.data?.candidates || []).forEach((candidate) => {
 				if (normalizeBibliographicTitle(candidate.title) === normalizedTitle) add(candidate.path, "title");
 			});
 			continue;
 		}
-		if (call.tool === "vault_read") {
+		if (call.tool === "vault_candidate_read") {
 			const doiMatches = Boolean(normalizedDoi) && (call.data?.dois || [])
 				.some((doi) => normalizeIdentityDoi(doi) === normalizedDoi);
 			const titleMatches = (call.data?.titles || [])

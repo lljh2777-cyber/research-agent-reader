@@ -456,11 +456,13 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.addSettingTab(new AgentDashboardSettingTab(this.app, this));
 	}
 
-	onunload(): void {
+	async onunload(): Promise<void> {
 		this.annotationPopover?.close();
 		this.hideAnnotationChip();
-		void this.flushScheduledSettingsSave();
-		this.agentLoopService.shutdown();
+		await this.flushScheduledSettingsSave();
+		await this.agentLoopService.shutdown().catch((error) => {
+			console.error("Light-agent shutdown barrier failed", error);
+		});
 		this.processExecution.shutdown();
 	}
 

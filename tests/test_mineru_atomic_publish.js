@@ -158,6 +158,26 @@ function testRealNpmExtensionlessCmdShimResolution() {
 	}
 }
 
+function testUnixGlobalNpmBinSymlinkResolution() {
+	if (process.platform === "win32") return;
+	const prefix = fs.mkdtempSync(path.join(os.tmpdir(), "mineru-global-prefix-"));
+	const entry = path.join(prefix, "lib", "node_modules", "mineru-open-api", "bin", "mineru-open-api");
+	const bin = path.join(prefix, "bin");
+	fs.mkdirSync(path.dirname(entry), { recursive: true });
+	fs.mkdirSync(bin);
+	fs.writeFileSync(entry, "#!/usr/bin/env node\nconsole.log('fixture');\n", "utf8");
+	fs.writeFileSync(path.join(prefix, "lib", "node_modules", "mineru-open-api", "package.json"), JSON.stringify({
+		name: "mineru-open-api",
+		bin: { "mineru-open-api": "bin/mineru-open-api" },
+	}));
+	const launcher = path.join(bin, "mineru-open-api");
+	fs.symlinkSync(path.relative(bin, entry), launcher, "file");
+	assert.deepEqual(resolveMineruCommand(launcher), {
+		command: process.execPath,
+		baseArgs: [fs.realpathSync.native ? fs.realpathSync.native(entry) : fs.realpathSync(entry)],
+	});
+}
+
 function testCmdShimTraversalAndCommandTailAreRejected() {
 	const base = fs.mkdtempSync(path.join(os.tmpdir(), "mineru-malicious-shim-"));
 	const root = path.join(base, "npm");
@@ -488,7 +508,123 @@ async function testUntrustedExtractionTreeIsBounded(fixture) {
 			}
 		},
 	});
-	assert.match(aggregateResult.error.message, /累计大小超过/);
+	assert.match(aggregateResult.error.message, /单文件超过|累计大小超过/);
+
+	const articleResult = await attemptPublish(fixture, "oversized_article_2026", {
+		writeExtraction(outputDir) {
+			writeExtraction(outputDir);
+			fs.truncateSync(path.join(outputDir, "result", "article.md"), 16 * 1024 * 1024 + 1);
+		},
+	});
+	assert.match(articleResult.error.message, /article\.md.*16 MiB/);
+
+	const jsonResult = await attemptPublish(fixture, "oversized_json_2026", {
+		writeExtraction(outputDir) {
+			writeExtraction(outputDir);
+			fs.truncateSync(path.join(outputDir, "result", "demo_content_list.json"), 32 * 1024 * 1024 + 1);
+		},
+	});
+	assert.match(jsonResult.error.message, /json.*32 MiB/i);
+
+	const nestedJsonResult = await attemptPublish(fixture, "nested_json_2026", {
+		writeExtraction(outputDir) {
+			writeExtraction(outputDir);
+			fs.writeFileSync(
+				path.join(outputDir, "result", "demo_content_list.json"),
+				`${"[".repeat(65)}0${"]".repeat(65)}`,
+				"utf8",
+			);
+		},
+	});
+	assert.match(nestedJsonResult.error.message, /嵌套深度超过/);
+}
+
+async function testVersionStageCancellationNeverStartsExtract(fixture) {
+	const controller = new AbortController();
+	let extractCalls = 0;
+	const result = await attemptPublish(fixture, "version_cancel_2026", {
+		signal: controller.signal,
+		async runCommand(request) {
+			if (request.cliArgs[0] === "version") {
+				controller.abort();
+				return { exitCode: 130, stdout: "", stderr: "cancelled" };
+			}
+			extractCalls += 1;
+			return { exitCode: 0, stdout: "", stderr: "" };
+		},
+	});
+	assert.match(result.error.message, /已取消.*未启动 MinerU extract/);
+	assert.equal(extractCalls, 0);
+}
+
+async function testVersionTerminationUnconfirmedPreservesStage(fixture) {
+	let extractCalls = 0;
+	const result = await attemptPublish(fixture, "version_tree_unconfirmed_2026", {
+		async runCommand(request) {
+			if (request.cliArgs[0] === "version") {
+				const error = new Error("version descendant still active");
+				error.name = "MineruTerminationUnconfirmedError";
+				throw error;
+			}
+			extractCalls += 1;
+			return { exitCode: 0, stdout: "", stderr: "" };
+		},
+	});
+	assert.equal(extractCalls, 0);
+	assert.match(result.error.message, /version descendant still active/);
+	assert.match(result.error.message, /暂存目录已保留/);
+}
+
+async function testReclaimsLockAfterPidReuse(fixture) {
+	const citekey = "reused_pid_lock_2026";
+	const locksRoot = path.join(fixture.vaultRoot, "papers", ".locks");
+	fs.mkdirSync(locksRoot, { recursive: true });
+	fs.writeFileSync(path.join(locksRoot, `${citekey}.lock`), JSON.stringify({
+		pid: process.pid,
+		created_at: "2020-01-01T00:00:00.000Z",
+		process_start_identity: "definitely-not-the-current-process",
+	}) + "\n", "utf8");
+	const result = await attemptPublish(fixture, citekey);
+	assert.ok(result.receipt, result.error?.message);
+	assert.equal(fs.existsSync(path.join(fixture.vaultRoot, "papers", citekey, "article.md")), true);
+}
+
+async function testLiveLegacyLockWithoutProcessIdentityFailsClosed(fixture) {
+	const citekey = "live_legacy_lock_2026";
+	const locksRoot = path.join(fixture.vaultRoot, "papers", ".locks");
+	fs.mkdirSync(locksRoot, { recursive: true });
+	const lockPath = path.join(locksRoot, `${citekey}.lock`);
+	fs.writeFileSync(lockPath, JSON.stringify({
+		pid: process.pid,
+		created_at: "2020-01-01T00:00:00.000Z",
+	}) + "\n", "utf8");
+	const result = await attemptPublish(fixture, citekey);
+	assert.match(result.error && result.error.message, /正在由另一个入库任务发布/);
+	assert.equal(fs.existsSync(lockPath), true);
+	fs.unlinkSync(lockPath);
+}
+
+async function testNonImagesAssetIsManifested(fixture) {
+	const citekey = "portable_asset_2026";
+	const result = await attemptPublish(fixture, citekey, {
+		writeExtraction(outputDir) {
+			writeExtraction(outputDir);
+			const resultDir = path.join(outputDir, "result");
+			fs.appendFileSync(path.join(resultDir, "article.md"), "\n![](assets/figure.png)\n", "utf8");
+			fs.writeFileSync(path.join(resultDir, "demo_content_list.json"), JSON.stringify([
+				{ type: "title", page_idx: 0 },
+				{ type: "image", page_idx: 0, img_path: "assets/figure.png" },
+			]), "utf8");
+			fs.mkdirSync(path.join(resultDir, "assets"));
+			fs.writeFileSync(path.join(resultDir, "assets", "figure.png"), Buffer.from("89504e470000000000000000000000000000000100000001", "hex"));
+		},
+	});
+	assert.equal(result.error, null);
+	const manifest = JSON.parse(fs.readFileSync(
+		path.join(fixture.vaultRoot, "papers", citekey, "_extraction", "manifest.json"),
+		"utf8",
+	));
+	assert.equal(manifest.outputs.some((record) => record.path === "assets/figure.png"), true);
 }
 
 async function testRenameFailureLeavesNoVaultResidue(fixture) {
@@ -556,6 +692,7 @@ async function testPerCitekeyPublishLock(fixture) {
 
 (async () => {
 	testRealNpmExtensionlessCmdShimResolution();
+	testUnixGlobalNpmBinSymlinkResolution();
 	testCmdShimTraversalAndCommandTailAreRejected();
 	const fixture = createFixture();
 	await testSuccessfulAtomicPublishAndPortableManifest(fixture);
@@ -572,6 +709,11 @@ async function testPerCitekeyPublishLock(fixture) {
 	await testCleanupFailureIsReported(fixture);
 	await testPapersJunctionOutsideVaultIsRejected();
 	await testUntrustedExtractionTreeIsBounded(fixture);
+	await testVersionStageCancellationNeverStartsExtract(fixture);
+	await testVersionTerminationUnconfirmedPreservesStage(fixture);
+	await testReclaimsLockAfterPidReuse(fixture);
+	await testLiveLegacyLockWithoutProcessIdentityFailsClosed(fixture);
+	await testNonImagesAssetIsManifested(fixture);
 	console.log("MINERU_ATOMIC_PUBLISH_TESTS_OK");
 })().catch((error) => {
 	console.error(error);

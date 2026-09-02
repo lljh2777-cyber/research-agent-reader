@@ -253,6 +253,9 @@ export interface MineruReaderPackage {
 	visualRepair: MineruVisualRepair | null;
 	visuals: MineruReaderVisual[];
 	pdfPath: string | null;
+	/** Bytes retained from manifest verification; renderers must not re-read paths. */
+	verifiedAssetBytes: Map<string, Uint8Array>;
+	verifiedPdfBytes: Uint8Array | null;
 	externalPdfRecorded: boolean;
 	issues: string[];
 }

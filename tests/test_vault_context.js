@@ -255,7 +255,7 @@ async function testLexicalRetriever() {
 			bibliographicRecords: [{ title: "Demo Paper", doi: "", authors: "Doe Jane", year: "2026" }],
 		},
 	}, {
-		tool: "vault_search",
+		tool: "vault_candidates",
 		ok: true,
 		data: dedupResult.receiptData,
 	}]);

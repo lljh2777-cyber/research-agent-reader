@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 import { buildRuntimeViewerIndex, MINERU_VIEWER_LIMITS } from "../mineru/normalization";
+import { MINERU_RESOURCE_LIMITS, parseBoundedJson } from "../mineru/resource-limits";
 import { buildVisualCandidates, validateVisualCandidates } from "../mineru/visual-candidates";
 import { buildRuntimeVisualRepair, validateVisualContracts } from "../mineru/visual-repair";
+import { MineruTerminationUnconfirmedError } from "../runtime/mineru-process";
 
 /**
  * Native (Python/toolkit-free) MinerU publish pipeline for the light agent.
@@ -94,13 +97,13 @@ export class MineruPreCommitValidationError extends Error {
 }
 
 const CITEKEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
-const MAX_PUBLISH_ASSET_BYTES = 256 * 1024 * 1024;
+const MAX_PUBLISH_ASSET_BYTES = MINERU_RESOURCE_LIMITS.outputAssetBytes;
 const PACKAGE_INVENTORY_LIMITS = {
 	maxDepth: 16,
 	maxEntries: 10_000,
 	maxFiles: 8_192,
-	maxTotalBytes: 512 * 1024 * 1024,
-	maxFileBytes: MAX_PUBLISH_ASSET_BYTES,
+	maxTotalBytes: MINERU_RESOURCE_LIMITS.packageTotalBytes,
+	maxFileBytes: MINERU_RESOURCE_LIMITS.pdfBytes,
 } as const;
 const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(([^)\s]+)[^)]*\)/g;
 const HTML_IMAGE_RE = /<img\b[^>]*\bsrc=["']([^"']+)["']/gi;
@@ -236,6 +239,14 @@ function resolveNodeRuntime(shimRoot: string): string {
 		try {
 			const stats = fs.lstatSync(candidate);
 			if (stats.isFile()) return realPathSync(candidate);
+			// nvm/Homebrew/npm prefixes commonly expose <prefix>/bin/node as an
+			// outer symlink. As with the MinerU bin link, use it only as a locator
+			// and require the final object to be a regular executable file.
+			if (process.platform !== "win32" && stats.isSymbolicLink()) {
+				const resolved = realPathSync(candidate);
+				const resolvedStats = fs.lstatSync(resolved);
+				if (resolvedStats.isFile() && /^node$/i.test(path.basename(candidate))) return resolved;
+			}
 		} catch {
 			continue;
 		}
@@ -303,10 +314,26 @@ export function resolveMineruCommand(executable: string): ResolvedMineruCommand 
 	}
 	const ext = path.extname(resolved).toLowerCase();
 	if (ext === ".js" || ext === ".mjs" || ext === ".cjs") {
-		return resolveNodeLauncher(realPathSync(resolved), path.dirname(resolved));
+		const stats = fs.lstatSync(resolved);
+		if (stats.isSymbolicLink() || !stats.isFile()) {
+			throw new Error("MinerU Node 入口必须是普通文件，不能是符号链接或 junction");
+		}
+		return resolveNodeLauncher(resolved, path.dirname(resolved));
 	}
 	if (!ext) {
 		const stats = fs.lstatSync(resolved);
+		// npm -g uses a top-level symlink in <prefix>/bin on macOS/Linux. Treat
+		// only that outer link as a locator; the resolved package root, bin path,
+		// package.json and final entry remain subject to the strict no-link checks
+		// in validateMineruNodeEntry().
+		if (stats.isSymbolicLink() && process.platform !== "win32") {
+			const entry = realPathSync(resolved);
+			const entryStats = fs.lstatSync(entry);
+			if (!entryStats.isFile()) throw new Error("MinerU npm bin symlink 没有指向普通文件");
+			const head = fs.readFileSync(entry, "utf8").slice(0, 200);
+			if (!/^#!.*\bnode\b/i.test(head)) throw new Error("MinerU npm bin symlink 没有指向 Node launcher");
+			return resolveNodeLauncher(entry, path.dirname(resolved));
+		}
 		if (stats.isFile()) {
 			const head = fs.readFileSync(resolved, "utf8").slice(0, 200);
 			if (/^#!.*\bnode\b/i.test(head)) {
@@ -507,7 +534,7 @@ function copyReferencedAssets(
 	packageRoot: string,
 	markdown: string,
 	payload: unknown,
-): void {
+): string[] {
 	const refs = new Set(markdownAssetRefs(markdown).map(normalizedReferencedAsset));
 	for (const element of flattenMineruElements(payload)) {
 		for (const rawAsset of element.assetPaths) refs.add(normalizedReferencedAsset(rawAsset));
@@ -516,6 +543,7 @@ function copyReferencedAssets(
 		throw new Error("MinerU 引用资产数超过安全上限");
 	}
 	const realExtractRoot = realPathSync(extractDir);
+	const copied: string[] = [];
 	for (const relative of refs) {
 		const source = path.resolve(outputRoot, ...relative.split("/"));
 		if (!isPathInside(path.resolve(outputRoot), source)) throw new Error(`MinerU 资产引用越界：${relative}`);
@@ -529,7 +557,9 @@ function copyReferencedAssets(
 		const destination = path.join(packageRoot, ...relative.split("/"));
 		fs.mkdirSync(path.dirname(destination), { recursive: true });
 		fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+		copied.push(relative);
 	}
+	return copied.sort();
 }
 
 function copyInventoriedTree(source: string, destination: string): void {
@@ -650,16 +680,60 @@ function markdownAssetRefs(markdown: string): string[] {
  * heading, a valid MinerU element array, and every referenced asset
  * present and non-empty inside the package.
  */
-export function validateStagedPackage(packageRoot: string): Record<string, unknown> {
-	const markdown = fs.readFileSync(path.join(packageRoot, "article.md"), "utf8");
+interface ValidatedExtractionData {
+	articleBytes: Buffer;
+	mineruBytes: Buffer;
+	markdown: string;
+	payload: unknown;
+}
+
+function readValidatedExtractionData(markdownPath: string, jsonPath: string): ValidatedExtractionData {
+	const markdownStats = fs.lstatSync(markdownPath);
+	const jsonStats = fs.lstatSync(jsonPath);
+	if (markdownStats.isSymbolicLink() || !markdownStats.isFile()
+		|| jsonStats.isSymbolicLink() || !jsonStats.isFile()) {
+		throw new Error("MinerU 核心输出必须是普通文件");
+	}
+	if (markdownStats.size > MINERU_RESOURCE_LIMITS.articleBytes) {
+		throw new Error("MinerU article.md 超过发布安全上限（16 MiB）");
+	}
+	if (jsonStats.size > MINERU_RESOURCE_LIMITS.mineruJsonBytes) {
+		throw new Error("MinerU mineru-result.json 超过发布安全上限（32 MiB）");
+	}
+	const articleBytes = fs.readFileSync(markdownPath);
+	const mineruBytes = fs.readFileSync(jsonPath);
+	if (articleBytes.byteLength !== markdownStats.size
+		|| articleBytes.byteLength > MINERU_RESOURCE_LIMITS.articleBytes) {
+		throw new Error("MinerU article.md 实际读取长度不一致或超过安全上限");
+	}
+	if (mineruBytes.byteLength !== jsonStats.size
+		|| mineruBytes.byteLength > MINERU_RESOURCE_LIMITS.mineruJsonBytes) {
+		throw new Error("MinerU mineru-result.json 实际读取长度不一致或超过安全上限");
+	}
+	const markdown = articleBytes.toString("utf8");
+	const payload = parseBoundedJson(mineruBytes.toString("utf8"), "mineru-result.json");
+	// Validate structural fan-out before the parsed object reaches any later
+	// contract builder. The same object is reused throughout publication.
+	flattenMineruElements(payload);
+	return { articleBytes, mineruBytes, markdown, payload };
+}
+
+export function validateStagedPackage(
+	packageRoot: string,
+	validated?: ValidatedExtractionData,
+): Record<string, unknown> {
+	const data = validated || readValidatedExtractionData(
+		path.join(packageRoot, "article.md"),
+		path.join(packageRoot, "mineru-result.json"),
+	);
+	const markdown = data.markdown;
 	if (markdown.trim().length < 100) {
 		throw new Error("MinerU article.md 为空或过短（<100 字符）");
 	}
 	if (!/^#\s+\S/m.test(markdown)) {
 		throw new Error("Mineru article.md 缺少文档标题（# 标题）");
 	}
-	const payload = JSON.parse(fs.readFileSync(path.join(packageRoot, "mineru-result.json"), "utf8")) as unknown;
-	const elements = flattenMineruElements(payload);
+	const elements = flattenMineruElements(data.payload);
 
 	let pageMax = 0;
 	const jsonAssets = new Set<string>();
@@ -710,6 +784,7 @@ function buildManifest(inputs: {
 	extractorExecutable: string;
 	packageRoot: string;
 	includeSourcePdf: boolean;
+	copiedAssets: readonly string[];
 	createdIso: string;
 }): Record<string, unknown> {
 	const outputs: Array<Record<string, unknown>> = [];
@@ -717,17 +792,25 @@ function buildManifest(inputs: {
 	const fileRecord = (absolutePath: string): Record<string, unknown> => {
 		const relative = path.relative(inputs.packageRoot, absolutePath).split(path.sep).join("/");
 		const size = fs.statSync(absolutePath).size;
-		if (size > MAX_PUBLISH_ASSET_BYTES) {
-			throw new Error(`包内文件超过发布上限（256MiB）：${relative}`);
+		const maxBytes = relative === "article.md"
+			? MINERU_RESOURCE_LIMITS.articleBytes
+			: relative === "mineru-result.json"
+				? MINERU_RESOURCE_LIMITS.mineruJsonBytes
+				: relative === "_extraction/source.pdf"
+					? MINERU_RESOURCE_LIMITS.pdfBytes
+					: relative.startsWith("_extraction/")
+						? MINERU_RESOURCE_LIMITS.contractBytes
+						: MAX_PUBLISH_ASSET_BYTES;
+		if (size > maxBytes) {
+			throw new Error(`包内文件超过发布上限：${relative}`);
 		}
 		return { path: relative, size, sha256: sha256File(absolutePath) };
 	};
 	const register = (absolutePath: string): void => { outputs.push(fileRecord(absolutePath)); };
 	register(path.join(inputs.packageRoot, "article.md"));
 	register(path.join(inputs.packageRoot, "mineru-result.json"));
-	const imagesDir = path.join(inputs.packageRoot, "images");
-	if (fs.existsSync(imagesDir)) {
-		for (const file of inventoryTree(imagesDir).files) register(file);
+	for (const relative of inputs.copiedAssets) {
+		register(path.join(inputs.packageRoot, ...relative.split("/")));
 	}
 	if (inputs.includeSourcePdf) {
 		register(path.join(inputs.packageRoot, "_extraction", "source.pdf"));
@@ -777,6 +860,7 @@ function buildManifest(inputs: {
 function writeDerivedViewerContracts(
 	packageRoot: string,
 	includeSourcePdf: boolean,
+	validated?: ValidatedExtractionData,
 ): {
 	viewerStatus: string;
 	repairStatus: string;
@@ -785,12 +869,14 @@ function writeDerivedViewerContracts(
 	autoGroupCount: number;
 	candidateCount: number;
 } {
-	const articlePath = path.join(packageRoot, "article.md");
-	const mineruPath = path.join(packageRoot, "mineru-result.json");
-	const articleBytes = fs.readFileSync(articlePath);
-	const mineruBytes = fs.readFileSync(mineruPath);
-	const articleMarkdown = articleBytes.toString("utf8");
-	const mineruPayload = JSON.parse(mineruBytes.toString("utf8")) as unknown;
+	const data = validated || readValidatedExtractionData(
+		path.join(packageRoot, "article.md"),
+		path.join(packageRoot, "mineru-result.json"),
+	);
+	const articleBytes = data.articleBytes;
+	const mineruBytes = data.mineruBytes;
+	const articleMarkdown = data.markdown;
+	const mineruPayload = data.payload;
 	const articleHash = sha256Bytes(articleBytes);
 	const mineruHash = sha256Bytes(mineruBytes);
 	const viewerIndex = buildRuntimeViewerIndex(mineruPayload, articleMarkdown, {
@@ -896,7 +982,57 @@ function ensureTrustedPapersRoot(vaultRoot: string): string {
 	return papersRoot;
 }
 
-function acquirePublishLock(papersRoot: string, citekey: string): () => void {
+/**
+ * Stable operating-system process identity used only to distinguish a live
+ * lock owner from a later process that reused the same PID. Wall-clock
+ * estimates such as Date.now() - process.uptime() are deliberately excluded:
+ * a clock correction must never make us remove a live lock.
+ */
+function processStartIdentity(pid: number): string | null {
+	try {
+		if (process.platform === "win32") {
+			const windowsRoot = path.resolve(process.env.SystemRoot || "C:\\Windows");
+			const powershell = path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+			const result = spawnSync(powershell, [
+				"-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+				`(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString()`,
+			], { encoding: "utf8", windowsHide: true, shell: false, timeout: 5_000, maxBuffer: 4096 });
+			if (result.status !== 0) return null;
+			const value = String(result.stdout || "").trim();
+			return /^\d{10,}$/.test(value) ? `win-ticks:${value}` : null;
+		}
+		// Linux exposes a boot-relative start tick in /proc/<pid>/stat. It is
+		// immune to wall-clock changes and exact enough to detect fast PID reuse.
+		if (process.platform === "linux") {
+			const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+			const close = stat.lastIndexOf(")");
+			if (close < 0) return null;
+			const fieldsAfterComm = stat.slice(close + 1).trim().split(/\s+/);
+			// Field 22 (starttime); fieldsAfterComm[0] is field 3 (state).
+			const startTicks = fieldsAfterComm[19];
+			return /^\d+$/.test(startTicks || "") ? `linux-ticks:${startTicks}` : null;
+		}
+		const ps = ["/bin/ps", "/usr/bin/ps"].find((candidate) => {
+			try { return fs.lstatSync(candidate).isFile(); } catch { return false; }
+		});
+		if (!ps) return null;
+		const result = spawnSync(ps, ["-o", "lstart=", "-p", String(pid)], {
+			encoding: "utf8", shell: false, timeout: 5_000, maxBuffer: 4096,
+		});
+		if (result.status !== 0) return null;
+		const value = String(result.stdout || "").trim().replace(/\s+/g, " ");
+		return value ? `ps-lstart:${value}` : null;
+	} catch {
+		return null;
+	}
+}
+
+function acquirePublishLock(papersRoot: string, citekey: string): {
+	release(): void;
+	papersIdentity: { dev: bigint; ino: bigint; realPath: string };
+} {
+	const papersStats = fs.statSync(papersRoot, { bigint: true });
+	const papersIdentity = { dev: papersStats.dev, ino: papersStats.ino, realPath: realPathSync(papersRoot) };
 	const locksRoot = path.join(papersRoot, ".locks");
 	try { fs.mkdirSync(locksRoot); } catch (error) {
 		const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
@@ -911,24 +1047,84 @@ function acquirePublishLock(papersRoot: string, citekey: string): () => void {
 	}
 	const lockPath = path.join(locksRoot, `${citekey}.lock`);
 	let descriptor: number;
+	const createLock = (): number => {
+		const opened = fs.openSync(lockPath, "wx", 0o600);
+		try {
+			const processIdentity = processStartIdentity(process.pid);
+			fs.writeFileSync(opened, JSON.stringify({
+				pid: process.pid,
+				created_at: new Date().toISOString(),
+				...(processIdentity ? { process_start_identity: processIdentity } : {}),
+			}) + "\n", "utf8");
+			fs.fsyncSync(opened);
+			return opened;
+		} catch (error) {
+			try { fs.closeSync(opened); } catch { /* Best effort. */ }
+			try { fs.unlinkSync(lockPath); } catch { /* Best effort. */ }
+			throw error;
+		}
+	};
 	try {
-		descriptor = fs.openSync(lockPath, "wx", 0o600);
-		fs.writeFileSync(descriptor, `${process.pid}\n`, "utf8");
+		descriptor = createLock();
 	} catch (error) {
 		const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
-		if (code === "EEXIST") throw new Error(`papers/${citekey} 正在由另一个入库任务发布`);
-		throw error;
+		if (code !== "EEXIST") throw error;
+		let staleRemoved = false;
+		try {
+			const staleDescriptor = fs.openSync(lockPath, "r");
+			try {
+				const opened = fs.fstatSync(staleDescriptor, { bigint: true });
+				if (!opened.isFile() || opened.size > 4096n) throw new Error("发布锁格式无效");
+				const record = JSON.parse(fs.readFileSync(staleDescriptor, "utf8")) as {
+					pid?: unknown;
+					process_start_identity?: unknown;
+				};
+				const pid = Number(record.pid);
+				if (!Number.isInteger(pid) || pid <= 0) throw new Error("发布锁 PID 无效");
+				let processAbsent = false;
+				try { process.kill(pid, 0); } catch (probeError) {
+					const probeCode = probeError && typeof probeError === "object" && "code" in probeError
+						? String(probeError.code) : "";
+					processAbsent = probeCode === "ESRCH";
+				}
+				if (!processAbsent) {
+					const recordedIdentity = typeof record.process_start_identity === "string"
+						? record.process_start_identity : "";
+					const actualIdentity = processStartIdentity(pid);
+					if (recordedIdentity && actualIdentity !== null
+						&& actualIdentity !== recordedIdentity) {
+						// The PID now belongs to a different process. The old owner is gone.
+						processAbsent = true;
+					}
+				}
+				if (!processAbsent) throw new Error("发布锁持有进程仍存在或无法证明已经退出");
+				const current = fs.lstatSync(lockPath, { bigint: true });
+				if (current.isSymbolicLink() || !current.isFile()
+					|| current.dev !== opened.dev || current.ino !== opened.ino) {
+					throw new Error("发布锁在回收检查期间发生变化");
+				}
+				fs.unlinkSync(lockPath);
+				staleRemoved = true;
+			} finally {
+				fs.closeSync(staleDescriptor);
+			}
+		} catch { /* Fail closed and preserve any lock that cannot be proved stale. */ }
+		if (!staleRemoved) throw new Error(`papers/${citekey} 正在由另一个入库任务发布`);
+		descriptor = createLock();
 	}
 	let released = false;
-	return () => {
+	return { papersIdentity, release: () => {
 		if (released) return;
 		released = true;
-		try { fs.closeSync(descriptor); } catch { /* Best effort. */ }
 		try {
-			const stats = fs.lstatSync(lockPath);
-			if (!stats.isSymbolicLink() && stats.isFile()) fs.unlinkSync(lockPath);
+			const stats = fs.lstatSync(lockPath, { bigint: true });
+			const opened = fs.fstatSync(descriptor, { bigint: true });
+			if (!stats.isSymbolicLink() && stats.isFile() && stats.dev === opened.dev && stats.ino === opened.ino) {
+				fs.unlinkSync(lockPath);
+			}
 		} catch { /* Best effort; stale lock remains visible and fails closed. */ }
-	};
+		try { fs.closeSync(descriptor); } catch { /* Best effort. */ }
+	} };
 }
 
 function errorDetail(error: unknown): string {
@@ -1017,11 +1213,25 @@ function publishValidatedPackageAtomically(
 	citekey: string,
 	context: MineruPublishContext,
 	customOps?: Partial<MineruPublishOps>,
+	expectedPapersIdentity?: { dev: bigint; ino: bigint; realPath: string },
 ): string {
+	const assertPapersIdentity = (): void => {
+		if (!expectedPapersIdentity) return;
+		const current = fs.statSync(papersRoot, { bigint: true });
+		if (current.dev !== expectedPapersIdentity.dev || current.ino !== expectedPapersIdentity.ino
+			|| realPathSync(papersRoot) !== expectedPapersIdentity.realPath) {
+			throw new Error("原子发布期间 papers 目录身份发生变化");
+		}
+	};
+	assertPapersIdentity();
 	const packageTarget = path.join(papersRoot, citekey);
 	if (fs.existsSync(packageTarget)) throw createOnlyError(citekey, true);
 
 	const stagingContainer = fs.mkdtempSync(path.join(papersRoot, `.${citekey}.staging-`));
+	assertPapersIdentity();
+	if (path.dirname(realPathSync(stagingContainer)) !== expectedPapersIdentity?.realPath && expectedPapersIdentity) {
+		throw new Error("MinerU staging 未创建在持锁的 papers 目录中");
+	}
 	const stagedPackage = path.join(stagingContainer, "package");
 	const copyPackage = customOps?.copyPackage
 		|| ((source: string, destination: string): void => {
@@ -1069,7 +1279,9 @@ function publishValidatedPackageAtomically(
 		throw createOnlyError(citekey, true, retainedStagingDetail(cleaned, stagingContainer));
 	}
 	try {
+		assertPapersIdentity();
 		renamePackage(stagedPackage, packageTarget);
+		assertPapersIdentity();
 	} catch (error) {
 		const targetExists = fs.existsSync(packageTarget);
 		const cleaned = cleanPublishStaging(stagingContainer, papersRoot, citekey);
@@ -1121,7 +1333,7 @@ export async function publishMineruPackage(
 	}
 	const pages = normalizePagesValue(args.pages);
 	const initialPapersRoot = ensureTrustedPapersRoot(deps.vaultRoot);
-	const releasePublishLock = acquirePublishLock(initialPapersRoot, args.citekey);
+	const publishLock = acquirePublishLock(initialPapersRoot, args.citekey);
 	try {
 		const packageTarget = path.join(initialPapersRoot, args.citekey);
 		if (fs.existsSync(packageTarget)) {
@@ -1130,6 +1342,7 @@ export async function publishMineruPackage(
 		const resolved = resolveMineruCommand(deps.mineruExecutable);
 		const stageRoot = deps.stageRoot || os.tmpdir();
 		const stage = fs.mkdtempSync(path.join(stageRoot, "mineru-publish-"));
+		let preserveStage = false;
 		try {
 		if (context.signal.aborted) throw new Error("任务已取消");
 		const extractDir = path.join(stage, "extract");
@@ -1141,8 +1354,13 @@ export async function publishMineruPackage(
 			cwd: stage,
 			timeoutMs: 15_000,
 			signal: context.signal,
-		}).catch(() => ({ exitCode: 1, stdout: "", stderr: "" }));
+		}).catch((error) => {
+			if (error instanceof MineruTerminationUnconfirmedError
+				|| (error instanceof Error && error.name === "MineruTerminationUnconfirmedError")) throw error;
+			return { exitCode: 1, stdout: "", stderr: "" };
+		});
 		const extractorVersion = normalizeExtractorVersion(versionResult.stdout);
+		if (context.signal.aborted) throw new Error("任务已取消，未启动 MinerU extract");
 
 		const publishTimeoutMs = Math.min(
 			context.timeoutMs,
@@ -1163,18 +1381,17 @@ export async function publishMineruPackage(
 		}
 
 		const outputs = locateMineruOutputs(extractDir);
+		const validatedExtraction = readValidatedExtractionData(outputs.markdown, outputs.json);
 		const packageRoot = path.join(stage, "package");
 		fs.mkdirSync(packageRoot);
 		fs.copyFileSync(outputs.markdown, path.join(packageRoot, "article.md"));
 		fs.copyFileSync(outputs.json, path.join(packageRoot, "mineru-result.json"));
-		const extractedMarkdown = fs.readFileSync(outputs.markdown, "utf8");
-		const extractedPayload = JSON.parse(fs.readFileSync(outputs.json, "utf8")) as unknown;
-		copyReferencedAssets(
+		const copiedAssets = copyReferencedAssets(
 			extractDir,
 			path.dirname(outputs.markdown),
 			packageRoot,
-			extractedMarkdown,
-			extractedPayload,
+			validatedExtraction.markdown,
+			validatedExtraction.payload,
 		);
 		const extractionDir = path.join(packageRoot, "_extraction");
 		if (args.includeSourcePdf) {
@@ -1183,8 +1400,12 @@ export async function publishMineruPackage(
 		}
 
 		fs.mkdirSync(extractionDir, { recursive: true });
-		const baseValidation = validateStagedPackage(packageRoot);
-		const contractSummary = writeDerivedViewerContracts(packageRoot, args.includeSourcePdf);
+		const baseValidation = validateStagedPackage(packageRoot, validatedExtraction);
+		const contractSummary = writeDerivedViewerContracts(
+			packageRoot,
+			args.includeSourcePdf,
+			validatedExtraction,
+		);
 		const validation = {
 			...baseValidation,
 			checks: {
@@ -1212,6 +1433,7 @@ export async function publishMineruPackage(
 			extractorExecutable: deps.mineruExecutable,
 			packageRoot,
 			includeSourcePdf: args.includeSourcePdf,
+			copiedAssets,
 			createdIso: (deps.now || (() => new Date()))().toISOString(),
 		});
 		fs.writeFileSync(
@@ -1223,22 +1445,37 @@ export async function publishMineruPackage(
 		// Re-resolve immediately before creating same-volume staging: a papers/
 		// junction introduced during the long remote extraction must fail closed.
 		const commitPapersRoot = ensureTrustedPapersRoot(deps.vaultRoot);
+		const commitPapersStats = fs.statSync(commitPapersRoot, { bigint: true });
+		if (realPathSync(commitPapersRoot) !== publishLock.papersIdentity.realPath
+			|| commitPapersStats.dev !== publishLock.papersIdentity.dev
+			|| commitPapersStats.ino !== publishLock.papersIdentity.ino) {
+			throw new Error("MinerU 提取期间 papers 目录身份发生变化，拒绝发布");
+		}
 		const committedPath = publishValidatedPackageAtomically(
 			packageRoot,
 			commitPapersRoot,
 			args.citekey,
 			context,
 			deps.publishOps,
+			publishLock.papersIdentity,
 		);
 		return { packagePath: committedPath, validation };
+		} catch (error) {
+			if (error instanceof Error && error.name === "MineruTerminationUnconfirmedError") {
+				preserveStage = true;
+				throw new Error(`${error.message}；为避免与存活进程竞争，暂存目录已保留：${stage}`);
+			}
+			throw error;
 		} finally {
-			try {
-				removeTreeNoFollow(stage);
-			} catch (cleanupError) {
-				console.warn("Could not clean MinerU staging directory", cleanupError);
+			if (!preserveStage) {
+				try {
+					removeTreeNoFollow(stage);
+				} catch (cleanupError) {
+					console.warn("Could not clean MinerU staging directory", cleanupError);
+				}
 			}
 		}
 	} finally {
-		releasePublishLock();
+		publishLock.release();
 	}
 }

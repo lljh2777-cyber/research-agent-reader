@@ -46,6 +46,7 @@ import {
 	type PaperIngestReceipts,
 } from "./paper-ingest-flow";
 import type { AgentLoopResult, AgentLoopStep } from "./types";
+import { readTrustedVaultFile, type VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
 
 export interface AgentLoopServiceDeps {
 	app: App;
@@ -83,6 +84,7 @@ export interface AgentRunHandle {
 
 interface ActiveAgentRun {
 	handle: AgentRunHandle;
+	completion: Promise<void>;
 }
 
 /** Final structured result; paths come from plugin receipts, not model claims. */
@@ -168,8 +170,9 @@ export class AgentLoopService {
 		return true;
 	}
 
-	/** Cancels every active run; called from plugin.onunload(). */
-	shutdown(): void {
+	/** Cancels every active run and resolves only after their cleanup barriers settle. */
+	async shutdown(): Promise<void> {
+		const completions = [...this.activeRuns.values()].map((active) => active.completion);
 		for (const active of this.activeRuns.values()) {
 			try {
 				active.handle.cancel();
@@ -177,7 +180,18 @@ export class AgentLoopService {
 				console.warn("Could not cancel light-agent run during shutdown", cancelError);
 			}
 		}
-		this.activeRuns.clear();
+		if (!completions.length) return;
+		let timeout: ReturnType<typeof setTimeout> | null = null;
+		try {
+			await Promise.race([
+				Promise.allSettled(completions),
+				new Promise<void>((_, reject) => {
+					timeout = setTimeout(() => reject(new Error("轻量 Agent 卸载清理超过 30 秒")), 30_000);
+				}),
+			]);
+		} finally {
+			if (timeout) clearTimeout(timeout);
+		}
 	}
 
 	async runPaperIngest(
@@ -193,6 +207,8 @@ export class AgentLoopService {
 		}
 
 		const abortController = new AbortController();
+		let resolveCompletion!: () => void;
+		const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
 		// Hard wall-clock budget: when it fires the run-level signal aborts
 		// everything (loops, HTTP, MinerU). Later phases may only run while
 		// budget remains — never re-added via a minimum floor.
@@ -226,6 +242,7 @@ export class AgentLoopService {
 					abortController.abort();
 				},
 			},
+			completion,
 		});
 		budgetTimer = setTimeout(() => {
 			state.budgetAborted = true;
@@ -523,6 +540,7 @@ export class AgentLoopService {
 			if (budgetTimer !== null) clearTimeout(budgetTimer);
 			await disposeAuthorizedPdfSnapshot(authorizedPdfSnapshot);
 			this.activeRuns.delete(runId);
+			resolveCompletion();
 		}
 	}
 
@@ -853,13 +871,20 @@ function describeLoopStatus(status: AgentLoopResult["status"]): string {
 
 /** Plugin-side title consistency gate on the published article. */
 export async function articleHeadContainsTitle(
-	deps: { app: { vault: { getAbstractFileByPath(path: string): unknown; read(file: unknown): Promise<string> } } },
+	deps: { app: { vault: {
+		getAbstractFileByPath(path: string): unknown;
+		adapter: VaultFilesystemAdapter;
+	} } },
 	articleVaultPath: string,
 	title: string,
 ): Promise<boolean> {
 	const file = deps.app.vault.getAbstractFileByPath(articleVaultPath);
 	if (!file) return false;
-	const content = await deps.app.vault.read(file);
+	const content = (await readTrustedVaultFile(
+		deps.app.vault.adapter,
+		articleVaultPath,
+		8 * 1024 * 1024,
+	)).toString("utf8");
 	return articleMarkdownTitleMatches(content, title);
 }
 

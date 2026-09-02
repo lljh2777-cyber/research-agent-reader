@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const Module = require("node:module");
+const os = require("node:os");
 const path = require("node:path");
 const esbuild = require(path.join(__dirname, "..", "node_modules", "esbuild"));
 
@@ -172,9 +173,17 @@ const createContext = () => ({
 });
 
 function createFakeVault(files, options = {}) {
+	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), "rar-agent-vault-"));
+	for (const [relativePath, content] of files.entries()) {
+		const fullPath = path.join(vaultRoot, ...String(relativePath).split("/"));
+		fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+		fs.writeFileSync(fullPath, String(content), "utf8");
+	}
 	const written = [];
 	const created = [];
 	const adapter = {
+		getBasePath: () => vaultRoot,
+		getFullPath: (target) => path.join(vaultRoot, ...String(target || "").split("/")),
 		exists: async (target) => {
 			const normalized = String(target).replace(/\\/g, "/");
 			if (files.has(normalized)) return true;
@@ -189,7 +198,8 @@ function createFakeVault(files, options = {}) {
 		mkdir: async () => {},
 		read: async (target) => {
 			const normalized = String(target).replace(/\\/g, "/");
-			if (files.has(normalized)) return files.get(normalized);
+			const fullPath = path.join(vaultRoot, ...normalized.split("/"));
+			if (fs.existsSync(fullPath)) return fs.readFileSync(fullPath, "utf8");
 			const entry = [...written, ...created].find((item) => item.path === normalized);
 			if (!entry) throw new Error(`文件不存在：${normalized}`);
 			return entry.data;
@@ -197,7 +207,9 @@ function createFakeVault(files, options = {}) {
 	};
 	const toStubFile = (filePath) => {
 		const extension = filePath.split(".").pop() || "";
-		return Object.assign(new ObsidianTFile(), { path: filePath, extension });
+		const fullPath = path.join(vaultRoot, ...String(filePath).split("/"));
+		const size = fs.existsSync(fullPath) ? fs.statSync(fullPath).size : 0;
+		return Object.assign(new ObsidianTFile(), { path: filePath, extension, stat: { size } });
 	};
 	const create = async (target, data) => {
 		const normalized = String(target).replace(/\\/g, "/");
@@ -206,22 +218,26 @@ function createFakeVault(files, options = {}) {
 		}
 		const entry = { path: normalized, data: String(data) };
 		created.push(entry);
+		const fullPath = path.join(vaultRoot, ...normalized.split("/"));
+		fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+		fs.writeFileSync(fullPath, String(data), { encoding: "utf8", flag: "wx" });
 		return toStubFile(normalized);
 	};
 	return {
+		vaultRoot,
 		written,
 		created,
 		createShouldFail: options.createShouldFail || false,
 		vault: {
 			getAbstractFileByPath: (target) => {
 				const normalized = String(target).replace(/\\/g, "/");
-				return files.has(normalized) ? toStubFile(normalized) : null;
+				return fs.existsSync(path.join(vaultRoot, ...normalized.split("/"))) ? toStubFile(normalized) : null;
 			},
 			getMarkdownFiles: () => [...files.keys()]
 				.filter((key) => key.endsWith(".md"))
 				.map(toStubFile),
 			getFiles: () => [...files.keys()].map(toStubFile),
-			read: async (file) => files.get(String(file.path)) ?? "",
+			read: async (file) => fs.readFileSync(path.join(vaultRoot, ...String(file.path).split("/")), "utf8"),
 			adapter,
 			create: async (target, data) => {
 				if (options.createShouldFail) throw new Error("File already exists");
@@ -229,6 +245,37 @@ function createFakeVault(files, options = {}) {
 			},
 		},
 	};
+}
+
+async function testVaultAncestorLinksAreRejected() {
+	const clippingVault = createFakeVault(new Map());
+	const outsideClippings = fs.mkdtempSync(path.join(os.tmpdir(), "rar-outside-clippings-"));
+	fs.writeFileSync(path.join(outsideClippings, "paper.md"), "# Outside Paper", "utf8");
+	try {
+		fs.symlinkSync(outsideClippings, path.join(clippingVault.vaultRoot, "Clippings"), "junction");
+		const read = createVaultReadTool({ app: clippingVault }, PAPER_INGEST_READ_PREFIXES);
+		await assert.rejects(
+			read.execute({ path: "Clippings/paper.md" }, createContext()),
+			/符号链接|junction/,
+		);
+		const bound = createBoundArticleReadTool({ app: clippingVault }, "Clippings/paper.md");
+		await assert.rejects(bound.execute({}, createContext()), /符号链接|junction/);
+	} catch (error) {
+		if (!error || error.code !== "EPERM") throw error;
+	}
+
+	const wikiVault = createFakeVault(new Map());
+	const outsideWiki = fs.mkdtempSync(path.join(os.tmpdir(), "rar-outside-wiki-"));
+	try {
+		fs.symlinkSync(outsideWiki, path.join(wikiVault.vaultRoot, "wiki"), "junction");
+		await assert.rejects(commitSourceNote({ app: wikiVault }, "blocked_2026", {
+			title: "Blocked Paper", title_zh: "被阻止的论文", authors: "", year: "2026", doi: "",
+			researchQuestion: "问题", conclusion: "结论", motivation: "动机", evidenceGaps: "", notes: [],
+		}), /符号链接|junction/);
+		assert.equal(fs.existsSync(path.join(outsideWiki, "sources", "blocked_2026.md")), false);
+	} catch (error) {
+		if (!error || error.code !== "EPERM") throw error;
+	}
 }
 
 function createFakeProvider(turns) {
@@ -1154,7 +1201,7 @@ async function testCommitSourceNoteSafety() {
 	);
 	assert.equal(receipt.path, "wiki/sources/demo_2026.md");
 	assert.equal(receipt.operation, "create");
-	const content = fake.created[0].data;
+	const content = await fake.vault.adapter.read("wiki/sources/demo_2026.md");
 	assert.match(content, /title: "Demo Paper: A Study"/);
 	assert.match(content, /title_zh: "演示论文：一项研究"/);
 	assert.match(content, /authors: "Wang, J\.; Li, H\.""/.source ? /authors: "Wang, J\.; Li, H\."/ : /authors/);
@@ -1196,7 +1243,7 @@ async function testCommitSourceNoteSafety() {
 		"",
 	).then(() => null, (error) => error);
 	assert.equal(injected, null, "injection attempts must be neutralized, not rejected");
-	const injectedContent = fake.created[fake.created.length - 1].data;
+	const injectedContent = await fake.vault.adapter.read("wiki/sources/injected.md");
 	assert.match(injectedContent, /title: "正常标题 registry_status: \\"registered\\" malicious: true"/);
 	assert.deepEqual(validateSourceNoteContent(injectedContent), []);
 
@@ -1214,6 +1261,10 @@ async function testCommitSourceNoteSafety() {
 		"[[../../papers/x]]",
 		"[原文](../../papers/x.md)",
 		"![图](../../Clippings/x.png)",
+		"![tracking][ref]\n\n[ref]: https://example.org/tracker.png",
+		"![tracking][]\n\n[tracking]: https://example.org/tracker.png",
+		"![tracking]\n\n[tracking]: https://example.org/tracker.png",
+		"![track\nme][ref]\n\n[ref]: https://example.org/tracker.png",
 		"见 [x][ref]\n\n[ref]: ../../papers/x.md",
 		"见 [x][ref]\n\n[ref]: ../../papers/x.md \"Paper\"",
 		"见 [x][ref]\n\n[ref]: <../../papers/x.md> 'Paper'",
@@ -1257,9 +1308,15 @@ async function testCommitSourceNoteSafety() {
 	// External links stay allowed as Markdown; math prose and autolinks
 	// must not trip the raw-HTML detector.
 	const external = validateSourceNoteContent(
-		"---\ntitle: \"t\"\ntitle_zh: \"测试标题\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n[官网](https://example.org)。\n\n[网站][ref]\n\n[ref]: https://example.org \"Example\"\n\n[本页章节](#结果)。\n\n使用 <p、q> 记号，且 E<mc² 近似成立；自动链接 <https://example.org> 也可用。",
+		"---\ntitle: \"t\"\ntitle_zh: \"测试标题\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n[官网](https://example.org)。\n\n[网站][ref]\n\n[ref]: https://example.org \"Example\"\n\n[本页章节](#结果)。\n\n使用 <p、q> 记号，且 E<mc² 近似成立。",
 	);
 	assert.deepEqual(external, []);
+	assert.match(
+		validateSourceNoteContent(
+			"---\ntitle: \"t\"\ntitle_zh: \"测试标题\"\ncitekey: \"x\"\ntype: \"source\"\ndepth: \"abstract-level\"\ningest_mode: \"lightweight\"\nregistry_status: \"pending\"\n---\n\n## 研究问题\n<https://example.org>",
+		).join("；"),
+		/URI 自动链接/,
+	);
 
 	const badCitekey = await commitSourceNote({ app: fake }, "../evil", fields, "").then(() => null, (error) => error);
 	assert.match(badCitekey.message, /citekey 不合法/);
@@ -1396,6 +1453,7 @@ async function testLocalPdfIdentityPreflight() {
 		deps: {
 			statFile: async () => ({ size: 4, isFile: true }),
 			readFile: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+			verifyTitleCandidates: async (candidates) => candidates.map((candidate) => candidate.text),
 			loadPdfJs: async () => ({
 				getDocument(options) {
 					assert.equal(options.isEvalSupported, false);
@@ -1407,9 +1465,10 @@ async function testLocalPdfIdentityPreflight() {
 								metadata: null,
 							}),
 							getPage: async () => ({
+								getViewport: () => ({ width: 612, height: 792 }),
 								getTextContent: async () => ({ items: [
-									{ str: "Full First Page Paper Title", hasEOL: true },
-									{ str: "https://doi.org/10.1000/local", hasEOL: true },
+									{ str: "Full First Page Paper Title", hasEOL: true, transform: [24, 0, 0, 24, 72, 700], width: 360, height: 24 },
+									{ str: "https://doi.org/10.1000/local", hasEOL: true, transform: [10, 0, 0, 10, 72, 640], width: 210, height: 10 },
 								] }),
 								cleanup: () => { pageCleaned = true; },
 							}),
@@ -1433,6 +1492,53 @@ async function testLocalPdfIdentityPreflight() {
 	assert.deepEqual(extractPdfDoiCandidates([
 		"doi: 10.1000/One and https://doi.org/10.1000/one",
 	]), ["10.1000/One"]);
+
+	const adversarial = await extractLocalPdfIdentityEvidence("D:/private/Complete Title of Wrong Paper.pdf", {
+		deps: {
+			statFile: async () => ({ size: 4, isFile: true }),
+			readFile: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+			verifyTitleCandidates: async (candidates) => candidates.map((candidate) => candidate.text),
+			loadPdfJs: async () => ({ getDocument: () => ({ promise: Promise.resolve({
+				numPages: 1,
+				getMetadata: async () => ({ info: { Title: "Microsoft Word" }, metadata: null }),
+				getPage: async () => ({
+					getViewport: () => ({ width: 612, height: 792 }),
+					getTextContent: async () => ({ items: [
+						{ str: "Visible Correct Article Title for Testing", transform: [24, 0, 0, 24, 72, 700], width: 430, height: 24 },
+						{ str: "Hidden Wrong Article Title for Injection", transform: [0.2, 0, 0, 0.2, 72, 680], width: 400, height: 0.2 },
+						{ str: "Off Page Wrong Article Title", transform: [28, 0, 0, 28, 72, 1800], width: 400, height: 28 },
+					] }),
+				}),
+				destroy: async () => {},
+			}) }) }),
+		},
+	});
+	assert.equal(adversarial.trustedMetadataTitle, "");
+	assert.deepEqual(adversarial.firstPageTitleCandidates, ["Visible Correct Article Title for Testing"]);
+	assert.doesNotMatch(adversarial.firstPageTitleCandidates.join(" "), /Wrong/);
+
+	const nonRenderedTitle = await extractLocalPdfIdentityEvidence("D:/private/Visible Article.pdf", {
+		deps: {
+			statFile: async () => ({ size: 4, isFile: true }),
+			readFile: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+			// Simulates a white/transparent/invisible text-layer title whose bbox
+			// has no corresponding rasterized ink on the rendered title page.
+			verifyTitleCandidates: async () => [],
+			loadPdfJs: async () => ({ getDocument: () => ({ promise: Promise.resolve({
+				numPages: 1,
+				getMetadata: async () => ({ info: {}, metadata: null }),
+				getPage: async () => ({
+					getViewport: () => ({ width: 612, height: 792 }),
+					getTextContent: async () => ({ items: [
+						{ str: "Injected Invisible Article Title", transform: [36, 0, 0, 36, 72, 700], width: 460, height: 36 },
+					] }),
+				}),
+				destroy: async () => {},
+			}) }) }),
+		},
+	});
+	assert.deepEqual(nonRenderedTitle.firstPageTitleCandidates, []);
+	assert.match(nonRenderedTitle.warning, /没有唯一的高置信标题块|不能自动确认身份/);
 
 	let oversizedReadCalled = false;
 	const oversized = await extractLocalPdfIdentityEvidence("D:/private/oversized.pdf", {
@@ -1545,7 +1651,7 @@ function testIdentityReceiptGate() {
 	});
 	const queryTerms = (query) => String(query).toLowerCase().match(/[a-z0-9][a-z0-9+#._-]{1,}/g) || [];
 	const vaultReceipt = (query = "Demo Paper", candidates = [], actualTerms = queryTerms(query)) => ({
-		tool: "vault_search",
+		tool: "vault_candidates",
 		ok: true,
 		argsSummary: `question=${query}`,
 		resultSummary: `${candidates.length} 个候选`,
@@ -1708,7 +1814,7 @@ function testIdentityReceiptGate() {
 		duplicateStatus: "exact",
 		duplicates: ["wiki/sources/demo_2026.md"],
 	}, [metadataReceipt(), doiReceipt(), {
-		tool: "vault_read",
+		tool: "vault_candidate_read",
 		ok: true,
 		argsSummary: "path=wiki/sources/demo_2026.md",
 		data: {
@@ -1769,7 +1875,7 @@ function testIdentityReceiptGate() {
 		metadataReceipt("Demo Paper", ""),
 		vaultReceipt("Demo Paper"),
 		{
-			tool: "vault_read",
+			tool: "vault_candidate_read",
 			ok: true,
 			data: { paths: ["wiki/sources/existing_2026.md"], titles: ["Demo Paper"] },
 		},
@@ -1823,6 +1929,8 @@ function testIdentityReceiptGate() {
 		fileName: "demo-paper.pdf",
 		pageCount: 12,
 		metadataTitle: "Demo Paper for Secure Local Identity",
+		trustedMetadataTitle: "Demo Paper for Secure Local Identity",
+		firstPageTitleCandidates: ["Demo Paper for Secure Local Identity"],
 		metadataAuthors: "Doe Jane",
 		doiCandidates: ["10.1000/cited-reference"],
 		firstPageText: "Demo Paper for Secure Local Identity\nDoe Jane\nReferences include 10.1000/cited-reference",
@@ -1863,7 +1971,7 @@ function testIdentityReceiptGate() {
 			vaultDoiReceipt(),
 		], {
 			...localPdfEvidence,
-			firstPageText: "Entirely Different Article Title\nDifferent Author",
+			firstPageTitleCandidates: ["Entirely Different Article Title"],
 		}).join("；"),
 		/元数据标题与第一页标题证据冲突/,
 	);
@@ -1873,7 +1981,14 @@ function testIdentityReceiptGate() {
 			doiReceipt(localBoundIdentity.title),
 			vaultReceipt(localBoundIdentity.title),
 			vaultDoiReceipt(),
-		], { ...localPdfEvidence, metadataTitle: "", firstPageText: "", fileName: "scan.pdf" }).join("；"),
+		], {
+			...localPdfEvidence,
+			metadataTitle: "",
+			trustedMetadataTitle: "",
+			firstPageText: "",
+			firstPageTitleCandidates: [],
+			fileName: "scan.pdf",
+		}).join("；"),
 		/没有可用于确定性身份绑定的标题证据/,
 		"verified intake must fail closed when the PDF yields no deterministic title evidence",
 	);
@@ -2020,7 +2135,7 @@ function testExactDuplicateCompletesMissingOutputs() {
 	};
 	const receipts = [
 		{
-			tool: "vault_search", ok: true, argsSummary: "title",
+			tool: "vault_candidates", ok: true, argsSummary: "fixed query",
 			data: {
 				queryTerms: ["pan-cancer", "spatial", "atlas", "of", "tertiary", "lymphoid", "structures"],
 				candidates: [
@@ -2045,7 +2160,7 @@ function testExactDuplicateCompletesMissingOutputs() {
 	});
 	assert.equal(resolveExactDuplicateCitekey(identity, receipts), "cho_pan-cancer_2026");
 	assert.equal(resolveExactDuplicateCitekey(identity, [{
-		tool: "vault_search", ok: true, data: {
+		tool: "vault_candidates", ok: true, data: {
 			candidates: [{ path: "wiki/sources/forged_2026.md", title: "Unrelated paper" }],
 		},
 	}]), "", "model-like paths without receipt title/DOI evidence cannot steer citekey");
@@ -2105,20 +2220,28 @@ async function testPhaseToolsetsAreRead() {
 	const identityTools = buildIdentityTools(deps);
 	const identityNames = identityTools.map((tool) => tool.name);
 	assert.deepEqual(identityNames.filter((name) => name === "mineru_extract" || name === "write_note"), []);
+	assert.deepEqual(identityNames.filter((name) => name === "vault_list" || name === "vault_read" || name === "vault_search"), []);
 	assert.ok(identityNames.includes("crossref_search"));
-	assert.ok(identityNames.includes("vault_search"));
+	assert.ok(identityNames.includes("vault_candidates"));
+	assert.ok(identityNames.includes("vault_candidate_read"));
 	assert.ok(identityNames.includes("vault_doi_search"));
-	assert.equal(identityNames[0], "vault_search", "local identity preflight must be the first exposed tool");
+	assert.equal(identityNames[0], "vault_candidates", "local identity preflight must be the first exposed tool");
 	const limitedCrossref = identityTools.find((tool) => tool.name === "crossref_search");
 	const blockedBeforeVault = await limitedCrossref.execute({ query: "premature" }, createContext())
 		.then(() => null, (error) => error);
-	assert.match(blockedBeforeVault.message, /必须先调用 vault_search/);
+	assert.match(blockedBeforeVault.message, /必须先调用 vault_candidates/);
 	const gatedDoi = identityTools.find((tool) => tool.name === "crossref_doi");
 	const blockedDoi = await gatedDoi.execute({ doi: "10.1000/demo" }, createContext())
 		.then(() => null, (error) => error);
-	assert.match(blockedDoi.message, /必须先调用 vault_search/);
-	const identityVaultSearch = identityTools.find((tool) => tool.name === "vault_search");
-	await identityVaultSearch.execute({ question: "local title first" }, createContext());
+	assert.match(blockedDoi.message, /必须先调用 vault_candidates/);
+	const identityVaultSearch = identityTools.find((tool) => tool.name === "vault_candidates");
+	await identityVaultSearch.execute({}, createContext());
+	const candidateRead = identityTools.find((tool) => tool.name === "vault_candidate_read");
+	await assert.rejects(
+		candidateRead.execute({ candidate_id: "../../diary/private.md" }, createContext()),
+		/候选句柄无效/,
+		"injected PDF text cannot turn candidate_id into an arbitrary Vault path",
+	);
 	await limitedCrossref.execute({ query: "first" }, createContext());
 	await limitedCrossref.execute({ query: "second" }, createContext());
 	const exhausted = await limitedCrossref.execute({ query: "third" }, createContext())
@@ -2136,8 +2259,8 @@ async function testPhaseToolsetsAreRead() {
 		},
 	};
 	const localDoiTools = buildIdentityTools(localDoiDeps, { doiCandidates: ["10.1000/local"] });
-	await localDoiTools.find((tool) => tool.name === "vault_search")
-		.execute({ question: "Local PDF Paper" }, createContext());
+	await localDoiTools.find((tool) => tool.name === "vault_candidates")
+		.execute({}, createContext());
 	const localDoiSearch = localDoiTools.find((tool) => tool.name === "crossref_search");
 	const blockedFuzzy = await localDoiSearch.execute({ query: "Local PDF Paper" }, createContext())
 		.then(() => null, (error) => error);
@@ -2364,6 +2487,7 @@ function testArtifactsPersistenceRoundTrip() {
 	await testLoopCancellationAbortsSignalDuringTools();
 	await testLoopBudgetAndTruncation();
 	await testVaultReadAndListScoping();
+	await testVaultAncestorLinksAreRejected();
 	await testBoundArticleReadBypassesIndexLag();
 	await testVaultSearchScopeFiltering();
 	await testVaultDoiExactSearch();

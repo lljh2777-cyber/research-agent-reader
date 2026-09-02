@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import * as fs from "node:fs";
-import * as nodePath from "node:path";
 
 import { App, TFile, normalizePath } from "obsidian";
 
@@ -21,6 +19,9 @@ import {
 	isSupportedVisualRepairAlgorithm,
 	validateVisualContracts,
 } from "./visual-repair";
+import { MINERU_RESOURCE_LIMITS, parseBoundedJson } from "./resource-limits";
+import { readTrustedVaultFile, resolveTrustedVaultPath } from "../runtime/trusted-vault-fs";
+import type { VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
 import type {
 	MineruReaderPackage,
 	MineruReaderVisual,
@@ -40,21 +41,19 @@ import type {
 type UnknownRecord = Record<string, unknown>;
 
 const MIB = 1024 * 1024;
-const MAX_ARTICLE_BYTES = 16 * MIB;
-const MAX_MINERU_JSON_BYTES = 32 * MIB;
-const MAX_CONTRACT_BYTES = 8 * MIB;
-const MAX_MANIFEST_BYTES = 2 * MIB;
-const MAX_VALIDATION_BYTES = 1 * MIB;
-const MAX_PDF_BYTES = 128 * MIB;
-const MAX_OUTPUT_ASSET_BYTES = 64 * MIB;
-const MAX_MANIFEST_RECORDS = 8_192;
-const MAX_PACKAGE_TOTAL_BYTES = 512 * MIB;
-const MAX_IMAGE_COUNT = 4_096;
-const MAX_IMAGE_TOTAL_BYTES = 256 * MIB;
-const MAX_IMAGE_PIXELS = 40_000_000;
-const MAX_IMAGE_TOTAL_PIXELS = 256_000_000;
-const MAX_JSON_DEPTH = 64;
-const MAX_JSON_STRING_CHARS = 1_000_000;
+const MAX_ARTICLE_BYTES = MINERU_RESOURCE_LIMITS.articleBytes;
+const MAX_MINERU_JSON_BYTES = MINERU_RESOURCE_LIMITS.mineruJsonBytes;
+const MAX_CONTRACT_BYTES = MINERU_RESOURCE_LIMITS.contractBytes;
+const MAX_MANIFEST_BYTES = MINERU_RESOURCE_LIMITS.manifestBytes;
+const MAX_VALIDATION_BYTES = MINERU_RESOURCE_LIMITS.validationBytes;
+const MAX_PDF_BYTES = MINERU_RESOURCE_LIMITS.pdfBytes;
+const MAX_OUTPUT_ASSET_BYTES = MINERU_RESOURCE_LIMITS.outputAssetBytes;
+const MAX_MANIFEST_RECORDS = MINERU_RESOURCE_LIMITS.manifestRecords;
+const MAX_PACKAGE_TOTAL_BYTES = MINERU_RESOURCE_LIMITS.packageTotalBytes;
+const MAX_IMAGE_COUNT = MINERU_RESOURCE_LIMITS.imageCount;
+const MAX_IMAGE_TOTAL_BYTES = MINERU_RESOURCE_LIMITS.imageTotalBytes;
+const MAX_IMAGE_PIXELS = MINERU_RESOURCE_LIMITS.imagePixels;
+const MAX_IMAGE_TOTAL_PIXELS = MINERU_RESOURCE_LIMITS.imageTotalPixels;
 
 function asRecord(value: unknown): UnknownRecord {
 	return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -186,52 +185,7 @@ function decodeUtf8(value: ArrayBuffer | Uint8Array): string {
 }
 
 function parseJson(value: string, label: string): unknown {
-	assertJsonComplexity(value, label);
-	try {
-		return JSON.parse(value);
-	} catch (error) {
-		throw new Error(`${label} 不是有效 JSON：${error instanceof Error ? error.message : String(error)}`);
-	}
-}
-
-function assertJsonComplexity(value: string, label: string): void {
-	let depth = 0;
-	let inString = false;
-	let escaped = false;
-	let stringChars = 0;
-	for (let index = 0; index < value.length; index += 1) {
-		const char = value[index];
-		if (inString) {
-			if (escaped) {
-				escaped = false;
-				continue;
-			}
-			if (char === "\\") {
-				escaped = true;
-				continue;
-			}
-			if (char === '"') {
-				inString = false;
-				stringChars = 0;
-				continue;
-			}
-			stringChars += 1;
-			if (stringChars > MAX_JSON_STRING_CHARS) throw new Error(`${label} 含超长字符串`);
-			continue;
-		}
-		if (char === '"') {
-			inString = true;
-			continue;
-		}
-		if (char === "{" || char === "[") {
-			depth += 1;
-			if (depth > MAX_JSON_DEPTH) throw new Error(`${label} 嵌套深度超过 ${MAX_JSON_DEPTH}`);
-		} else if (char === "}" || char === "]") {
-			depth -= 1;
-			if (depth < 0) throw new Error(`${label} 结构不平衡`);
-		}
-	}
-	if (inString || depth !== 0) throw new Error(`${label} 结构不完整`);
+	return parseBoundedJson(value, label);
 }
 
 function normalizePackageArticlePath(value: string): string {
@@ -258,32 +212,15 @@ function findTFile(app: App, path: string): TFile | null {
 	return file instanceof TFile ? file : null;
 }
 
+function filesystemAdapter(app: App): VaultFilesystemAdapter {
+	return app.vault.adapter as unknown as VaultFilesystemAdapter;
+}
+
 async function assertPackageFileNoFollow(app: App, packagePath: string, file: TFile): Promise<void> {
-	const adapter = app.vault.adapter as (typeof app.vault.adapter & {
-		getFullPath?: (path: string) => string;
-	}) | undefined;
-	if (!adapter || typeof adapter.getFullPath !== "function") return;
 	const normalizedFile = normalizePath(file.path);
 	if (!normalizedFile.startsWith(`${packagePath}/`)) throw new Error(`原文包资产越出包根：${file.path}`);
-	const packageRoot = adapter.getFullPath(packagePath);
-	const packageStats = await fs.promises.lstat(packageRoot);
-	if (packageStats.isSymbolicLink() || !packageStats.isDirectory()) throw new Error("原文包根不能是符号链接或 junction");
-	const realPackageRoot = await fs.promises.realpath(packageRoot);
-	const relativeSegments = normalizedFile.slice(packagePath.length + 1).split("/").filter(Boolean);
-	let cursor = packageRoot;
-	for (let index = 0; index < relativeSegments.length; index += 1) {
-		cursor = nodePath.join(cursor, relativeSegments[index]);
-		const stats = await fs.promises.lstat(cursor);
-		const isLast = index === relativeSegments.length - 1;
-		if (stats.isSymbolicLink() || (isLast ? !stats.isFile() : !stats.isDirectory())) {
-			throw new Error(`原文包路径包含符号链接、junction 或特殊文件：${file.path}`);
-		}
-	}
-	const realFile = await fs.promises.realpath(cursor);
-	const relative = nodePath.relative(realPackageRoot, realFile);
-	if (!relative || relative.startsWith("..") || nodePath.isAbsolute(relative)) {
-		throw new Error(`原文包资产解析到包根之外：${file.path}`);
-	}
+	await resolveTrustedVaultPath(filesystemAdapter(app), packagePath, { expectedType: "directory" });
+	await resolveTrustedVaultPath(filesystemAdapter(app), normalizedFile, { expectedType: "file" });
 }
 
 async function readRequiredBinary(
@@ -299,9 +236,7 @@ async function readRequiredBinary(
 	if (file.stat.size > maxBytes) {
 		throw new Error(`${label} 超过阅读器安全上限（${Math.round(maxBytes / MIB)} MiB）：${path}`);
 	}
-	const buffer = await app.vault.readBinary(file);
-	const bytes = new Uint8Array(buffer);
-	if (bytes.byteLength > maxBytes) throw new Error(`${label} 实际读取结果超过阅读器安全上限`);
+	const bytes = new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), path, maxBytes));
 	return { file, bytes, text: decodeUtf8(bytes) };
 }
 
@@ -315,7 +250,7 @@ async function readOptionalJson(
 	if (!file) return null;
 	if (packagePath) await assertPackageFileNoFollow(app, packagePath, file);
 	if (file.stat.size > maxBytes) throw new Error(`${path} 超过阅读器安全上限`);
-	const bytes = new Uint8Array(await app.vault.readBinary(file));
+	const bytes = new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), path, maxBytes));
 	if (bytes.byteLength > maxBytes) throw new Error(`${path} 实际读取结果超过阅读器安全上限`);
 	return parseJson(decodeUtf8(bytes), path);
 }
@@ -338,7 +273,7 @@ async function readOptionalDerivedJson(
 		if (file.stat.size > MAX_CONTRACT_BYTES || Number(manifestRecord.size) !== file.stat.size) {
 			throw new Error("文件大小与 manifest.json 不一致或超过安全上限");
 		}
-		const bytes = new Uint8Array(await app.vault.readBinary(file));
+		const bytes = new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), path, MAX_CONTRACT_BYTES));
 		if (bytes.byteLength > MAX_CONTRACT_BYTES || bytes.byteLength !== file.stat.size) {
 			throw new Error("文件实际读取长度与记录不一致或超过安全上限");
 		}
@@ -684,52 +619,6 @@ function optionalManifestRecords(value: unknown): Map<string, UnknownRecord> {
 	return Array.isArray(value) ? manifestRecords(value, "derived_contracts") : new Map();
 }
 
-async function hashVaultFileBounded(
-	app: App,
-	file: TFile,
-	maxBytes: number,
-): Promise<string> {
-	const adapter = app.vault.adapter as (typeof app.vault.adapter & {
-		getFullPath?: (path: string) => string;
-	}) | undefined;
-	if (adapter && typeof adapter.getFullPath === "function") {
-		const fullPath = adapter.getFullPath(file.path);
-		const stats = await fs.promises.lstat(fullPath);
-		if (stats.isSymbolicLink() || !stats.isFile()) throw new Error(`原文包资产不是普通文件：${file.path}`);
-		if (stats.size !== file.stat.size || stats.size > maxBytes) {
-			throw new Error(`原文包文件实际大小不一致或超过安全上限：${file.path}`);
-		}
-		return await new Promise<string>((resolve, reject) => {
-			const hash = createHash("sha256");
-			let bytesRead = 0;
-			const stream = fs.createReadStream(fullPath, { highWaterMark: MIB });
-			stream.on("data", (chunk: Buffer) => {
-				bytesRead += chunk.byteLength;
-				if (bytesRead > maxBytes) {
-					stream.destroy(new Error(`原文包文件流超过安全上限：${file.path}`));
-					return;
-				}
-				hash.update(chunk);
-			});
-			stream.once("error", reject);
-			stream.once("end", () => {
-				if (bytesRead !== stats.size) {
-					reject(new Error(`原文包文件流长度发生变化：${file.path}`));
-					return;
-				}
-				resolve(hash.digest("hex"));
-			});
-		});
-	}
-	// Non-desktop test adapters do not expose a filesystem path. Retain a
-	// bounded fallback, with both declared and actual byte checks.
-	const bytes = new Uint8Array(await app.vault.readBinary(file));
-	if (bytes.byteLength !== file.stat.size || bytes.byteLength > maxBytes) {
-		throw new Error(`原文包文件实际读取长度不一致或超过安全上限：${file.path}`);
-	}
-	return sha256(bytes);
-}
-
 async function verifyManifestOutputs(
 	app: App,
 	packagePath: string,
@@ -737,7 +626,7 @@ async function verifyManifestOutputs(
 	article: { bytes: Uint8Array },
 	mineru: { bytes: Uint8Array },
 	pdfPath: string | null,
-): Promise<void> {
+): Promise<{ verifiedAssetBytes: Map<string, Uint8Array>; verifiedPdfBytes: Uint8Array | null }> {
 	if (Number(manifest.schema_version) !== 1) throw new Error("manifest.json 版本不受支持");
 	const records = manifestRecords(manifest.outputs, "outputs");
 	const derivedRecords = optionalManifestRecords(manifest.derived_contracts);
@@ -768,6 +657,8 @@ async function verifyManifestOutputs(
 	}
 	let decodedPixels = 0;
 	let sourcePdfOutputHash = "";
+	const verifiedAssetBytes = new Map<string, Uint8Array>();
+	let verifiedPdfBytes: Uint8Array | null = null;
 	for (const [relativePath, record] of records) {
 		const resolvedPath = resolvePackageAssetPath(packagePath, relativePath);
 		const file = findTFile(app, resolvedPath);
@@ -789,22 +680,20 @@ async function verifyManifestOutputs(
 		if (!/^[a-f0-9]{64}$/.test(expectedHash)) {
 			throw new Error(`原文包文件哈希与 manifest.json 不一致：${relativePath}`);
 		}
-		if (relativePath === "_extraction/source.pdf") {
-			sourcePdfOutputHash = await hashVaultFileBounded(app, file, MAX_PDF_BYTES);
-			if (sourcePdfOutputHash !== expectedHash) {
-				throw new Error(`原文包文件哈希与 manifest.json 不一致：${relativePath}`);
-			}
-			continue;
-		}
 		const bytes = knownBytes.get(relativePath)
-			|| new Uint8Array(await app.vault.readBinary(file));
+			|| new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), resolvedPath, maxBytes));
 		if (bytes.byteLength !== expectedSize || bytes.byteLength > maxBytes) {
 			throw new Error(`原文包文件实际读取长度不一致或超过安全上限：${relativePath}`);
 		}
 		if (sha256(bytes) !== expectedHash) {
 			throw new Error(`原文包文件哈希与 manifest.json 不一致：${relativePath}`);
 		}
+		if (relativePath === "_extraction/source.pdf") {
+			sourcePdfOutputHash = expectedHash;
+			verifiedPdfBytes = bytes;
+		}
 		if (isRasterImagePath(relativePath)) {
+			verifiedAssetBytes.set(relativePath, bytes);
 			const dimensions = rasterImageDimensions(bytes, relativePath);
 			const pixels = dimensions.width * dimensions.height;
 			if (pixels <= 0 || pixels > MAX_IMAGE_PIXELS) {
@@ -826,6 +715,7 @@ async function verifyManifestOutputs(
 			throw new Error("包内 source.pdf 与 manifest.json 来源哈希不一致");
 		}
 	}
+	return { verifiedAssetBytes, verifiedPdfBytes };
 }
 
 function isRasterImagePath(value: string): boolean {
@@ -835,21 +725,60 @@ function isRasterImagePath(value: string): boolean {
 function rasterImageDimensions(bytes: Uint8Array, label: string): { width: number; height: number } {
 	if (bytes.length >= 24
 		&& bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+		for (let offset = 8; offset + 12 <= bytes.length;) {
+			const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+			const length = view.getUint32(offset);
+			if (length > bytes.length - offset - 12) throw new Error(`PNG chunk 长度无效：${label}`);
+			const type = String.fromCharCode(...bytes.slice(offset + 4, offset + 8));
+			if (type === "acTL") throw new Error(`阅读器拒绝动画 PNG：${label}`);
+			offset += 12 + length;
+			if (type === "IEND") break;
+		}
 		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 		return { width: view.getUint32(16), height: view.getUint32(20) };
 	}
 	if (bytes.length >= 10 && String.fromCharCode(...bytes.slice(0, 3)) === "GIF") {
-		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-		return { width: view.getUint16(6, true), height: view.getUint16(8, true) };
+		throw new Error(`阅读器拒绝 GIF（无法在解码前可靠核算动画帧像素）：${label}`);
 	}
 	if (bytes.length >= 30
 		&& String.fromCharCode(...bytes.slice(0, 4)) === "RIFF"
 		&& String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") {
 		const kind = String.fromCharCode(...bytes.slice(12, 16));
 		if (kind === "VP8X") {
+			let hasAnimationFrame = false;
+			for (let offset = 12; offset + 8 <= bytes.length;) {
+				const chunkSize = bytes[offset + 4]
+					| (bytes[offset + 5] << 8)
+					| (bytes[offset + 6] << 16)
+					| (bytes[offset + 7] << 24);
+				if (chunkSize < 0 || chunkSize > bytes.length - offset - 8) {
+					throw new Error(`WebP chunk 长度无效：${label}`);
+				}
+				if (bytes[offset] === 0x41 && bytes[offset + 1] === 0x4e
+					&& bytes[offset + 2] === 0x4d && bytes[offset + 3] === 0x46) {
+					hasAnimationFrame = true;
+					break;
+				}
+				offset += 8 + chunkSize + (chunkSize & 1);
+			}
+			if ((bytes[20] & 0x02) !== 0 || hasAnimationFrame) {
+				throw new Error(`阅读器拒绝动画 WebP：${label}`);
+			}
 			const width = 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16);
 			const height = 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16);
 			return { width, height };
+		}
+		if (kind === "VP8 " && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a) {
+			return {
+				width: (bytes[26] | (bytes[27] << 8)) & 0x3fff,
+				height: (bytes[28] | (bytes[29] << 8)) & 0x3fff,
+			};
+		}
+		if (kind === "VP8L" && bytes[20] === 0x2f) {
+			return {
+				width: 1 + bytes[21] + ((bytes[22] & 0x3f) << 8),
+				height: 1 + (bytes[22] >> 6) + (bytes[23] << 2) + ((bytes[24] & 0x0f) << 10),
+			};
 		}
 	}
 	if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
@@ -905,8 +834,7 @@ function markdownOrderForAsset(index: MineruViewerIndex, assetPath: string): num
 function buildVisuals(
 	index: MineruViewerIndex,
 	repair: MineruVisualRepair | null,
-	packagePath: string,
-	app: App,
+	verifiedAssetBytes: ReadonlyMap<string, Uint8Array>,
 	pdfPath: string | null,
 	issues: string[],
 ): MineruReaderVisual[] {
@@ -923,7 +851,7 @@ function buildVisuals(
 		if (members.length < 2) continue;
 		const rawAssetPaths = [...new Set(members.map((block) => block.asset_path || "").filter(Boolean))];
 		const assetPaths = rawAssetPaths.filter((assetPath) => {
-			const available = Boolean(findTFile(app, resolvePackageAssetPath(packagePath, assetPath)));
+			const available = verifiedAssetBytes.has(normalizeAssetPath(assetPath));
 			if (!available) issues.push(`视觉修复跳过缺失图片：${assetPath}`);
 			return available;
 		});
@@ -972,7 +900,7 @@ function buildVisuals(
 	for (const block of blocks) {
 		if (consumed.has(block.id) || !["visual", "table"].includes(block.role) || !block.asset_path) continue;
 		const assetPath = block.asset_path;
-		if (!findTFile(app, resolvePackageAssetPath(packagePath, assetPath))) {
+		if (!verifiedAssetBytes.has(normalizeAssetPath(assetPath))) {
 			issues.push(`阅读器跳过缺失图片：${assetPath}`);
 			continue;
 		}
@@ -1072,7 +1000,7 @@ export class MineruPackageLoader {
 		}
 		const pdfPathCandidate = `${packagePath}/_extraction/source.pdf`;
 		const pdfPath = findTFile(this.app, pdfPathCandidate) ? pdfPathCandidate : null;
-		await verifyManifestOutputs(this.app, packagePath, manifest, article, mineru, pdfPath);
+		const verified = await verifyManifestOutputs(this.app, packagePath, manifest, article, mineru, pdfPath);
 		const articleHash = sha256(article.bytes);
 		const mineruHash = sha256(mineru.bytes);
 		const mineruPayload = parseJson(mineru.text, "mineru-result.json");
@@ -1176,8 +1104,10 @@ export class MineruPackageLoader {
 			mineruPayload,
 			viewerIndex,
 			visualRepair,
-			visuals: buildVisuals(viewerIndex, visualRepair, packagePath, this.app, pdfPath, issues),
+			visuals: buildVisuals(viewerIndex, visualRepair, verified.verifiedAssetBytes, pdfPath, issues),
 			pdfPath,
+			verifiedAssetBytes: verified.verifiedAssetBytes,
+			verifiedPdfBytes: verified.verifiedPdfBytes,
 			externalPdfRecorded,
 			issues: [...new Set(issues.filter(Boolean))],
 		};

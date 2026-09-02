@@ -150,6 +150,7 @@ export class MineruReaderView extends ItemView {
 	private opened = false;
 	private resizeTimer: number | null = null;
 	private pdfFollowInteractionSource: "markdown" | "pdf" = "markdown";
+	private readonly verifiedResourceUrls = new Map<string, string>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: MineruReaderHost) {
 		super(leaf);
@@ -216,6 +217,7 @@ export class MineruReaderView extends ItemView {
 		if (this.resizeTimer) window.clearTimeout(this.resizeTimer);
 		this.resizeTimer = null;
 		await this.pdfRenderer.destroy();
+		this.revokeVerifiedResourceUrls();
 		this.contentEl.empty();
 	}
 
@@ -229,15 +231,16 @@ export class MineruReaderView extends ItemView {
 
 	private async loadAndRender(): Promise<void> {
 		const generation = ++this.loadGeneration;
+		this.revokeVerifiedResourceUrls();
 		this.renderLoading();
 		try {
 			const loaded = await this.loader.load(this.readerState.articlePath);
 			if (!this.opened || generation !== this.loadGeneration) return;
 			this.readerPackage = loaded;
 			if (loaded.sourceKind === "markdown") this.readerState.mode = "visuals";
-			if (loaded.pdfPath) {
+			if (loaded.pdfPath && loaded.verifiedPdfBytes) {
 				try {
-					await this.pdfRenderer.load(this.app, loaded.pdfPath);
+					await this.pdfRenderer.loadBytes(loaded.verifiedPdfBytes);
 					try {
 						const continuationRegions = pdfCaptionContinuationRegions(
 							loaded.visuals,
@@ -837,7 +840,9 @@ export class MineruReaderView extends ItemView {
 		const availableWidth = Math.max(260, scroll.clientWidth - 34);
 		const estimatedWidth = Math.floor(availableWidth * this.readerState.pdfZoom);
 		const pageWrappers: HTMLElement[] = [];
-		for (let pageNumber = 1; pageNumber <= this.pdfRenderer.numPages; pageNumber += 1) {
+		const firstPage = Math.max(1, this.readerState.pdfPage - 2);
+		const lastPage = Math.min(this.pdfRenderer.numPages, this.readerState.pdfPage + 2);
+		for (let pageNumber = firstPage; pageNumber <= lastPage; pageNumber += 1) {
 			const pageWrapper = scroll.createDiv({
 				cls: "agent-dashboard-mineru-pdf-page is-loading",
 				attr: {
@@ -934,7 +939,7 @@ export class MineruReaderView extends ItemView {
 			if (generation !== this.referenceGeneration) return;
 			const probe = scroll.scrollTop + Math.min(scroll.clientHeight * 0.35, 260);
 			const scrollRect = scroll.getBoundingClientRect();
-			let currentPage = 1;
+			let currentPage = firstPage;
 			for (const pageWrapper of pageWrappers) {
 				const pageTop = readerElementOffset(
 					scroll.scrollTop,
@@ -959,7 +964,7 @@ export class MineruReaderView extends ItemView {
 			if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
 		}, { once: true });
 
-		const initialPage = pageWrappers[this.readerState.pdfPage - 1];
+		const initialPage = pageWrappers.find((page) => Number(page.dataset.pageNumber) === this.readerState.pdfPage);
 		if (initialPage) {
 			const leadingInset = Number.parseFloat(window.getComputedStyle(scroll).paddingTop) || 0;
 			scroll.scrollTop = alignedReaderScrollTop(
@@ -969,8 +974,7 @@ export class MineruReaderView extends ItemView {
 				leadingInset,
 			);
 			queuePageRender(initialPage);
-			if (this.readerState.pdfPage > 1) queuePageRender(pageWrappers[this.readerState.pdfPage - 2]);
-			if (this.readerState.pdfPage < pageWrappers.length) queuePageRender(pageWrappers[this.readerState.pdfPage]);
+			pageWrappers.filter((page) => page !== initialPage).forEach(queuePageRender);
 		}
 		this.renderReferenceStatus(parent);
 	}
@@ -1040,23 +1044,17 @@ export class MineruReaderView extends ItemView {
 		await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
 		let count = 0;
 		for (const block of compatibleBlocks) {
-			const assetPath = resolvePackageAssetPath(this.readerPackage?.packagePath || "", block.asset_path || "");
-			const file = this.app.vault.getAbstractFileByPath(assetPath);
-			if (!(file instanceof TFile)) continue;
-			let bytes: ArrayBuffer;
-			try {
-				bytes = await this.app.vault.readBinary(file);
-			} catch {
-				continue;
-			}
-			const mime = file.extension.toLowerCase() === "png" ? "image/png" : "image/jpeg";
+			const relativeAssetPath = String(block.asset_path || "").replace(/\\/g, "/");
+			const bytes = this.readerPackage?.verifiedAssetBytes.get(relativeAssetPath);
+			if (!bytes) continue;
+			const mime = this.imageMime(relativeAssetPath);
 			let compatibilityImage: HTMLImageElement | null = null;
 			try {
 				const dataUrl = await new Promise<string>((resolve, reject) => {
 					const reader = new FileReader();
 					reader.addEventListener("load", () => resolve(String(reader.result || "")), { once: true });
 					reader.addEventListener("error", () => reject(reader.error || new Error("图片读取失败")), { once: true });
-					reader.readAsDataURL(new Blob([bytes], { type: mime }));
+					reader.readAsDataURL(new Blob([Uint8Array.from(bytes).buffer], { type: mime }));
 				});
 				const [x1, y1, x2, y2] = block.bbox_norm as NonNullable<typeof block.bbox_norm>;
 				compatibilityImage = imageLayer.createEl("img", {
@@ -1477,7 +1475,12 @@ export class MineruReaderView extends ItemView {
 	private scrollPdfToPage(pageNumber: number, behavior: ScrollBehavior): void {
 		const scroll = this.referenceHost?.querySelector<HTMLElement>(".agent-dashboard-mineru-pdf-scroll");
 		const page = scroll?.querySelector<HTMLElement>(`[data-page-number="${pageNumber}"]`);
-		if (!scroll || !page) return;
+		if (!scroll) return;
+		if (!page) {
+			this.readerState.pdfPage = Math.max(1, Math.min(this.pdfRenderer.numPages, pageNumber));
+			void this.renderReference();
+			return;
+		}
 		const pageInput = this.referenceHost?.querySelector<HTMLInputElement>(
 			".agent-dashboard-mineru-page-input",
 		);
@@ -1515,15 +1518,20 @@ export class MineruReaderView extends ItemView {
 	private async openAsset(assetPath: string): Promise<void> {
 		const readerPackage = this.readerPackage;
 		if (!readerPackage || !assetPath) return;
+		if (readerPackage.sourceKind === "mineru") {
+			const verifiedUrl = this.resourceUrl(assetPath);
+			if (!verifiedUrl) {
+				new Notice("未找到已验证的原始图片字节");
+				return;
+			}
+			window.open(verifiedUrl, "_blank", "noopener,noreferrer");
+			return;
+		}
 		if (/^https?:\/\//i.test(assetPath)) {
 			window.open(assetPath, "_blank", "noopener,noreferrer");
 			return;
 		}
-		const file = readerPackage.sourceKind === "markdown"
-			? this.app.metadataCache.getFirstLinkpathDest(assetPath, readerPackage.articlePath)
-			: this.app.vault.getAbstractFileByPath(
-				resolvePackageAssetPath(readerPackage.packagePath, assetPath),
-			);
+		const file = this.app.metadataCache.getFirstLinkpathDest(assetPath, readerPackage.articlePath);
 		if (!(file instanceof TFile)) {
 			new Notice("未找到原始图片资源");
 			return;
@@ -1535,12 +1543,30 @@ export class MineruReaderView extends ItemView {
 		const readerPackage = this.readerPackage;
 		if (!readerPackage) return "";
 		if (/^https?:\/\//i.test(assetPath)) return assetPath;
-		const file = readerPackage.sourceKind === "markdown"
-			? this.app.metadataCache.getFirstLinkpathDest(assetPath, readerPackage.articlePath)
-			: this.app.vault.getAbstractFileByPath(
-				resolvePackageAssetPath(readerPackage.packagePath, assetPath),
-			);
+		if (readerPackage.sourceKind === "mineru") {
+			const normalized = assetPath.replace(/\\/g, "/").replace(/^\.\//, "");
+			const bytes = readerPackage.verifiedAssetBytes.get(normalized);
+			if (!bytes) return "";
+			const existing = this.verifiedResourceUrls.get(normalized);
+			if (existing) return existing;
+			const url = URL.createObjectURL(new Blob([Uint8Array.from(bytes).buffer], { type: this.imageMime(normalized) }));
+			this.verifiedResourceUrls.set(normalized, url);
+			return url;
+		}
+		const file = this.app.metadataCache.getFirstLinkpathDest(assetPath, readerPackage.articlePath);
 		return file instanceof TFile ? this.app.vault.getResourcePath(file) : "";
+	}
+
+	private imageMime(assetPath: string): string {
+		if (/\.png$/i.test(assetPath)) return "image/png";
+		if (/\.webp$/i.test(assetPath)) return "image/webp";
+		if (/\.gif$/i.test(assetPath)) return "image/gif";
+		return "image/jpeg";
+	}
+
+	private revokeVerifiedResourceUrls(): void {
+		for (const url of this.verifiedResourceUrls.values()) URL.revokeObjectURL(url);
+		this.verifiedResourceUrls.clear();
 	}
 
 	private clearWorkspaceLifecycle(): void {

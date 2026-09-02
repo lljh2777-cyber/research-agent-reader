@@ -8,6 +8,7 @@ import {
 	type MineruPublishContext,
 } from "./mineru-publish";
 import type { AgentTool, AgentToolContext } from "./types";
+import { createTrustedVaultTextFile, readTrustedVaultFile } from "../runtime/trusted-vault-fs";
 
 /** Max characters of one vault file handed to the model per read. */
 const VAULT_READ_CHAR_LIMIT = 16000;
@@ -27,6 +28,8 @@ export interface VaultToolDeps {
 			getFiles(): Array<{ path: string; extension?: string }>;
 			read(file: TFile): Promise<string>;
 			adapter: {
+				getBasePath?(): string;
+				getFullPath?(path: string): string;
 				exists(path: string, sensitive?: boolean): Promise<boolean>;
 				write(path: string, data: string): Promise<void>;
 				mkdir(path: string): Promise<void>;
@@ -162,7 +165,11 @@ export function createVaultReadTool(deps: VaultToolDeps, allowedPrefixes: readon
 				throw new Error(`vault_read 只支持文本文件，收到 .${file.extension}`);
 			}
 			assertTextFileSize(file, path);
-			const content = await deps.app.vault.read(file);
+			const content = (await readTrustedVaultFile(
+				deps.app.vault.adapter,
+				path,
+				MAX_VAULT_TEXT_FILE_BYTES,
+			)).toString("utf8");
 			const offset = Math.max(0, Math.round(Number(args.offset)) || 0);
 			const slice = content.slice(offset, offset + VAULT_READ_CHAR_LIMIT);
 			const header = `path=${path} 共 ${content.length} 字符，本次返回 ${slice.length}（offset ${offset}）`;
@@ -312,22 +319,11 @@ export function createBoundArticleReadTool(deps: VaultToolDeps, articleVaultPath
 		required: [],
 		async execute(args, context) {
 			if (context.signal.aborted) throw new Error("任务已取消");
-			if (!(await deps.app.vault.adapter.exists(path, true))) {
-				throw new Error(`已发布原文不存在：${path}`);
-			}
-			const indexed = deps.app.vault.getAbstractFileByPath(path);
-			const indexedSize = indexed instanceof TFile ? Number(indexed.stat?.size || 0) : 0;
-			const adapterStat = deps.app.vault.adapter.stat
-				? await deps.app.vault.adapter.stat(path)
-				: null;
-			const observedSize = Number(adapterStat?.size || indexedSize || 0);
-			if (observedSize > MAX_VAULT_TEXT_FILE_BYTES) {
-				throw new Error(`已发布原文超过 8 MiB 文本读取上限：${path}`);
-			}
-			const content = await deps.app.vault.adapter.read(path);
-			if (Buffer.byteLength(content, "utf8") > MAX_VAULT_TEXT_FILE_BYTES) {
-				throw new Error(`已发布原文实际读取结果超过 8 MiB 上限：${path}`);
-			}
+			const content = (await readTrustedVaultFile(
+				deps.app.vault.adapter,
+				path,
+				MAX_VAULT_TEXT_FILE_BYTES,
+			)).toString("utf8");
 			if (context.signal.aborted) throw new Error("任务已取消");
 			const mode = String(args.mode || "overview").trim().toLowerCase();
 			const identity = extractVaultIdentity(content);
@@ -439,7 +435,11 @@ export function createVaultDoiSearchTool(
 			for (const file of sourceNotes) {
 				if (context.signal.aborted || context.remainingMs() <= 0) throw new Error("DOI 精确查重已取消或超时");
 				assertTextFileSize(file as TFile, String(file.path));
-				const content = await deps.app.vault.read(file as TFile);
+				const content = (await readTrustedVaultFile(
+					deps.app.vault.adapter,
+					String(file.path),
+					MAX_VAULT_TEXT_FILE_BYTES,
+				)).toString("utf8");
 				observedBytes += Buffer.byteLength(content, "utf8");
 				if (observedBytes > MAX_DOI_SCAN_TOTAL_BYTES) {
 					throw new Error("DOI 精确查重实际读取累计超过 64 MiB 安全预算");
@@ -669,6 +669,138 @@ export function createVaultSearchTool(retriever: {
 	};
 }
 
+/**
+ * Identity-stage Vault access is capability-scoped. The model can request a
+ * deterministic search owned by the plugin, then inspect bounded metadata for
+ * only those task-local candidates; it never supplies or enumerates paths.
+ */
+export function createIdentityVaultCandidateTools(
+	deps: VaultToolDeps,
+	retriever: {
+		retrieve(
+			question: string,
+			expandedTerms?: string[],
+			options?: { allowedPrefixes?: string[] },
+		): Promise<Record<string, unknown>>;
+	},
+	fixedQueries: readonly string[],
+	allowedPrefixes: readonly string[],
+): [AgentTool, AgentTool] {
+	const registry = new Map<string, { path: string; title: string; doi: string }>();
+	let searched = false;
+	let reads = 0;
+	let readBytes = 0;
+	const search: AgentTool = {
+		name: "vault_candidates",
+		description: "执行插件根据本地 PDF 证据预先确定的 Vault 查重查询。模型不能修改查询或目录；返回任务内候选句柄。",
+		parameters: {},
+		required: [],
+		async execute() {
+			if (searched) throw new Error("vault_candidates 本阶段只能调用一次");
+			searched = true;
+			const candidates: Array<{ path: string; title: string; doi: string }> = [];
+			const queryTerms = new Set<string>();
+			for (const query of fixedQueries.slice(0, 3)) {
+				const result = await retriever.retrieve(query, [], { allowedPrefixes: [...allowedPrefixes] });
+				if (result.scope_complete === false) {
+					throw new Error("Vault 去重检索范围不完整，无法安全确认重复状态");
+				}
+				for (const term of Array.isArray(result.lexical_terms) ? result.lexical_terms : []) {
+					if (typeof term === "string" && term.trim()) queryTerms.add(term.trim());
+				}
+				for (const seed of Array.isArray(result.lexical_seeds) ? result.lexical_seeds : []) {
+					const record = seed as { path?: string; title?: string };
+					const candidatePath = String(record.path || "").replace(/\\/g, "/");
+					if (!withinPrefixes(candidatePath, allowedPrefixes)) continue;
+					if (candidates.some((candidate) => candidate.path === candidatePath)) continue;
+					candidates.push({ path: candidatePath, title: String(record.title || "").slice(0, 500), doi: "" });
+					if (candidates.length >= 8) break;
+				}
+				if (candidates.length >= 8) break;
+			}
+			let metadataBytes = 0;
+			for (const candidate of candidates) {
+				const file = deps.app.vault.getAbstractFileByPath(candidate.path);
+				if (!(file instanceof TFile)) throw new Error("Vault 候选文件不存在或已发生变化");
+				assertTextFileSize(file, candidate.path);
+				const content = (await readTrustedVaultFile(
+					deps.app.vault.adapter,
+					candidate.path,
+					MAX_VAULT_TEXT_FILE_BYTES,
+				)).toString("utf8");
+				metadataBytes += Buffer.byteLength(content, "utf8");
+				if (metadataBytes > 24 * 1024 * 1024) {
+					throw new Error("Vault 候选元数据预检超过本阶段安全预算");
+				}
+				const identity = extractVaultIdentity(content);
+				candidate.title = identity.title || candidate.title;
+				candidate.doi = identity.doi;
+			}
+			for (const [index, candidate] of candidates.entries()) {
+				registry.set(`vault-candidate-${index + 1}`, candidate);
+			}
+			const output = candidates.length
+				? candidates.map((candidate, index) => (
+					`${index + 1}. candidate_id=vault-candidate-${index + 1}；标题=${candidate.title || "（索引未提供）"}；层=${candidate.path.startsWith("wiki/sources/") ? "analysis" : "source"}`
+				)).join("\n")
+				: "当前插件固定查询没有找到 Vault 候选。";
+			return {
+				output,
+				summary: `${candidates.length} 个任务内 Vault 候选`,
+				receiptData: {
+					query: fixedQueries.join(" | "),
+					queryTerms: [...queryTerms],
+					paths: candidates.map((candidate) => candidate.path),
+					titles: candidates.map((candidate) => candidate.title).filter(Boolean),
+					dois: candidates.map((candidate) => candidate.doi).filter(Boolean),
+					candidates,
+				},
+			};
+		},
+	};
+	const read: AgentTool = {
+		name: "vault_candidate_read",
+		description: "读取当前任务 Vault 候选的标题与 DOI 元数据。只接受 vault_candidates 返回的 candidate_id，不接受路径。",
+		parameters: { candidate_id: "vault_candidates 返回的任务内候选句柄" },
+		required: ["candidate_id"],
+		async execute(args) {
+			if (!searched) throw new Error("必须先调用 vault_candidates");
+			if (reads >= 3) throw new Error("vault_candidate_read 本阶段最多读取 3 个候选");
+			const id = String(args.candidate_id || "").trim();
+			const candidate = registry.get(id);
+			if (!candidate) throw new Error("候选句柄无效、过期或不属于当前任务");
+			const file = deps.app.vault.getAbstractFileByPath(candidate.path);
+			if (!(file instanceof TFile)) throw new Error("候选文件不存在或已发生变化");
+			assertTextFileSize(file, candidate.path);
+			const content = (await readTrustedVaultFile(
+				deps.app.vault.adapter,
+				candidate.path,
+				MAX_VAULT_TEXT_FILE_BYTES,
+			)).toString("utf8");
+			const bytes = Buffer.byteLength(content, "utf8");
+			if (bytes > MAX_VAULT_TEXT_FILE_BYTES || readBytes + bytes > 24 * 1024 * 1024) {
+				throw new Error("Vault 候选读取超过本阶段安全预算");
+			}
+			reads += 1;
+			readBytes += bytes;
+			const identity = extractVaultIdentity(content);
+			const layer = candidate.path.startsWith("wiki/sources/") ? "analysis" : "source";
+			return {
+				output: `candidate_id=${id}\n层=${layer}\n标题=${identity.title || candidate.title || "（无）"}\nDOI=${identity.doi || "（无）"}`,
+				summary: `${id} 元数据已读取`,
+					receiptData: {
+					query: id,
+					paths: [candidate.path],
+					titles: [identity.title || candidate.title].filter(Boolean),
+						dois: identity.doi ? [identity.doi] : candidate.doi ? [candidate.doi] : [],
+					candidates: [{ path: candidate.path, title: identity.title || candidate.title }],
+				},
+			};
+		},
+	};
+	return [search, read];
+}
+
 export interface TavilySearchDeps {
 	http: WebSearchHttpDeps;
 	apiKey: string;
@@ -805,18 +937,31 @@ export function yamlSafeScalar(value: string): string {
  */
 function findDisallowedLinkTargets(body: string): string[] {
 	const targets: string[] = [];
+	// Reject every Markdown image form up front, including full/collapsed/
+	// shortcut reference images such as ![alt][id], ![alt][], and ![id].
+	// The note schema intentionally permits no model-authored image nodes.
+	for (const match of body.matchAll(/!\[/g)) {
+		targets.push(`image:${match[0]}`);
+	}
 	for (const match of body.matchAll(/\[\[([^\]]+)\]\]/g)) {
 		targets.push(`wikilink:${match[1]}`);
 	}
 	for (const match of body.matchAll(/\[[^\]]*\]\(\s*<?([^)\s>]+)>?[^)]*\)/g)) {
 		targets.push(match[1]);
 	}
+	for (const match of body.matchAll(/<([A-Za-z][A-Za-z0-9+.-]*:[^>\r\n]+)>/g)) {
+		targets.push(`uri-autolink:${match[1]}`);
+	}
 	// Reference definitions: target, optional <angle> target, and optional
 	// "double"/'single'/(paren) title after it.
 	for (const match of body.matchAll(/^[ \t]{0,3}\[[^\]\r\n]+\]:[ \t]*(?:<([^>\r\n]+)>|(\S+))(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^)\r\n]*\)))?[ \t]*$/gm)) {
 		targets.push(match[1] || match[2] || "");
 	}
-	return targets.filter((target) => !/^(https?:\/\/|mailto:|#)/i.test(target));
+	return targets.filter((target) => (
+		target.startsWith("image:")
+		|| target.startsWith("uri-autolink:")
+		|| !/^(https?:\/\/|mailto:|#)/i.test(target)
+	));
 }
 
 /**
@@ -861,7 +1006,7 @@ export function validateSourceNoteContent(content: string): string[] {
 	const disallowed = findDisallowedLinkTargets(rest);
 	if (disallowed.length) {
 		violations.push(
-			`正文包含不允许的 Vault 内部链接（${disallowed.slice(0, 3).map((target) => target.slice(0, 60)).join("、")}）；主目录间禁止互链，模型生成的正文字段暂不包含任何内部链接`,
+			`正文包含不允许的链接或图片（${disallowed.slice(0, 3).map((target) => target.slice(0, 60)).join("、")}）；禁止 Vault 内部链接、Markdown 图片与 URI 自动链接`,
 		);
 	}
 	return violations;
@@ -941,23 +1086,18 @@ export async function commitSourceNote(
 	if (violations.length) {
 		throw new Error(`生成的笔记未通过结构校验：${violations.join("；")}`);
 	}
-	const segments = path.split("/");
-	for (let index = 1; index < segments.length; index += 1) {
-		const folder = segments.slice(0, index).join("/");
-		if (folder && !(await deps.app.vault.adapter.exists(folder, true))) {
-			await deps.app.vault.adapter.mkdir(folder);
-		}
-	}
 	if (options.signal?.aborted) throw new Error("任务已取消，未写入文件");
-	// Atomic create: fails when the file appeared between the earlier dedup
-	// check and now (another task or sync service), instead of overwriting.
 	try {
-		await deps.app.vault.create(path, content);
+		await createTrustedVaultTextFile(deps.app.vault.adapter, path, content);
 	} catch (createError) {
 		const message = createError instanceof Error ? createError.message : String(createError);
 		throw new Error(`创建笔记失败（已存在同名文件时不会覆盖）：${message.slice(0, 200)}`);
 	}
-	const written = await deps.app.vault.adapter.read(path);
+	const written = (await readTrustedVaultFile(
+		deps.app.vault.adapter,
+		path,
+		MAX_VAULT_TEXT_FILE_BYTES,
+	)).toString("utf8");
 	if (written !== content) {
 		throw new Error("写入后回读校验不一致，请人工检查该文件");
 	}

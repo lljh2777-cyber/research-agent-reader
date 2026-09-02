@@ -76,13 +76,24 @@ function baseFiles(options = {}) {
 }
 
 function fakeApp(files, statOverrides = new Map(), fullRoot = "") {
+	const vaultRoot = fullRoot || fs.mkdtempSync(path.join(os.tmpdir(), "mineru-package-vault-"));
+	if (!fullRoot) {
+		for (const [filePath, bytes] of files) {
+			const absolute = path.join(vaultRoot, ...filePath.split("/"));
+			fs.mkdirSync(path.dirname(absolute), { recursive: true });
+			fs.writeFileSync(absolute, bytes);
+		}
+	}
 	const tFiles = new Map([...files].map(([filePath, bytes]) => [
 		filePath,
 		new TFile(filePath, statOverrides.get(filePath) ?? bytes.length),
 	]));
 	return {
 		vault: {
-			adapter: fullRoot ? { getFullPath: (filePath) => path.join(fullRoot, ...filePath.split("/")) } : {},
+			adapter: {
+				getBasePath: () => vaultRoot,
+				getFullPath: (filePath) => path.join(vaultRoot, ...String(filePath || "").split("/")),
+			},
 			getAbstractFileByPath(filePath) { return tFiles.get(filePath) || null; },
 			async readBinary(file) {
 				const bytes = files.get(file.path);
@@ -123,7 +134,7 @@ async function testManifestRecordBudget() {
 async function testPostReadLengthBudget() {
 	const fixture = baseFiles({ article: Buffer.alloc(16 * 1024 * 1024 + 1, 0x41) });
 	const articlePath = `${fixture.packagePath}/article.md`;
-	await assert.rejects(loadPackage(fixture, new Map([[articlePath, 1]])), /实际读取结果超过/);
+	await assert.rejects(loadPackage(fixture, new Map([[articlePath, 1]])), /超过安全上限/);
 }
 
 async function testDeepJsonRejectedBeforeNormalization() {
@@ -168,6 +179,37 @@ async function testUnsupportedViewerImageFormatRejected() {
 	await assert.rejects(loadPackage(fixture), /不受像素预算保护的图片格式/);
 }
 
+async function testVerifiedImageBytesAreRetainedAndGifRejected() {
+	const article = Buffer.from("# Demo Paper\n\n![](images/static.png)\n", "utf8");
+	const mineru = jsonBytes([{ type: "image", page_idx: 0, img_path: "images/static.png" }]);
+	const png = Buffer.alloc(24);
+	Buffer.from([0x89, 0x50, 0x4e, 0x47]).copy(png, 0);
+	png.writeUInt32BE(2, 16);
+	png.writeUInt32BE(3, 20);
+	const outputs = [
+		{ path: "article.md", size: article.length, sha256: sha256(article) },
+		{ path: "mineru-result.json", size: mineru.length, sha256: sha256(mineru) },
+		{ path: "images/static.png", size: png.length, sha256: sha256(png) },
+	];
+	const loaded = await loadPackage(baseFiles({
+		article, mineru, outputs, extraFiles: [["images/static.png", png]],
+	}));
+	assert.deepEqual(Buffer.from(loaded.verifiedAssetBytes.get("images/static.png")), png);
+
+	const gifArticle = Buffer.from("# Demo Paper\n\n![](images/animated.gif)\n", "utf8");
+	const gifMineru = jsonBytes([{ type: "image", page_idx: 0, img_path: "images/animated.gif" }]);
+	const gif = Buffer.from("474946383961020003000000", "hex");
+	const gifOutputs = [
+		{ path: "article.md", size: gifArticle.length, sha256: sha256(gifArticle) },
+		{ path: "mineru-result.json", size: gifMineru.length, sha256: sha256(gifMineru) },
+		{ path: "images/animated.gif", size: gif.length, sha256: sha256(gif) },
+	];
+	await assert.rejects(loadPackage(baseFiles({
+		article: gifArticle, mineru: gifMineru, outputs: gifOutputs,
+		extraFiles: [["images/animated.gif", gif]],
+	})), /拒绝 GIF/);
+}
+
 async function testSymlinkedPackageAssetRejected() {
 	const fixture = baseFiles();
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "mineru-reader-nofollow-"));
@@ -192,6 +234,27 @@ async function testSymlinkedPackageAssetRejected() {
 	}
 }
 
+async function testSymlinkedPapersAncestorRejected() {
+	const fixture = baseFiles();
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "mineru-reader-root-link-"));
+	const outside = fs.mkdtempSync(path.join(os.tmpdir(), "mineru-reader-outside-papers-"));
+	for (const [filePath, bytes] of fixture.files) {
+		const relative = filePath.replace(/^papers\//, "");
+		const absolute = path.join(outside, ...relative.split("/"));
+		fs.mkdirSync(path.dirname(absolute), { recursive: true });
+		fs.writeFileSync(absolute, bytes);
+	}
+	try {
+		fs.symlinkSync(outside, path.join(root, "papers"), "junction");
+		await assert.rejects(
+			new MineruPackageLoader(fakeApp(fixture.files, new Map(), root)).load(`${fixture.packagePath}/article.md`),
+			/符号链接|junction/,
+		);
+	} catch (error) {
+		if (!error || error.code !== "EPERM") throw error;
+	}
+}
+
 (async () => {
 	await testValidSmallPackageLoads();
 	await testManifestRecordBudget();
@@ -200,7 +263,9 @@ async function testSymlinkedPackageAssetRejected() {
 	await testUnmanifestedViewerAssetRejected();
 	await testImagePixelBombRejected();
 	await testUnsupportedViewerImageFormatRejected();
+	await testVerifiedImageBytesAreRetainedAndGifRejected();
 	await testSymlinkedPackageAssetRejected();
+	await testSymlinkedPapersAncestorRejected();
 	console.log("MINERU_PACKAGE_LIMITS_TESTS_OK");
 })().catch((error) => {
 	console.error(error);
