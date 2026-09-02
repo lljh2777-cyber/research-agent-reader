@@ -51,6 +51,12 @@ loop inside the plugin. Its boundaries are enforced in code, not by prompt:
 - The MinerU helper always receives the exact PDF path the user confirmed in
   the modal (remote-upload confirmation still applies); the model cannot
   select or substitute files.
+- PDF filenames, metadata, and text-layer extraction are discovery hints only.
+  Before a bibliographic identity can authorize extraction or a Wiki write,
+  the user must visually confirm a final PDF.js raster from the immutable
+  authorized snapshot against the plugin-bound Crossref record. The receipt
+  is bound to the task ID, snapshot SHA-256, raster SHA-256, render parameters,
+  and Crossref record hash; it cannot be replayed for another task or PDF.
 - Wiki writes are performed by the plugin from validated model-supplied
   fields into `wiki/sources/<citekey>.md`, create-only; existing notes are
   never overwritten.
@@ -59,6 +65,26 @@ loop inside the plugin. Its boundaries are enforced in code, not by prompt:
 - Tool results and web content are untrusted input and may contain prompt
   injection; the plugin treats them as data, and only the user's modal input
   and the plugin's own state can change what tools are allowed to do.
+
+## Environmental trust assumption
+
+Research Agent Reader defends against untrusted PDFs, remote MinerU output,
+model responses, logical path traversal, symbolic links, junctions, special
+files, and ordinary TOCTOU changes observable through file identity and real
+path checks.
+
+The plugin does not claim to resist a malicious local process running under the
+same operating-system account with equivalent filesystem permissions. Such a
+process can move or replace a validated directory inode while it is in use and
+can also directly modify the Vault, plugin installation, configuration,
+private temporary files, or Obsidian process state. Cross-platform JavaScript
+path APIs cannot provide a complete mandatory-integrity boundary against that
+attacker.
+
+Accordingly, the Vault root, plugin installation directory, and plugin-owned
+temporary directory are assumed not to be actively rewritten by an equally
+privileged malicious local process during an operation. Observable identity
+changes still fail closed.
 
 When reporting a vulnerability, include the plugin version, Obsidian version,
 operating system, affected feature, minimal reproduction, and whether an

@@ -119,8 +119,9 @@ export function runMineruProcessCommand(
 			if (!child.pid) return { exitCode: 1, error: new Error("MinerU 子进程没有 PID") };
 			return await new Promise((resolveTaskkill) => {
 				let completed = false;
-				const windowsRoot = path.resolve(control.windowsRoot || process.env.SystemRoot || "C:\\Windows");
-				const helperPath = path.join(windowsRoot, "System32", "taskkill.exe");
+				const windowsPath = platform === "win32" ? path.win32 : path.posix;
+				const windowsRoot = windowsPath.resolve(control.windowsRoot || process.env.SystemRoot || "C:\\Windows");
+				const helperPath = windowsPath.join(windowsRoot, "System32", "taskkill.exe");
 				const helper = spawnProcess(helperPath, ["/pid", String(child.pid), "/T", "/F"], {
 					shell: false,
 					windowsHide: true,
@@ -141,8 +142,9 @@ export function runMineruProcessCommand(
 		};
 		const noWindowsDescendants = async (rootPid: number): Promise<boolean> => {
 			if (control.checkWindowsDescendants) return await control.checkWindowsDescendants(rootPid);
-			const windowsRoot = path.resolve(control.windowsRoot || process.env.SystemRoot || "C:\\Windows");
-			const helperPath = path.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+			const windowsPath = platform === "win32" ? path.win32 : path.posix;
+			const windowsRoot = windowsPath.resolve(control.windowsRoot || process.env.SystemRoot || "C:\\Windows");
+			const helperPath = windowsPath.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 			const script = [
 				"$ErrorActionPreference='Stop'",
 				`$root=[uint32]${rootPid}`,

@@ -56,9 +56,11 @@ The model never writes files and never chooses extraction paths:
   (authors/year/doi), `ingest_mode: lightweight`, and
   `registry_status: pending` frontmatter.
 - "Verified" identity results are additionally gated on plugin-observed tool
-  receipts (at least one metadata lookup, one dedup lookup, exact DOI
-  verification whenever a DOI is claimed, and a Crossref title consistent
-  with local PDF title evidence).
+  receipts (at least one metadata lookup, one dedup lookup, and exact DOI
+  verification whenever a DOI is claimed) plus an explicit human visual
+  confirmation. The user compares a final PDF.js raster from the authorized
+  snapshot with the plugin-bound Crossref record; filenames, metadata, and
+  PDF text-layer candidates remain discovery hints only.
 
 The light runner never updates `papers.csv`, `references.bib`, or index/log
 pages — those registry files remain the Codex CLI pipeline's job, which can

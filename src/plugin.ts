@@ -60,6 +60,7 @@ import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./service
 import { saveQueryAnswerNote } from "./services/query-note";
 import { searchTavily, type WebSearchHttpDeps } from "./services/web-search";
 import { AgentDashboardSettingTab } from "./settings/settings-tab";
+import { requestHumanIdentityConfirmation } from "./modals/human-identity-confirmation";
 import { CodePracticeView } from "./views/code-practice";
 import { DashboardView } from "./views/dashboard";
 import { MineruReaderView } from "./views/mineru-reader";
@@ -234,6 +235,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		getLexicalRetriever: () => this.getLexicalRetriever(),
 		getVaultRoot: () => this.getActiveVaultRoot(),
 		runMineruCommand: (request) => this.runMineruProcess(request),
+		confirmPaperIdentity: (request) => requestHumanIdentityConfirmation(this.app, request),
 	});
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;

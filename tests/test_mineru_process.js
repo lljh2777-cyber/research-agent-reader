@@ -42,7 +42,9 @@ async function testNormalExit() {
 		baseArgs: [],
 		cliArgs: ["-e", "process.stdout.write('ok')"],
 		cwd: os.tmpdir(),
-		timeoutMs: 5_000,
+		// On a cold Windows runner the Job Object wrapper must compile its small
+		// C# helper before it can launch the command.
+		timeoutMs: process.platform === "win32" ? 30_000 : 5_000,
 		signal: new AbortController().signal,
 	});
 	assert.equal(result.exitCode, 0);
@@ -118,7 +120,7 @@ async function testWindowsHelperFailureNeverClaimsTreeExit() {
 	setImmediate(() => controller.abort());
 	await assert.rejects(running, /进程树终止未确认|完整进程树/);
 	assert.equal(helperCommands.some((command) => (
-		path.normalize(command) === path.normalize("C:\\Windows\\System32\\taskkill.exe")
+		path.win32.normalize(command) === path.win32.normalize("C:\\Windows\\System32\\taskkill.exe")
 	)), true);
 }
 

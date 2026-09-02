@@ -206,8 +206,9 @@ Research Agent Reader 是桌面版 Obsidian 科研阅读与本地智能体工作
 AI 能力分三层：只需一个 Direct API 配置即可使用知识库问答、联网搜索、问答落笔记
 和轻量文献入库（身份核验 + 去重 + 初步文章 Wiki；配置 MinerU CLI 后可生成完整原文
 Markdown 包，并由轻量 Agent 读取已验证的 `article.md` 生成摘要级 Wiki，无需 Python、
-工具包目录或 Codex CLI）。身份核验会先在本机读取 PDF 元数据与第一页文本；提取到 DOI
-时先精确核验，只有本地证据不足时才使用 Crossref 模糊搜索；完整登记（papers.csv、references.bib、
+工具包目录或 Codex CLI）。身份核验会先在本机读取 PDF 元数据与第一页文本作为候选线索；
+提取到 DOI 时先精确核验，只有本地线索不足时才使用 Crossref 模糊搜索。写入前，用户必须
+对照同一授权 PDF 快照最终渲染的标题页明确确认 Crossref 记录；完整登记（papers.csv、references.bib、
 文献索引）以及全文深读、代码分析、综合分析等高级操作使用 Research Vault Toolkit +
 Codex CLI 管线。知识库体检内置可用，OKF 导出仍是 Toolkit 脚本能力。插件不会自行
 安装外部程序，也不会包含客户端遥测。

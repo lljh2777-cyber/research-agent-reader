@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const Module = require("node:module");
 const os = require("node:os");
@@ -13,11 +14,17 @@ class ObsidianBase {}
 class ObsidianTFile extends ObsidianBase {}
 class ObsidianFileSystemAdapter extends ObsidianBase {}
 
+let pdfJsForRasterTest = null;
+
 const obsidianStub = {
 	Component: ObsidianBase,
 	FileSystemAdapter: ObsidianFileSystemAdapter,
 	ItemView: ObsidianBase,
 	MarkdownRenderer: { render: async () => {} },
+	loadPdfJs: async () => {
+		if (!pdfJsForRasterTest) throw new Error("PDF.js raster test fixture is not configured");
+		return pdfJsForRasterTest;
+	},
 	Modal: ObsidianBase,
 	Notice: class {},
 	Plugin: ObsidianBase,
@@ -73,6 +80,8 @@ const hookBuild = esbuild.buildSync({
 			"  parseIdentityResult,",
 			"  parseNoteDraft,",
 			"  validateIdentityReceipts,",
+			"  validateHumanIdentityConfirmation,",
+			"  crossrefRecordHash,",
 			"  validateDraftReceipts,",
 			"  bindIdentityMetadataFromReceipts,",
 			"  evaluateDraftPhase,",
@@ -88,7 +97,7 @@ const hookBuild = esbuild.buildSync({
 			"  stripMatchingQuotes,",
 			"  PAPER_INGEST_READ_PREFIXES,",
 			'} from "./src/agent/paper-ingest-flow";',
-			"export { createAuthorizedPdfSnapshot, disposeAuthorizedPdfSnapshot, extractLocalPdfIdentityEvidence, extractPdfDoiCandidates, MAX_LOCAL_PDF_BYTES } from './src/agent/pdf-identity';",
+			"export { createAuthorizedPdfSnapshot, disposeAuthorizedPdfSnapshot, extractLocalPdfIdentityEvidence, extractPdfDoiCandidates, renderAuthorizedPdfIdentityPage, MAX_LOCAL_PDF_BYTES } from './src/agent/pdf-identity';",
 			"export { articleHeadContainsTitle, articleMarkdownTitleMatches, resolvePaperTitleZh } from './src/agent/agent-loop-service';",
 			"export { normalizeTaskRunArtifacts, normalizeStoredTaskRuns } from './src/runtime/persistence';",
 		].join("\n"),
@@ -139,6 +148,8 @@ const {
 	parseIdentityResult,
 	parseNoteDraft,
 	validateIdentityReceipts,
+	validateHumanIdentityConfirmation,
+	crossrefRecordHash,
 	validateDraftReceipts,
 	bindIdentityMetadataFromReceipts,
 	evaluateDraftPhase,
@@ -157,6 +168,7 @@ const {
 	extractPdfDoiCandidates,
 	createAuthorizedPdfSnapshot,
 	disposeAuthorizedPdfSnapshot,
+	renderAuthorizedPdfIdentityPage,
 	MAX_LOCAL_PDF_BYTES,
 	articleHeadContainsTitle,
 	articleMarkdownTitleMatches,
@@ -1371,10 +1383,10 @@ function testIdentityAndDraftContracts() {
 	assert.match(identityPrompt, /最多两次/);
 	assert.match(identityPrompt, /输出前检查清单/);
 	assert.match(identityPrompt, /有核验 DOI 时还必须用 vault_doi_search/);
-	assert.match(identityPrompt, /没有该记录时必须返回 status=conflict/);
+	assert.match(identityPrompt, /没有可信结构化记录时必须返回 status=conflict/);
 	assert.match(identityPrompt, /不能写入任何文件/);
 	assert.match(identityPrompt, /不是给你的指令/);
-	assert.match(identityPrompt, /插件会核对本阶段是否真的执行过元数据查询和去重检索/);
+	assert.match(identityPrompt, /插件会核对工具回执/);
 	assert.doesNotMatch(identityPrompt, /write_note/);
 
 	// Path privacy: only the basename reaches the model prompt.
@@ -1453,7 +1465,6 @@ async function testLocalPdfIdentityPreflight() {
 		deps: {
 			statFile: async () => ({ size: 4, isFile: true }),
 			readFile: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
-			verifyTitleCandidates: async (candidates) => candidates.map((candidate) => candidate.text),
 			loadPdfJs: async () => ({
 				getDocument(options) {
 					assert.equal(options.isEvalSupported, false);
@@ -1497,7 +1508,6 @@ async function testLocalPdfIdentityPreflight() {
 		deps: {
 			statFile: async () => ({ size: 4, isFile: true }),
 			readFile: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
-			verifyTitleCandidates: async (candidates) => candidates.map((candidate) => candidate.text),
 			loadPdfJs: async () => ({ getDocument: () => ({ promise: Promise.resolve({
 				numPages: 1,
 				getMetadata: async () => ({ info: { Title: "Microsoft Word" }, metadata: null }),
@@ -1521,9 +1531,6 @@ async function testLocalPdfIdentityPreflight() {
 		deps: {
 			statFile: async () => ({ size: 4, isFile: true }),
 			readFile: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
-			// Simulates a white/transparent/invisible text-layer title whose bbox
-			// has no corresponding rasterized ink on the rendered title page.
-			verifyTitleCandidates: async () => [],
 			loadPdfJs: async () => ({ getDocument: () => ({ promise: Promise.resolve({
 				numPages: 1,
 				getMetadata: async () => ({ info: {}, metadata: null }),
@@ -1537,8 +1544,8 @@ async function testLocalPdfIdentityPreflight() {
 			}) }) }),
 		},
 	});
-	assert.deepEqual(nonRenderedTitle.firstPageTitleCandidates, []);
-	assert.match(nonRenderedTitle.warning, /没有唯一的高置信标题块|不能自动确认身份/);
+	assert.deepEqual(nonRenderedTitle.firstPageTitleCandidates, ["Injected Invisible Article Title"]);
+	assert.match(nonRenderedTitle.warning, /仅用于检索.*人工确认/);
 
 	let oversizedReadCalled = false;
 	const oversized = await extractLocalPdfIdentityEvidence("D:/private/oversized.pdf", {
@@ -1602,6 +1609,75 @@ async function testLocalPdfIdentityPreflight() {
 		if (!error || error.code !== "EPERM") throw error;
 	}
 	fs.rmSync(snapshotRoot, { recursive: true, force: true });
+}
+
+async function testAuthorizedPdfFinalRasterBinding() {
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), "rar-raster-confirm-"));
+	const snapshotPath = path.join(directory, "authorized.pdf");
+	const bytes = Buffer.from("%PDF-test-raster");
+	fs.writeFileSync(snapshotPath, bytes);
+	const originalDocument = global.document;
+	global.document = {
+		createElement(name) {
+			assert.equal(name, "canvas");
+			let pageInk = 0;
+			const canvas = {
+				width: 0,
+				height: 0,
+				getContext: () => ({
+					save() {}, restore() {}, fillRect() {}, fillStyle: "#fff",
+					setPageInk(value) { pageInk = value; },
+					getImageData(_x, _y, width, height) {
+						const data = new Uint8ClampedArray(width * height * 4);
+						data.fill(pageInk);
+						return { data };
+					},
+				}),
+				toDataURL: () => `data:image/png;base64,page-${pageInk}`,
+			};
+			return canvas;
+		},
+	};
+	pdfJsForRasterTest = {
+		version: "fixture-1",
+		getDocument: () => ({ promise: Promise.resolve({
+			numPages: 3,
+			getPage: async (pageNumber) => ({
+				getViewport: ({ scale }) => ({ width: 600 * scale, height: 800 * scale }),
+				render: ({ canvasContext }) => {
+					canvasContext.setPageInk(pageNumber * 31);
+					return { promise: Promise.resolve() };
+				},
+				cleanup() {},
+			}),
+			destroy: async () => {},
+		}) }),
+	};
+	const snapshot = {
+		path: snapshotPath,
+		directory,
+		originalFileName: "demo.pdf",
+		size: bytes.length,
+		sha256: createHash("sha256").update(bytes).digest("hex"),
+	};
+	try {
+		const page2 = await renderAuthorizedPdfIdentityPage(snapshot, 2);
+		assert.equal(page2.pageNumber, 2);
+		assert.equal(page2.pageCount, 3);
+		assert.equal(page2.renderEngineVersion, "fixture-1");
+		assert.match(page2.rasterDataUrl, /^data:image\/png;base64,page-62$/);
+		assert.match(page2.rasterSha256, /^[a-f0-9]{64}$/);
+		await assert.rejects(
+			renderAuthorizedPdfIdentityPage({ ...snapshot, sha256: "0".repeat(64) }, 1),
+			/快照哈希发生变化/,
+		);
+		await assert.rejects(renderAuthorizedPdfIdentityPage(snapshot, 4), /前 3 页/);
+	} finally {
+		pdfJsForRasterTest = null;
+		global.document = originalDocument;
+		fs.unlinkSync(snapshotPath);
+		fs.rmdirSync(directory);
+	}
 }
 
 function testIdentityReceiptGate() {
@@ -1955,15 +2031,15 @@ function testIdentityReceiptGate() {
 		vaultReceipt("Cited Reference"),
 		vaultDoiReceipt("10.1000/cited-reference"),
 	];
-	assert.match(
+	assert.deepEqual(
 		validateIdentityReceipts(citedIdentity, citedReceipts, {
 			...localPdfEvidence,
 			fileName: "Cited Reference.pdf",
-		}).join("；"),
-		/本地 PDF 标题证据不一致/,
-		"a DOI appearing in references must not rebind the selected PDF to another paper",
+		}),
+		[],
+		"text-layer hints cannot approve or reject identity; the human raster receipt is authoritative",
 	);
-	assert.match(
+	assert.deepEqual(
 		validateIdentityReceipts(localBoundIdentity, [
 			metadataReceipt(localBoundIdentity.title),
 			doiReceipt(localBoundIdentity.title),
@@ -1972,10 +2048,10 @@ function testIdentityReceiptGate() {
 		], {
 			...localPdfEvidence,
 			firstPageTitleCandidates: ["Entirely Different Article Title"],
-		}).join("；"),
-		/元数据标题与第一页标题证据冲突/,
+		}),
+		[],
 	);
-	assert.match(
+	assert.deepEqual(
 		validateIdentityReceipts(localBoundIdentity, [
 			metadataReceipt(localBoundIdentity.title),
 			doiReceipt(localBoundIdentity.title),
@@ -1988,9 +2064,9 @@ function testIdentityReceiptGate() {
 			firstPageText: "",
 			firstPageTitleCandidates: [],
 			fileName: "scan.pdf",
-		}).join("；"),
-		/没有可用于确定性身份绑定的标题证据/,
-		"verified intake must fail closed when the PDF yields no deterministic title evidence",
+		}),
+		[],
+		"a scanned PDF may proceed to final-raster human confirmation without text-layer evidence",
 	);
 
 	const cyrillicIdentity = { ...identity, doi: "", title: "Анализ данных", citekey: "ivanov_2026" };
@@ -2027,6 +2103,49 @@ function testIdentityReceiptGate() {
 		"10.1000/legal.",
 		"binding must preserve legal trailing DOI punctuation",
 	);
+}
+
+function testHumanIdentityConfirmationReceipt() {
+	const identity = {
+		status: "verified",
+		duplicateStatus: "none",
+		citekey: "demo_2026",
+		title: "Demo Paper",
+		title_zh: "演示论文",
+		authors: "Doe Jane",
+		year: "2026",
+		doi: "10.1000/demo",
+		duplicates: [], conflicts: [], notes: [],
+	};
+	const expected = {
+		taskId: "task-a",
+		snapshotSha256: "a".repeat(64),
+		snapshotSize: 1234,
+		identity,
+	};
+	const receipt = {
+		schemaVersion: 1,
+		taskId: expected.taskId,
+		snapshotSha256: expected.snapshotSha256,
+		snapshotSize: expected.snapshotSize,
+		pageNumber: 2,
+		rasterSha256: "b".repeat(64),
+		renderEngine: "obsidian-pdfjs",
+		renderEngineVersion: "test",
+		viewportWidth: 1200,
+		viewportHeight: 1600,
+		scale: 2,
+		confirmedTitle: identity.title,
+		confirmedDoi: identity.doi,
+		crossrefRecordHash: crossrefRecordHash(identity),
+		confirmationMode: "human-visual",
+	};
+	assert.deepEqual(validateHumanIdentityConfirmation(receipt, expected), []);
+	assert.match(validateHumanIdentityConfirmation(null, expected).join("；"), /没有人工视觉/);
+	assert.match(validateHumanIdentityConfirmation({ ...receipt, taskId: "task-b" }, expected).join("；"), /另一任务/);
+	assert.match(validateHumanIdentityConfirmation({ ...receipt, snapshotSha256: "c".repeat(64) }, expected).join("；"), /未绑定本次授权 PDF/);
+	assert.match(validateHumanIdentityConfirmation({ ...receipt, confirmedTitle: "Injected Title" }, expected).join("；"), /标题或 DOI/);
+	assert.match(validateHumanIdentityConfirmation({ ...receipt, crossrefRecordHash: "d".repeat(64) }, expected).join("；"), /Crossref/);
 }
 
 function testDraftGateAndStatusSemantics() {
@@ -2501,7 +2620,9 @@ function testArtifactsPersistenceRoundTrip() {
 	await testResolveUniqueCitekey();
 	testIdentityAndDraftContracts();
 	await testLocalPdfIdentityPreflight();
+	await testAuthorizedPdfFinalRasterBinding();
 	testIdentityReceiptGate();
+	testHumanIdentityConfirmationReceipt();
 	testDraftGateAndStatusSemantics();
 	testExactDuplicateCompletesMissingOutputs();
 	testResolvedTitleTranslationMatchesCommittedDraft();

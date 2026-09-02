@@ -304,7 +304,7 @@ export class ActionInputModal extends Modal {
 		});
 		section.createDiv({
 			cls: "agent-dashboard-run-config-note",
-			text: "流程由插件分阶段强制：先在本机读取 PDF 元数据与第一页文本识别标题/DOI，再分别检查原文层（papers + Clippings）和分析层（wiki/sources）；有 DOI 时先精确核验，仅在本地证据不足时模糊检索。原文层缺失时才对你确认的 PDF 运行 MinerU，分析层缺失时才读取已核验原文并生成 Wiki。两层相互独立且均不覆盖已有内容。不更新 papers.csv 与 references.bib（完整登记请用 Codex CLI 方式）。",
+			text: "流程由插件分阶段强制：本地 PDF 元数据与文本层只用于发现候选；Crossref 核验后，你必须亲眼确认授权快照最终渲染的标题页与书目记录一致。确认完成后再分别检查原文层（papers + Clippings）和分析层（wiki/sources），两层相互独立且均不覆盖已有内容，缺什么补什么。不更新 papers.csv 与 references.bib（完整登记请用 Codex CLI 方式）。",
 		});
 	}
 

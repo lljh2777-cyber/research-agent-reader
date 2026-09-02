@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 
 import { tokenizeForLexicalRetrieval } from "../query/lexical-retrieval";
 import type { AgentTool, AgentToolCallReceipt } from "./types";
@@ -70,6 +71,70 @@ export interface PaperIngestIdentity {
 	duplicates: string[];
 	conflicts: string[];
 	notes: string[];
+}
+
+export interface HumanIdentityConfirmationReceipt {
+	schemaVersion: 1;
+	taskId: string;
+	snapshotSha256: string;
+	snapshotSize: number;
+	pageNumber: number;
+	rasterSha256: string;
+	renderEngine: "obsidian-pdfjs";
+	renderEngineVersion: string;
+	viewportWidth: number;
+	viewportHeight: number;
+	scale: number;
+	confirmedTitle: string;
+	confirmedDoi: string | null;
+	crossrefRecordHash: string;
+	confirmationMode: "human-visual";
+}
+
+export function crossrefRecordHash(identity: Pick<PaperIngestIdentity, "title" | "doi" | "authors" | "year">): string {
+	return createHash("sha256").update(JSON.stringify({
+		title: String(identity.title || "").trim(),
+		doi: normalizeIdentityDoi(identity.doi || ""),
+		authors: String(identity.authors || "").trim(),
+		year: String(identity.year || "").trim(),
+	}), "utf8").digest("hex");
+}
+
+/** Validate the non-replayable receipt immediately before any write phase. */
+export function validateHumanIdentityConfirmation(
+	receipt: HumanIdentityConfirmationReceipt | null,
+	expected: {
+		taskId: string;
+		snapshotSha256: string;
+		snapshotSize: number;
+		identity: PaperIngestIdentity;
+	},
+): string[] {
+	if (!receipt) return ["没有人工视觉身份确认回执"];
+	const problems: string[] = [];
+	if (receipt.schemaVersion !== 1 || receipt.confirmationMode !== "human-visual") problems.push("人工身份确认回执版本或模式无效");
+	if (receipt.taskId !== expected.taskId) problems.push("人工身份确认回执属于另一任务");
+	if (receipt.snapshotSha256 !== expected.snapshotSha256 || receipt.snapshotSize !== expected.snapshotSize) {
+		problems.push("人工身份确认回执未绑定本次授权 PDF 快照");
+	}
+	if (!Number.isInteger(receipt.pageNumber) || receipt.pageNumber < 1 || receipt.pageNumber > 3
+		|| !Number.isFinite(receipt.viewportWidth) || receipt.viewportWidth <= 0
+		|| !Number.isFinite(receipt.viewportHeight) || receipt.viewportHeight <= 0
+		|| !Number.isFinite(receipt.scale) || receipt.scale <= 0
+		|| !/^[a-f0-9]{64}$/i.test(receipt.rasterSha256)) {
+		problems.push("人工身份确认回执的页面栅格信息无效");
+	}
+	if (receipt.renderEngine !== "obsidian-pdfjs" || !receipt.renderEngineVersion.trim()) {
+		problems.push("人工身份确认回执缺少渲染引擎信息");
+	}
+	if (receipt.confirmedTitle !== expected.identity.title
+		|| normalizeIdentityDoi(receipt.confirmedDoi || "") !== normalizeIdentityDoi(expected.identity.doi || "")) {
+		problems.push("人工确认的标题或 DOI 与插件锁定的 Crossref 记录不一致");
+	}
+	if (receipt.crossrefRecordHash !== crossrefRecordHash(expected.identity)) {
+		problems.push("人工身份确认回执未绑定当前 Crossref 结构化记录");
+	}
+	return problems;
 }
 
 /** Structured note-field contract the draft phase must produce. */
@@ -346,22 +411,13 @@ export function validateIdentityReceipts(
 		));
 	const dedupCalls = successful(["vault_candidates", "vault_candidate_read", "vault_doi_search"]);
 	if (localPdfEvidence) {
-		const metadataTitle = String(localPdfEvidence.trustedMetadataTitle || "").trim();
-		const firstPageTitles = [...(localPdfEvidence.firstPageTitleCandidates || [])];
-		const bindingTitles = localPdfTitleCandidates(localPdfEvidence);
-		if (localPdfEvidence.status !== "available" || !bindingTitles.length) {
-			problems.push("本地 PDF 没有可用于确定性身份绑定的标题证据");
-		} else if (metadataTitle && firstPageTitles.length
-			&& !firstPageTitles.some((candidate) => bibliographicTitlesMatch(candidate, metadataTitle))) {
-			problems.push("本地 PDF 元数据标题与第一页标题证据冲突");
-		} else if (!bindingTitles.some((candidate) => bibliographicTitlesMatch(candidate, identity.title))) {
-			problems.push("Crossref 最终标题与本地 PDF 标题证据不一致");
+		if (localPdfEvidence.status !== "available") {
+			problems.push("本地 PDF 预检不可用，不能进入最终栅格人工确认");
 		} else if (!toolCalls.some((call) => (
 			call.ok
 			&& call.tool === "vault_candidates"
-			&& bindingTitles.some((candidate) => receiptQuerySupportsTitle(call, candidate))
 		))) {
-			problems.push("Vault 预检没有实际使用本地 PDF 的标题证据");
+			problems.push("未完成固定范围的 Vault 候选预检");
 		}
 	}
 	if (!metadataCalls.length) {
@@ -438,8 +494,8 @@ function localPdfTitleCandidates(evidence: LocalPdfIdentityEvidence): string[] {
 		if (normalized.length < 12 || candidates.some((item) => normalizeBibliographicTitle(item) === normalized)) return;
 		candidates.push(text.slice(0, 500));
 	};
-	// Metadata is useful as a search/corroboration hint, but it is writable PDF
-	// metadata and cannot by itself bind a scanned or image-only document.
+	// These values only seed deterministic searches. Neither metadata nor the
+	// PDF text layer is an identity authority; the human raster receipt is.
 	for (const candidate of evidence.firstPageTitleCandidates || []) add(candidate);
 	return candidates;
 }

@@ -14,7 +14,10 @@ import {
 	createAuthorizedPdfSnapshot,
 	disposeAuthorizedPdfSnapshot,
 	extractLocalPdfIdentityEvidence,
+	renderAuthorizedPdfIdentityPage,
 	type AuthorizedPdfSnapshot,
+	type AuthorizedPdfPageRaster,
+	type LocalPdfIdentityEvidence,
 } from "./pdf-identity";
 import {
 	buildDraftSystemPrompt,
@@ -26,6 +29,7 @@ import {
 	bindIdentityMetadataFromReceipts,
 	deriveBibliographicCitekey,
 	commitSourceNote,
+	crossrefRecordHash,
 	evaluateDraftPhase,
 	computeIngestOutcomeStatus,
 	mineruReadiness,
@@ -38,12 +42,14 @@ import {
 	resolveUniqueCitekey,
 	runAuthorizedMineruExtract,
 	validateIdentityReceipts,
+	validateHumanIdentityConfirmation,
 	validateDraftReceipts,
 	VaultWriteJournal,
 	type PaperIngestFlowOptions,
 	type PaperIngestIdentity,
 	type PaperIngestNoteDraft,
 	type PaperIngestReceipts,
+	type HumanIdentityConfirmationReceipt,
 } from "./paper-ingest-flow";
 import type { AgentLoopResult, AgentLoopStep } from "./types";
 import { readTrustedVaultFile, type VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
@@ -76,6 +82,19 @@ export interface AgentLoopServiceDeps {
 		timeoutMs: number;
 		signal: AbortSignal;
 	}): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+	confirmPaperIdentity(request: HumanIdentityConfirmationRequest): Promise<HumanIdentityConfirmationReceipt | null>;
+}
+
+export interface HumanIdentityConfirmationRequest {
+	taskId: string;
+	snapshotSha256: string;
+	snapshotSize: number;
+	pageCount: number;
+	identity: Readonly<PaperIngestIdentity>;
+	localEvidence: Readonly<LocalPdfIdentityEvidence>;
+	crossrefRecordHash: string;
+	signal: AbortSignal;
+	renderPage(pageNumber: number): Promise<AuthorizedPdfPageRaster>;
 }
 
 export interface AgentRunHandle {
@@ -357,6 +376,37 @@ export class AgentLoopService {
 				state.conflicts.push(`疑似重复，需要人工确认：${identity.duplicates.join("；") || "见检索结果"}`);
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
+			if (!authorizedPdfSnapshot) {
+				state.conflicts.push("没有授权 PDF 快照，无法完成人工视觉身份确认");
+				return this.finish(state, options, profileId, resolved, emitStatus);
+			}
+			emitStatus("waiting", "等待人工确认 PDF 页面与书目记录");
+			const confirmation = await this.deps.confirmPaperIdentity({
+				taskId: runId,
+				snapshotSha256: authorizedPdfSnapshot.sha256,
+				snapshotSize: authorizedPdfSnapshot.size,
+				pageCount: localPdfEvidence.pageCount,
+				identity: Object.freeze({ ...identity }),
+				localEvidence: Object.freeze({ ...localPdfEvidence }),
+				crossrefRecordHash: crossrefRecordHash(identity),
+				signal: abortController.signal,
+				renderPage: (pageNumber) => renderAuthorizedPdfIdentityPage(
+					authorizedPdfSnapshot!,
+					pageNumber,
+					{ signal: abortController.signal },
+				),
+			});
+			const confirmationProblems = validateHumanIdentityConfirmation(confirmation, {
+				taskId: runId,
+				snapshotSha256: authorizedPdfSnapshot.sha256,
+				snapshotSize: authorizedPdfSnapshot.size,
+				identity,
+			});
+			if (confirmationProblems.length) {
+				state.conflicts.push(`人工身份确认未完成：${confirmationProblems.join("；")}`);
+				return this.finish(state, options, profileId, resolved, emitStatus);
+			}
+			state.notes.push(`已人工确认授权 PDF 第 ${confirmation!.pageNumber} 页与 Crossref 书目记录一致`);
 			if (identity.duplicateStatus === "exact") {
 				const observedLayers = resolveExactDuplicateLayers(identity, identityLoop.toolCalls);
 				if (observedLayers.conflict) {

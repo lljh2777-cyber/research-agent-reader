@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { loadPdfJs } from "obsidian";
+import { MINERU_RESOURCE_LIMITS } from "../mineru/resource-limits";
 
 const FIRST_PAGE_TEXT_LIMIT = 8_000;
 export const MAX_LOCAL_PDF_BYTES = 128 * 1024 * 1024;
@@ -25,7 +26,6 @@ interface PdfPageProxy {
 		canvasContext: CanvasRenderingContext2D;
 		viewport: { width: number; height: number };
 	}): { promise: Promise<void>; cancel?(): void };
-	getOperatorList?(): Promise<{ fnArray: number[]; argsArray: unknown[][] }>;
 	cleanup?(): void;
 }
 
@@ -52,7 +52,7 @@ interface PdfLoadingTask {
 
 interface PdfJsApi {
 	getDocument(options: { data: Uint8Array; isEvalSupported: boolean }): PdfLoadingTask;
-	OPS?: Record<string, number>;
+	version?: string;
 }
 
 export interface LocalPdfIdentityEvidence {
@@ -72,10 +72,6 @@ export interface LocalPdfIdentityDeps {
 	statFile(sourcePath: string): Promise<{ size: number; isFile: boolean }>;
 	readFile(sourcePath: string, signal?: AbortSignal): Promise<Uint8Array>;
 	loadPdfJs(): Promise<PdfJsApi>;
-	/** Test seam; production always raster-verifies the candidate against page 1. */
-	verifyTitleCandidates?: (
-		candidates: readonly { text: string; boxes: readonly [number, number, number, number][] }[],
-	) => Promise<string[]>;
 }
 
 export interface AuthorizedPdfSnapshot {
@@ -84,6 +80,18 @@ export interface AuthorizedPdfSnapshot {
 	originalFileName: string;
 	size: number;
 	sha256: string;
+}
+
+export interface AuthorizedPdfPageRaster {
+	pageNumber: number;
+	pageCount: number;
+	rasterDataUrl: string;
+	rasterSha256: string;
+	renderEngine: "obsidian-pdfjs";
+	renderEngineVersion: string;
+	viewportWidth: number;
+	viewportHeight: number;
+	scale: number;
 }
 
 function safeFileName(sourcePath: string): string {
@@ -288,199 +296,6 @@ function firstPageTitleCandidateGroups(
 	return plausible.length === 1 ? plausible : [];
 }
 
-async function rasterVerifiedTitleCandidates(
-	page: PdfPageProxy,
-	groups: readonly { text: string; items: readonly VisiblePdfTextItem[] }[],
-	viewport: { width: number; height: number },
-	signal: AbortSignal,
-): Promise<string[]> {
-	if (!groups.length || !page.render || typeof document === "undefined") return [];
-	const scale = Math.min(2, 1600 / Math.max(viewport.width, viewport.height));
-	const renderedViewport = page.getViewport({ scale });
-	if (!Number.isFinite(renderedViewport.width) || !Number.isFinite(renderedViewport.height)) return [];
-	const width = Math.max(1, Math.ceil(renderedViewport.width));
-	const height = Math.max(1, Math.ceil(renderedViewport.height));
-	if (width * height > 4_000_000) return [];
-	const canvas = document.createElement("canvas");
-	canvas.width = width;
-	canvas.height = height;
-	const context = canvas.getContext("2d", { willReadFrequently: true });
-	if (!context) return [];
-	context.save();
-	context.fillStyle = "#ffffff";
-	context.fillRect(0, 0, width, height);
-	context.restore();
-	const task = page.render({ canvasContext: context, viewport: renderedViewport });
-	try {
-		await waitForAbortable(task.promise, signal, "本地 PDF 标题可见性验证已取消");
-		const upperHeight = Math.max(1, Math.min(height, Math.ceil(height * 0.62)));
-		const upper = context.getImageData(0, 0, width, upperHeight).data;
-		let nearWhite = 0;
-		let sampled = 0;
-		for (let index = 0; index < upper.length; index += 4 * 16) {
-			sampled += 1;
-			if (upper[index] >= 245 && upper[index + 1] >= 245 && upper[index + 2] >= 245 && upper[index + 3] >= 245) nearWhite += 1;
-		}
-		// Automatic identity binding is intentionally limited to ordinary light
-		// paper title pages. Covers or image-backed titles require manual review.
-		if (!sampled || nearWhite / sampled < 0.72) return [];
-		return groups.filter((group) => group.items.length > 0 && group.items.every((item) => {
-			const left = Math.max(0, Math.floor(item.x * scale));
-			const top = Math.max(0, Math.floor(item.top * scale));
-			const right = Math.min(width, Math.ceil(item.right * scale));
-			const bottom = Math.min(height, Math.ceil(item.bottom * scale));
-			if (right <= left || bottom <= top) return false;
-			const pixels = context.getImageData(left, top, right - left, bottom - top).data;
-			let ink = 0;
-			for (let index = 0; index < pixels.length; index += 4) {
-				if (pixels[index + 3] >= 245
-					&& Math.min(pixels[index], pixels[index + 1], pixels[index + 2]) <= 225) ink += 1;
-			}
-			return ink >= Math.max(3, Math.ceil((pixels.length / 4) * 0.0015));
-		})).map((group) => group.text);
-	} finally {
-		try { task.cancel?.(); } catch { /* Rendering already settled. */ }
-		canvas.width = 1;
-		canvas.height = 1;
-	}
-}
-
-function operatorText(value: unknown): string {
-	if (typeof value === "string") return value;
-	if (Array.isArray(value)) return value.map(operatorText).join("");
-	if (value && typeof value === "object") {
-		const record = value as { unicode?: unknown; fontChar?: unknown };
-		if (typeof record.unicode === "string") return record.unicode;
-		if (typeof record.fontChar === "string") return record.fontChar;
-	}
-	return "";
-}
-
-function operatorTextMatches(candidate: string, corpus: string): boolean {
-	const normalize = (value: string): string => value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
-	const expected = normalize(candidate);
-	const actual = normalize(corpus);
-	if (!expected || !actual) return false;
-	if (actual.includes(expected)) return true;
-	const terms = expected.split(/\s+/).filter(Boolean);
-	const actualTerms = new Set(actual.split(/\s+/).filter(Boolean));
-	return terms.length >= 4 && terms.filter((term) => actualTerms.has(term)).length / terms.length >= 0.9;
-}
-
-function operatorColorNumbers(args: readonly unknown[]): number[] {
-	const values: number[] = [];
-	const visit = (value: unknown): void => {
-		if (typeof value === "number" && Number.isFinite(value)) values.push(value);
-		else if (Array.isArray(value) || ArrayBuffer.isView(value)) {
-			for (const item of Array.from(value as ArrayLike<unknown>)) visit(item);
-		}
-	};
-	for (const arg of args) visit(arg);
-	return values;
-}
-
-function normalizedColor(value: number): number {
-	return Math.max(0, Math.min(1, value > 1 ? value / 255 : value));
-}
-
-async function operatorVerifiedTitleCandidates(
-	page: PdfPageProxy,
-	groups: readonly { text: string }[],
-	api: PdfJsApi,
-	signal: AbortSignal,
-): Promise<string[]> {
-	const ops = api.OPS;
-	if (!page.getOperatorList || !ops) return [];
-	const list = await waitForAbortable(page.getOperatorList(), signal, "本地 PDF 标题绘制状态验证已取消");
-	let renderMode = 0;
-	let fillAlpha = 1;
-	let strokeAlpha = 1;
-	let fillDark = true;
-	let strokeDark = true;
-	let clipActive = false;
-	const stateStack: Array<{
-		renderMode: number; fillAlpha: number; strokeAlpha: number;
-		fillDark: boolean; strokeDark: boolean; clipActive: boolean;
-	}> = [];
-	const visible: string[] = [];
-	const hidden: string[] = [];
-	for (let index = 0; index < list.fnArray.length; index += 1) {
-		const fn = list.fnArray[index];
-		const args = list.argsArray[index] || [];
-		if (fn === ops.save) {
-			stateStack.push({ renderMode, fillAlpha, strokeAlpha, fillDark, strokeDark, clipActive });
-			continue;
-		}
-		if (fn === ops.restore) {
-			const restored = stateStack.pop();
-			if (restored) ({ renderMode, fillAlpha, strokeAlpha, fillDark, strokeDark, clipActive } = restored);
-			continue;
-		}
-		if (fn === ops.setTextRenderingMode) {
-			renderMode = Math.max(0, Math.min(7, Number(args[0]) || 0));
-			continue;
-		}
-		if (fn === ops.setGState) {
-			const entries = Array.isArray(args[0]) ? args[0] : args;
-			for (const entry of entries) {
-				if (!Array.isArray(entry) || entry.length < 2) continue;
-				if (entry[0] === "ca") fillAlpha = Number(entry[1]);
-				if (entry[0] === "CA") strokeAlpha = Number(entry[1]);
-			}
-			continue;
-		}
-		if (fn === ops.clip || fn === ops.eoClip) {
-			clipActive = true;
-			continue;
-		}
-		if (fn === ops.setFillGray || fn === ops.setStrokeGray) {
-			const gray = normalizedColor(operatorColorNumbers(args)[0] ?? 1);
-			if (fn === ops.setFillGray) fillDark = gray <= 0.82;
-			else strokeDark = gray <= 0.82;
-			continue;
-		}
-		if (fn === ops.setFillRGBColor || fn === ops.setStrokeRGBColor) {
-			const [red = 1, green = 1, blue = 1] = operatorColorNumbers(args).map(normalizedColor);
-			const dark = (0.2126 * red + 0.7152 * green + 0.0722 * blue) <= 0.82;
-			if (fn === ops.setFillRGBColor) fillDark = dark;
-			else strokeDark = dark;
-			continue;
-		}
-		if (fn === ops.setFillCMYKColor || fn === ops.setStrokeCMYKColor) {
-			const [cyan = 0, magenta = 0, yellow = 0, black = 0] = operatorColorNumbers(args).map(normalizedColor);
-			const red = 1 - Math.min(1, cyan + black);
-			const green = 1 - Math.min(1, magenta + black);
-			const blue = 1 - Math.min(1, yellow + black);
-			const dark = (0.2126 * red + 0.7152 * green + 0.0722 * blue) <= 0.82;
-			if (fn === ops.setFillCMYKColor) fillDark = dark;
-			else strokeDark = dark;
-			continue;
-		}
-		if (fn === ops.setFillColorSpace || fn === ops.setFillColor || fn === ops.setFillColorN) {
-			fillDark = false;
-			continue;
-		}
-		if (fn === ops.setStrokeColorSpace || fn === ops.setStrokeColor || fn === ops.setStrokeColorN) {
-			strokeDark = false;
-			continue;
-		}
-		const isText = fn === ops.showText || fn === ops.showSpacedText
-			|| fn === ops.nextLineShowText || fn === ops.nextLineSetSpacingShowText;
-		if (!isText) continue;
-		const text = operatorText(args);
-		if (!text.trim()) continue;
-		const paintsFill = !clipActive && [0, 2].includes(renderMode) && fillAlpha > 0.01 && fillDark;
-		const paintsStroke = !clipActive && [1, 2].includes(renderMode) && strokeAlpha > 0.01 && strokeDark;
-		(paintsFill || paintsStroke ? visible : hidden).push(text);
-	}
-	const visibleText = visible.join(" ");
-	const hiddenText = hidden.join(" ");
-	return groups.filter((group) => (
-		operatorTextMatches(group.text, visibleText)
-		&& !operatorTextMatches(group.text, hiddenText)
-	)).map((group) => group.text);
-}
-
 function trustedMetadataTitle(value: string, fileName: string): string {
 	const title = cleanPdfText(value, 1_000);
 	const normalized = title.toLowerCase().replace(/[\s._-]+/g, " ").trim();
@@ -621,6 +436,113 @@ export async function disposeAuthorizedPdfSnapshot(snapshot: AuthorizedPdfSnapsh
 }
 
 /**
+ * Render one of the first three pages from the immutable authorized snapshot.
+ * The returned hash covers the exact RGBA pixels shown to the user, including
+ * dimensions, rather than PDF text-layer or metadata observations.
+ */
+export async function renderAuthorizedPdfIdentityPage(
+	snapshot: AuthorizedPdfSnapshot,
+	pageNumber: number,
+	options: { signal?: AbortSignal } = {},
+): Promise<AuthorizedPdfPageRaster> {
+	if (typeof document === "undefined") throw new Error("当前环境不能渲染 PDF 身份确认页面");
+	if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > 3) {
+		throw new Error("身份确认只能渲染 PDF 的前 3 页");
+	}
+	if (options.signal?.aborted) throw abortError("PDF 身份确认渲染已取消");
+	const renderController = new AbortController();
+	let timedOut = false;
+	const timer = setTimeout(() => {
+		timedOut = true;
+		renderController.abort();
+	}, PDF_PREFLIGHT_TIMEOUT_MS);
+	const onOuterAbort = (): void => renderController.abort();
+	options.signal?.addEventListener("abort", onOuterAbort, { once: true });
+	let loadingTask: PdfLoadingTask | null = null;
+	let pdf: PdfDocumentProxy | null = null;
+	let page: PdfPageProxy | null = null;
+	let canvas: HTMLCanvasElement | null = null;
+	try {
+		const bytes = await waitForAbortable(
+			fs.promises.readFile(snapshot.path),
+			renderController.signal,
+			"PDF 身份确认渲染已取消",
+		);
+		if (bytes.byteLength !== snapshot.size || bytes.byteLength > MAX_LOCAL_PDF_BYTES) {
+			throw new Error("授权 PDF 快照大小发生变化");
+		}
+		const actualSha256 = createHash("sha256").update(bytes).digest("hex");
+		if (actualSha256 !== snapshot.sha256) throw new Error("授权 PDF 快照哈希发生变化");
+		const pdfjs = await waitForAbortable(
+			loadPdfJs() as unknown as Promise<PdfJsApi>,
+			renderController.signal,
+			"PDF 身份确认渲染已取消",
+		);
+		loadingTask = pdfjs.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false });
+		pdf = await waitForAbortable(loadingTask.promise, renderController.signal, "PDF 身份确认渲染已取消");
+		const pageCount = Math.max(1, Math.round(Number(pdf.numPages) || 1));
+		if (pageCount > MINERU_RESOURCE_LIMITS.pdfPages) throw new Error("PDF 页数超过安全上限");
+		if (pageNumber > Math.min(3, pageCount)) throw new Error("所选标题页超出 PDF 范围");
+		page = await waitForAbortable(pdf.getPage(pageNumber), renderController.signal, "PDF 身份确认渲染已取消");
+		const baseViewport = page.getViewport({ scale: 1 });
+		if (!Number.isFinite(baseViewport.width) || !Number.isFinite(baseViewport.height)
+			|| baseViewport.width <= 0 || baseViewport.height <= 0) {
+			throw new Error("PDF 标题页尺寸无效");
+		}
+		const aspect = Math.max(baseViewport.width / baseViewport.height, baseViewport.height / baseViewport.width);
+		if (aspect > 20) throw new Error("PDF 标题页长宽比超过安全上限");
+		const scale = Math.min(2, 1600 / Math.max(baseViewport.width, baseViewport.height));
+		const viewport = page.getViewport({ scale });
+		const width = Math.max(1, Math.ceil(viewport.width));
+		const height = Math.max(1, Math.ceil(viewport.height));
+		if (width * height > 4_000_000) throw new Error("PDF 标题页像素数超过安全上限");
+		canvas = document.createElement("canvas");
+		canvas.width = width;
+		canvas.height = height;
+		const context = canvas.getContext("2d", { willReadFrequently: true });
+		if (!context || !page.render) throw new Error("PDF 标题页渲染器不可用");
+		context.save();
+		context.fillStyle = "#ffffff";
+		context.fillRect(0, 0, width, height);
+		context.restore();
+		const task = page.render({ canvasContext: context, viewport });
+		await waitForAbortable(task.promise, renderController.signal, "PDF 身份确认渲染已取消");
+		const pixels = context.getImageData(0, 0, width, height).data;
+		const rasterSha256 = createHash("sha256")
+			.update(`${width}x${height}:rgba:`)
+			.update(Buffer.from(pixels.buffer, pixels.byteOffset, pixels.byteLength))
+			.digest("hex");
+		return {
+			pageNumber,
+			pageCount,
+			rasterDataUrl: canvas.toDataURL("image/png"),
+			rasterSha256,
+			renderEngine: "obsidian-pdfjs",
+			renderEngineVersion: String(pdfjs.version || "unknown").slice(0, 100),
+			viewportWidth: width,
+			viewportHeight: height,
+			scale,
+		};
+	} catch (error) {
+		if (timedOut) throw new Error("PDF 身份确认页面渲染超过 20 秒");
+		throw error;
+	} finally {
+		clearTimeout(timer);
+		options.signal?.removeEventListener("abort", onOuterAbort);
+		page?.cleanup?.();
+		if (canvas) {
+			canvas.width = 1;
+			canvas.height = 1;
+		}
+		if (pdf) {
+			try { await pdf.destroy(); } catch { /* Best effort. */ }
+		} else if (loadingTask?.destroy) {
+			try { await loadingTask.destroy(); } catch { /* Best effort. */ }
+		}
+	}
+}
+
+/**
  * Reads PDF metadata and page 1 locally through Obsidian's bundled PDF.js.
  * Only the basename and bounded extracted evidence leave this function; the
  * absolute path is never included in the returned model-visible structure.
@@ -671,6 +593,9 @@ export async function extractLocalPdfIdentityEvidence(
 		const pdfjs = await waitForAbortable(deps.loadPdfJs(), deadlineController.signal, "本地 PDF 身份预检已取消");
 		loadingTask = pdfjs.getDocument({ data: bytes, isEvalSupported: false });
 		document = await waitForAbortable(loadingTask.promise, deadlineController.signal, "本地 PDF 身份预检已取消");
+		if (document.numPages > MINERU_RESOURCE_LIMITS.pdfPages) {
+			return unavailable(fileName, "PDF 页数超过身份预检安全上限");
+		}
 		const metadataResult = document.getMetadata
 			? await waitForAbortable(
 				document.getMetadata().catch(() => ({ info: {}, metadata: null })),
@@ -686,21 +611,10 @@ export async function extractLocalPdfIdentityEvidence(
 		const visibleItems = visibleFirstPageItems(content.items || [], viewport);
 		const pageText = pageTextFromVisibleItems(visibleItems);
 		const titleGroups = firstPageTitleCandidateGroups(visibleItems, viewport);
-		const testCandidates = titleGroups.map((group) => ({
-			text: group.text,
-			boxes: group.items.map((item) => [item.x, item.top, item.right, item.bottom] as [number, number, number, number]),
-		}));
-		const titleCandidates = options.deps?.verifyTitleCandidates
-			? await waitForAbortable(
-				options.deps.verifyTitleCandidates(testCandidates),
-				deadlineController.signal,
-				"本地 PDF 标题可见性验证已取消",
-			)
-			: await (async () => {
-				const rasterTitles = await rasterVerifiedTitleCandidates(page, titleGroups, viewport, deadlineController.signal);
-				const rasterGroups = titleGroups.filter((group) => rasterTitles.includes(group.text));
-				return await operatorVerifiedTitleCandidates(page, rasterGroups, pdfjs, deadlineController.signal);
-			})();
+		// Text-layer titles are bounded search hints only. They intentionally do
+		// not attempt to model PDF paint order, clipping, transparency, or final
+		// pixel visibility; the human raster receipt owns that security decision.
+		const titleCandidates = titleGroups.map((group) => group.text);
 		page.cleanup?.();
 		const title = metadataValue(info, metadata, ["Title", "dc:title", "title"]);
 		const authors = metadataValue(info, metadata, ["Author", "dc:creator", "creator", "author"]);
@@ -719,10 +633,8 @@ export async function extractLocalPdfIdentityEvidence(
 			firstPageText: pageText,
 			firstPageTitleCandidates: titleCandidates,
 			warning: pageText
-				? titleCandidates.length || trustedMetadataTitle(title, fileName)
-					? ""
-					: "第一页没有唯一的高置信标题块；文件名只用于检索，不参与自动身份确认"
-				: "第一页没有可见的可提取文本，可能是扫描件；文件名只用于检索，不能自动确认身份",
+				? "PDF 文本层、元数据和文件名仅用于检索；必须人工确认最终渲染页面"
+				: "第一页没有可提取文本，可能是扫描件；必须人工确认最终渲染页面",
 		};
 	} catch (error) {
 		if (options.signal?.aborted && error instanceof Error && error.name === "AbortError") throw error;
