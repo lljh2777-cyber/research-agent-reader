@@ -38,21 +38,27 @@ The model never writes files and never chooses extraction paths:
 
 - When the selected output includes original Markdown, the plugin runs the
   conversion itself: it spawns the user-configured `mineru-open-api` CLI
-  directly (npm; no Python and no toolkit required), validates the
+  directly (npm; no Python and no toolkit required). Automatic and saved CLI
+  paths must resolve to a package whose `package.json` name and declared bin
+  entry are both `mineru-open-api`; arbitrary native executables are rejected.
+  The plugin validates the
   extraction with the same gates as the toolkit helper (single md/json,
   non-empty article with a title heading, every referenced asset present
   inside the package), and publishes create-only into the active vault at
   `papers/<citekey>/` with a reader-compatible `_extraction/manifest.json`
-  and `validation.json`. The source is always the exact PDF the user
-  authorized; a same-citekey package is never overwritten or claimed.
+  and `validation.json`. Before any remote extraction, the plugin copies the
+  selected ordinary PDF into a private, bounded, SHA-256-addressed snapshot;
+  both local identity evidence and MinerU consume that same immutable byte
+  sequence. A same-citekey package is never overwritten or claimed.
 - The wiki note is written by the plugin from model-supplied *fields* into
   `wiki/sources/<citekey>.md` via the vault's atomic create (never
   overwriting), with safe single-line YAML scalars, bibliographic metadata
   (authors/year/doi), `ingest_mode: lightweight`, and
   `registry_status: pending` frontmatter.
 - "Verified" identity results are additionally gated on plugin-observed tool
-  receipts (at least one metadata lookup, one dedup lookup, and exact DOI
-  verification whenever a DOI is claimed).
+  receipts (at least one metadata lookup, one dedup lookup, exact DOI
+  verification whenever a DOI is claimed, and a Crossref title consistent
+  with local PDF title evidence).
 
 The light runner never updates `papers.csv`, `references.bib`, or index/log
 pages — those registry files remain the Codex CLI pipeline's job, which can

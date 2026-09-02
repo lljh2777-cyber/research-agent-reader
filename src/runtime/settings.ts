@@ -9,6 +9,7 @@ import type {
 } from "../actions";
 import type { CliBackendId } from "../config";
 import type { ProviderProfile } from "../providers/profile";
+import { resolveMineruCommand } from "../agent/mineru-publish";
 
 export type ClaudeConfigSource = "official" | "cc-switch";
 export type CodexConfigSource = "official" | "cc-switch";
@@ -254,6 +255,17 @@ function isExecutableFile(value: unknown): boolean {
 	}
 }
 
+function isVerifiedCliExecutable(kind: CliExecutableKind, value: unknown): boolean {
+	if (!isExecutableFile(value)) return false;
+	if (kind !== "mineru") return true;
+	try {
+		resolveMineruCommand(String(value || ""));
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 function uniqueExistingFiles(candidates: string[]): string[] {
 	const seen = new Set<string>();
 	return candidates
@@ -419,23 +431,24 @@ export function detectCliExecutable(
 ): CliExecutableDetection {
 	const environmentVariable = CLI_ENVIRONMENT_VARIABLES[kind];
 	const environmentPath = normalizeExecutablePath(process.env[environmentVariable]);
-	if (isExecutableFile(environmentPath)) {
+	if (isVerifiedCliExecutable(kind, environmentPath)) {
 		return detectionResult(
 			environmentPath,
 			"environment",
 			`环境变量 ${environmentVariable}`,
 		);
 	}
-	const commonPath = uniqueExistingFiles(commonCliCandidates(kind))[0] || "";
+	const commonPath = uniqueExistingFiles(commonCliCandidates(kind))
+		.find((candidate) => isVerifiedCliExecutable(kind, candidate)) || "";
 	if (commonPath) {
 		return detectionResult(commonPath, "common", "常见安装目录");
 	}
 	const pathExecutable = findExecutableOnPath(CLI_COMMAND_NAMES[kind]);
-	if (pathExecutable) {
+	if (pathExecutable && isVerifiedCliExecutable(kind, pathExecutable)) {
 		return detectionResult(pathExecutable, "path", "系统 PATH / where.exe");
 	}
 	const normalizedManualPath = normalizeExecutablePath(manualPath);
-	if (isExecutableFile(normalizedManualPath)) {
+	if (isVerifiedCliExecutable(kind, normalizedManualPath)) {
 		return detectionResult(normalizedManualPath, "manual", "手动路径");
 	}
 	return detectionResult(
@@ -454,7 +467,7 @@ export function describeCliExecutable(
 	if (!normalized) {
 		return detectionResult("", "missing", "未配置", false);
 	}
-	if (!isExecutableFile(normalized)) {
+	if (!isVerifiedCliExecutable(kind, normalized)) {
 		return detectionResult(
 			normalized,
 			"missing",
@@ -474,6 +487,7 @@ export function describeCliExecutable(
 		);
 	}
 	const commonPaths = uniqueExistingFiles(commonCliCandidates(kind))
+		.filter((candidate) => isVerifiedCliExecutable(kind, candidate))
 		.map((candidate) => candidate.toLowerCase());
 	if (commonPaths.includes(normalized.toLowerCase())) {
 		return detectionResult(normalized, "common", "常见安装目录");

@@ -16,6 +16,8 @@ const ARTICLE_HEAD_CHAR_LIMIT = 4000;
 const ARTICLE_PAGE_CHAR_LIMIT = 16000;
 const VAULT_LIST_LIMIT = 200;
 const VAULT_DOI_SCAN_FILE_LIMIT = 5000;
+const MAX_VAULT_TEXT_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_DOI_SCAN_TOTAL_BYTES = 64 * 1024 * 1024;
 
 export interface VaultToolDeps {
 	app: {
@@ -29,9 +31,16 @@ export interface VaultToolDeps {
 				write(path: string, data: string): Promise<void>;
 				mkdir(path: string): Promise<void>;
 				read(path: string): Promise<string>;
+				stat?(path: string): Promise<{ size: number } | null>;
 			};
 		};
 	};
+}
+
+function assertTextFileSize(file: TFile, label: string): void {
+	if (Number(file.stat?.size || 0) > MAX_VAULT_TEXT_FILE_BYTES) {
+		throw new Error(`${label} 超过 8 MiB 文本读取上限`);
+	}
 }
 
 export interface HttpToolDeps {
@@ -152,6 +161,7 @@ export function createVaultReadTool(deps: VaultToolDeps, allowedPrefixes: readon
 			if (["png", "jpg", "jpeg", "webp", "gif", "pdf"].includes(file.extension.toLowerCase())) {
 				throw new Error(`vault_read 只支持文本文件，收到 .${file.extension}`);
 			}
+			assertTextFileSize(file, path);
 			const content = await deps.app.vault.read(file);
 			const offset = Math.max(0, Math.round(Number(args.offset)) || 0);
 			const slice = content.slice(offset, offset + VAULT_READ_CHAR_LIMIT);
@@ -305,7 +315,19 @@ export function createBoundArticleReadTool(deps: VaultToolDeps, articleVaultPath
 			if (!(await deps.app.vault.adapter.exists(path, true))) {
 				throw new Error(`已发布原文不存在：${path}`);
 			}
+			const indexed = deps.app.vault.getAbstractFileByPath(path);
+			const indexedSize = indexed instanceof TFile ? Number(indexed.stat?.size || 0) : 0;
+			const adapterStat = deps.app.vault.adapter.stat
+				? await deps.app.vault.adapter.stat(path)
+				: null;
+			const observedSize = Number(adapterStat?.size || indexedSize || 0);
+			if (observedSize > MAX_VAULT_TEXT_FILE_BYTES) {
+				throw new Error(`已发布原文超过 8 MiB 文本读取上限：${path}`);
+			}
 			const content = await deps.app.vault.adapter.read(path);
+			if (Buffer.byteLength(content, "utf8") > MAX_VAULT_TEXT_FILE_BYTES) {
+				throw new Error(`已发布原文实际读取结果超过 8 MiB 上限：${path}`);
+			}
 			if (context.signal.aborted) throw new Error("任务已取消");
 			const mode = String(args.mode || "overview").trim().toLowerCase();
 			const identity = extractVaultIdentity(content);
@@ -406,10 +428,22 @@ export function createVaultDoiSearchTool(
 			if (sourceNotes.length > VAULT_DOI_SCAN_FILE_LIMIT) {
 				throw new Error(`原文与分析 Markdown 数量超过 DOI 精确查重上限 ${VAULT_DOI_SCAN_FILE_LIMIT}，不能安全判定 none`);
 			}
+			const declaredBytes = sourceNotes.reduce((total, file) => (
+				total + Number((file as TFile).stat?.size || 0)
+			), 0);
+			if (declaredBytes > MAX_DOI_SCAN_TOTAL_BYTES) {
+				throw new Error("DOI 精确查重的 Markdown 累计大小超过 64 MiB 安全预算");
+			}
 			const candidates: Array<{ path: string; title: string }> = [];
+			let observedBytes = 0;
 			for (const file of sourceNotes) {
 				if (context.signal.aborted || context.remainingMs() <= 0) throw new Error("DOI 精确查重已取消或超时");
+				assertTextFileSize(file as TFile, String(file.path));
 				const content = await deps.app.vault.read(file as TFile);
+				observedBytes += Buffer.byteLength(content, "utf8");
+				if (observedBytes > MAX_DOI_SCAN_TOTAL_BYTES) {
+					throw new Error("DOI 精确查重实际读取累计超过 64 MiB 安全预算");
+				}
 				const observed = extractVaultIdentity(content);
 				if (normalizeObservedDoi(observed.doi).toLowerCase() !== doi.toLowerCase()) continue;
 				candidates.push({ path: String(file.path), title: observed.title });

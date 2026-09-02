@@ -649,7 +649,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.renderCliExecutableSetting(containerEl, {
 			kind: "mineru",
 			name: "MinerU 可执行文件",
-			description: "用于文献入库的 precision extract；固定生成 Markdown 与 JSON。",
+			description: "用于文献入库的 precision extract；固定生成 Markdown 与 JSON。只接受可核验为 mineru-open-api 包的 npm shim 或其声明入口，不直接执行任意原生文件。",
 			placeholder: "mineru-open-api.cmd",
 			getValue: () => this.plugin.settings.mineruExecutable,
 			setValue: (value) => {

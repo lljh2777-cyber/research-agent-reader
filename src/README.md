@@ -30,6 +30,8 @@ src/runtime/lifecycle-state.ts
                              Active process, provider, and query-run state
 src/runtime/process-execution.ts
                              Typed Python/Codex child-process execution and cleanup
+src/runtime/mineru-process.ts
+                             MinerU process-tree stop/timeout confirmation and bounded output
 src/runtime/persistence.ts   Version-tolerant state decoding and serialized saves
 src/services/dashboard-data.ts
                              Incremental vault scan and Dashboard metric/gap derivation

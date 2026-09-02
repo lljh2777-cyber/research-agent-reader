@@ -11,6 +11,10 @@ const PLUGIN_OUTPUT_DIRECTORY_SEGMENTS = ["task-output", "dashboard-runs"];
 const LEGACY_TOOLKIT_OUTPUT_DIRECTORY_SEGMENTS = ["tool-library", "output", "dashboard-runs"];
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000;
+const MAX_SIDECAR_BYTES = 16 * 1024 * 1024;
+const MAX_OUTPUT_CHARS = 12 * 1024 * 1024;
+const MAX_ERROR_CHARS = 128 * 1024;
+const MAX_SUMMARY_CHARS = 64 * 1024;
 
 export interface TaskRunOutputLocation {
 	rootPath: string;
@@ -201,6 +205,9 @@ export async function writeTaskRunOutput(
 		summary: run.summary,
 		artifacts: run.artifacts,
 	}, null, 2);
+	if (Buffer.byteLength(payload, "utf8") > MAX_SIDECAR_BYTES) {
+		throw new Error("任务输出 sidecar 超过 16 MiB 安全上限");
+	}
 	let temporaryFileCreated = false;
 	try {
 		await fs.promises.writeFile(temporaryPath, payload, { encoding: "utf8", flag: "wx" });
@@ -234,14 +241,36 @@ function readPayload(
 	try {
 		const directStats = fs.lstatSync(location.absolutePath);
 		if (directStats.isSymbolicLink() || !directStats.isFile()) return null;
+		if (directStats.size > MAX_SIDECAR_BYTES) return null;
 		const resolvedFile = realPathSync(location.absolutePath);
 		if (!isPathInside(location.rootPath, resolvedFile)) return null;
-		const payload = JSON.parse(fs.readFileSync(resolvedFile, "utf8")) as Record<string, unknown>;
+		const serialized = fs.readFileSync(resolvedFile, "utf8");
+		if (Buffer.byteLength(serialized, "utf8") > MAX_SIDECAR_BYTES) return null;
+		const payload = JSON.parse(serialized) as Record<string, unknown>;
 		if (![1, 2].includes(Number(payload.schema_version)) || payload.run_id !== runId) return null;
+		if (typeof payload.output === "string" && payload.output.length > MAX_OUTPUT_CHARS) return null;
+		if (typeof payload.error === "string" && payload.error.length > MAX_ERROR_CHARS) return null;
+		if (typeof payload.summary === "string" && payload.summary.length > MAX_SUMMARY_CHARS) return null;
+		if (payload.artifacts !== undefined && !isSafeArtifacts(payload.artifacts)) return null;
 		return payload;
 	} catch {
 		return null;
 	}
+}
+
+function isSafeArtifacts(value: unknown): value is TaskRunArtifacts {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const record = value as Record<string, unknown>;
+	const allowed = new Set(["articlePath", "wikiPath", "filesWritten"]);
+	if (Object.keys(record).some((key) => !allowed.has(key))) return false;
+	for (const key of ["articlePath", "wikiPath"] as const) {
+		if (record[key] !== undefined && (typeof record[key] !== "string" || record[key].length > 1_000)) return false;
+	}
+	if (record.filesWritten !== undefined) {
+		if (!Array.isArray(record.filesWritten) || record.filesWritten.length > 1_000) return false;
+		if (record.filesWritten.some((item) => typeof item !== "string" || item.length > 1_000)) return false;
+	}
+	return true;
 }
 
 function readOutputPayload(location: TaskRunOutputLocation, run: TaskRun): string | null {

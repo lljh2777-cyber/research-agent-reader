@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const fs = require("node:fs");
 const Module = require("node:module");
 const os = require("node:os");
@@ -42,6 +43,10 @@ function createFixture() {
 	const mineruExecutable = path.join(privateCliRoot, "mineru-open-api.js");
 	fs.writeFileSync(sourcePdf, Buffer.from("%PDF-1.4 fake atomic publish fixture"));
 	fs.writeFileSync(mineruExecutable, "// fake MinerU entry\n", "utf8");
+	fs.writeFileSync(path.join(privateCliRoot, "package.json"), JSON.stringify({
+		name: "mineru-open-api",
+		bin: { "mineru-open-api": "mineru-open-api.js" },
+	}));
 	return { base, stageRoot, vaultRoot, sourcePdf, mineruExecutable };
 }
 
@@ -72,6 +77,7 @@ function makeDeps(fixture, overrides = {}) {
 			publishOps: overrides.publishOps,
 			runCommand: async (request) => {
 				calls.push(request);
+				if (overrides.runCommand) return await overrides.runCommand(request);
 				if (request.cliArgs[0] === "version") {
 					return {
 						exitCode: 0,
@@ -81,7 +87,7 @@ function makeDeps(fixture, overrides = {}) {
 				}
 				const outputIndex = request.cliArgs.indexOf("--output");
 				assert.notEqual(outputIndex, -1, "extract invocation must bind an output directory");
-				writeExtraction(request.cliArgs[outputIndex + 1]);
+				(overrides.writeExtraction || writeExtraction)(request.cliArgs[outputIndex + 1]);
 				return { exitCode: 0, stdout: "", stderr: "" };
 			},
 		},
@@ -91,6 +97,8 @@ function makeDeps(fixture, overrides = {}) {
 function makeArgs(fixture, citekey) {
 	return {
 		source: fixture.sourcePdf,
+		sourceName: path.basename(fixture.sourcePdf),
+		expectedSourceSha256: createHash("sha256").update(fs.readFileSync(fixture.sourcePdf)).digest("hex"),
 		citekey,
 		model: "vlm",
 		language: "en",
@@ -108,6 +116,10 @@ function testRealNpmExtensionlessCmdShimResolution() {
 	const entry = path.join(root, "node_modules", "mineru-open-api", "bin", "mineru-open-api");
 	fs.mkdirSync(path.dirname(entry), { recursive: true });
 	fs.writeFileSync(entry, "#!/usr/bin/env node\nconsole.log('fixture');\n", "utf8");
+	fs.writeFileSync(path.join(root, "node_modules", "mineru-open-api", "package.json"), JSON.stringify({
+		name: "mineru-open-api",
+		bin: { "mineru-open-api": "bin/mineru-open-api" },
+	}));
 	const shim = path.join(root, "mineru-open-api.cmd");
 	fs.writeFileSync(
 		shim,
@@ -133,7 +145,6 @@ function testRealNpmExtensionlessCmdShimResolution() {
 	const platformPackage = `mineru-open-api-${process.platform}-${process.arch}`;
 	if (["darwin", "linux", "win32"].includes(process.platform) && ["arm64", "x64"].includes(process.arch)) {
 		const packageRoot = path.join(root, "node_modules", "mineru-open-api");
-		fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "mineru-open-api" }));
 		const platformRoot = path.join(packageRoot, "node_modules", platformPackage);
 		const nativeName = process.platform === "win32" ? "mineru-open-api.exe" : "mineru-open-api";
 		const nativeBinary = path.join(platformRoot, "bin", nativeName);
@@ -167,6 +178,48 @@ function testCmdShimTraversalAndCommandTailAreRejected() {
 		"utf8",
 	);
 	assert.throws(() => resolveMineruCommand(tailedShim), /无法从 npm shim 解析/);
+
+	const impostorRoot = path.join(root, "node_modules", "mineru-open-api");
+	fs.writeFileSync(path.join(impostorRoot, "package.json"), JSON.stringify({
+		name: "evil-package",
+		bin: { "mineru-open-api": "bin/mineru-open-api" },
+	}));
+	const identityShim = path.join(root, "identity.cmd");
+	fs.writeFileSync(identityShim, '"%dp0%\\node_modules\\mineru-open-api\\bin\\mineru-open-api" %*\r\n', "utf8");
+	assert.throws(() => resolveMineruCommand(identityShim), /不是 mineru-open-api/);
+	fs.writeFileSync(path.join(impostorRoot, "package.json"), JSON.stringify({
+		name: "mineru-open-api",
+		bin: { "mineru-open-api": "bin/other-entry" },
+	}));
+	fs.writeFileSync(path.join(impostorRoot, "bin", "other-entry"), "console.log('other');\n", "utf8");
+	assert.throws(() => resolveMineruCommand(identityShim), /bin 映射不一致/);
+
+	fs.writeFileSync(path.join(impostorRoot, "package.json"), JSON.stringify({
+		name: "mineru-open-api",
+		bin: { "mineru-open-api": "../outside-entry" },
+	}));
+	assert.throws(() => resolveMineruCommand(identityShim), /bin 映射包含不安全路径|bin 入口越出包目录|bin 映射不一致/);
+
+	fs.writeFileSync(path.join(impostorRoot, "package.json"), JSON.stringify({
+		name: "mineru-open-api",
+		bin: { "mineru-open-api": "bin/mineru-open-api" },
+	}));
+	const originalEntry = path.join(impostorRoot, "bin", "mineru-open-api");
+	const realEntry = path.join(impostorRoot, "bin", "real-entry.js");
+	fs.writeFileSync(realEntry, "console.log('real');\n", "utf8");
+	fs.rmSync(originalEntry, { force: true });
+	try {
+		fs.symlinkSync(realEntry, originalEntry, "file");
+		assert.throws(() => resolveMineruCommand(identityShim), /普通文件|符号链接/);
+	} catch (error) {
+		if (!error || error.code !== "EPERM") throw error;
+		// Windows without Developer Mode cannot create a symlink fixture. The
+		// same behavior runs on the Unix CI jobs and production lstat still fails closed.
+	}
+
+	const arbitraryNative = path.join(base, process.platform === "win32" ? "mineru-open-api.exe" : "mineru-open-api-native");
+	fs.writeFileSync(arbitraryNative, "unverified native executable");
+	assert.throws(() => resolveMineruCommand(arbitraryNative), /不直接执行任意原生文件/);
 }
 
 async function attemptPublish(fixture, citekey, overrides = {}) {
@@ -246,12 +299,12 @@ async function testVersionOutputCannotLeakHostPaths(fixture) {
 
 async function testCleanupFailureIsReported(fixture) {
 	const citekey = "cleanup_failure_2026";
-	const originalRmSync = fs.rmSync;
-	fs.rmSync = function injectedRmFailure(target, options) {
+	const originalRmdirSync = fs.rmdirSync;
+	fs.rmdirSync = function injectedRmdirFailure(target, options) {
 		if (path.basename(String(target)).startsWith(`.${citekey}.staging-`)) {
 			throw new Error("injected cleanup failure");
 		}
-		return originalRmSync.call(fs, target, options);
+		return originalRmdirSync.call(fs, target, options);
 	};
 	try {
 		const { error } = await attemptPublish(fixture, citekey, {
@@ -262,7 +315,7 @@ async function testCleanupFailureIsReported(fixture) {
 		assert.match(error.message, /staging 清理失败并保留/);
 		assert.equal(stagingEntries(fixture, citekey).length, 1);
 	} finally {
-		fs.rmSync = originalRmSync;
+		fs.rmdirSync = originalRmdirSync;
 	}
 }
 
@@ -326,12 +379,12 @@ async function testPreCommitTitleConflictLeavesNoVaultResidue(fixture) {
 async function testPreCommitConflictCleanupFailureIsExplicit(fixture) {
 	const citekey = "title_conflict_cleanup_failure_2026";
 	const packageTarget = path.join(fixture.vaultRoot, "papers", citekey);
-	const originalRmSync = fs.rmSync;
-	fs.rmSync = function injectedRmFailure(target, options) {
+	const originalRmdirSync = fs.rmdirSync;
+	fs.rmdirSync = function injectedRmdirFailure(target, options) {
 		if (path.basename(String(target)).startsWith(`.${citekey}.staging-`)) {
 			throw new Error("injected pre-commit cleanup failure");
 		}
-		return originalRmSync.call(fs, target, options);
+		return originalRmdirSync.call(fs, target, options);
 	};
 	try {
 		const { error } = await attemptPublish(fixture, citekey, {
@@ -345,7 +398,7 @@ async function testPreCommitConflictCleanupFailureIsExplicit(fixture) {
 		assert.equal(error.message.includes(fixture.vaultRoot), false, "only the bounded staging basename may be reported");
 		assert.equal(fs.existsSync(packageTarget), false);
 	} finally {
-		fs.rmSync = originalRmSync;
+		fs.rmdirSync = originalRmdirSync;
 	}
 }
 
@@ -401,6 +454,43 @@ async function testPapersJunctionOutsideVaultIsRejected() {
 	assert.deepEqual(fs.readdirSync(outside), [], "no staging or package may be written through the junction");
 }
 
+async function testUntrustedExtractionTreeIsBounded(fixture) {
+	const outside = path.join(fixture.base, "outside-images");
+	fs.mkdirSync(outside);
+	fs.writeFileSync(path.join(outside, "private.png"), "private", "utf8");
+	const symlinkResult = await attemptPublish(fixture, "image_symlink_2026", {
+		writeExtraction(outputDir) {
+			writeExtraction(outputDir);
+			const link = path.join(outputDir, "result", "untrusted-images");
+			fs.symlinkSync(outside, link, process.platform === "win32" ? "junction" : "dir");
+		},
+	});
+	assert.match(symlinkResult.error.message, /符号链接或 junction/);
+	assert.equal(fs.existsSync(path.join(fixture.vaultRoot, "papers", "image_symlink_2026")), false);
+
+	const deepResult = await attemptPublish(fixture, "deep_tree_2026", {
+		writeExtraction(outputDir) {
+			writeExtraction(outputDir);
+			let current = path.join(outputDir, "deep");
+			for (let depth = 0; depth < 18; depth += 1) current = path.join(current, `d${depth}`);
+			fs.mkdirSync(current, { recursive: true });
+		},
+	});
+	assert.match(deepResult.error.message, /目录深度超过/);
+
+	const aggregateResult = await attemptPublish(fixture, "aggregate_tree_2026", {
+		writeExtraction(outputDir) {
+			writeExtraction(outputDir);
+			for (let index = 0; index < 3; index += 1) {
+				const sparse = path.join(outputDir, `sparse-${index}.bin`);
+				fs.closeSync(fs.openSync(sparse, "w"));
+				fs.truncateSync(sparse, 180 * 1024 * 1024);
+			}
+		},
+	});
+	assert.match(aggregateResult.error.message, /累计大小超过/);
+}
+
 async function testRenameFailureLeavesNoVaultResidue(fixture) {
 	const citekey = "rename_failure_2026";
 	const packageTarget = path.join(fixture.vaultRoot, "papers", citekey);
@@ -433,6 +523,37 @@ async function testConcurrentTargetWinsWithoutOverwrite(fixture) {
 	assert.deepEqual(stagingEntries(fixture, citekey), [], "losing staging must be removed after a real rename conflict");
 }
 
+async function testPerCitekeyPublishLock(fixture) {
+	const citekey = "locked_publish_2026";
+	let releaseVersion;
+	let markVersionStarted;
+	const versionStarted = new Promise((resolve) => { markVersionStarted = resolve; });
+	const releaseVersionPromise = new Promise((resolve) => { releaseVersion = resolve; });
+	const firstConfigured = makeDeps(fixture, {
+		runCommand: async (request) => {
+			if (request.cliArgs[0] === "version") {
+				markVersionStarted();
+				await releaseVersionPromise;
+				return { exitCode: 0, stdout: "mineru-open-api 1.2.3", stderr: "" };
+			}
+			const outputIndex = request.cliArgs.indexOf("--output");
+			writeExtraction(request.cliArgs[outputIndex + 1]);
+			return { exitCode: 0, stdout: "", stderr: "" };
+		},
+	});
+	const first = publishMineruPackage(
+		firstConfigured.deps,
+		makeArgs(fixture, citekey),
+		{ signal: new AbortController().signal, timeoutMs: 600_000 },
+	);
+	await versionStarted;
+	const second = await attemptPublish(fixture, citekey);
+	assert.match(second.error && second.error.message, /正在由另一个入库任务发布/);
+	releaseVersion();
+	const receipt = await first;
+	assert.ok(fs.existsSync(path.join(receipt.packagePath, "article.md")));
+}
+
 (async () => {
 	testRealNpmExtensionlessCmdShimResolution();
 	testCmdShimTraversalAndCommandTailAreRejected();
@@ -447,8 +568,10 @@ async function testConcurrentTargetWinsWithoutOverwrite(fixture) {
 	await testAbortInsideValidatorSkipsRename(fixture);
 	await testRenameFailureLeavesNoVaultResidue(fixture);
 	await testConcurrentTargetWinsWithoutOverwrite(fixture);
+	await testPerCitekeyPublishLock(fixture);
 	await testCleanupFailureIsReported(fixture);
 	await testPapersJunctionOutsideVaultIsRejected();
+	await testUntrustedExtractionTreeIsBounded(fixture);
 	console.log("MINERU_ATOMIC_PUBLISH_TESTS_OK");
 })().catch((error) => {
 	console.error(error);

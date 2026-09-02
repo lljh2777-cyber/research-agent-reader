@@ -11,7 +11,6 @@ import {
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
 
 import { ACTION_BY_ID, type DashboardAction } from "./actions";
 import {
@@ -53,6 +52,7 @@ import {
 	writeTaskRunOutput,
 } from "./runtime/task-output-persistence";
 import { ProcessExecutionService } from "./runtime/process-execution";
+import { runMineruProcessCommand } from "./runtime/mineru-process";
 import { AgentLoopService, type AgentLoopRunOutcome } from "./agent/agent-loop-service";
 import type { PaperIngestFlowOptions } from "./agent/paper-ingest-flow";
 import { VaultLintService } from "./services/vault-lint";
@@ -2603,91 +2603,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		timeoutMs: number;
 		signal: AbortSignal;
 	}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-		return new Promise((resolve, reject) => {
-			const MAX_HELPER_OUTPUT_CHARS = 1_000_000;
-			let stdout = "";
-			let stderr = "";
-			let settled = false;
-			const mineruEnv: NodeJS.ProcessEnv = {
-				...process.env,
-				PYTHONUTF8: "1",
-				PYTHONIOENCODING: "utf-8",
-			};
-			const mineruToken = this.getMineruToken();
-			if (mineruToken) mineruEnv.MINERU_TOKEN = mineruToken;
-			const child = spawn(request.command, [...request.baseArgs, ...request.cliArgs], {
-				cwd: request.cwd,
-				shell: false,
-				windowsHide: true,
-				// Own process group on POSIX so the negative-pid kill in
-				// killTree() reaches the MinerU CLI subprocess as well.
-				detached: process.platform !== "win32",
-				env: mineruEnv,
-			});
-			const settle = (result: { exitCode: number; stdout: string; stderr: string } | Error) => {
-				if (settled) return;
-				settled = true;
-				request.signal.removeEventListener("abort", onAbort);
-				window.clearTimeout(timer);
-				if (result instanceof Error) reject(result);
-				else resolve(result);
-			};
-			const killTree = (): void => {
-				try {
-					if (!child.pid) {
-						child.kill();
-						return;
-					}
-					if (process.platform === "win32") {
-						// child.kill() only terminates the direct Python process;
-						// the MinerU CLI it waits on would survive as an orphan.
-						// taskkill /T ends the whole process tree (array args, no shell).
-						spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-							shell: false,
-							windowsHide: true,
-						});
-					} else {
-						// The helper is spawned detached on POSIX paths via negative
-						// pid when possible; plain kill remains the fallback.
-						try {
-							process.kill(-child.pid);
-						} catch {
-							child.kill();
-						}
-					}
-				} catch (killError) {
-					console.warn("Could not kill MinerU helper process", killError);
-					try {
-						child.kill();
-					} catch {
-						// Nothing more we can do.
-					}
-				}
-			};
-			const onAbort = (): void => {
-				killTree();
-				settle({ exitCode: 130, stdout, stderr: `${stderr}\n已手动停止，MinerU 子进程已终止`.trim() });
-			};
-			const timer = window.setTimeout(() => {
-				killTree();
-				settle({ exitCode: 124, stdout, stderr: `${stderr}\nMinerU 提取超时`.trim() });
-			}, request.timeoutMs);
-			if (request.signal.aborted) {
-				onAbort();
-				return;
-			}
-			request.signal.addEventListener("abort", onAbort);
-			child.stdout.on("data", (chunk: Buffer) => {
-				if (stdout.length < MAX_HELPER_OUTPUT_CHARS) stdout += chunk.toString("utf8");
-			});
-			child.stderr.on("data", (chunk: Buffer) => {
-				if (stderr.length < MAX_HELPER_OUTPUT_CHARS) stderr += chunk.toString("utf8");
-			});
-			child.once("error", (error: Error) => settle(error));
-			child.once("close", (code: number | null) => {
-				settle({ exitCode: code ?? 1, stdout, stderr });
-			});
-		});
+		return runMineruProcessCommand(request, this.getMineruToken());
 	}
 
 	/**

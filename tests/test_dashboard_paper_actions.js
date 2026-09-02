@@ -15,6 +15,7 @@ const settingsTab = readPlugin("src/settings/settings-tab.ts");
 const dashboard = readPlugin("src/views/dashboard.ts");
 const dashboardData = readPlugin("src/services/dashboard-data.ts");
 const processExecution = readPlugin("src/runtime/process-execution.ts");
+const mineruProcess = readPlugin("src/runtime/mineru-process.ts");
 const pluginSource = readPlugin("src/plugin.ts");
 const mineruPublish = readPlugin("src/agent/mineru-publish.ts");
 
@@ -80,7 +81,7 @@ assert.match(
 	/mineru-open-api-\$\{process\.platform\}-\$\{process\.arch\}/,
 	"npm MinerU launchers must resolve the platform-native binary without Electron",
 );
-assert.match(mineruPublish, /resolvePackagedMineruBinary\(entry\)[\s\S]{0,200}return \{ command: nativeBinary, baseArgs: \[\] \}/);
+assert.match(mineruPublish, /validateMineruNodeEntry\(entry\)[\s\S]{0,240}resolvePackagedMineruBinary\(validated\.packageRoot\)[\s\S]{0,160}return \{ command: nativeBinary, baseArgs: \[\] \}/);
 // 任务默认策略: paper-ingest gains a default-runner dropdown and the model
 // override is a recognized-model list, not free text.
 assert.match(settingsTab, /默认运行方式/);
@@ -105,7 +106,7 @@ assert.match(processExecution, /probeMineruCli[\s\S]*child\.stdin\.end\(\)/);
 assert.match(processExecution, /probeMineruCli[\s\S]*resolveMineruCommand\(executable\)/);
 
 assert.match(pluginSource, /getMineruToken\(\)/);
-assert.match(pluginSource, /mineruEnv\.MINERU_TOKEN = mineruToken/);
-assert.doesNotMatch(pluginSource, /mineruEnv\.ELECTRON_RUN_AS_NODE/);
+assert.match(mineruProcess, /mineruEnv\.MINERU_TOKEN = mineruToken/);
+assert.doesNotMatch(mineruProcess, /mineruEnv\.ELECTRON_RUN_AS_NODE/);
 
 console.log("DASHBOARD_OPTIONAL_WORKFLOW_CONTRACT_TESTS_OK");

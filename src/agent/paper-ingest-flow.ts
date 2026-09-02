@@ -113,7 +113,6 @@ export function buildIdentityTools(
 		.map((doi) => String(doi || "").trim().toLowerCase())
 		.filter(Boolean))];
 	const attemptedLocalDois = new Set<string>();
-	let verifiedLocalDoi = "";
 	const vaultSearchBase = createVaultSearchTool(deps.lexicalRetriever, PAPER_INGEST_READ_PREFIXES);
 	const vaultSearch: AgentTool = {
 		...vaultSearchBase,
@@ -143,7 +142,6 @@ export function buildIdentityTools(
 				.toLowerCase();
 			if (localDoiCandidates.includes(doi)) attemptedLocalDois.add(doi);
 			const result = await crossrefDoiBase.execute(args, context);
-			if (localDoiCandidates.includes(doi)) verifiedLocalDoi = doi;
 			return result;
 		},
 	});
@@ -155,9 +153,6 @@ export function buildIdentityTools(
 	const crossrefSearch: AgentTool = afterVaultPreflight({
 		...crossrefSearchBase,
 		async execute(args, context) {
-			if (verifiedLocalDoi) {
-				throw new Error(`本地 PDF 的 DOI ${verifiedLocalDoi} 已被 Crossref 精确查到；请比较该记录与 PDF 标题并继续 Vault 查重，若不一致则返回 conflict，不得再做模糊搜索`);
-			}
 			const pending = localDoiCandidates.filter((doi) => !attemptedLocalDois.has(doi));
 			if (pending.length) {
 				throw new Error(`本地 PDF 已提取 DOI 候选 ${pending.join("、")}；必须先逐个调用 crossref_doi 精确核验，不能提前模糊搜索`);
@@ -274,6 +269,7 @@ export function parseIdentityResult(
 export function validateIdentityReceipts(
 	identity: PaperIngestIdentity,
 	toolCalls: ReadonlyArray<AgentToolCallReceipt>,
+	localPdfEvidence?: LocalPdfIdentityEvidence,
 ): string[] {
 	if (identity.status !== "verified") return [];
 	// Dedup must use the same canonical title/DOI that the plugin will commit.
@@ -292,6 +288,33 @@ export function validateIdentityReceipts(
 			=== normalizeBibliographicTitle(identity.title)
 		));
 	const dedupCalls = successful(["vault_search", "vault_doi_search", "vault_list", "vault_read"]);
+	if (localPdfEvidence) {
+		const metadataTitle = String(localPdfEvidence.metadataTitle || "").trim();
+		const intrinsicTitles = localPdfTitleCandidates({
+			...localPdfEvidence,
+			fileName: "paper.pdf",
+		});
+		const firstPageTitles = localPdfTitleCandidates({
+			...localPdfEvidence,
+			metadataTitle: "",
+			fileName: "paper.pdf",
+		});
+		const bindingTitles = intrinsicTitles.length ? intrinsicTitles : localPdfTitleCandidates(localPdfEvidence);
+		if (localPdfEvidence.status !== "available" || !bindingTitles.length) {
+			problems.push("本地 PDF 没有可用于确定性身份绑定的标题证据");
+		} else if (metadataTitle && firstPageTitles.length
+			&& !firstPageTitles.some((candidate) => bibliographicTitlesMatch(candidate, metadataTitle))) {
+			problems.push("本地 PDF 元数据标题与第一页标题证据冲突");
+		} else if (!bindingTitles.some((candidate) => bibliographicTitlesMatch(candidate, identity.title))) {
+			problems.push("Crossref 最终标题与本地 PDF 标题证据不一致");
+		} else if (!toolCalls.some((call) => (
+			call.ok
+			&& call.tool === "vault_search"
+			&& bindingTitles.some((candidate) => receiptQuerySupportsTitle(call, candidate))
+		))) {
+			problems.push("Vault 预检没有实际使用本地 PDF 的标题证据");
+		}
+	}
 	if (!metadataCalls.length) {
 		problems.push("未执行任何元数据查询（crossref/web_search）");
 	} else if (!bibliographicObservations.length) {
@@ -301,7 +324,16 @@ export function validateIdentityReceipts(
 	}
 	if (!dedupCalls.length) {
 		problems.push("未执行任何去重检索（vault 查询）");
-	} else if (["exact", "possible"].includes(identity.duplicateStatus)) {
+	} else if (identity.duplicateStatus === "exact") {
+		const trusted = collectTrustedExactDuplicateRecords(identity, toolCalls);
+		if (!trusted.length) {
+			problems.push("exact 重复判定未被 Vault 检索回执支持：缺少标题或 DOI 一致证据路径");
+		}
+		const citekeys = trusted.map((record) => record.citekey).filter(Boolean);
+		if (new Set(citekeys.map((value) => value.toLowerCase())).size > 1) {
+			problems.push("工具回执中的 exact 重复层导出不同 citekey");
+		}
+	} else if (identity.duplicateStatus === "possible") {
 		const declaredPaths = identity.duplicates.flatMap(extractDuplicatePaths);
 		if (!declaredPaths.length) {
 			problems.push(`${identity.duplicateStatus} 重复判定没有提供已有文献的 Vault 路径`);
@@ -309,10 +341,6 @@ export function validateIdentityReceipts(
 			receiptContainsPath(call, declaredPath)
 		)))) {
 			problems.push(`${identity.duplicateStatus} 重复判定未被 Vault 检索回执支持`);
-		} else if (identity.duplicateStatus === "exact" && !dedupCalls.some((call) => (
-			declaredPaths.some((declaredPath) => receiptSupportsExactDuplicate(call, declaredPath, identity))
-		))) {
-			problems.push("exact 重复判定缺少同路径下的标题或 DOI 一致证据");
 		}
 	} else {
 		if (identity.duplicates.length) {
@@ -350,6 +378,57 @@ export function validateIdentityReceipts(
 		problems.push("Crossref 的同标题记录包含 DOI，但模型将 DOI 留空；必须按 DOI 精确核验后再标记 verified");
 	}
 	return problems;
+}
+
+function localPdfTitleCandidates(evidence: LocalPdfIdentityEvidence): string[] {
+	if (evidence.status !== "available") return [];
+	const candidates: string[] = [];
+	const add = (value: string): void => {
+		const text = String(value || "").replace(/\s+/g, " ").trim();
+		const normalized = normalizeBibliographicTitle(text);
+		if (normalized.length < 12 || candidates.some((item) => normalizeBibliographicTitle(item) === normalized)) return;
+		candidates.push(text.slice(0, 500));
+	};
+	add(evidence.metadataTitle);
+	const lines = String(evidence.firstPageText || "")
+		.split(/\r?\n/)
+		.map((line) => line.replace(/\s+/g, " ").trim())
+		.filter((line) => (
+			line.length >= 12
+			&& line.length <= 350
+			&& !/^(?:abstract|article|research|review|received|accepted|published|doi\b|https?:|www\.)/i.test(line)
+			&& !/^10\.\d{4,9}\//i.test(line)
+		))
+		.slice(0, 8);
+	for (let start = 0; start < Math.min(lines.length, 4); start += 1) {
+		let joined = "";
+		for (let count = 0; count < 3 && start + count < lines.length; count += 1) {
+			joined = `${joined} ${lines[start + count]}`.trim();
+			if (joined.length <= 500) add(joined);
+		}
+	}
+	const stem = String(evidence.fileName || "")
+		.replace(/\.pdf$/i, "")
+		.replace(/[_-]+/g, " ")
+		.replace(/\s+/g, " ")
+		.trim();
+	if (!/^(?:paper|article|download|document|fulltext|manuscript)(?:\s*\d*)?$/i.test(stem)) add(stem);
+	return candidates;
+}
+
+function bibliographicTitlesMatch(left: string, right: string): boolean {
+	const a = normalizeBibliographicTitle(left);
+	const b = normalizeBibliographicTitle(right);
+	if (!a || !b) return false;
+	if (a === b) return true;
+	const aTerms = a.split(/\s+/).filter(Boolean);
+	const bTerms = b.split(/\s+/).filter(Boolean);
+	if (Math.min(aTerms.length, bTerms.length) < 4) return false;
+	const bSet = new Set(bTerms);
+	const overlap = aTerms.filter((term) => bSet.has(term)).length;
+	const coverage = overlap / Math.min(aTerms.length, bTerms.length);
+	const lengthRatio = Math.min(a.length, b.length) / Math.max(a.length, b.length);
+	return coverage >= 0.9 && lengthRatio >= 0.72;
 }
 
 interface BibliographicObservation {
@@ -703,6 +782,91 @@ export interface ExactDuplicateLayers {
 	sourcePath: string;
 	/** Existing analysis note in wiki/sources/. */
 	analysisPath: string;
+	/** Receipt-derived citekey when papers/ or wiki/sources supplies one. */
+	citekey: string;
+	/** Non-empty when trusted source/analysis receipts disagree on citekey. */
+	conflict: string;
+}
+
+export interface TrustedExactDuplicateRecord {
+	path: string;
+	layer: "source" | "analysis";
+	citekey: string;
+	evidence: "doi" | "title";
+}
+
+function trustedPathRecord(pathValue: string, evidence: "doi" | "title"): TrustedExactDuplicateRecord | null {
+	const pathValueNormalized = String(pathValue || "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+	if (!pathValueNormalized || pathValueNormalized.split("/").some((segment) => !segment || segment === "." || segment === "..")) return null;
+	const comparison = pathValueNormalized.toLowerCase();
+	if (/^papers\/[^/]+\/article\.md$/i.test(pathValueNormalized)) {
+		const citekey = pathValueNormalized.split("/")[1] || "";
+		return {
+			path: pathValueNormalized,
+			layer: "source",
+			citekey: CITEKEY_PATTERN_FOR_RECEIPT.test(citekey) ? citekey : "",
+			evidence,
+		};
+	}
+	if (comparison.startsWith("clippings/") && /\.md$/i.test(pathValueNormalized)) {
+		return { path: pathValueNormalized, layer: "source", citekey: "", evidence };
+	}
+	if (comparison.startsWith("wiki/sources/") && /\.md$/i.test(pathValueNormalized)) {
+		const citekey = pathValueNormalized.split("/").pop()?.replace(/\.md$/i, "") || "";
+		return {
+			path: pathValueNormalized,
+			layer: "analysis",
+			citekey: CITEKEY_PATTERN_FOR_RECEIPT.test(citekey) ? citekey : "",
+			evidence,
+		};
+	}
+	return null;
+}
+
+const CITEKEY_PATTERN_FOR_RECEIPT = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
+
+export function collectTrustedExactDuplicateRecords(
+	identity: Pick<PaperIngestIdentity, "title" | "doi">,
+	toolCalls: ReadonlyArray<AgentToolCallReceipt>,
+): TrustedExactDuplicateRecord[] {
+	const normalizedTitle = normalizeBibliographicTitle(identity.title);
+	const normalizedDoi = normalizeIdentityDoi(identity.doi);
+	const records: TrustedExactDuplicateRecord[] = [];
+	const add = (pathValue: string, evidence: "doi" | "title"): void => {
+		const record = trustedPathRecord(pathValue, evidence);
+		if (!record) return;
+		const key = normalizeReceiptPath(record.path);
+		const existing = records.find((item) => normalizeReceiptPath(item.path) === key);
+		if (!existing) records.push(record);
+		else if (evidence === "doi") existing.evidence = "doi";
+	};
+	for (const call of toolCalls) {
+		if (!call.ok) continue;
+		if (call.tool === "vault_doi_search"
+			&& normalizedDoi
+			&& normalizeIdentityDoi(call.data?.query || "") === normalizedDoi
+			&& (call.data?.dois || []).some((doi) => normalizeIdentityDoi(doi) === normalizedDoi)) {
+			(call.data?.candidates || []).forEach((candidate) => add(candidate.path, "doi"));
+			continue;
+		}
+		if (call.tool === "vault_search") {
+			if (!receiptQuerySupportsTitle(call, identity.title)) continue;
+			(call.data?.candidates || []).forEach((candidate) => {
+				if (normalizeBibliographicTitle(candidate.title) === normalizedTitle) add(candidate.path, "title");
+			});
+			continue;
+		}
+		if (call.tool === "vault_read") {
+			const doiMatches = Boolean(normalizedDoi) && (call.data?.dois || [])
+				.some((doi) => normalizeIdentityDoi(doi) === normalizedDoi);
+			const titleMatches = (call.data?.titles || [])
+				.some((title) => normalizeBibliographicTitle(title) === normalizedTitle);
+			if (doiMatches || titleMatches) {
+				(call.data?.paths || []).forEach((pathValue) => add(pathValue, doiMatches ? "doi" : "title"));
+			}
+		}
+	}
+	return records;
 }
 
 /**
@@ -710,73 +874,60 @@ export interface ExactDuplicateLayers {
  * A model-authored path alone never satisfies either output layer.
  */
 export function resolveExactDuplicateLayers(
-	identity: Pick<PaperIngestIdentity, "title" | "doi" | "citekey">,
+	identity: Pick<PaperIngestIdentity, "title" | "doi">,
 	toolCalls: ReadonlyArray<AgentToolCallReceipt>,
 ): ExactDuplicateLayers {
-	const exactPaths: string[] = [];
-	const normalizedTitle = normalizeBibliographicTitle(identity.title);
-	const normalizedDoi = normalizeIdentityDoi(identity.doi);
-	const add = (value: string): void => {
-		const path = String(value || "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-		if (!path || path.split("/").some((segment) => !segment || segment === "." || segment === "..")) return;
-		if (!exactPaths.some((existing) => normalizeReceiptPath(existing) === normalizeReceiptPath(path))) {
-			exactPaths.push(path);
-		}
-	};
-	for (const call of toolCalls) {
-		if (!call.ok) continue;
-		if (call.tool === "vault_doi_search"
-			&& normalizedDoi
-			&& normalizeIdentityDoi(call.data?.query || "") === normalizedDoi) {
-			(call.data?.candidates || []).forEach((candidate) => add(candidate.path));
-			continue;
-		}
-		if (call.tool === "vault_search") {
-			(call.data?.candidates || []).forEach((candidate) => {
-				if (normalizeBibliographicTitle(candidate.title) === normalizedTitle
-					|| candidatePathMatchesCitekey(candidate.path, identity.citekey)) add(candidate.path);
-			});
-			continue;
-		}
-		if (call.tool === "vault_read") {
-			const titleMatches = (call.data?.titles || [])
-				.some((title) => normalizeBibliographicTitle(title) === normalizedTitle);
-			const doiMatches = Boolean(normalizedDoi) && (call.data?.dois || [])
-				.some((doi) => normalizeIdentityDoi(doi) === normalizedDoi);
-			if (titleMatches || doiMatches) (call.data?.paths || []).forEach(add);
-		}
-	}
-	const analysisPaths = exactPaths.filter((value) => normalizeReceiptPath(value).startsWith("wiki/sources/") && /\.md$/i.test(value));
-	const sourcePaths = exactPaths.filter((value) => {
-		const path = normalizeReceiptPath(value);
-		return /\.md$/i.test(value) && (path.startsWith("papers/") || path.startsWith("clippings/"));
-	});
+	const trusted = collectTrustedExactDuplicateRecords(identity, toolCalls);
+	const analysisPaths = trusted.filter((record) => record.layer === "analysis").map((record) => record.path);
+	const sourcePaths = trusted.filter((record) => record.layer === "source").map((record) => record.path);
+	const citekeys = [...new Set(trusted.map((record) => record.citekey).filter(Boolean))];
 	const preferredSource = sourcePaths.find((value) => /^papers\/[^/]+\/article\.md$/i.test(value))
 		|| sourcePaths.find((value) => normalizeReceiptPath(value).startsWith("clippings/"))
 		|| sourcePaths[0]
 		|| "";
-	return { sourcePath: preferredSource, analysisPath: analysisPaths[0] || "" };
+	return {
+		sourcePath: preferredSource,
+		analysisPath: analysisPaths[0] || "",
+		citekey: citekeys.length === 1 ? citekeys[0] : "",
+		conflict: citekeys.length > 1 ? `同一文献的工具回执导出多个 citekey：${citekeys.join("、")}` : "",
+	};
 }
 
 /**
  * Reuse the citekey named by the receipt-backed duplicate path so filling a
  * missing output cannot fork one paper into a new suffixed record.
  */
-export function resolveExactDuplicateCitekey(identity: Pick<PaperIngestIdentity, "citekey" | "duplicates">): string {
-	const citekeys = extractDuplicatePaths(identity.duplicates.join("\n"))
-		.map((duplicatePath) => {
-			const normalized = String(duplicatePath || "").trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
-			const comparison = normalized.toLowerCase();
-			if (comparison.startsWith("wiki/sources/")) {
-				return normalized.split("/").pop()?.replace(/\.md$/i, "") || "";
-			}
-			if (comparison.startsWith("papers/")) return normalized.split("/")[1] || "";
-			return "";
-		})
-		.filter((citekey) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(citekey));
-	const unique = [...new Set(citekeys)];
-	const current = unique.find((citekey) => citekey.toLowerCase() === identity.citekey.toLowerCase());
-	return current || (unique.length === 1 ? unique[0] : "");
+export function resolveExactDuplicateCitekey(
+	identity: Pick<PaperIngestIdentity, "title" | "doi">,
+	toolCalls: ReadonlyArray<AgentToolCallReceipt>,
+): string {
+	return resolveExactDuplicateLayers(identity, toolCalls).citekey;
+}
+
+/**
+ * Deterministic fallback for legacy Clippings whose path carries no citekey.
+ * Inputs are the Crossref-bound bibliographic fields, never model duplicate
+ * prose. The service still applies active-Vault uniqueness before writing.
+ */
+export function deriveBibliographicCitekey(
+	identity: Pick<PaperIngestIdentity, "authors" | "title" | "year">,
+): string {
+	const asciiSlug = (value: string): string => String(value || "")
+		.normalize("NFKD")
+		.replace(/[\u0300-\u036f]/g, "")
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "");
+	const firstAuthor = String(identity.authors || "").split(";")[0]?.trim() || "";
+	const surnameRaw = firstAuthor.includes(",")
+		? firstAuthor.split(",")[0]
+		: firstAuthor.split(/\s+/)[0];
+	const surname = asciiSlug(surnameRaw) || "paper";
+	const stopWords = new Set(["a", "an", "and", "of", "on", "the", "to", "for", "in", "with"]);
+	const titleTerms = asciiSlug(identity.title).split("_").filter((term) => term && !stopWords.has(term));
+	const keyword = titleTerms.slice(0, 2).join("_") || "source";
+	const year = /^\d{4}$/.test(String(identity.year || "")) ? String(identity.year) : "undated";
+	return `${surname}_${keyword}_${year}`.slice(0, 120).replace(/_+$/g, "");
 }
 
 /**

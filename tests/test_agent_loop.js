@@ -79,6 +79,7 @@ const hookBuild = esbuild.buildSync({
 			"  planExactDuplicateOutputs,",
 			"  resolveExactDuplicateLayers,",
 			"  resolveExactDuplicateCitekey,",
+			"  deriveBibliographicCitekey,",
 			"  resolveUniqueCitekey,",
 			"  deriveArticleVaultPath,",
 			"  resolveArticleVaultPath,",
@@ -86,7 +87,7 @@ const hookBuild = esbuild.buildSync({
 			"  stripMatchingQuotes,",
 			"  PAPER_INGEST_READ_PREFIXES,",
 			'} from "./src/agent/paper-ingest-flow";',
-			"export { extractLocalPdfIdentityEvidence, extractPdfDoiCandidates } from './src/agent/pdf-identity';",
+			"export { createAuthorizedPdfSnapshot, disposeAuthorizedPdfSnapshot, extractLocalPdfIdentityEvidence, extractPdfDoiCandidates, MAX_LOCAL_PDF_BYTES } from './src/agent/pdf-identity';",
 			"export { articleHeadContainsTitle, articleMarkdownTitleMatches, resolvePaperTitleZh } from './src/agent/agent-loop-service';",
 			"export { normalizeTaskRunArtifacts, normalizeStoredTaskRuns } from './src/runtime/persistence';",
 		].join("\n"),
@@ -144,6 +145,7 @@ const {
 	planExactDuplicateOutputs,
 	resolveExactDuplicateLayers,
 	resolveExactDuplicateCitekey,
+	deriveBibliographicCitekey,
 	resolveUniqueCitekey,
 	deriveArticleVaultPath,
 	resolveArticleVaultPath,
@@ -152,6 +154,9 @@ const {
 	PAPER_INGEST_READ_PREFIXES,
 	extractLocalPdfIdentityEvidence,
 	extractPdfDoiCandidates,
+	createAuthorizedPdfSnapshot,
+	disposeAuthorizedPdfSnapshot,
+	MAX_LOCAL_PDF_BYTES,
 	articleHeadContainsTitle,
 	articleMarkdownTitleMatches,
 	resolvePaperTitleZh,
@@ -782,6 +787,11 @@ function testResolveMineruCommand() {
 		const entry = path.join(base, "node_modules", "mineru-open-api", "dist", "cli.js");
 		fs.mkdirSync(path.dirname(entry), { recursive: true });
 		fs.writeFileSync(entry, "// entry");
+		const packageRoot = path.join(base, "node_modules", "mineru-open-api");
+		fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+			name: "mineru-open-api",
+			bin: { "mineru-open-api": "dist/cli.js" },
+		}));
 		const shimPath = path.join(base, "mineru-open-api.cmd");
 		fs.writeFileSync(shimPath, [
 			"@ECHO off",
@@ -798,6 +808,10 @@ function testResolveMineruCommand() {
 		const extensionlessEntry = path.join(base, "node_modules", "mineru-open-api", "bin", "mineru-open-api");
 		fs.mkdirSync(path.dirname(extensionlessEntry), { recursive: true });
 		fs.writeFileSync(extensionlessEntry, "#!/usr/bin/env node\nconsole.log('wrapper');\n");
+		fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+			name: "mineru-open-api",
+			bin: { "mineru-open-api": "bin/mineru-open-api" },
+		}));
 		const currentNpmShim = path.join(base, "current-mineru-open-api.cmd");
 		fs.writeFileSync(currentNpmShim, [
 			"@ECHO off",
@@ -808,6 +822,10 @@ function testResolveMineruCommand() {
 		assert.equal(path.basename(currentResolved.baseArgs[0]), "mineru-open-api");
 		assert.equal(path.extname(currentResolved.baseArgs[0]), "", "current npm launcher is extensionless");
 
+		fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+			name: "mineru-open-api",
+			bin: { "mineru-open-api": "dist/cli.js" },
+		}));
 		const direct = resolveMineruCommand(entry);
 		assert.equal(direct.command, process.execPath);
 		assert.equal(direct.baseArgs.length, 1);
@@ -817,11 +835,13 @@ function testResolveMineruCommand() {
 				: fs.realpathSync(direct.baseArgs[0]),
 			canonicalEntry,
 		);
+		fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({
+			name: "mineru-open-api",
+			bin: { "mineru-open-api": "bin/mineru-open-api" },
+		}));
 
 		const platformPackage = `mineru-open-api-${process.platform}-${process.arch}`;
 		if (["darwin", "linux", "win32"].includes(process.platform) && ["arm64", "x64"].includes(process.arch)) {
-			const packageRoot = path.join(base, "node_modules", "mineru-open-api");
-			fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "mineru-open-api" }));
 			const platformRoot = path.join(packageRoot, "node_modules", platformPackage);
 			const nativeName = process.platform === "win32" ? "mineru-open-api.exe" : "mineru-open-api";
 			const nativeBinary = path.join(platformRoot, "bin", nativeName);
@@ -864,6 +884,10 @@ async function testMineruPublishPipeline() {
 	const shimEntry = path.join(base, "node_modules", "mineru-open-api", "dist", "cli.js");
 	fs.mkdirSync(path.dirname(shimEntry), { recursive: true });
 	fs.writeFileSync(shimEntry, "// fake entry");
+	fs.writeFileSync(path.join(base, "node_modules", "mineru-open-api", "package.json"), JSON.stringify({
+		name: "mineru-open-api",
+		bin: { "mineru-open-api": "dist/cli.js" },
+	}));
 	const fakeShim = path.join(base, "mineru-open-api.cmd");
 	fs.writeFileSync(fakeShim, [
 		"@ECHO off",
@@ -928,6 +952,8 @@ async function testMineruPublishPipeline() {
 
 	const args = {
 		source: sourcePdf,
+		sourceName: path.basename(sourcePdf),
+		expectedSourceSha256: require("node:crypto").createHash("sha256").update(fs.readFileSync(sourcePdf)).digest("hex"),
 		citekey: "demo_2026",
 		model: "vlm",
 		language: "en",
@@ -1368,6 +1394,7 @@ async function testLocalPdfIdentityPreflight() {
 	let pageCleaned = false;
 	const result = await extractLocalPdfIdentityEvidence("D:/private/research/demo.pdf", {
 		deps: {
+			statFile: async () => ({ size: 4, isFile: true }),
 			readFile: async () => new Uint8Array([0x25, 0x50, 0x44, 0x46]),
 			loadPdfJs: async () => ({
 				getDocument(options) {
@@ -1406,6 +1433,69 @@ async function testLocalPdfIdentityPreflight() {
 	assert.deepEqual(extractPdfDoiCandidates([
 		"doi: 10.1000/One and https://doi.org/10.1000/one",
 	]), ["10.1000/One"]);
+
+	let oversizedReadCalled = false;
+	const oversized = await extractLocalPdfIdentityEvidence("D:/private/oversized.pdf", {
+		deps: {
+			statFile: async () => ({ size: MAX_LOCAL_PDF_BYTES + 1, isFile: true }),
+			readFile: async () => {
+				oversizedReadCalled = true;
+				return new Uint8Array();
+			},
+			loadPdfJs: async () => { throw new Error("must not load PDF.js"); },
+		},
+	});
+	assert.equal(oversized.status, "unavailable");
+	assert.equal(oversizedReadCalled, false, "oversized PDF must be rejected before readFile");
+
+	let underlyingReadAborted = false;
+	let markReadStarted;
+	const readStarted = new Promise((resolve) => { markReadStarted = resolve; });
+	const controller = new AbortController();
+	const cancelled = extractLocalPdfIdentityEvidence("D:/private/cancel.pdf", {
+		signal: controller.signal,
+		deps: {
+			statFile: async () => ({ size: 4, isFile: true }),
+			readFile: async (_path, signal) => await new Promise((_resolve, reject) => {
+				markReadStarted();
+				signal.addEventListener("abort", () => {
+					underlyingReadAborted = true;
+					reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+				}, { once: true });
+			}),
+			loadPdfJs: async () => { throw new Error("must not load PDF.js"); },
+		},
+	});
+	await readStarted;
+	controller.abort();
+	await assert.rejects(cancelled, /取消/);
+	assert.equal(underlyingReadAborted, true, "AbortSignal must reach the underlying read");
+
+	const snapshotRoot = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "pdf-snapshot-test-"));
+	const original = path.join(snapshotRoot, "selected.pdf");
+	const bytesA = Buffer.from("%PDF-1.4 authorized A");
+	const bytesB = Buffer.from("%PDF-1.4 replaced B");
+	fs.writeFileSync(original, bytesA);
+	const snapshot = await createAuthorizedPdfSnapshot(original);
+	fs.writeFileSync(original, bytesB);
+	assert.deepEqual(fs.readFileSync(snapshot.path), bytesA, "snapshot bytes must not follow later path replacement");
+	assert.equal(
+		snapshot.sha256,
+		require("node:crypto").createHash("sha256").update(bytesA).digest("hex"),
+	);
+	await disposeAuthorizedPdfSnapshot(snapshot);
+	const linked = path.join(snapshotRoot, "linked.pdf");
+	try {
+		fs.symlinkSync(original, linked, "file");
+		await assert.rejects(
+			createAuthorizedPdfSnapshot(linked),
+			/普通文件.*符号链接|符号链接.*junction/,
+			"authorization must not follow a user-selected mutable symlink",
+		);
+	} catch (error) {
+		if (!error || error.code !== "EPERM") throw error;
+	}
+	fs.rmSync(snapshotRoot, { recursive: true, force: true });
 }
 
 function testIdentityReceiptGate() {
@@ -1728,6 +1818,66 @@ function testIdentityReceiptGate() {
 		vaultDoiReceipt(),
 	]), [], "an empty authoritative DOI lookup plus an empty title lookup may be none");
 
+	const localPdfEvidence = {
+		status: "available",
+		fileName: "demo-paper.pdf",
+		pageCount: 12,
+		metadataTitle: "Demo Paper for Secure Local Identity",
+		metadataAuthors: "Doe Jane",
+		doiCandidates: ["10.1000/cited-reference"],
+		firstPageText: "Demo Paper for Secure Local Identity\nDoe Jane\nReferences include 10.1000/cited-reference",
+		warning: "",
+	};
+	const localBoundIdentity = { ...identity, title: "Demo Paper for Secure Local Identity" };
+	assert.deepEqual(validateIdentityReceipts(localBoundIdentity, [
+		metadataReceipt(localBoundIdentity.title),
+		doiReceipt(localBoundIdentity.title),
+		vaultReceipt(localBoundIdentity.title),
+		vaultDoiReceipt(),
+	], localPdfEvidence), [], "Crossref identity must remain bound to local PDF title evidence");
+	const citedIdentity = {
+		...identity,
+		title: "Cited Reference",
+		doi: "10.1000/cited-reference",
+		citekey: "cited_2026",
+	};
+	const citedReceipts = [
+		metadataReceipt("Cited Reference", "10.1000/cited-reference"),
+		doiReceipt("Cited Reference", "10.1000/cited-reference"),
+		vaultReceipt("Cited Reference"),
+		vaultDoiReceipt("10.1000/cited-reference"),
+	];
+	assert.match(
+		validateIdentityReceipts(citedIdentity, citedReceipts, {
+			...localPdfEvidence,
+			fileName: "Cited Reference.pdf",
+		}).join("；"),
+		/本地 PDF 标题证据不一致/,
+		"a DOI appearing in references must not rebind the selected PDF to another paper",
+	);
+	assert.match(
+		validateIdentityReceipts(localBoundIdentity, [
+			metadataReceipt(localBoundIdentity.title),
+			doiReceipt(localBoundIdentity.title),
+			vaultReceipt(localBoundIdentity.title),
+			vaultDoiReceipt(),
+		], {
+			...localPdfEvidence,
+			firstPageText: "Entirely Different Article Title\nDifferent Author",
+		}).join("；"),
+		/元数据标题与第一页标题证据冲突/,
+	);
+	assert.match(
+		validateIdentityReceipts(localBoundIdentity, [
+			metadataReceipt(localBoundIdentity.title),
+			doiReceipt(localBoundIdentity.title),
+			vaultReceipt(localBoundIdentity.title),
+			vaultDoiReceipt(),
+		], { ...localPdfEvidence, metadataTitle: "", firstPageText: "", fileName: "scan.pdf" }).join("；"),
+		/没有可用于确定性身份绑定的标题证据/,
+		"verified intake must fail closed when the PDF yields no deterministic title evidence",
+	);
+
 	const cyrillicIdentity = { ...identity, doi: "", title: "Анализ данных", citekey: "ivanov_2026" };
 	assert.deepEqual(validateIdentityReceipts(cyrillicIdentity, [
 		metadataReceipt("Анализ данных", ""),
@@ -1871,10 +2021,13 @@ function testExactDuplicateCompletesMissingOutputs() {
 	const receipts = [
 		{
 			tool: "vault_search", ok: true, argsSummary: "title",
-			data: { candidates: [
+			data: {
+				queryTerms: ["pan-cancer", "spatial", "atlas", "of", "tertiary", "lymphoid", "structures"],
+				candidates: [
 				{ path: "Clippings/Pan-cancer spatial atlas.md", title: identity.title },
 				{ path: "wiki/sources/unrelated.md", title: "Unrelated paper" },
-			] },
+				],
+			},
 		},
 		{
 			tool: "vault_doi_search", ok: true, argsSummary: "doi",
@@ -1887,18 +2040,40 @@ function testExactDuplicateCompletesMissingOutputs() {
 	assert.deepEqual(resolveExactDuplicateLayers(identity, receipts), {
 		sourcePath: "Clippings/Pan-cancer spatial atlas.md",
 		analysisPath: "wiki/sources/cho_pan-cancer_2026.md",
-	});
-	assert.equal(resolveExactDuplicateCitekey({
-		citekey: "new_candidate_2026",
-		duplicates: ["`wiki/sources/cho_pan-cancer_2026.md` — DOI 完全一致"],
-	}), "cho_pan-cancer_2026");
-	assert.equal(resolveExactDuplicateCitekey({
 		citekey: "cho_pan-cancer_2026",
-		duplicates: [
-			"`wiki/sources/cho_pan-cancer_2026.md` — DOI 完全一致",
-			"`papers/cho_pan-cancer_2026/article.md` — 同一记录",
-		],
-	}), "cho_pan-cancer_2026");
+		conflict: "",
+	});
+	assert.equal(resolveExactDuplicateCitekey(identity, receipts), "cho_pan-cancer_2026");
+	assert.equal(resolveExactDuplicateCitekey(identity, [{
+		tool: "vault_search", ok: true, data: {
+			candidates: [{ path: "wiki/sources/forged_2026.md", title: "Unrelated paper" }],
+		},
+	}]), "", "model-like paths without receipt title/DOI evidence cannot steer citekey");
+	const conflictingLayers = resolveExactDuplicateLayers(
+		{ ...identity, duplicates: ["wiki/sources/forged_model_key.md"] },
+		[{
+			tool: "vault_doi_search", ok: true,
+			data: {
+				query: identity.doi,
+				dois: [identity.doi],
+				candidates: [
+					{ path: "papers/receipt_source_key/article.md", title: identity.title },
+					{ path: "wiki/sources/receipt_analysis_key.md", title: identity.title },
+				],
+			},
+		}],
+	);
+	assert.match(conflictingLayers.conflict, /多个 citekey|citekey 不一致/);
+	assert.equal(conflictingLayers.citekey, "", "model duplicate prose cannot resolve receipt-layer ambiguity");
+	assert.equal(
+		deriveBibliographicCitekey({
+			authors: "Cho, K. S.; Liu, Y.",
+			title: "Pan-cancer spatial atlas of tertiary lymphoid structures",
+			year: "2026",
+		}),
+		"cho_pan_cancer_2026",
+		"legacy Clippings receive a deterministic Crossref-bound key rather than a model-authored path",
+	);
 }
 
 function testResolvedTitleTranslationMatchesCommittedDraft() {
@@ -1969,9 +2144,8 @@ async function testPhaseToolsetsAreRead() {
 	assert.match(blockedFuzzy.message, /必须先逐个调用 crossref_doi/);
 	await localDoiTools.find((tool) => tool.name === "crossref_doi")
 		.execute({ doi: "10.1000/local" }, createContext());
-	const blockedAfterExact = await localDoiSearch.execute({ query: "Local PDF Paper" }, createContext())
-		.then(() => null, (error) => error);
-	assert.match(blockedAfterExact.message, /已被 Crossref 精确查到/);
+	const fuzzyAfterExact = await localDoiSearch.execute({ query: "Local PDF Paper" }, createContext());
+	assert.equal(fuzzyAfterExact.summary, "1 条候选", "a local DOI may be a cited paper; title-bound fuzzy fallback remains available");
 
 	const draftNames = buildDraftTools(deps).map((tool) => tool.name);
 	assert.deepEqual(draftNames.filter((name) => name === "mineru_extract" || name === "write_note"), []);

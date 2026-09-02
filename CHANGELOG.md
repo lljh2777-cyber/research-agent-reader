@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- 外部安全审查后的轻量入库边界加固：本地 PDF 先按 128 MiB 上限、取消信号和前后文件状态生成私有不可变快照，并由 SHA-256 同时绑定身份预检与 MinerU 输入；Crossref 最终记录还必须匹配该 PDF 的标题证据。精确重复的路径与 citekey 只从 Vault 工具回执推导。npm shim 只接受 `mineru-open-api` 包名及其声明的 bin 入口。MinerU 输出和阅读器加载均增加目录深度、文件数、累计字节、JSON 深度、图片数/像素及 manifest 覆盖预算，拒绝符号链接、junction 和特殊文件；同一 citekey 由发布锁串行化。停止/超时只有在实际观察到子进程关闭后才返回，暂存清理不跟随链接。任务侧车和 Vault 文本读取也增加了持久化前及读取前后的大小上限。这里的 SHA-256 用于同一次流程内的完整性与一致性校验，不代表签名、发布者身份或来源真实性。
 - 文献入库与阅读器的运行时规则已收敛为单一职责模块：入库提示词/输入解析不再与状态机和写入边界混杂，阅读位置恢复不再属于图片修复模块；`visual-repair.json` 现在明确只是派生缓存，阅读器始终从已验证的 `article.md` 与 `mineru-result.json` 生成当前确定性显示计划，旧包或同版本但内容不一致的缓存不能继续影响图片合并、图注归属或正文初始位置。视觉算法版本与兼容判断也改为单一常量，避免加载器和生成器各自维护版本分支。
 - 原生 MinerU 入库现在会在同一原子 staging 内生成、验证并由 manifest 的 size/SHA-256 绑定 `viewer-index.json`、`visual-repair.json` 与只读 `visual-candidates.json`；候选包只含确定性的复核 ID、几何与结构信号，不含资产路径或原文，也不会被阅读器自动执行。旧包缺少 sidecar 时仍会从原始 JSON 的页码、bbox、相邻关系、Markdown 图片顺序和图注信号在内存中重建。整页仅含连续视觉分片时可按精确页覆盖从 PDF 重建，完整大图与其内含重复子图也会按一一对应关系折叠；无 `source.pdf` 的裁剪计划强制降为复核。持久化和运行时两条路径共用输入哈希、块内容、Markdown occurrence、PDF 来源声明和结构资源上限的反向绑定，失败时整组回退原图；不修改 `article.md`、原始图片、JSON 或 PDF，现有包无需重新入库。
 - 轻量入库身份阶段改为插件强制的 Vault-first 顺序：必须先检索 `papers/`、`Clippings/` 与 `wiki/sources/`，可从已有候选取得未截断标题和 DOI 后直接进行 `crossref_doi` 精确核验；完成本地预检前 Crossref/Web 工具会拒绝调用。避免截断 PDF 文件名和模型错误改写检索词耗尽两次模糊搜索预算后误报冲突。

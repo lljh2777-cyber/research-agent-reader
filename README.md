@@ -106,7 +106,9 @@ same atomic staging directory and binds them in `manifest.json` by size and
 SHA-256. Older validated packages without sidecars are reconstructed in memory;
 any stale or malformed relationship fails closed to the original assets. The
 candidate packet contains only deterministic review IDs and structural evidence;
-it is not consumed as an automatic repair decision.
+it is not consumed as an automatic repair decision. These hashes are package
+integrity and consistency checks only; they are not signatures and do not
+authenticate the extractor, publisher, or scientific source.
 
 ## Optional workflow toolkit
 

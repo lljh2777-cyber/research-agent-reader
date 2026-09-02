@@ -10,7 +10,12 @@ import type {
 import type { DashboardSettings } from "../runtime/settings";
 import { runBoundedAgentLoop } from "./loop";
 import { MineruPreCommitValidationError } from "./mineru-publish";
-import { extractLocalPdfIdentityEvidence } from "./pdf-identity";
+import {
+	createAuthorizedPdfSnapshot,
+	disposeAuthorizedPdfSnapshot,
+	extractLocalPdfIdentityEvidence,
+	type AuthorizedPdfSnapshot,
+} from "./pdf-identity";
 import {
 	buildDraftSystemPrompt,
 	buildDraftTools,
@@ -19,6 +24,7 @@ import {
 	buildIdentityTools,
 	buildIdentityUserMessage,
 	bindIdentityMetadataFromReceipts,
+	deriveBibliographicCitekey,
 	commitSourceNote,
 	evaluateDraftPhase,
 	computeIngestOutcomeStatus,
@@ -195,6 +201,7 @@ export class AgentLoopService {
 			Math.min(4 * 60 * 60 * 1000, (Math.round(settings.taskTimeoutMinutes) || 60) * 60 * 1000),
 		);
 		let budgetTimer: ReturnType<typeof setTimeout> | null = null;
+		let authorizedPdfSnapshot: AuthorizedPdfSnapshot | null = null;
 		const state: IngestState = {
 			traces: [],
 			notes: [],
@@ -259,8 +266,14 @@ export class AgentLoopService {
 
 			// ---- Phase 1: local PDF preflight + identity/dedup model loop ----
 			emitStatus("running", "阶段一 · 本地 PDF 身份预检");
-			const localPdfEvidence = await extractLocalPdfIdentityEvidence(options.sourcePdfPath, {
+			if (options.sourcePdfPath) {
+				authorizedPdfSnapshot = await createAuthorizedPdfSnapshot(options.sourcePdfPath, {
+					signal: abortController.signal,
+				});
+			}
+			const localPdfEvidence = await extractLocalPdfIdentityEvidence(authorizedPdfSnapshot?.path || "", {
 				signal: abortController.signal,
+				displayFileName: authorizedPdfSnapshot?.originalFileName,
 			});
 			if (localPdfEvidence.status === "available") {
 				emitStatus("running", localPdfEvidence.doiCandidates.length
@@ -309,7 +322,11 @@ export class AgentLoopService {
 			bindIdentityMetadataFromReceipts(identity, identityLoop.toolCalls);
 
 			// Gate: the model must have actually done the verification work.
-			const receiptProblems = validateIdentityReceipts(identity, identityLoop.toolCalls);
+			const receiptProblems = validateIdentityReceipts(
+				identity,
+				identityLoop.toolCalls,
+				authorizedPdfSnapshot ? localPdfEvidence : undefined,
+			);
 			if (receiptProblems.length) {
 				state.errors.push(`阶段一未满足插件侧凭据要求：${receiptProblems.join("；")}`);
 				return this.finish(state, options, profileId, resolved, emitStatus);
@@ -325,10 +342,19 @@ export class AgentLoopService {
 			}
 			if (identity.duplicateStatus === "exact") {
 				const observedLayers = resolveExactDuplicateLayers(identity, identityLoop.toolCalls);
-				const existingCitekey = resolveExactDuplicateCitekey(identity);
+				if (observedLayers.conflict) {
+					state.conflicts.push(observedLayers.conflict);
+					return this.finish(state, options, profileId, resolved, emitStatus);
+				}
+				const existingCitekey = resolveExactDuplicateCitekey(identity, identityLoop.toolCalls);
 				if (existingCitekey && existingCitekey !== identity.citekey) {
 					state.notes.push(`沿用现有重复记录的 citekey：${existingCitekey}`);
 					identity.citekey = existingCitekey;
+				} else if (!existingCitekey) {
+					const derivedBase = deriveBibliographicCitekey(identity);
+					const derived = await this.resolveCitekeyUniqueness(derivedBase);
+					identity.citekey = derived.citekey;
+					state.notes.push(`现有原文路径不含可信 citekey，插件由已核验书目信息确定：${derived.citekey}`);
 				}
 				const existing = await this.resolveExistingOutputs(identity.citekey, observedLayers);
 				state.existingSourcePath = existing.sourcePath;
@@ -373,7 +399,15 @@ export class AgentLoopService {
 					if (!readiness.ready) {
 						state.notes.push(`无法生成原文 Markdown：${readiness.reason}`);
 					} else {
-						await this.runExtractionPhase(options, identity, toolDeps, abortController, deadline, state);
+						await this.runExtractionPhase(
+							options,
+							identity,
+							toolDeps,
+							abortController,
+							deadline,
+							state,
+							authorizedPdfSnapshot,
+						);
 					}
 				}
 			}
@@ -487,6 +521,7 @@ export class AgentLoopService {
 			return this.finish(state, options, profileId, resolved, emitStatus);
 		} finally {
 			if (budgetTimer !== null) clearTimeout(budgetTimer);
+			await disposeAuthorizedPdfSnapshot(authorizedPdfSnapshot);
 			this.activeRuns.delete(runId);
 		}
 	}
@@ -499,6 +534,7 @@ export class AgentLoopService {
 		abortController: AbortController,
 		deadline: number,
 		state: IngestState,
+		authorizedPdfSnapshot: AuthorizedPdfSnapshot | null,
 	): Promise<void> {
 		const remaining = deadline - Date.now();
 		if (remaining < 60_000) {
@@ -510,10 +546,16 @@ export class AgentLoopService {
 			remaining,
 		);
 		try {
+			if (!authorizedPdfSnapshot) {
+				state.errors.push("本次任务没有可用的 PDF 授权快照，未启动 MinerU");
+				return;
+			}
 			state.receipts.mineruPackage = await runAuthorizedMineruExtract(
 				toolDeps.mineru,
 				{
-					source: options.sourcePdfPath,
+					source: authorizedPdfSnapshot.path,
+					sourceName: authorizedPdfSnapshot.originalFileName,
+					expectedSourceSha256: authorizedPdfSnapshot.sha256,
 					citekey: identity.citekey,
 					model: options.mineruModel,
 					language: options.mineruLanguage,
@@ -590,11 +632,9 @@ export class AgentLoopService {
 	}
 
 	private async resolveExistingOutputs(
-		citekey: string,
+		_citekey: string,
 		observed: { sourcePath: string; analysisPath: string },
 	): Promise<{ sourcePath: string; analysisPath: string }> {
-		const articlePath = `papers/${citekey}/article.md`;
-		const wikiPath = `wiki/sources/${citekey}.md`;
 		const adapter = this.deps.app.vault.adapter;
 		const observedSource = observed.sourcePath && await adapter.exists(observed.sourcePath, true)
 			? observed.sourcePath
@@ -603,8 +643,11 @@ export class AgentLoopService {
 			? observed.analysisPath
 			: "";
 		return {
-			sourcePath: observedSource || (await adapter.exists(articlePath, true) ? articlePath : ""),
-			analysisPath: observedAnalysis || (await adapter.exists(wikiPath, true) ? wikiPath : ""),
+			// Exact-duplicate decisions are receipt-bound. A conventional path that
+			// happens to share the model's citekey is not evidence that this PDF's
+			// source or analysis layer already exists.
+			sourcePath: observedSource,
+			analysisPath: observedAnalysis,
 		};
 	}
 

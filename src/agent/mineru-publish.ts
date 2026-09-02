@@ -48,6 +48,10 @@ export interface MineruPublishOps {
 
 export interface MineruPublishArgs {
 	source: string;
+	/** User-visible original basename; the CLI reads the authorized snapshot. */
+	sourceName?: string;
+	/** Hash computed while creating the authorized snapshot. */
+	expectedSourceSha256?: string;
 	citekey: string;
 	model: string;
 	language: string;
@@ -91,6 +95,13 @@ export class MineruPreCommitValidationError extends Error {
 
 const CITEKEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/;
 const MAX_PUBLISH_ASSET_BYTES = 256 * 1024 * 1024;
+const PACKAGE_INVENTORY_LIMITS = {
+	maxDepth: 16,
+	maxEntries: 10_000,
+	maxFiles: 8_192,
+	maxTotalBytes: 512 * 1024 * 1024,
+	maxFileBytes: MAX_PUBLISH_ASSET_BYTES,
+} as const;
 const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\(([^)\s]+)[^)]*\)/g;
 const HTML_IMAGE_RE = /<img\b[^>]*\bsrc=["']([^"']+)["']/gi;
 
@@ -110,15 +121,7 @@ function packagedMineruPlatformName(): string {
  * an optional platform package. Resolve that native binary ourselves so the
  * desktop plugin never tries to use Obsidian/Electron as a Node runtime.
  */
-function resolvePackagedMineruBinary(entry: string): string {
-	const packageRoot = path.dirname(path.dirname(entry));
-	const packageJson = path.join(packageRoot, "package.json");
-	try {
-		const rootRecord = JSON.parse(fs.readFileSync(packageJson, "utf8")) as { name?: string };
-		if (rootRecord.name !== "mineru-open-api") return "";
-	} catch {
-		return "";
-	}
+function resolvePackagedMineruBinary(packageRoot: string): string {
 	const platformPackage = packagedMineruPlatformName();
 	if (!platformPackage) return "";
 	const binaryName = process.platform === "win32" ? "mineru-open-api.exe" : "mineru-open-api";
@@ -128,11 +131,19 @@ function resolvePackagedMineruBinary(entry: string): string {
 	];
 	for (const platformRoot of packageCandidates) {
 		try {
+			const platformRootStats = fs.lstatSync(platformRoot);
+			const platformPackageJson = path.join(platformRoot, "package.json");
+			const platformPackageJsonStats = fs.lstatSync(platformPackageJson);
+			if (platformRootStats.isSymbolicLink() || !platformRootStats.isDirectory()
+				|| platformPackageJsonStats.isSymbolicLink() || !platformPackageJsonStats.isFile()) continue;
 			const platformRecord = JSON.parse(
-				fs.readFileSync(path.join(platformRoot, "package.json"), "utf8"),
+				fs.readFileSync(platformPackageJson, "utf8"),
 			) as { name?: string };
 			if (platformRecord.name !== platformPackage) continue;
-			const stats = fs.lstatSync(path.join(platformRoot, "bin", binaryName));
+			const platformBinRoot = path.join(platformRoot, "bin");
+			const platformBinStats = fs.lstatSync(platformBinRoot);
+			if (platformBinStats.isSymbolicLink() || !platformBinStats.isDirectory()) continue;
+			const stats = fs.lstatSync(path.join(platformBinRoot, binaryName));
 			if (stats.isSymbolicLink() || !stats.isFile()) continue;
 			const realPlatformRoot = realPathSync(platformRoot);
 			const realBinary = realPathSync(path.join(platformRoot, "bin", binaryName));
@@ -145,14 +156,80 @@ function resolvePackagedMineruBinary(entry: string): string {
 	return "";
 }
 
+interface ValidatedMineruNodeEntry {
+	entry: string;
+	packageRoot: string;
+}
+
+function validateMineruNodeEntry(rawEntry: string): ValidatedMineruNodeEntry {
+	const entry = path.resolve(rawEntry);
+	const entryStats = fs.lstatSync(entry);
+	if (entryStats.isSymbolicLink() || !entryStats.isFile()) {
+		throw new Error("MinerU Node 入口必须是普通文件，不能是符号链接或 junction");
+	}
+	const realEntry = realPathSync(entry);
+	let current = path.dirname(entry);
+	for (let depth = 0; depth < 8; depth += 1) {
+		const packageJson = path.join(current, "package.json");
+		if (fs.existsSync(packageJson)) {
+			const packageStats = fs.lstatSync(current);
+			const packageJsonStats = fs.lstatSync(packageJson);
+			if (packageStats.isSymbolicLink() || !packageStats.isDirectory()
+				|| packageJsonStats.isSymbolicLink() || !packageJsonStats.isFile()) {
+				throw new Error("MinerU npm 包根和 package.json 必须是普通目录与文件");
+			}
+			const record = JSON.parse(fs.readFileSync(packageJson, "utf8")) as {
+				name?: string;
+				bin?: string | Record<string, string>;
+			};
+			if (record.name !== "mineru-open-api") {
+				throw new Error(`npm shim 指向的包不是 mineru-open-api：${String(record.name || "未知包")}`);
+			}
+			const binValue = typeof record.bin === "string"
+				? record.bin
+				: record.bin?.["mineru-open-api"];
+			if (!binValue || path.isAbsolute(binValue)) {
+				throw new Error("mineru-open-api package.json 缺少可信的 bin 映射");
+			}
+			const binSegments = String(binValue).replace(/\\/g, "/").split("/");
+			if (binSegments.some((segment) => !segment || segment === "." || segment === "..")) {
+				throw new Error("mineru-open-api bin 映射包含不安全路径");
+			}
+			const declaredEntry = path.resolve(current, ...binSegments);
+			let inspectedParent = path.dirname(declaredEntry);
+			while (inspectedParent !== current) {
+				const parentStats = fs.lstatSync(inspectedParent);
+				if (parentStats.isSymbolicLink() || !parentStats.isDirectory()) {
+					throw new Error("mineru-open-api bin 路径包含符号链接或非普通目录");
+				}
+				const next = path.dirname(inspectedParent);
+				if (next === inspectedParent || !isPathInside(current, inspectedParent)) {
+					throw new Error("mineru-open-api bin 入口越出包目录");
+				}
+				inspectedParent = next;
+			}
+			const declaredStats = fs.lstatSync(declaredEntry);
+			if (declaredStats.isSymbolicLink() || !declaredStats.isFile()) {
+				throw new Error("mineru-open-api bin 入口不是普通文件");
+			}
+			const realPackageRoot = realPathSync(current);
+			const realDeclaredEntry = realPathSync(declaredEntry);
+			if (!isPathInside(realPackageRoot, realDeclaredEntry) || realDeclaredEntry !== realEntry) {
+				throw new Error("npm shim 入口与 mineru-open-api package.json bin 映射不一致");
+			}
+			return { entry: realEntry, packageRoot: realPackageRoot };
+		}
+		const parent = path.dirname(current);
+		if (parent === current) break;
+		current = parent;
+	}
+	throw new Error("无法找到 mineru-open-api 的 package.json，拒绝 Node launcher");
+}
+
 function resolveNodeRuntime(shimRoot: string): string {
 	const executableName = process.platform === "win32" ? "node.exe" : "node";
 	const candidates = [
 		path.join(shimRoot, executableName),
-		...(process.env.PATH || "")
-			.split(path.delimiter)
-			.filter(Boolean)
-			.map((directory) => path.join(directory, executableName)),
 	];
 	if (/^node(?:\.exe)?$/i.test(path.basename(process.execPath))) candidates.unshift(process.execPath);
 	for (const candidate of candidates) {
@@ -167,11 +244,12 @@ function resolveNodeRuntime(shimRoot: string): string {
 }
 
 function resolveNodeLauncher(entry: string, shimRoot: string): ResolvedMineruCommand {
-	const nativeBinary = resolvePackagedMineruBinary(entry);
+	const validated = validateMineruNodeEntry(entry);
+	const nativeBinary = resolvePackagedMineruBinary(validated.packageRoot);
 	if (nativeBinary) return { command: nativeBinary, baseArgs: [] };
 	const nodeRuntime = resolveNodeRuntime(shimRoot);
-	if (nodeRuntime) return { command: nodeRuntime, baseArgs: [entry] };
-	throw new Error("MinerU npm 包需要 Node.js，但插件未找到 node 可执行文件；请重新安装 Node.js 或 mineru-open-api");
+	if (nodeRuntime) return { command: nodeRuntime, baseArgs: [validated.entry] };
+	throw new Error("MinerU npm 包未提供可验证的平台二进制，且配置目录旁没有可信 Node.js；请重新安装 mineru-open-api");
 }
 
 function resolveNpmShimEntry(shimPath: string, shim: string): string {
@@ -185,7 +263,9 @@ function resolveNpmShimEntry(shimPath: string, shim: string): string {
 				.replace(/^%(?:~dp0|dp0%)[\\/]+/i, "")
 				.replace(/\\/g, "/");
 			const segments = relative.split("/").filter(Boolean);
-			if (segments[0]?.toLowerCase() !== "node_modules" || segments.includes("..")) continue;
+			if (segments[0]?.toLowerCase() !== "node_modules"
+				|| segments[1]?.toLowerCase() !== "mineru-open-api"
+				|| segments.includes("..")) continue;
 			// A normal npm cmd shim passes only `%*` after the quoted entry. Never
 			// reinterpret shell operators or an appended command tail.
 			const tail = line.slice((match.index || 0) + match[0].length).trim();
@@ -235,7 +315,9 @@ export function resolveMineruCommand(executable: string): ResolvedMineruCommand 
 		}
 	}
 	if (ext !== ".cmd" && ext !== ".bat") {
-		return { command: resolved, baseArgs: [] };
+		throw new Error(
+			"MinerU CLI 必须是可验证的 mineru-open-api npm shim 或该包声明的 Node 入口；不直接执行任意原生文件",
+		);
 	}
 	const shimStats = fs.lstatSync(resolved);
 	if (shimStats.isSymbolicLink() || !shimStats.isFile()) {
@@ -282,7 +364,19 @@ export function normalizePagesValue(value: string): string {
 }
 
 function sha256File(file: string): string {
-	return sha256Bytes(fs.readFileSync(file));
+	const hash = createHash("sha256");
+	const descriptor = fs.openSync(file, "r");
+	const buffer = Buffer.allocUnsafe(1024 * 1024);
+	try {
+		while (true) {
+			const bytesRead = fs.readSync(descriptor, buffer, 0, buffer.length, null);
+			if (!bytesRead) break;
+			hash.update(buffer.subarray(0, bytesRead));
+		}
+		return hash.digest("hex");
+	} finally {
+		fs.closeSync(descriptor);
+	}
 }
 
 function sha256Bytes(bytes: Buffer): string {
@@ -306,22 +400,72 @@ function normalizeExtractorVersion(value: string): string {
 	return candidate && strictSemver.test(candidate) ? candidate : "unknown";
 }
 
-function listFilesRecursive(root: string): string[] {
-	const results: string[] = [];
-	const walk = (current: string): void => {
-		for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-			const child = path.join(current, entry.name);
-			if (entry.isDirectory()) walk(child);
-			else if (entry.isFile()) results.push(child);
+interface PackageInventory {
+	files: string[];
+	directories: string[];
+	totalBytes: number;
+}
+
+/** Enumerate an untrusted tree without following filesystem indirections. */
+function inventoryTree(root: string): PackageInventory {
+	const rootPath = path.resolve(root);
+	const rootStats = fs.lstatSync(rootPath);
+	if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+		throw new Error(`MinerU 输出根必须是普通目录：${rootPath}`);
+	}
+	const realRoot = realPathSync(rootPath);
+	const files: string[] = [];
+	const directories: string[] = [];
+	const stack: Array<{ directory: string; depth: number }> = [{ directory: rootPath, depth: 0 }];
+	let entries = 0;
+	let totalBytes = 0;
+	while (stack.length) {
+		const current = stack.pop() as { directory: string; depth: number };
+		if (current.depth > PACKAGE_INVENTORY_LIMITS.maxDepth) {
+			throw new Error(`MinerU 输出目录深度超过 ${PACKAGE_INVENTORY_LIMITS.maxDepth}`);
 		}
-	};
-	walk(root);
-	return results;
+		const handle = fs.opendirSync(current.directory);
+		try {
+			while (true) {
+				const entry = handle.readSync();
+				if (!entry) break;
+				entries += 1;
+				if (entries > PACKAGE_INVENTORY_LIMITS.maxEntries) {
+					throw new Error(`MinerU 输出条目数超过 ${PACKAGE_INVENTORY_LIMITS.maxEntries}`);
+				}
+				const child = path.join(current.directory, entry.name);
+				const stats = fs.lstatSync(child);
+				if (stats.isSymbolicLink()) throw new Error(`MinerU 输出包含符号链接或 junction：${entry.name}`);
+				const realChild = realPathSync(child);
+				if (!isPathInside(realRoot, realChild)) throw new Error(`MinerU 输出解析到暂存目录之外：${entry.name}`);
+				if (stats.isDirectory()) {
+					directories.push(child);
+					stack.push({ directory: child, depth: current.depth + 1 });
+					continue;
+				}
+				if (!stats.isFile()) throw new Error(`MinerU 输出包含不支持的特殊文件：${entry.name}`);
+				if (stats.size > PACKAGE_INVENTORY_LIMITS.maxFileBytes) {
+					throw new Error(`MinerU 输出单文件超过 256 MiB：${entry.name}`);
+				}
+				files.push(child);
+				totalBytes += stats.size;
+				if (files.length > PACKAGE_INVENTORY_LIMITS.maxFiles) {
+					throw new Error(`MinerU 输出文件数超过 ${PACKAGE_INVENTORY_LIMITS.maxFiles}`);
+				}
+				if (totalBytes > PACKAGE_INVENTORY_LIMITS.maxTotalBytes) {
+					throw new Error("MinerU 输出累计大小超过 512 MiB");
+				}
+			}
+		} finally {
+			handle.closeSync();
+		}
+	}
+	return { files, directories, totalBytes };
 }
 
 /** Mirrors the toolkit helper: exactly one .md, one unambiguous MinerU JSON. */
 function locateMineruOutputs(extractDir: string): { markdown: string; json: string } {
-	const files = listFilesRecursive(extractDir);
+	const files = inventoryTree(extractDir).files;
 	const inventory = files.length
 		? files.slice(0, 20).map((file) => path.relative(extractDir, file).replace(/\\/g, "/")).join("、")
 		: "（空）";
@@ -341,6 +485,64 @@ function locateMineruOutputs(extractDir: string): { markdown: string; json: stri
 		throw new Error(`MinerU 输出应有唯一无歧义的 JSON，实际 ${jsonFiles.length} 个；暂存文件：${inventory}`);
 	}
 	return { markdown: markdownFiles[0], json: jsonFile };
+}
+
+function normalizedReferencedAsset(rawPath: string): string {
+	let normalized = String(rawPath || "").trim().replace(/^</, "").replace(/>$/, "");
+	try { normalized = decodeURIComponent(normalized); } catch { /* Keep raw input. */ }
+	normalized = normalized.replace(/\\/g, "/").replace(/^\.\//, "");
+	if (!normalized || /^[a-z]+:\/\//i.test(normalized) || path.posix.isAbsolute(normalized)) {
+		throw new Error(`MinerU 资产引用了不支持的地址：${rawPath}`);
+	}
+	const segments = normalized.split("/");
+	if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+		throw new Error(`MinerU 资产引用越出包目录：${rawPath}`);
+	}
+	return segments.join("/");
+}
+
+function copyReferencedAssets(
+	extractDir: string,
+	outputRoot: string,
+	packageRoot: string,
+	markdown: string,
+	payload: unknown,
+): void {
+	const refs = new Set(markdownAssetRefs(markdown).map(normalizedReferencedAsset));
+	for (const element of flattenMineruElements(payload)) {
+		for (const rawAsset of element.assetPaths) refs.add(normalizedReferencedAsset(rawAsset));
+	}
+	if (refs.size > MINERU_VIEWER_LIMITS.maxMarkdownImages * 2) {
+		throw new Error("MinerU 引用资产数超过安全上限");
+	}
+	const realExtractRoot = realPathSync(extractDir);
+	for (const relative of refs) {
+		const source = path.resolve(outputRoot, ...relative.split("/"));
+		if (!isPathInside(path.resolve(outputRoot), source)) throw new Error(`MinerU 资产引用越界：${relative}`);
+		if (!fs.existsSync(source)) throw new Error(`MinerU 引用资产缺失或为空：${relative}`);
+		const stats = fs.lstatSync(source);
+		if (stats.isSymbolicLink() || !stats.isFile() || stats.size <= 0) {
+			throw new Error(`MinerU 引用资产不是非空普通文件：${relative}`);
+		}
+		const realSource = realPathSync(source);
+		if (!isPathInside(realExtractRoot, realSource)) throw new Error(`MinerU 引用资产解析到暂存目录之外：${relative}`);
+		const destination = path.join(packageRoot, ...relative.split("/"));
+		fs.mkdirSync(path.dirname(destination), { recursive: true });
+		fs.copyFileSync(source, destination, fs.constants.COPYFILE_EXCL);
+	}
+}
+
+function copyInventoriedTree(source: string, destination: string): void {
+	const inventory = inventoryTree(source);
+	fs.mkdirSync(destination);
+	for (const directory of inventory.directories.sort((a, b) => a.length - b.length)) {
+		const relative = path.relative(source, directory);
+		fs.mkdirSync(path.join(destination, relative));
+	}
+	for (const file of inventory.files) {
+		const relative = path.relative(source, file);
+		fs.copyFileSync(file, path.join(destination, relative), fs.constants.COPYFILE_EXCL);
+	}
 }
 
 interface MineruElement {
@@ -525,7 +727,7 @@ function buildManifest(inputs: {
 	register(path.join(inputs.packageRoot, "mineru-result.json"));
 	const imagesDir = path.join(inputs.packageRoot, "images");
 	if (fs.existsSync(imagesDir)) {
-		for (const file of listFilesRecursive(imagesDir)) register(file);
+		for (const file of inventoryTree(imagesDir).files) register(file);
 	}
 	if (inputs.includeSourcePdf) {
 		register(path.join(inputs.packageRoot, "_extraction", "source.pdf"));
@@ -548,7 +750,7 @@ function buildManifest(inputs: {
 		created_at: inputs.createdIso,
 		processing_depth: "conversion-only",
 		source: {
-			path: portableBasename(inputs.sourcePdf),
+			path: portableBasename(inputs.options.sourceName || inputs.sourcePdf),
 			size: sourceStat.size,
 			sha256: sha256File(inputs.sourcePdf),
 		},
@@ -694,8 +896,85 @@ function ensureTrustedPapersRoot(vaultRoot: string): string {
 	return papersRoot;
 }
 
+function acquirePublishLock(papersRoot: string, citekey: string): () => void {
+	const locksRoot = path.join(papersRoot, ".locks");
+	try { fs.mkdirSync(locksRoot); } catch (error) {
+		const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+		if (code !== "EEXIST") throw error;
+	}
+	const lockRootStats = fs.lstatSync(locksRoot);
+	if (lockRootStats.isSymbolicLink() || !lockRootStats.isDirectory()) {
+		throw new Error("papers/.locks 必须是普通目录");
+	}
+	if (!isPathInside(realPathSync(papersRoot), realPathSync(locksRoot))) {
+		throw new Error("papers/.locks 解析到 papers 之外");
+	}
+	const lockPath = path.join(locksRoot, `${citekey}.lock`);
+	let descriptor: number;
+	try {
+		descriptor = fs.openSync(lockPath, "wx", 0o600);
+		fs.writeFileSync(descriptor, `${process.pid}\n`, "utf8");
+	} catch (error) {
+		const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+		if (code === "EEXIST") throw new Error(`papers/${citekey} 正在由另一个入库任务发布`);
+		throw error;
+	}
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		try { fs.closeSync(descriptor); } catch { /* Best effort. */ }
+		try {
+			const stats = fs.lstatSync(lockPath);
+			if (!stats.isSymbolicLink() && stats.isFile()) fs.unlinkSync(lockPath);
+		} catch { /* Best effort; stale lock remains visible and fails closed. */ }
+	};
+}
+
 function errorDetail(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Remove one private staging tree without ever following symbolic links or
+ * Windows junctions. Every directory is removed only after its direct
+ * children; reparse-point entries are unlinked as entries, not traversed.
+ */
+function removeTreeNoFollow(root: string): void {
+	if (!fs.existsSync(root)) return;
+	const rootStats = fs.lstatSync(root);
+	if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+		fs.unlinkSync(root);
+		return;
+	}
+	const stack: Array<{ directory: string; visited: boolean }> = [
+		{ directory: root, visited: false },
+	];
+	while (stack.length) {
+		const current = stack.pop();
+		if (!current) continue;
+		if (current.visited) {
+			fs.rmdirSync(current.directory);
+			continue;
+		}
+		stack.push({ directory: current.directory, visited: true });
+		const handle = fs.opendirSync(current.directory);
+		try {
+			for (;;) {
+				const entry = handle.readSync();
+				if (!entry) break;
+				const child = path.join(current.directory, entry.name);
+				const stats = fs.lstatSync(child);
+				if (stats.isDirectory() && !stats.isSymbolicLink()) {
+					stack.push({ directory: child, visited: false });
+				} else {
+					fs.unlinkSync(child);
+				}
+			}
+		} finally {
+			handle.closeSync();
+		}
+	}
 }
 
 function cleanPublishStaging(
@@ -713,11 +992,7 @@ function cleanPublishStaging(
 		return false;
 	}
 	try {
-		if (fs.existsSync(stagingContainer) && fs.lstatSync(stagingContainer).isSymbolicLink()) {
-			console.warn("Refused to recursively clean a symlinked MinerU staging directory", stagingContainer);
-			return false;
-		}
-		fs.rmSync(stagingContainer, { recursive: true, force: true });
+		removeTreeNoFollow(stagingContainer);
 		return !fs.existsSync(stagingContainer);
 	} catch (cleanupError) {
 		console.warn("Could not clean failed MinerU vault staging directory", cleanupError);
@@ -750,7 +1025,7 @@ function publishValidatedPackageAtomically(
 	const stagedPackage = path.join(stagingContainer, "package");
 	const copyPackage = customOps?.copyPackage
 		|| ((source: string, destination: string): void => {
-			fs.cpSync(source, destination, { recursive: true, force: false, errorOnExist: true });
+			copyInventoriedTree(source, destination);
 		});
 	const renamePackage = customOps?.renamePackage
 		|| ((source: string, destination: string): void => fs.renameSync(source, destination));
@@ -765,6 +1040,7 @@ function publishValidatedPackageAtomically(
 	}
 
 	try {
+		inventoryTree(stagedPackage);
 		if (context.signal.aborted) throw new Error("任务已取消");
 		if (context.validateBeforeCommit) {
 			const articleMarkdown = fs.readFileSync(path.join(stagedPackage, "article.md"), "utf8");
@@ -835,16 +1111,26 @@ export async function publishMineruPackage(
 	if (!source.toLowerCase().endsWith(".pdf") || !fs.existsSync(source)) {
 		throw new Error(`来源 PDF 不存在：${source}`);
 	}
+	const sourceStats = fs.lstatSync(source);
+	if (sourceStats.isSymbolicLink() || !sourceStats.isFile()) {
+		throw new Error("MinerU 输入必须是插件创建的普通 PDF 快照");
+	}
+	const expectedSourceHash = String(args.expectedSourceSha256 || "").toLowerCase();
+	if (!/^[a-f0-9]{64}$/.test(expectedSourceHash) || sha256File(source) !== expectedSourceHash) {
+		throw new Error("PDF 授权快照与身份预检哈希不一致，未启动 MinerU");
+	}
 	const pages = normalizePagesValue(args.pages);
 	const initialPapersRoot = ensureTrustedPapersRoot(deps.vaultRoot);
-	const packageTarget = path.join(initialPapersRoot, args.citekey);
-	if (fs.existsSync(packageTarget)) {
-		throw createOnlyError(args.citekey);
-	}
-	const resolved = resolveMineruCommand(deps.mineruExecutable);
-	const stageRoot = deps.stageRoot || os.tmpdir();
-	const stage = fs.mkdtempSync(path.join(stageRoot, "mineru-publish-"));
+	const releasePublishLock = acquirePublishLock(initialPapersRoot, args.citekey);
 	try {
+		const packageTarget = path.join(initialPapersRoot, args.citekey);
+		if (fs.existsSync(packageTarget)) {
+			throw createOnlyError(args.citekey);
+		}
+		const resolved = resolveMineruCommand(deps.mineruExecutable);
+		const stageRoot = deps.stageRoot || os.tmpdir();
+		const stage = fs.mkdtempSync(path.join(stageRoot, "mineru-publish-"));
+		try {
 		if (context.signal.aborted) throw new Error("任务已取消");
 		const extractDir = path.join(stage, "extract");
 		fs.mkdirSync(extractDir, { recursive: true });
@@ -881,10 +1167,15 @@ export async function publishMineruPackage(
 		fs.mkdirSync(packageRoot);
 		fs.copyFileSync(outputs.markdown, path.join(packageRoot, "article.md"));
 		fs.copyFileSync(outputs.json, path.join(packageRoot, "mineru-result.json"));
-		const imagesSource = path.join(path.dirname(outputs.markdown), "images");
-		if (fs.existsSync(imagesSource)) {
-			fs.cpSync(imagesSource, path.join(packageRoot, "images"), { recursive: true });
-		}
+		const extractedMarkdown = fs.readFileSync(outputs.markdown, "utf8");
+		const extractedPayload = JSON.parse(fs.readFileSync(outputs.json, "utf8")) as unknown;
+		copyReferencedAssets(
+			extractDir,
+			path.dirname(outputs.markdown),
+			packageRoot,
+			extractedMarkdown,
+			extractedPayload,
+		);
 		const extractionDir = path.join(packageRoot, "_extraction");
 		if (args.includeSourcePdf) {
 			fs.mkdirSync(extractionDir, { recursive: true });
@@ -940,11 +1231,14 @@ export async function publishMineruPackage(
 			deps.publishOps,
 		);
 		return { packagePath: committedPath, validation };
-	} finally {
-		try {
-			fs.rmSync(stage, { recursive: true, force: true });
-		} catch (cleanupError) {
-			console.warn("Could not clean MinerU staging directory", cleanupError);
+		} finally {
+			try {
+				removeTreeNoFollow(stage);
+			} catch (cleanupError) {
+				console.warn("Could not clean MinerU staging directory", cleanupError);
+			}
 		}
+	} finally {
+		releasePublishLock();
 	}
 }
