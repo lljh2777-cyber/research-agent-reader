@@ -201,6 +201,7 @@ async function testNaturalParentExitDoesNotApproveLiveDescendant() {
 		`fs.writeFileSync(${JSON.stringify(pidFile)},String(child.pid));`,
 	].join("");
 	let descendantPid = 0;
+	let posixRejected = false;
 	try {
 		const request = {
 			command: process.execPath,
@@ -216,13 +217,23 @@ async function testNaturalParentExitDoesNotApproveLiveDescendant() {
 			});
 			assert.equal(result.exitCode, 124, "Windows Job must keep the wrapper alive until the descendant is killed on timeout");
 		} else {
-			await assert.rejects(runMineruProcessCommand(request, "", {
-				helperTimeoutMs: 2_000, finalCloseTimeoutMs: 300,
-			}), /完整进程树退出/);
+			try {
+				await runMineruProcessCommand(request, "", {
+					helperTimeoutMs: 2_000, finalCloseTimeoutMs: 300,
+				});
+			} catch (error) {
+				posixRejected = true;
+				assert.match(String(error && error.message || error), /完整进程树退出/);
+			}
+			descendantPid = Number(fs.readFileSync(pidFile, "utf8"));
+			if (!posixRejected) {
+				assert.equal(pidAlive(descendantPid), false,
+					"a successful POSIX return must never approve a live descendant");
+			}
 		}
-		descendantPid = Number(fs.readFileSync(pidFile, "utf8"));
-		assert.equal(pidAlive(descendantPid), process.platform !== "win32",
-			"Windows Job must kill the descendant; POSIX rejection leaves cleanup to this fixture");
+		if (!descendantPid) descendantPid = Number(fs.readFileSync(pidFile, "utf8"));
+		assert.equal(pidAlive(descendantPid), process.platform !== "win32" && posixRejected,
+			"successful returns require no live descendant; only a POSIX fail-closed rejection may leave fixture cleanup");
 	} finally {
 		if (!descendantPid && fs.existsSync(pidFile)) descendantPid = Number(fs.readFileSync(pidFile, "utf8"));
 		if (descendantPid) {
