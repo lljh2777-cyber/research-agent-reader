@@ -4,6 +4,7 @@ import { App, TFile, normalizePath } from "obsidian";
 
 import {
 	buildRuntimeViewerIndex,
+	MINERU_VIEWER_LIMITS,
 	normalizeAssetPath,
 	normalizeBbox,
 	reclassifyRuntimeRunningHeaders,
@@ -20,6 +21,7 @@ import {
 	validateVisualContracts,
 } from "./visual-repair";
 import { MINERU_RESOURCE_LIMITS, parseBoundedJson } from "./resource-limits";
+import { assertPassiveMineruMarkdown } from "../security/safe-markdown";
 import { readTrustedVaultFile, resolveTrustedVaultPath } from "../runtime/trusted-vault-fs";
 import type { VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
 import type {
@@ -63,7 +65,18 @@ function asRecord(value: unknown): UnknownRecord {
 
 function asStringArray(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
-	return value.map((item) => String(item || "").trim()).filter(Boolean);
+	if (value.length > MINERU_VIEWER_LIMITS.maxNestedStrings) {
+		throw new Error("Viewer Index 嵌套字符串数组超过安全上限");
+	}
+	const result: string[] = [];
+	for (const item of value) {
+		if (typeof item !== "string" || item.length > 2_000) {
+			throw new Error("Viewer Index 嵌套字符串值无效或过长");
+		}
+		const text = item.trim();
+		if (text) result.push(text);
+	}
+	return result;
 }
 
 const CAPTION_PART_KINDS = new Set<MineruCaptionPart["kind"]>([
@@ -79,11 +92,13 @@ function normalizeCaptionParts(
 	fallback: readonly MineruCaptionPart[] = [],
 ): MineruCaptionPart[] | null {
 	if (value === undefined) return fallback.map((part) => ({ ...part }));
-	if (!Array.isArray(value)) return null;
+	if (!Array.isArray(value) || value.length > MINERU_VIEWER_LIMITS.maxNestedStrings) return null;
 	const parts: MineruCaptionPart[] = [];
 	for (let index = 0; index < value.length; index += 1) {
 		const record = asRecord(value[index]);
-		const text = String(record.text || "").trim();
+		const rawText = record.text;
+		if (typeof rawText !== "string" || rawText.length > 2_000) return null;
+		const text = rawText.trim();
 		const kind = String(record.kind || "") as MineruCaptionPart["kind"];
 		const declaredIndex = record.index;
 		if (
@@ -101,7 +116,7 @@ function normalizeNextPagePlaceholders(
 	fallback: readonly MineruNextPagePlaceholder[] = [],
 ): MineruNextPagePlaceholder[] | null {
 	if (value === undefined) return (fallback || []).map((placeholder) => ({ ...placeholder }));
-	if (!Array.isArray(value)) return null;
+	if (!Array.isArray(value) || value.length > MINERU_VIEWER_LIMITS.maxNestedStrings) return null;
 	const placeholders: MineruNextPagePlaceholder[] = [];
 	for (const item of value) {
 		const record = asRecord(item);
@@ -437,7 +452,22 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 
 function normalizeViewerIndex(value: unknown, fallback: MineruViewerIndex): MineruViewerIndex | null {
 	const record = asRecord(value);
-	if (Number(record.schema_version) !== 1 || !Array.isArray(record.pages)) return null;
+	if (
+		Number(record.schema_version) !== 1
+		|| !Array.isArray(record.pages)
+		|| record.pages.length === 0
+		|| record.pages.length > MINERU_VIEWER_LIMITS.maxPages
+		|| (Array.isArray(record.markdown_images)
+			&& record.markdown_images.length > MINERU_VIEWER_LIMITS.maxMarkdownImages)
+		|| (Array.isArray(record.issues) && record.issues.length > MINERU_VIEWER_LIMITS.maxIssues)
+	) return null;
+	let totalBlocks = 0;
+	for (const pageValue of record.pages) {
+		const blocks = asRecord(pageValue).blocks;
+		if (!Array.isArray(blocks) || blocks.length > MINERU_VIEWER_LIMITS.maxBlocksPerPage) return null;
+		totalBlocks += blocks.length;
+		if (totalBlocks > MINERU_VIEWER_LIMITS.maxSourceElements) return null;
+	}
 	const fallbackBySource = new Map<number, MineruViewerBlock>();
 	fallback.pages.forEach((page) => page.blocks.forEach((block) => fallbackBySource.set(block.source_index, block)));
 	const pages: MineruViewerPage[] = [];
@@ -626,7 +656,7 @@ async function verifyManifestOutputs(
 	article: { bytes: Uint8Array },
 	mineru: { bytes: Uint8Array },
 	pdfPath: string | null,
-): Promise<{ verifiedAssetBytes: Map<string, Uint8Array>; verifiedPdfBytes: Uint8Array | null }> {
+): Promise<{ verifiedAssetBlobs: Map<string, Blob>; verifiedPdfBytes: Uint8Array | null }> {
 	if (Number(manifest.schema_version) !== 1) throw new Error("manifest.json 版本不受支持");
 	const records = manifestRecords(manifest.outputs, "outputs");
 	const derivedRecords = optionalManifestRecords(manifest.derived_contracts);
@@ -645,9 +675,9 @@ async function verifyManifestOutputs(
 			imageTotalBytes += size;
 		}
 	}
-	if (packageTotalBytes > MAX_PACKAGE_TOTAL_BYTES) throw new Error("原文包累计大小超过 512 MiB");
+	if (packageTotalBytes > MAX_PACKAGE_TOTAL_BYTES) throw new Error(`原文包累计大小超过 ${Math.round(MAX_PACKAGE_TOTAL_BYTES / MIB)} MiB`);
 	if (imageCount > MAX_IMAGE_COUNT) throw new Error(`原文包图片数超过 ${MAX_IMAGE_COUNT}`);
-	if (imageTotalBytes > MAX_IMAGE_TOTAL_BYTES) throw new Error("原文包图片累计大小超过 256 MiB");
+	if (imageTotalBytes > MAX_IMAGE_TOTAL_BYTES) throw new Error(`原文包图片累计大小超过 ${Math.round(MAX_IMAGE_TOTAL_BYTES / MIB)} MiB`);
 	const knownBytes = new Map<string, Uint8Array>([
 		["article.md", article.bytes],
 		["mineru-result.json", mineru.bytes],
@@ -657,7 +687,7 @@ async function verifyManifestOutputs(
 	}
 	let decodedPixels = 0;
 	let sourcePdfOutputHash = "";
-	const verifiedAssetBytes = new Map<string, Uint8Array>();
+	const verifiedAssetBlobs = new Map<string, Blob>();
 	let verifiedPdfBytes: Uint8Array | null = null;
 	for (const [relativePath, record] of records) {
 		const resolvedPath = resolvePackageAssetPath(packagePath, relativePath);
@@ -693,7 +723,6 @@ async function verifyManifestOutputs(
 			verifiedPdfBytes = bytes;
 		}
 		if (isRasterImagePath(relativePath)) {
-			verifiedAssetBytes.set(relativePath, bytes);
 			const dimensions = rasterImageDimensions(bytes, relativePath);
 			const pixels = dimensions.width * dimensions.height;
 			if (pixels <= 0 || pixels > MAX_IMAGE_PIXELS) {
@@ -701,6 +730,17 @@ async function verifyManifestOutputs(
 			}
 			decodedPixels += pixels;
 			if (decodedPixels > MAX_IMAGE_TOTAL_PIXELS) throw new Error("原文包图片累计解码像素超过安全上限");
+			// Blob becomes the single retained authority representation. The
+			// transient verification buffer is released after this loop iteration.
+			if (!(bytes.buffer instanceof ArrayBuffer)
+				|| bytes.byteOffset !== 0
+				|| bytes.byteLength !== bytes.buffer.byteLength) {
+				throw new Error(`图片验证缓冲区不是独占 ArrayBuffer：${relativePath}`);
+			}
+			verifiedAssetBlobs.set(relativePath, new Blob(
+				[bytes.buffer],
+				{ type: rasterImageMime(relativePath) },
+			));
 		}
 	}
 	if (pdfPath) {
@@ -715,11 +755,17 @@ async function verifyManifestOutputs(
 			throw new Error("包内 source.pdf 与 manifest.json 来源哈希不一致");
 		}
 	}
-	return { verifiedAssetBytes, verifiedPdfBytes };
+	return { verifiedAssetBlobs, verifiedPdfBytes };
 }
 
 function isRasterImagePath(value: string): boolean {
 	return /\.(?:png|jpe?g|gif|webp)$/i.test(value);
+}
+
+function rasterImageMime(value: string): string {
+	if (/\.png$/i.test(value)) return "image/png";
+	if (/\.webp$/i.test(value)) return "image/webp";
+	return "image/jpeg";
 }
 
 function rasterImageDimensions(bytes: Uint8Array, label: string): { width: number; height: number } {
@@ -834,7 +880,7 @@ function markdownOrderForAsset(index: MineruViewerIndex, assetPath: string): num
 function buildVisuals(
 	index: MineruViewerIndex,
 	repair: MineruVisualRepair | null,
-	verifiedAssetBytes: ReadonlyMap<string, Uint8Array>,
+	verifiedAssetBlobs: ReadonlyMap<string, Blob>,
 	pdfPath: string | null,
 	issues: string[],
 ): MineruReaderVisual[] {
@@ -851,7 +897,7 @@ function buildVisuals(
 		if (members.length < 2) continue;
 		const rawAssetPaths = [...new Set(members.map((block) => block.asset_path || "").filter(Boolean))];
 		const assetPaths = rawAssetPaths.filter((assetPath) => {
-			const available = verifiedAssetBytes.has(normalizeAssetPath(assetPath));
+			const available = verifiedAssetBlobs.has(normalizeAssetPath(assetPath));
 			if (!available) issues.push(`视觉修复跳过缺失图片：${assetPath}`);
 			return available;
 		});
@@ -900,7 +946,7 @@ function buildVisuals(
 	for (const block of blocks) {
 		if (consumed.has(block.id) || !["visual", "table"].includes(block.role) || !block.asset_path) continue;
 		const assetPath = block.asset_path;
-		if (!verifiedAssetBytes.has(normalizeAssetPath(assetPath))) {
+		if (!verifiedAssetBlobs.has(normalizeAssetPath(assetPath))) {
 			issues.push(`阅读器跳过缺失图片：${assetPath}`);
 			continue;
 		}
@@ -987,6 +1033,11 @@ export class MineruPackageLoader {
 			packagePath,
 		);
 		const manifest = asRecord(manifestValue);
+		const outputRecords = manifestRecords(manifest.outputs, "outputs");
+		const manifestedImages = new Set(
+			[...outputRecords.keys()].filter((relativePath) => isRasterImagePath(relativePath)),
+		);
+		assertPassiveMineruMarkdown(article.text, manifestedImages);
 		const derivedRecords = optionalManifestRecords(manifest.derived_contracts);
 		const validationValue = await readOptionalJson(
 			this.app,
@@ -1017,7 +1068,16 @@ export class MineruPackageLoader {
 			derivedRecords.get("_extraction/viewer-index.json"),
 			packagePath,
 		);
-		let viewerIndex = contractValue ? normalizeViewerIndex(contractValue, fallbackIndex) : null;
+		let viewerIndex: MineruViewerIndex | null = null;
+		if (contractValue) {
+			try {
+				viewerIndex = normalizeViewerIndex(contractValue, fallbackIndex);
+			} catch (error) {
+				issues.push(
+					`viewer-index.json 超过结构复杂度上限，已从原始 MinerU JSON 临时重建：${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
 		if (contractValue && !viewerIndex) {
 			issues.push("viewer-index.json 结构不受支持，已从原始 MinerU JSON 临时重建");
 		}
@@ -1027,7 +1087,6 @@ export class MineruPackageLoader {
 		}
 		viewerIndex ||= fallbackIndex;
 		viewerIndex = reclassifyRuntimeRunningHeaders(viewerIndex);
-		const outputRecords = manifestRecords(manifest.outputs, "outputs");
 		assertViewerAssetsManifested(outputRecords, [fallbackIndex, viewerIndex]);
 		issues.push(...viewerIndex.issues);
 		const repairValue = await readOptionalDerivedJson(
@@ -1104,9 +1163,9 @@ export class MineruPackageLoader {
 			mineruPayload,
 			viewerIndex,
 			visualRepair,
-			visuals: buildVisuals(viewerIndex, visualRepair, verified.verifiedAssetBytes, pdfPath, issues),
+			visuals: buildVisuals(viewerIndex, visualRepair, verified.verifiedAssetBlobs, pdfPath, issues),
 			pdfPath,
-			verifiedAssetBytes: verified.verifiedAssetBytes,
+			verifiedAssetBlobs: verified.verifiedAssetBlobs,
 			verifiedPdfBytes: verified.verifiedPdfBytes,
 			externalPdfRecorded,
 			issues: [...new Set(issues.filter(Boolean))],

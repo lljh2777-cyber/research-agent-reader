@@ -2672,6 +2672,26 @@ assert.ok(!prepared.includes("images/b.jpg"));
 assert.ok(!prepared.includes("Fig. 1. Complete caption"));
 assert.ok(prepared.includes("images/unrelated.jpg"));
 
+const budgetMarkdown = `# Budget\n\n![](images/a.jpg)\n\nFig. 1. Complete caption\n\n${"body\n".repeat(800_000)}`;
+const budgetVisuals = Array.from({ length: 32 }, (_value, index) => ({
+	...visual,
+	id: `budget-${index}`,
+	memberAssetPaths: index === 0 ? ["images/a.jpg"] : [`images/not-present-${index}.jpg`],
+	memberMarkdownImageIds: index === 0 ? ["md-img-0000"] : [],
+}));
+const budgetStarted = performance.now();
+const budgetPrepared = markdown.prepareReaderMarkdown(
+	budgetMarkdown,
+	budgetVisuals,
+	undefined,
+	{ removeUnmappedImages: true, maxProjectionWork: 1_000_000 },
+);
+const budgetElapsedMs = performance.now() - budgetStarted;
+assert.ok(budgetElapsedMs < 2_500, `projection budget fallback took ${budgetElapsedMs.toFixed(1)} ms`);
+assert.equal((budgetPrepared.match(/data-visual-id=/g) || []).length, 1);
+assert.match(budgetPrepared, /Fig\. 1\. Complete caption/);
+assert.match(budgetPrepared, /data-reader-page="1"/);
+
 const pagedMarkdown = "# Example\n\nFirst page paragraph.\n\nSecond page paragraph.\n";
 const pagedIndex = normalization.buildRuntimeViewerIndex([
 	[{ type: "text", bbox: [0, 0, 100, 100], text: "First page paragraph." }],
@@ -3140,8 +3160,8 @@ assert.match(pdfRenderer, /document\.numPages > MINERU_RESOURCE_LIMITS\.pdfPages
 assert.match(pdfRenderer, /pageAspectRatio/);
 assert.match(pdfRenderer, /canvasDimension/);
 assert.match(pdfRenderer, /activeCanvasPixels/);
-assert.match(view, /const firstPage = Math\.max\(1, this\.readerState\.pdfPage - 2\)/);
-assert.match(view, /const lastPage = Math\.min\(this\.pdfRenderer\.numPages, this\.readerState\.pdfPage \+ 2\)/);
+assert.match(view, /const firstPage = Math\.max\(1, this\.readerState\.pdfPage - 1\)/);
+assert.match(view, /const lastPage = Math\.min\(this\.pdfRenderer\.numPages, this\.readerState\.pdfPage \+ 1\)/);
 assert.doesNotMatch(view, /pageNumber <= this\.pdfRenderer\.numPages/);
 assert.match(view, /verifiedResourceUrls/);
 assert.match(view, /URL\.revokeObjectURL/);
@@ -3149,7 +3169,14 @@ assert.doesNotMatch(view, /await this\.app\.vault\.readBinary/);
 assert.match(view, /if \(readerPackage\.sourceKind === "mineru"\)[\s\S]*?this\.resourceUrl\(assetPath\)/);
 assert.doesNotMatch(view, /sourceKind === "markdown"\s*\?[^:]+:\s*this\.app\.vault\.getAbstractFileByPath/);
 assert.doesNotMatch(pdfRenderer, /Array\.isArray\(transform\)/);
-assert.match(view, /reader\.readAsDataURL/);
+assert.match(view, /verifiedAssetBlobs\.get/);
+assert.match(view, /URL\.createObjectURL\(blob\)/);
+assert.doesNotMatch(view, /readAsDataURL|Uint8Array\.from/);
+assert.match(loader, /new Blob\([\s\S]*?\[bytes\.buffer\]/);
+assert.doesNotMatch(loader, /Uint8Array\.from\(bytes\)|bytes\.slice\(\)/);
+assert.doesNotMatch(pdfRenderer, /sourceBytes\.slice\(\)/);
+assert.match(view, /this\.readerPackage = null/);
+assert.match(view, /auditCanvas/);
 assert.match(view, /await compatibilityImage\.decode\(\)/);
 assert.match(view, /agent-dashboard-mineru-pdf-image-layer/);
 assert.match(view, /data-reader-page/);

@@ -9,6 +9,7 @@ import {
 } from "./mineru-publish";
 import type { AgentTool, AgentToolContext } from "./types";
 import { createTrustedVaultTextFile, readTrustedVaultFile } from "../runtime/trusted-vault-fs";
+import { validateModelNoteBodyMarkdown } from "../security/safe-markdown";
 
 /** Max characters of one vault file handed to the model per read. */
 const VAULT_READ_CHAR_LIMIT = 16000;
@@ -1007,6 +1008,13 @@ export function validateSourceNoteContent(content: string): string[] {
 	if (disallowed.length) {
 		violations.push(
 			`正文包含不允许的链接或图片（${disallowed.slice(0, 3).map((target) => target.slice(0, 60)).join("、")}）；禁止 Vault 内部链接、Markdown 图片与 URI 自动链接`,
+		);
+		return violations;
+	}
+	const activeMarkdown = validateModelNoteBodyMarkdown(rest);
+	if (activeMarkdown.length) {
+		violations.push(
+			`正文包含活动或非白名单 Markdown（${activeMarkdown.slice(0, 3).map((item) => item.detail).join("、")}）；只允许纯文本、段落、有限列表、强调和普通 https/mailto 外链`,
 		);
 	}
 	return violations;

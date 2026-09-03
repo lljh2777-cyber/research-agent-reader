@@ -1157,8 +1157,6 @@ function verifiedBoundedHeadingRanges(
 			!/^<table\b[^>]*>[\s\S]*<\/table>$/i.test(source)
 			|| markdown.slice(lineStart, range.start).trim()
 			|| markdown.slice(range.end, lineEnd).trim()
-			|| markdown.indexOf(source) !== range.start
-			|| markdown.indexOf(source, range.start + source.length) >= 0
 		) return null;
 		return { start: range.start, end: range.end };
 	};
@@ -1217,14 +1215,32 @@ function verifiedInlineCaptionRanges(
 			if (
 				!projection.text
 				|| exact !== projection.text
-				|| markdown.indexOf(projection.text) !== projection.start
-				|| markdown.indexOf(projection.text, projection.start + projection.text.length) >= 0
 				|| !hasSequentialCaptionPanels(visual.captionParts[0] || visual.caption, exact)
 			) continue;
 			ranges.push({ start: projection.start, end: projection.end });
 		}
 	}
 	return ranges;
+}
+
+interface ReaderMarkdownEdit {
+	start: number;
+	end: number;
+	replacement: string;
+}
+
+function applyReaderMarkdownEdits(markdown: string, edits: readonly ReaderMarkdownEdit[]): string {
+	const ordered = [...edits].sort((left, right) => left.start - right.start || right.end - left.end);
+	const output: string[] = [];
+	let cursor = 0;
+	for (const edit of ordered) {
+		if (!Number.isInteger(edit.start) || !Number.isInteger(edit.end)
+			|| edit.start < cursor || edit.end < edit.start || edit.end > markdown.length) continue;
+		output.push(markdown.slice(cursor, edit.start), edit.replacement);
+		cursor = edit.end;
+	}
+	output.push(markdown.slice(cursor));
+	return output.join("");
 }
 
 function suppressProjectedReaderText(
@@ -1289,12 +1305,10 @@ function suppressProjectedReaderText(
 	for (const range of verifiedInlineCaptionRanges(markdown, visuals, viewerIndex)) {
 		ranges.set(`${range.start}:${range.end}`, range);
 	}
-	return [...ranges.values()]
-		.sort((left, right) => right.start - left.start)
-		.reduce(
-			(result, range) => `${result.slice(0, range.start)}${result.slice(range.end)}`,
-			markdown,
-		);
+	return applyReaderMarkdownEdits(
+		markdown,
+		[...ranges.values()].map((range) => ({ ...range, replacement: "" })),
+	);
 }
 
 function sameIds(actual: readonly string[], expected: readonly string[]): boolean {
@@ -1833,7 +1847,47 @@ export function prepareReaderMarkdown(
 	markdown: string,
 	visuals: readonly MineruReaderVisual[],
 	viewerIndex?: MineruViewerIndex,
+	options: { removeUnmappedImages?: boolean; maxProjectionWork?: number } = {},
 ): string {
+	const projectedWork = markdown.length * Math.max(1, visuals.length);
+	const maxProjectionWork = Math.max(1_000_000, options.maxProjectionWork || 96_000_000);
+	if (projectedWork > maxProjectionWork) {
+		// Fail soft on display repair, not on content safety. A single regex pass
+		// still replaces every image with a plugin-owned anchor (or removes an
+		// unbound image), but expensive caption/table projections are skipped.
+		const imageToVisual = new Map<string, string>();
+		const assetCandidates = new Map<string, Set<string>>();
+		visuals.forEach((visual) => {
+			(visual.memberMarkdownImageIds || []).forEach((imageId) => imageToVisual.set(imageId, visual.id));
+			visual.memberAssetPaths.forEach((assetPath) => {
+				const candidates = assetCandidates.get(assetPath) || new Set<string>();
+				candidates.add(visual.id);
+				assetCandidates.set(assetPath, candidates);
+			});
+		});
+		let imageOrder = 0;
+		const inserted = new Set<string>();
+		IMAGE_TOKEN_RE.lastIndex = 0;
+		let passive = markdown.replace(
+			IMAGE_TOKEN_RE,
+			(_match, _alt: string, anglePath: string, plainPath: string, htmlPath: string) => {
+				const assetPath = normalizeAssetPath(anglePath || plainPath || htmlPath || "");
+				const imageId = `md-img-${String(imageOrder).padStart(4, "0")}`;
+				imageOrder += 1;
+				const candidates = assetPath ? assetCandidates.get(assetPath) : undefined;
+				const visualId = imageToVisual.get(imageId)
+					|| (candidates?.size === 1 ? [...candidates][0] : undefined);
+				if (!visualId) return options.removeUnmappedImages ? "" : _match;
+				if (inserted.has(visualId)) return "";
+				inserted.add(visualId);
+				return `<span class="agent-dashboard-mineru-reading-anchor" data-visual-id="${escapeHtmlAttribute(visualId)}" aria-label="图像位置"></span>`;
+			},
+		);
+		const firstLineEnd = passive.indexOf("\n");
+		const firstPagePosition = firstLineEnd >= 0 ? firstLineEnd + 1 : passive.length;
+		passive = `${passive.slice(0, firstPagePosition)}<span class="agent-dashboard-mineru-page-anchor" data-reader-page="1" aria-hidden="true"></span>${passive.slice(firstPagePosition)}`;
+		return passive;
+	}
 	const atomicCaptures = visuals.flatMap((visual) => {
 		const projection = visual.atomicBlockProjection;
 		if (!projection) return [];
@@ -1862,10 +1916,6 @@ export function prepareReaderMarkdown(
 			!/^<table\b[^>]*>[\s\S]*<\/table>$/i.test(tableText)
 			|| !captionText
 			|| captionContent.trim() !== captionText
-			|| markdown.indexOf(tableText) !== tableRange.start
-			|| markdown.indexOf(tableText, tableRange.start + tableText.length) >= 0
-			|| markdown.indexOf(captionText) !== captionRange.start + captionContent.indexOf(captionText)
-			|| markdown.indexOf(captionText, captionRange.start + captionContent.indexOf(captionText) + captionText.length) >= 0
 			|| markdown.slice(tableRange.end, captionRange.start).trim()
 			|| (captionRange.start > 0 && markdown[captionRange.start - 1] !== "\n")
 			|| (captionRange.end < markdown.length && markdown[captionRange.end - 1] !== "\n")
@@ -1923,7 +1973,7 @@ export function prepareReaderMarkdown(
 			const candidates = assetPath ? assetCandidates.get(assetPath) : undefined;
 			const visualId = imageToVisual.get(imageId)
 				|| (candidates?.size === 1 ? [...candidates][0] : undefined);
-			if (!visualId) return _match;
+			if (!visualId) return options.removeUnmappedImages ? "" : _match;
 			if (inserted.has(visualId)) return "";
 			inserted.add(visualId);
 			return `<span class="agent-dashboard-mineru-reading-anchor" data-visual-id="${escapeHtmlAttribute(visualId)}" aria-label="图像位置"></span>`;
@@ -1934,12 +1984,18 @@ export function prepareReaderMarkdown(
 		if (!located) return [];
 		return [{ capture, ...located }];
 	}).sort((left, right) => right.tableStart - left.tableStart);
+	const atomicEdits: ReaderMarkdownEdit[] = [];
 	for (const replacement of atomicReplacements) {
 		if (inserted.has(replacement.capture.visualId)) continue;
 		const anchor = `<span class="agent-dashboard-mineru-reading-anchor" data-visual-id="${escapeHtmlAttribute(replacement.capture.visualId)}" aria-label="图像位置"></span>`;
-		prepared = `${prepared.slice(0, replacement.tableStart)}${anchor}${prepared.slice(replacement.tableEnd, replacement.captionStart)}${prepared.slice(replacement.captionEnd)}`;
+		atomicEdits.push({
+			start: replacement.tableStart,
+			end: replacement.captionEnd,
+			replacement: `${anchor}${prepared.slice(replacement.tableEnd, replacement.captionStart)}`,
+		});
 		inserted.add(replacement.capture.visualId);
 	}
+	prepared = applyReaderMarkdownEdits(prepared, atomicEdits);
 	if (!viewerIndex?.pages.length) return prepared;
 
 	const positionsByPage = new Map<number, number[]>();
@@ -1949,16 +2005,17 @@ export function prepareReaderMarkdown(
 		positions.push(position);
 		positionsByPage.set(pageIdx, positions);
 	};
-	for (const page of viewerIndex.pages) {
-		for (const block of page.blocks) {
-			const range = block.markdown_text_range || block.markdown_table_range;
-			if (
-				!range
-				|| range.offset_unit !== "utf16-code-unit"
-				|| range.start < 0
-				|| range.end <= range.start
-				|| range.end > markdown.length
-			) continue;
+	// Text-only pages get one bounded lookup apiece. This path is disabled when
+	// its declared character-scan budget would exceed the same hard operation
+	// budget used above; no per-block full-document search remains.
+	if (projectedWork + prepared.length * viewerIndex.pages.length <= maxProjectionWork) {
+		for (const page of viewerIndex.pages) {
+			if ((positionsByPage.get(page.page_idx) || []).length) continue;
+			const range = page.blocks
+				.map((block) => block.markdown_text_range || block.markdown_table_range)
+				.find((candidate) => candidate?.offset_unit === "utf16-code-unit"
+					&& candidate.start >= 0 && candidate.end > candidate.start && candidate.end <= markdown.length);
+			if (!range) continue;
 			const source = markdown.slice(range.start, range.end);
 			if (!source.trim()) continue;
 			const position = prepared.indexOf(source);
@@ -1980,11 +2037,11 @@ export function prepareReaderMarkdown(
 		insertions.push({ pageNumber: page.page_idx + 1, position });
 		previousPosition = position;
 	}
-	for (const insertion of insertions.sort((left, right) => right.position - left.position)) {
-		const anchor = `<span class="agent-dashboard-mineru-page-anchor" data-reader-page="${insertion.pageNumber}" aria-hidden="true"></span>`;
-		prepared = `${prepared.slice(0, insertion.position)}${anchor}${prepared.slice(insertion.position)}`;
-	}
-	return prepared;
+	return applyReaderMarkdownEdits(prepared, insertions.map((insertion) => ({
+		start: insertion.position,
+		end: insertion.position,
+		replacement: `<span class="agent-dashboard-mineru-page-anchor" data-reader-page="${insertion.pageNumber}" aria-hidden="true"></span>`,
+	})));
 }
 
 /**

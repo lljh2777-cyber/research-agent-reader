@@ -239,7 +239,7 @@ export function buildMarkdownReaderPackage(
 		visualRepair: null,
 		visuals: figures.map(clippingVisual),
 		pdfPath: null,
-		verifiedAssetBytes: new Map(),
+		verifiedAssetBlobs: new Map(),
 		verifiedPdfBytes: null,
 		externalPdfRecorded: false,
 		issues: [],

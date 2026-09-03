@@ -96,11 +96,11 @@ export class MineruPdfRenderer {
 		if (!sourceBytes.byteLength || sourceBytes.byteLength > MINERU_RESOURCE_LIMITS.pdfBytes) {
 			throw new Error("阅读器 PDF 为空或超过安全上限");
 		}
-		const bytes = sourceBytes.slice();
-		if (generation !== this.generation) return;
 		const pdfjs = await loadPdfJs();
 		if (generation !== this.generation) return;
-		const loadingTask = pdfjs.getDocument({ data: bytes }) as PdfLoadingTask;
+		// Hand the verified authority buffer directly to PDF.js. The caller drops
+		// its reference after this method returns, avoiding a second full-PDF copy.
+		const loadingTask = pdfjs.getDocument({ data: sourceBytes }) as PdfLoadingTask;
 		this.loadingTask = loadingTask;
 		const document = await loadingTask.promise;
 		if (generation !== this.generation) {

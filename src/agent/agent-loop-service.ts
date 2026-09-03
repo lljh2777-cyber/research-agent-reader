@@ -94,7 +94,7 @@ export interface HumanIdentityConfirmationRequest {
 	localEvidence: Readonly<LocalPdfIdentityEvidence>;
 	crossrefRecordHash: string;
 	signal: AbortSignal;
-	renderPage(pageNumber: number): Promise<AuthorizedPdfPageRaster>;
+	renderPage(pageNumber: number, signal: AbortSignal): Promise<AuthorizedPdfPageRaster>;
 }
 
 export interface AgentRunHandle {
@@ -322,7 +322,10 @@ export class AgentLoopService {
 			const identityLoop = await runBoundedAgentLoop({
 				system: buildIdentitySystemPrompt(options),
 				user: buildIdentityUserMessage(options, localPdfEvidence),
-				tools: buildIdentityTools(toolDeps, localPdfEvidence),
+				tools: buildIdentityTools(toolDeps, localPdfEvidence, {
+					candidateTitle: options.identityCandidateTitle,
+					candidateDoi: options.identityCandidateDoi,
+				}),
 				provider: resolved.provider,
 				model: resolved.model,
 				maxTokens,
@@ -390,10 +393,10 @@ export class AgentLoopService {
 				localEvidence: Object.freeze({ ...localPdfEvidence }),
 				crossrefRecordHash: crossrefRecordHash(identity),
 				signal: abortController.signal,
-				renderPage: (pageNumber) => renderAuthorizedPdfIdentityPage(
+				renderPage: (pageNumber, signal) => renderAuthorizedPdfIdentityPage(
 					authorizedPdfSnapshot!,
 					pageNumber,
-					{ signal: abortController.signal },
+					{ signal },
 				),
 			});
 			const confirmationProblems = validateHumanIdentityConfirmation(confirmation, {

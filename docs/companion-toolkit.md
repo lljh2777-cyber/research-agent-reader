@@ -32,7 +32,8 @@ is still required for AI-assisted lint repair and other advanced write actions.
 CLI (or any coding agent). The model behind a user's Direct API profile drives
 a bounded, phase-gated tool loop inside the plugin: identity verification via
 `crossref_search` / `crossref_doi` (plugin-constructed URLs), vault lexical
-search, and capped reads restricted to `wiki/sources` and `papers`.
+search, and capped identity reads restricted to `wiki/sources`, `papers`, and
+`Clippings`.
 
 The model never writes files and never chooses extraction paths:
 

@@ -104,16 +104,32 @@ export function runMineruProcessCommand(
 		};
 		const waitForProcessGroupExit = async (pid: number, timeoutMs: number): Promise<boolean> => {
 			const deadline = Date.now() + timeoutMs;
-			while (Date.now() < deadline) {
+			do {
 				try {
 					process.kill(-pid, 0);
 				} catch (error) {
 					const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
 					if (code === "ESRCH") return true;
 				}
+				if (Date.now() >= deadline) break;
 				await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 50));
-			}
+			} while (Date.now() <= deadline);
 			return false;
+		};
+		const terminatePosixProcessGroup = async (pid: number): Promise<boolean> => {
+			if (await waitForProcessGroupExit(pid, 0)) return true;
+			try {
+				process.kill(-pid, "SIGTERM");
+			} catch {
+				try { child.kill("SIGTERM"); } catch { /* Escalate below. */ }
+			}
+			if (await waitForProcessGroupExit(pid, 3_000)) return true;
+			try {
+				process.kill(-pid, "SIGKILL");
+			} catch {
+				try { child.kill("SIGKILL"); } catch { /* Final confirmation fails closed. */ }
+			}
+			return await waitForProcessGroupExit(pid, finalCloseTimeoutMs);
 		};
 		const runTaskkill = async (): Promise<{ exitCode: number; error: Error | null }> => {
 			if (!child.pid) return { exitCode: 1, error: new Error("MinerU 子进程没有 PID") };
@@ -204,20 +220,7 @@ export function runMineruProcessCommand(
 							try { child.kill("SIGKILL"); } catch { /* Continue to final wait. */ }
 						}
 					} else if (child.pid) {
-						try {
-							process.kill(-child.pid, "SIGTERM");
-						} catch {
-							try { child.kill("SIGTERM"); } catch { /* Continue to escalation. */ }
-						}
-						terminationCommandSucceeded = await waitForProcessGroupExit(child.pid, 3_000);
-						if (!terminationCommandSucceeded) {
-							try {
-								process.kill(-child.pid, "SIGKILL");
-							} catch {
-								try { child.kill("SIGKILL"); } catch { /* Continue to final wait. */ }
-							}
-							terminationCommandSucceeded = await waitForProcessGroupExit(child.pid, finalCloseTimeoutMs);
-						}
+						terminationCommandSucceeded = await terminatePosixProcessGroup(child.pid);
 					} else {
 						try { child.kill("SIGKILL"); } catch { /* Continue to final wait. */ }
 					}
@@ -230,6 +233,12 @@ export function runMineruProcessCommand(
 					throw new MineruTerminationUnconfirmedError(
 						`${message}，但 MinerU 子进程在终止期限内没有关闭；进程树终止未确认`,
 					);
+				}
+				// The leader may close between the abort/timeout signal and this
+				// continuation while descendants remain in the detached POSIX group.
+				// A close event never transfers lifecycle ownership away from us.
+				if (platform !== "win32" && child.pid && !await waitForProcessGroupExit(child.pid, 0)) {
+					terminationCommandSucceeded = await terminatePosixProcessGroup(child.pid);
 				}
 				const treeTerminationConfirmed = (closeObserved || terminationCommandSucceeded)
 					&& await confirmTreeGone();
@@ -273,14 +282,26 @@ export function runMineruProcessCommand(
 			closeResolver?.();
 			if (!terminating) {
 				terminating = true;
-				void confirmTreeGone().then((confirmed) => {
+				void confirmTreeGone().then(async (initiallyConfirmed) => {
+					let confirmed = initiallyConfirmed;
+					let recoveredResidualGroup = false;
+					if (!confirmed && platform !== "win32" && child.pid) {
+						recoveredResidualGroup = true;
+						confirmed = await terminatePosixProcessGroup(child.pid);
+					}
 					if (!confirmed) {
 						settle(new MineruTerminationUnconfirmedError(
 							"MinerU 直接子进程已关闭，但无法确认其完整进程树退出",
 						));
 						return;
 					}
-					settle({ exitCode: code ?? 1, stdout, stderr });
+					settle({
+						exitCode: code ?? 1,
+						stdout,
+						stderr: recoveredResidualGroup
+							? `${stderr}\nMinerU 启动器退出后仍有后代，已终止并确认完整进程组退出`.trim()
+							: stderr,
+					});
 				}, (error) => settle(error instanceof Error ? error : new Error(String(error))));
 			}
 		});

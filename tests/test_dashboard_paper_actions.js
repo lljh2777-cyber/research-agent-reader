@@ -9,6 +9,7 @@ const readPlugin = (relativePath) => fs.readFileSync(path.join(pluginRoot, relat
 
 const actions = readPlugin("src/actions.ts");
 const modal = readPlugin("src/modals/action-input.ts");
+const identityConfirmationModal = readPlugin("src/modals/human-identity-confirmation.ts");
 const serializer = readPlugin("src/runtime/action-request.ts");
 const settings = readPlugin("src/runtime/settings.ts");
 const settingsTab = readPlugin("src/settings/settings-tab.ts");
@@ -62,6 +63,14 @@ assert.match(settings, /mineruDefaultIncludeSourcePdf/);
 assert.match(modal, /this\.plugin\.settings\.mineruDefaultModel/);
 assert.match(modal, /this\.plugin\.settings\.mineruDefaultTimeoutSeconds/);
 assert.match(modal, /uploadConfirmation/);
+assert.match(modal, /候选标题/);
+assert.match(modal, /候选 DOI/);
+assert.match(modal, /identityCandidateTitle/);
+assert.match(modal, /identityCandidateDoi/);
+assert.match(identityConfirmationModal, /pageAbortController\?\.abort\(\)/);
+assert.match(identityConfirmationModal, /await this\.preview\.decode\(\)/);
+assert.match(identityConfirmationModal, /generation !== this\.loadGeneration/);
+assert.match(identityConfirmationModal, /this\.confirmButton\?\.setAttribute\("disabled", "true"\)/);
 assert.match(dashboard, /serializeActionRequest\(/);
 // Stop routing must be resolved by the plugin (loop → direct query →
 // process), never inferred from executionConfig.backend in the dashboard.

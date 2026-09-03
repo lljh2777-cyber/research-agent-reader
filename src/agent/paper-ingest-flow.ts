@@ -44,6 +44,8 @@ export type PaperIngestPhase = "identity" | "draft";
 export interface PaperIngestFlowOptions {
 	sourcePdfPath: string;
 	requestNotes: string;
+	identityCandidateTitle: string;
+	identityCandidateDoi: string;
 	createArticleMarkdown: boolean;
 	createArticleWiki: boolean;
 	articleWikiSource: "auto" | "pdf" | "article";
@@ -170,13 +172,21 @@ export const PAPER_INGEST_READ_PREFIXES = ["wiki/sources", "papers", "Clippings"
 export function buildIdentityTools(
 	deps: PaperIngestToolDeps,
 	localPdfEvidence?: LocalPdfIdentityEvidence,
+	userHints: { candidateTitle?: string; candidateDoi?: string } = {},
 ): AgentTool[] {
 	let vaultSearchCompleted = false;
 	const exactDoiCandidates = new Set((localPdfEvidence?.doiCandidates || [])
 		.map((doi) => String(doi || "").trim().toLowerCase())
 		.filter(Boolean));
+	const userCandidateDoi = normalizeIdentityDoi(userHints.candidateDoi || "");
+	if (userCandidateDoi) exactDoiCandidates.add(userCandidateDoi);
 	const attemptedExactDois = new Set<string>();
 	const trustedTitles = localPdfEvidence ? localPdfTitleCandidates(localPdfEvidence) : [];
+	const userCandidateTitle = String(userHints.candidateTitle || "").replace(/\s+/g, " ").trim().slice(0, 500);
+	if (normalizeBibliographicTitle(userCandidateTitle).length >= 12
+		&& !trustedTitles.some((value) => normalizeBibliographicTitle(value) === normalizeBibliographicTitle(userCandidateTitle))) {
+		trustedTitles.unshift(userCandidateTitle);
+	}
 	const fileHint = String(localPdfEvidence?.fileName || "")
 		.replace(/\.pdf$/i, "")
 		.replace(/[_-]+/g, " ")

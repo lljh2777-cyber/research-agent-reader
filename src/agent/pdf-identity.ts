@@ -464,7 +464,7 @@ export async function renderAuthorizedPdfIdentityPage(
 	let canvas: HTMLCanvasElement | null = null;
 	try {
 		const bytes = await waitForAbortable(
-			fs.promises.readFile(snapshot.path),
+			fs.promises.readFile(snapshot.path, { signal: renderController.signal }),
 			renderController.signal,
 			"PDF 身份确认渲染已取消",
 		);

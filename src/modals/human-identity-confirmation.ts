@@ -20,6 +20,7 @@ export class HumanIdentityConfirmationModal extends Modal {
 	private preview?: HTMLImageElement;
 	private status?: HTMLElement;
 	private confirmButton?: HTMLButtonElement;
+	private pageAbortController: AbortController | null = null;
 
 	constructor(
 		app: App,
@@ -102,6 +103,8 @@ export class HumanIdentityConfirmationModal extends Modal {
 
 	onClose(): void {
 		this.loadGeneration += 1;
+		this.pageAbortController?.abort();
+		this.pageAbortController = null;
 		this.contentEl.empty();
 		if (!this.settled) {
 			this.settled = true;
@@ -117,15 +120,21 @@ export class HumanIdentityConfirmationModal extends Modal {
 
 	private async loadPage(pageNumber: number): Promise<void> {
 		const generation = ++this.loadGeneration;
+		this.pageAbortController?.abort();
+		const pageAbortController = new AbortController();
+		this.pageAbortController = pageAbortController;
 		this.activeRaster = null;
 		this.confirmButton?.setAttribute("disabled", "true");
 		if (this.status) this.status.setText(`正在渲染第 ${pageNumber} 页…`);
 		if (this.preview) this.preview.removeAttribute("src");
 		try {
-			const raster = await this.request.renderPage(pageNumber);
+			const raster = await this.request.renderPage(pageNumber, pageAbortController.signal);
 			if (generation !== this.loadGeneration || this.settled) return;
+			if (!this.preview) throw new Error("身份确认预览容器不可用");
+			this.preview.src = raster.rasterDataUrl;
+			await this.preview.decode();
+			if (generation !== this.loadGeneration || this.settled || pageAbortController.signal.aborted) return;
 			this.activeRaster = raster;
-			if (this.preview) this.preview.src = raster.rasterDataUrl;
 			if (this.status) {
 				this.status.setText(`授权快照第 ${raster.pageNumber}/${raster.pageCount} 页 · 栅格 ${raster.viewportWidth}×${raster.viewportHeight}`);
 			}
@@ -133,6 +142,8 @@ export class HumanIdentityConfirmationModal extends Modal {
 		} catch (error) {
 			if (generation !== this.loadGeneration || this.settled) return;
 			if (this.status) this.status.setText(`页面渲染失败：${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			if (this.pageAbortController === pageAbortController) this.pageAbortController = null;
 		}
 	}
 

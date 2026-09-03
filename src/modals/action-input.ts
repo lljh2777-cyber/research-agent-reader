@@ -325,6 +325,24 @@ export class ActionInputModal extends Modal {
 				cls: "agent-dashboard-action-options-description",
 				text: "身份核验与元数据准备始终执行。papers/ 与 Clippings/ 同属原文层，wiki/sources/ 是独立分析层；以下两个输出分别查重、分别补全。",
 			});
+			const identityHints = section.createDiv({
+				cls: "agent-dashboard-mineru-grid",
+				attr: { "aria-label": "扫描件身份检索提示" },
+			});
+			const candidateTitleField = identityHints.createDiv({ cls: "agent-dashboard-mineru-field" });
+			const candidateTitleCopy = candidateTitleField.createDiv();
+			candidateTitleCopy.createEl("strong", { text: "候选标题（可选）" });
+			candidateTitleCopy.createSpan({ text: "扫描件、通用文件名或无文本层 PDF 可填写；只用于固定检索，不作为身份权威。" });
+			const candidateTitle = candidateTitleField.createEl("input", {
+				attr: { type: "text", maxlength: "500", "aria-label": "候选标题" },
+			});
+			const candidateDoiField = identityHints.createDiv({ cls: "agent-dashboard-mineru-field" });
+			const candidateDoiCopy = candidateDoiField.createDiv();
+			candidateDoiCopy.createEl("strong", { text: "候选 DOI（可选）" });
+			candidateDoiCopy.createSpan({ text: "将优先进行 Crossref DOI 精确核验；仍需核对最终栅格页面。" });
+			const candidateDoi = candidateDoiField.createEl("input", {
+				attr: { type: "text", maxlength: "200", placeholder: "10.xxxx/xxxxx", "aria-label": "候选 DOI" },
+			});
 			const mineruAvailable = describeCliExecutable(
 				"mineru",
 				this.plugin.settings.mineruExecutable,
@@ -581,6 +599,8 @@ export class ActionInputModal extends Modal {
 			wikiOption.addEventListener("change", sync);
 			sourceSelect.addEventListener("change", onChange);
 			for (const control of [
+				candidateTitle,
+				candidateDoi,
 				model.select,
 				language.select,
 				includeSourcePdf,
@@ -598,6 +618,8 @@ export class ActionInputModal extends Modal {
 
 			return {
 				getOptions: () => ({
+					identityCandidateTitle: candidateTitle.value.trim().slice(0, 500),
+					identityCandidateDoi: candidateDoi.value.trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").slice(0, 200),
 					createArticleMarkdown: markdownOption.checked,
 					createArticleWiki: wikiOption.checked,
 					articleWikiSource: sourceSelect.value === "pdf"
@@ -620,6 +642,8 @@ export class ActionInputModal extends Modal {
 					mineruRemoteConfirmed: uploadConfirmation ? uploadConfirmation.checked : true,
 				}),
 				isValid: () => {
+					const doiHint = candidateDoi.value.trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
+					if (doiHint && !/^10\.\d{4,9}\/\S+$/i.test(doiHint)) return false;
 					if (!markdownOption.checked && !wikiOption.checked) return false;
 					if (!markdownOption.checked) return true;
 					const extractionReady = this.runner === "light-agent"

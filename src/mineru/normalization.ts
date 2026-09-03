@@ -19,6 +19,8 @@ export const MINERU_VIEWER_LIMITS = {
 	maxBlocksPerPage: 512,
 	maxMarkdownImages: 4096,
 	maxMarkdownCaptions: 4096,
+	maxIssues: 512,
+	maxNestedStrings: 512,
 	maxTextDepth: 32,
 	maxTextValues: 8192,
 } as const;

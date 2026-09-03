@@ -5,6 +5,8 @@ export type PdfXraySource = "pdf" | "article";
 export type MineruModel = "vlm" | "pipeline" | "auto" | "html";
 
 export interface DashboardActionOptions {
+	identityCandidateTitle?: string;
+	identityCandidateDoi?: string;
 	createArticleMarkdown?: boolean;
 	createArticleWiki?: boolean;
 	articleWikiSource?: ArticleWikiSource;

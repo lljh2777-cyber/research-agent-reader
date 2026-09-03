@@ -43,14 +43,14 @@ loop inside the plugin. Its boundaries are enforced in code, not by prompt:
 
 - Tools are allowlisted per workflow phase; phases run in a fixed order
   (identity/dedup → extraction → note commit) controlled by the plugin.
-- Vault reads and listings are restricted to `wiki/sources` and `papers`;
+- Vault identity reads and listings are restricted to `wiki/sources`, `papers`, and `Clippings`;
   traversal (`..`) and out-of-scope paths are rejected.
 - Network access is limited to domain-bound metadata lookups (Crossref); the
   plugin constructs the URLs, so model-controlled text can only fill query
   parameters.
-- The MinerU helper always receives the exact PDF path the user confirmed in
-  the modal (remote-upload confirmation still applies); the model cannot
-  select or substitute files.
+- The MinerU helper receives the immutable private snapshot derived from the
+  exact PDF selected and authorized by the user (remote-upload confirmation
+  still applies); it never receives a model-selected path.
 - PDF filenames, metadata, and text-layer extraction are discovery hints only.
   Before a bibliographic identity can authorize extraction or a Wiki write,
   the user must visually confirm a final PDF.js raster from the immutable
@@ -60,6 +60,13 @@ loop inside the plugin. Its boundaries are enforced in code, not by prompt:
 - Wiki writes are performed by the plugin from validated model-supplied
   fields into `wiki/sources/<citekey>.md`, create-only; existing notes are
   never overwritten.
+- MinerU and model text are treated as untrusted active-Markdown input. The
+  original MinerU Markdown bytes are retained only as
+  `_extraction/article.raw.txt`; the rendered `article.md` is a deterministic
+  passive derivative. Fenced/indented code, raw HTML, embeds, reference-style
+  or external images, plugin directives, and unbound media are neutralized or
+  rejected before Obsidian's global Markdown processor chain. Model-authored Source Notes use
+  the same boundary with an even stricter no-image profile.
 - Tool output is size-capped and the run has step/wall-clock budgets;
   cancellation aborts in-flight requests and subprocesses.
 - Tool results and web content are untrusted input and may contain prompt

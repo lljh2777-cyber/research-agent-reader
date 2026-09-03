@@ -6,6 +6,8 @@ import type { LocalPdfIdentityEvidence } from "./pdf-identity";
 export interface PaperIngestPromptOptions {
 	sourcePdfPath: string;
 	requestNotes: string;
+	identityCandidateTitle?: string;
+	identityCandidateDoi?: string;
 	createArticleMarkdown: boolean;
 	createArticleWiki: boolean;
 	articleWikiSource: "auto" | "pdf" | "article";
@@ -129,6 +131,10 @@ export function buildIdentityUserMessage(
 		].filter(Boolean).join(" + ") || "仅登记身份"}`,
 		"",
 		...pdfEvidenceLines,
+		"",
+		"用户结构化检索提示（仅用于发现候选，仍须 Crossref 回执与人工栅格确认）：",
+		`- 候选标题：${options.identityCandidateTitle || "（未填写）"}`,
+		`- 候选 DOI：${options.identityCandidateDoi || "（未填写）"}`,
 		"",
 		"任务说明（用户原文）：",
 		options.requestNotes || "（无补充说明）",

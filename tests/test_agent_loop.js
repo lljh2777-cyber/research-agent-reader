@@ -1043,7 +1043,8 @@ async function testMineruPublishPipeline() {
 	);
 	assert.equal(manifest.schema_version, 1);
 	assert.equal(manifest.extractor, "mineru-open-api");
-	assert.equal(manifest.outputs.length, 3, "article + json + image must be registered");
+	assert.equal(manifest.outputs.length, 4, "safe article + raw text + json + image must be registered");
+	assert.ok(manifest.outputs.some((item) => item.path === "_extraction/article.raw.txt"));
 	const articleRecord = manifest.outputs.find((record) => record.path === "article.md");
 	const expectedHash = require("node:crypto")
 		.createHash("sha256")
@@ -1316,6 +1317,21 @@ async function testCommitSourceNoteSafety() {
 		).then(() => null, (error) => error);
 		assert.ok(rejected instanceof Error, `must reject raw HTML: ${htmlInjection}`);
 		assert.match(rejected.message, /原始 HTML/);
+	}
+	for (const activeMarkdownInjection of [
+		"```some-active-language\npayload\n```",
+		"~~~unknown-processor\npayload\n~~~",
+		"    indented processor payload",
+		"%% hidden plugin directive %%",
+	]) {
+		const rejected = await commitSourceNote(
+			{ app: fake },
+			"activemarkdown",
+			{ ...fields, conclusion: activeMarkdownInjection },
+			"",
+		).then(() => null, (error) => error);
+		assert.ok(rejected instanceof Error, `must reject active Markdown: ${activeMarkdownInjection}`);
+		assert.match(rejected.message, /活动或非白名单 Markdown/);
 	}
 	// External links stay allowed as Markdown; math prose and autolinks
 	// must not trip the raw-HTML detector.

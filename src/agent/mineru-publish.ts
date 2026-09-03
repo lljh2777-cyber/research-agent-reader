@@ -9,6 +9,7 @@ import { MINERU_RESOURCE_LIMITS, parseBoundedJson } from "../mineru/resource-lim
 import { buildVisualCandidates, validateVisualCandidates } from "../mineru/visual-candidates";
 import { buildRuntimeVisualRepair, validateVisualContracts } from "../mineru/visual-repair";
 import { MineruTerminationUnconfirmedError } from "../runtime/mineru-process";
+import { assertPassiveMineruMarkdown, derivePassiveMineruMarkdown } from "../security/safe-markdown";
 
 /**
  * Native (Python/toolkit-free) MinerU publish pipeline for the light agent.
@@ -472,7 +473,7 @@ function inventoryTree(root: string): PackageInventory {
 				}
 				if (!stats.isFile()) throw new Error(`MinerU 输出包含不支持的特殊文件：${entry.name}`);
 				if (stats.size > PACKAGE_INVENTORY_LIMITS.maxFileBytes) {
-					throw new Error(`MinerU 输出单文件超过 256 MiB：${entry.name}`);
+					throw new Error(`MinerU 输出单文件超过 ${Math.round(PACKAGE_INVENTORY_LIMITS.maxFileBytes / 1024 / 1024)} MiB：${entry.name}`);
 				}
 				files.push(child);
 				totalBytes += stats.size;
@@ -480,7 +481,7 @@ function inventoryTree(root: string): PackageInventory {
 					throw new Error(`MinerU 输出文件数超过 ${PACKAGE_INVENTORY_LIMITS.maxFiles}`);
 				}
 				if (totalBytes > PACKAGE_INVENTORY_LIMITS.maxTotalBytes) {
-					throw new Error("MinerU 输出累计大小超过 512 MiB");
+					throw new Error(`MinerU 输出累计大小超过 ${Math.round(PACKAGE_INVENTORY_LIMITS.maxTotalBytes / 1024 / 1024)} MiB`);
 				}
 			}
 		} finally {
@@ -727,6 +728,7 @@ export function validateStagedPackage(
 		path.join(packageRoot, "mineru-result.json"),
 	);
 	const markdown = data.markdown;
+	assertPassiveMineruMarkdown(markdown);
 	if (markdown.trim().length < 100) {
 		throw new Error("MinerU article.md 为空或过短（<100 字符）");
 	}
@@ -792,7 +794,7 @@ function buildManifest(inputs: {
 	const fileRecord = (absolutePath: string): Record<string, unknown> => {
 		const relative = path.relative(inputs.packageRoot, absolutePath).split(path.sep).join("/");
 		const size = fs.statSync(absolutePath).size;
-		const maxBytes = relative === "article.md"
+		const maxBytes = relative === "article.md" || relative === "_extraction/article.raw.txt"
 			? MINERU_RESOURCE_LIMITS.articleBytes
 			: relative === "mineru-result.json"
 				? MINERU_RESOURCE_LIMITS.mineruJsonBytes
@@ -809,6 +811,7 @@ function buildManifest(inputs: {
 	const register = (absolutePath: string): void => { outputs.push(fileRecord(absolutePath)); };
 	register(path.join(inputs.packageRoot, "article.md"));
 	register(path.join(inputs.packageRoot, "mineru-result.json"));
+	register(path.join(inputs.packageRoot, "_extraction", "article.raw.txt"));
 	for (const relative of inputs.copiedAssets) {
 		register(path.join(inputs.packageRoot, ...relative.split("/")));
 	}
@@ -1381,10 +1384,20 @@ export async function publishMineruPackage(
 		}
 
 		const outputs = locateMineruOutputs(extractDir);
-		const validatedExtraction = readValidatedExtractionData(outputs.markdown, outputs.json);
+		const rawExtraction = readValidatedExtractionData(outputs.markdown, outputs.json);
+		const passiveMarkdown = derivePassiveMineruMarkdown(rawExtraction.markdown);
+		const passiveBytes = Buffer.from(passiveMarkdown, "utf8");
+		if (passiveBytes.byteLength > MINERU_RESOURCE_LIMITS.articleBytes) {
+			throw new Error("安全展示 article.md 超过发布安全上限（16 MiB）");
+		}
+		const validatedExtraction: ValidatedExtractionData = {
+			...rawExtraction,
+			articleBytes: passiveBytes,
+			markdown: passiveMarkdown,
+		};
 		const packageRoot = path.join(stage, "package");
 		fs.mkdirSync(packageRoot);
-		fs.copyFileSync(outputs.markdown, path.join(packageRoot, "article.md"));
+		fs.writeFileSync(path.join(packageRoot, "article.md"), passiveBytes, { flag: "wx" });
 		fs.copyFileSync(outputs.json, path.join(packageRoot, "mineru-result.json"));
 		const copiedAssets = copyReferencedAssets(
 			extractDir,
@@ -1394,12 +1407,12 @@ export async function publishMineruPackage(
 			validatedExtraction.payload,
 		);
 		const extractionDir = path.join(packageRoot, "_extraction");
+		fs.mkdirSync(extractionDir, { recursive: true });
+		fs.writeFileSync(path.join(extractionDir, "article.raw.txt"), rawExtraction.articleBytes, { flag: "wx" });
 		if (args.includeSourcePdf) {
-			fs.mkdirSync(extractionDir, { recursive: true });
 			fs.copyFileSync(source, path.join(extractionDir, "source.pdf"));
 		}
 
-		fs.mkdirSync(extractionDir, { recursive: true });
 		const baseValidation = validateStagedPackage(packageRoot, validatedExtraction);
 		const contractSummary = writeDerivedViewerContracts(
 			packageRoot,
@@ -1410,6 +1423,8 @@ export async function publishMineruPackage(
 			...baseValidation,
 			checks: {
 				...(baseValidation.checks as Record<string, unknown>),
+				passive_markdown_closed: true,
+				raw_markdown_non_renderable: true,
 				viewer_index_contract_valid: true,
 				visual_repair_contract_valid: true,
 				visual_candidates_contract_valid: true,

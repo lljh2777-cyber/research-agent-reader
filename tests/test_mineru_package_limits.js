@@ -75,6 +75,20 @@ function baseFiles(options = {}) {
 	return { packagePath, files };
 }
 
+function attachViewerIndex(fixture, viewerIndex) {
+	const viewerBytes = jsonBytes(viewerIndex);
+	const manifestPath = `${fixture.packagePath}/_extraction/manifest.json`;
+	const manifest = JSON.parse(fixture.files.get(manifestPath).toString("utf8"));
+	manifest.derived_contracts = [{
+		path: "_extraction/viewer-index.json",
+		size: viewerBytes.length,
+		sha256: sha256(viewerBytes),
+	}];
+	fixture.files.set(manifestPath, jsonBytes(manifest));
+	fixture.files.set(`${fixture.packagePath}/_extraction/viewer-index.json`, viewerBytes);
+	return fixture;
+}
+
 function fakeApp(files, statOverrides = new Map(), fullRoot = "") {
 	const vaultRoot = fullRoot || fs.mkdtempSync(path.join(os.tmpdir(), "mineru-package-vault-"));
 	if (!fullRoot) {
@@ -143,11 +157,53 @@ async function testDeepJsonRejectedBeforeNormalization() {
 	await assert.rejects(loadPackage(fixture), /嵌套深度超过/);
 }
 
+async function testViewerIndexFanoutFallsBackBeforeMapping() {
+	const tooManyPages = attachViewerIndex(baseFiles(), {
+		schema_version: 1,
+		pages: Array.from({ length: 2_049 }, (_value, page_idx) => ({ page_idx, blocks: [] })),
+		markdown_images: [],
+		issues: [],
+	});
+	const pageFallback = await loadPackage(tooManyPages);
+	assert.equal(pageFallback.viewerIndex.pages.length, 1);
+	assert.ok(pageFallback.issues.some((issue) => /结构不受支持/.test(issue)));
+
+	const nestedFanout = attachViewerIndex(baseFiles(), {
+		schema_version: 1,
+		pages: [{
+			page_idx: 0,
+			blocks: [{
+				source_index: 0,
+				markdown_image_ids: Array.from({ length: 513 }, (_value, index) => `image-${index}`),
+			}],
+		}],
+		markdown_images: [],
+		issues: [],
+	});
+	const nestedFallback = await loadPackage(nestedFanout);
+	assert.equal(nestedFallback.viewerIndex.pages.length, 1);
+	assert.ok(nestedFallback.issues.some((issue) => /结构复杂度上限/.test(issue)));
+}
+
+async function testActiveMarkdownPackageRejectedBeforeReaderLoad() {
+	for (const injection of [
+		"```some-active-language\npayload\n```",
+		"![tracking][remote]\n\n[remote]: https://example.invalid/opened",
+		"![[Vault embed]]",
+		"<iframe src=https://example.invalid></iframe>",
+	]) {
+		const fixture = baseFiles({
+			article: Buffer.from(`# Demo Paper\n\n${injection}\n`, "utf8"),
+		});
+		await assert.rejects(loadPackage(fixture), /article\.md 含活动或未绑定 Markdown/);
+	}
+}
+
 async function testUnmanifestedViewerAssetRejected() {
 	const article = Buffer.from("# Demo Paper\n\n![](images/missing.png)\n", "utf8");
 	const mineru = jsonBytes([{ type: "image", page_idx: 0, img_path: "images/missing.png" }]);
 	const fixture = baseFiles({ article, mineru });
-	await assert.rejects(loadPackage(fixture), /引用资产未登记/);
+	await assert.rejects(loadPackage(fixture), /未绑定 Manifest|引用资产未登记/);
 }
 
 async function testImagePixelBombRejected() {
@@ -176,7 +232,7 @@ async function testUnsupportedViewerImageFormatRejected() {
 		{ path: "images/vector.svg", size: svg.length, sha256: sha256(svg) },
 	];
 	const fixture = baseFiles({ article, mineru, outputs, extraFiles: [["images/vector.svg", svg]] });
-	await assert.rejects(loadPackage(fixture), /不受像素预算保护的图片格式/);
+	await assert.rejects(loadPackage(fixture), /不受像素预算保护的图片格式|不允许的图片/);
 }
 
 async function testVerifiedImageBytesAreRetainedAndGifRejected() {
@@ -194,7 +250,7 @@ async function testVerifiedImageBytesAreRetainedAndGifRejected() {
 	const loaded = await loadPackage(baseFiles({
 		article, mineru, outputs, extraFiles: [["images/static.png", png]],
 	}));
-	assert.deepEqual(Buffer.from(loaded.verifiedAssetBytes.get("images/static.png")), png);
+	assert.deepEqual(Buffer.from(await loaded.verifiedAssetBlobs.get("images/static.png").arrayBuffer()), png);
 
 	const gifArticle = Buffer.from("# Demo Paper\n\n![](images/animated.gif)\n", "utf8");
 	const gifMineru = jsonBytes([{ type: "image", page_idx: 0, img_path: "images/animated.gif" }]);
@@ -207,7 +263,7 @@ async function testVerifiedImageBytesAreRetainedAndGifRejected() {
 	await assert.rejects(loadPackage(baseFiles({
 		article: gifArticle, mineru: gifMineru, outputs: gifOutputs,
 		extraFiles: [["images/animated.gif", gif]],
-	})), /拒绝 GIF/);
+	})), /拒绝 GIF|不允许的图片/);
 }
 
 async function testSymlinkedPackageAssetRejected() {
@@ -260,6 +316,8 @@ async function testSymlinkedPapersAncestorRejected() {
 	await testManifestRecordBudget();
 	await testPostReadLengthBudget();
 	await testDeepJsonRejectedBeforeNormalization();
+	await testViewerIndexFanoutFallsBackBeforeMapping();
+	await testActiveMarkdownPackageRejectedBeforeReaderLoad();
 	await testUnmanifestedViewerAssetRejected();
 	await testImagePixelBombRejected();
 	await testUnsupportedViewerImageFormatRejected();
