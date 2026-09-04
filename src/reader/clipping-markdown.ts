@@ -230,6 +230,7 @@ export function buildMarkdownReaderPackage(
 	};
 	return {
 		sourceKind: "markdown",
+		sourceMarkdownDisposition: "passive",
 		packagePath,
 		articlePath: normalizedPath,
 		title: titleFromMarkdown(articleMarkdown, normalizedPath),

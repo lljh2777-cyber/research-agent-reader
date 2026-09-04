@@ -244,6 +244,7 @@ export interface MineruReaderVisual {
 
 export interface MineruReaderPackage {
 	sourceKind: "mineru" | "markdown";
+	sourceMarkdownDisposition: "passive" | "runtime-derived";
 	packagePath: string;
 	articlePath: string;
 	title: string;

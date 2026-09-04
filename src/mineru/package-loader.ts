@@ -21,7 +21,7 @@ import {
 	validateVisualContracts,
 } from "./visual-repair";
 import { MINERU_RESOURCE_LIMITS, parseBoundedJson } from "./resource-limits";
-import { assertPassiveMineruMarkdown } from "../security/safe-markdown";
+import { assertPassiveMineruMarkdown, derivePassiveMineruMarkdown } from "../security/safe-markdown";
 import { readTrustedVaultFile, resolveTrustedVaultPath } from "../runtime/trusted-vault-fs";
 import type { VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
 import type {
@@ -748,11 +748,32 @@ async function verifyManifestOutputs(
 		const source = asRecord(manifest.source);
 		const expectedHash = String(source.sha256 || "").toLowerCase();
 		if (!file || file.stat.size > MAX_PDF_BYTES) throw new Error("包内 source.pdf 缺失或超过安全上限");
-		if (!records.has("_extraction/source.pdf") || !sourcePdfOutputHash) {
-			throw new Error("manifest.json 未登记包内 source.pdf");
-		}
-		if (!/^[a-f0-9]{64}$/.test(expectedHash) || sourcePdfOutputHash !== expectedHash) {
-			throw new Error("包内 source.pdf 与 manifest.json 来源哈希不一致");
+		if (records.has("_extraction/source.pdf") && sourcePdfOutputHash) {
+			if (!/^[a-f0-9]{64}$/.test(expectedHash) || sourcePdfOutputHash !== expectedHash) {
+				throw new Error("包内 source.pdf 与 manifest.json 来源哈希不一致");
+			}
+		} else {
+			// Legacy schema-v1 packages recorded the bundled source only in the
+			// source record. It remains authoritative only when both size and
+			// SHA-256 bind the exact verified bytes; the path string is ignored.
+			const expectedSize = Number(source.size);
+			if (!Number.isSafeInteger(expectedSize)
+				|| expectedSize < 0
+				|| file.stat.size !== expectedSize
+				|| !/^[a-f0-9]{64}$/.test(expectedHash)
+				|| packageTotalBytes + expectedSize > MAX_PACKAGE_TOTAL_BYTES) {
+				throw new Error("旧版 manifest.json 未完整绑定包内 source.pdf");
+			}
+			await assertPackageFileNoFollow(app, packagePath, file);
+			const bytes = new Uint8Array(await readTrustedVaultFile(
+				filesystemAdapter(app),
+				pdfPath,
+				MAX_PDF_BYTES,
+			));
+			if (bytes.byteLength !== expectedSize || sha256(bytes) !== expectedHash) {
+				throw new Error("包内 source.pdf 与旧版 manifest.json 来源哈希不一致");
+			}
+			verifiedPdfBytes = bytes;
 		}
 	}
 	return { verifiedAssetBlobs, verifiedPdfBytes };
@@ -1037,7 +1058,6 @@ export class MineruPackageLoader {
 		const manifestedImages = new Set(
 			[...outputRecords.keys()].filter((relativePath) => isRasterImagePath(relativePath)),
 		);
-		assertPassiveMineruMarkdown(article.text, manifestedImages);
 		const derivedRecords = optionalManifestRecords(manifest.derived_contracts);
 		const validationValue = await readOptionalJson(
 			this.app,
@@ -1052,15 +1072,33 @@ export class MineruPackageLoader {
 		const pdfPathCandidate = `${packagePath}/_extraction/source.pdf`;
 		const pdfPath = findTFile(this.app, pdfPathCandidate) ? pdfPathCandidate : null;
 		const verified = await verifyManifestOutputs(this.app, packagePath, manifest, article, mineru, pdfPath);
-		const articleHash = sha256(article.bytes);
+		let renderMarkdown = article.text;
+		let sourceMarkdownDisposition: MineruReaderPackage["sourceMarkdownDisposition"] = "passive";
+		try {
+			assertPassiveMineruMarkdown(renderMarkdown, manifestedImages);
+		} catch (error) {
+			const validationChecks = asRecord(validation.checks);
+			if (validationChecks.passive_markdown_closed === true) {
+				throw new Error(
+					`该 MinerU 包声明 article.md 已安全闭合，但实际校验失败：${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			renderMarkdown = derivePassiveMineruMarkdown(article.text);
+			assertPassiveMineruMarkdown(renderMarkdown, manifestedImages);
+			sourceMarkdownDisposition = "runtime-derived";
+		}
+		const articleHash = sha256(new TextEncoder().encode(renderMarkdown));
 		const mineruHash = sha256(mineru.bytes);
 		const mineruPayload = parseJson(mineru.text, "mineru-result.json");
-		const fallbackIndex = buildRuntimeViewerIndex(mineruPayload, article.text, {
+		const fallbackIndex = buildRuntimeViewerIndex(mineruPayload, renderMarkdown, {
 			articleSha256: articleHash,
 			mineruResultSha256: mineruHash,
 			packagedSourcePdf: Boolean(pdfPath),
 		});
 		const issues = [...fallbackIndex.issues];
+		if (sourceMarkdownDisposition === "runtime-derived") {
+			issues.push("旧版 article.md 含活动 Markdown；已在内存中生成安全阅读副本，磁盘原文件保持不变");
+		}
 		const contractValue = await readOptionalDerivedJson(
 			this.app,
 			`${packagePath}/_extraction/viewer-index.json`,
@@ -1071,7 +1109,9 @@ export class MineruPackageLoader {
 		let viewerIndex: MineruViewerIndex | null = null;
 		if (contractValue) {
 			try {
-				viewerIndex = normalizeViewerIndex(contractValue, fallbackIndex);
+				viewerIndex = sourceMarkdownDisposition === "runtime-derived"
+					? null
+					: normalizeViewerIndex(contractValue, fallbackIndex);
 			} catch (error) {
 				issues.push(
 					`viewer-index.json 超过结构复杂度上限，已从原始 MinerU JSON 临时重建：${error instanceof Error ? error.message : String(error)}`,
@@ -1079,7 +1119,9 @@ export class MineruPackageLoader {
 			}
 		}
 		if (contractValue && !viewerIndex) {
-			issues.push("viewer-index.json 结构不受支持，已从原始 MinerU JSON 临时重建");
+			issues.push(sourceMarkdownDisposition === "runtime-derived"
+				? "旧版 Viewer Index 对应原始 HTML 偏移，已从安全阅读副本临时重建"
+				: "viewer-index.json 结构不受支持，已从原始 MinerU JSON 临时重建");
 		}
 		if (viewerIndex && !viewerHashesMatch(viewerIndex, articleHash, mineruHash)) {
 			issues.push("viewer-index.json 与原始文件哈希不一致，已从原始 MinerU JSON 临时重建");
@@ -1089,13 +1131,15 @@ export class MineruPackageLoader {
 		viewerIndex = reclassifyRuntimeRunningHeaders(viewerIndex);
 		assertViewerAssetsManifested(outputRecords, [fallbackIndex, viewerIndex]);
 		issues.push(...viewerIndex.issues);
-		const repairValue = await readOptionalDerivedJson(
-			this.app,
-			`${packagePath}/_extraction/visual-repair.json`,
-			issues,
-			derivedRecords.get("_extraction/visual-repair.json"),
-			packagePath,
-		);
+		const repairValue = sourceMarkdownDisposition === "runtime-derived"
+			? null
+			: await readOptionalDerivedJson(
+				this.app,
+				`${packagePath}/_extraction/visual-repair.json`,
+				issues,
+				derivedRecords.get("_extraction/visual-repair.json"),
+				packagePath,
+			);
 		const storedVisualRepair = repairValue ? normalizeRepair(repairValue) : null;
 		if (repairValue && !storedVisualRepair) {
 			issues.push("visual-repair.json 结构或算法版本不受支持，已保留 MinerU 原图显示");
@@ -1156,10 +1200,11 @@ export class MineruPackageLoader {
 		const externalPdfRecorded = Boolean(asRecord(manifest.source).path);
 		return {
 			sourceKind: "mineru",
+			sourceMarkdownDisposition,
 			packagePath,
 			articlePath,
-			title: titleFromMarkdown(article.text, packagePath),
-			articleMarkdown: article.text,
+			title: titleFromMarkdown(renderMarkdown, packagePath),
+			articleMarkdown: renderMarkdown,
 			mineruPayload,
 			viewerIndex,
 			visualRepair,

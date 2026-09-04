@@ -3217,6 +3217,8 @@ assert.match(visualRepairSource, /captionLinkMatchesBlocks/);
 assert.match(visualRepairSource, /validateVisualContracts/);
 assert.match(loader, /reclassifyRuntimeRunningHeaders\(viewerIndex\)/);
 assert.match(loader, /verifyManifestOutputs/);
+assert.match(loader, /await verifyManifestOutputs[\s\S]*?derivePassiveMineruMarkdown/);
+assert.match(view, /sourceMarkdownDisposition === "runtime-derived"[\s\S]*?return;[\s\S]*?openReaderSourceMarkdown/);
 assert.match(loader, /readOptionalDerivedJson/);
 assert.match(loader, /manifest\.json 已登记该文件，但文件不存在/);
 assert.match(loader, /captionRecord\.items \?\? captionRecord\.parts/);

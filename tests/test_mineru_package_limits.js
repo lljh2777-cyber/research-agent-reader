@@ -68,7 +68,7 @@ function baseFiles(options = {}) {
 	const files = new Map([
 		[`${packagePath}/article.md`, article],
 		[`${packagePath}/mineru-result.json`, mineru],
-		[`${packagePath}/_extraction/validation.json`, jsonBytes({ status: "passed" })],
+		[`${packagePath}/_extraction/validation.json`, jsonBytes(options.validation || { status: "passed" })],
 		[`${packagePath}/_extraction/manifest.json`, jsonBytes(manifest)],
 	]);
 	for (const [filePath, bytes] of options.extraFiles || []) files.set(`${packagePath}/${filePath}`, bytes);
@@ -126,6 +126,8 @@ async function loadPackage(fixture, statOverrides) {
 async function testValidSmallPackageLoads() {
 	const loaded = await loadPackage(baseFiles());
 	assert.equal(loaded.title, "Demo Paper");
+	assert.equal(loaded.sourceMarkdownDisposition, "passive");
+	assert.equal(loaded.articleMarkdown, "# Demo Paper\n\n正文。");
 }
 
 async function testManifestRecordBudget() {
@@ -185,18 +187,81 @@ async function testViewerIndexFanoutFallsBackBeforeMapping() {
 	assert.ok(nestedFallback.issues.some((issue) => /结构复杂度上限/.test(issue)));
 }
 
-async function testActiveMarkdownPackageRejectedBeforeReaderLoad() {
+async function testLegacyActiveMarkdownIsDerivedBeforeReaderLoad() {
 	for (const injection of [
+		"H<sub>2</sub>O 与 x<sup>2</sup>",
 		"```some-active-language\npayload\n```",
 		"![tracking][remote]\n\n[remote]: https://example.invalid/opened",
 		"![[Vault embed]]",
 		"<iframe src=https://example.invalid></iframe>",
 	]) {
+		const original = Buffer.from(`# Demo Paper\n\n${injection}\n`, "utf8");
 		const fixture = baseFiles({
-			article: Buffer.from(`# Demo Paper\n\n${injection}\n`, "utf8"),
+			article: original,
 		});
-		await assert.rejects(loadPackage(fixture), /article\.md 含活动或未绑定 Markdown/);
+		const loaded = await loadPackage(fixture);
+		assert.equal(loaded.sourceMarkdownDisposition, "runtime-derived");
+		assert.doesNotMatch(loaded.articleMarkdown, /<\/?(?:sub|sup|iframe)\b|```|!\[\[|\[remote\]:/i);
+		assert.ok(loaded.issues.some((issue) => /内存中生成安全阅读副本/.test(issue)));
+		assert.deepEqual(fixture.files.get(`${fixture.packagePath}/article.md`), original);
 	}
+}
+
+async function testClaimedPassivePackageStillRejectsActiveMarkdown() {
+	const fixture = baseFiles({
+		article: Buffer.from("# Demo Paper\n\nH<sup>2</sup>O\n", "utf8"),
+		validation: { status: "passed", checks: { passive_markdown_closed: true } },
+	});
+	await assert.rejects(loadPackage(fixture), /声明 article\.md 已安全闭合.*原始 HTML/s);
+}
+
+async function testLegacyCompatibilityRunsOnlyAfterManifestVerification() {
+	const fixture = baseFiles({
+		article: Buffer.from("# Demo Paper\n\nH<sup>2</sup>O\n", "utf8"),
+	});
+	const manifestPath = `${fixture.packagePath}/_extraction/manifest.json`;
+	const manifest = JSON.parse(fixture.files.get(manifestPath).toString("utf8"));
+	manifest.outputs.find((record) => record.path === "article.md").sha256 = "f".repeat(64);
+	fixture.files.set(manifestPath, jsonBytes(manifest));
+	await assert.rejects(loadPackage(fixture), /哈希与 manifest\.json 不一致：article\.md/);
+}
+
+async function testLegacyViewerCacheIsIgnoredAfterRuntimeDerivation() {
+	const article = Buffer.from("# Demo Paper\n\nH<sup>2</sup>O\n", "utf8");
+	const mineru = jsonBytes([{ type: "title", page_idx: 0, text: "Demo Paper" }]);
+	const fixture = attachViewerIndex(baseFiles({ article, mineru }), {
+		schema_version: 1,
+		status: "complete",
+		inputs: {
+			article: { path: "article.md", sha256: sha256(article) },
+			mineru_result: { path: "mineru-result.json", sha256: sha256(mineru) },
+		},
+		markdown_images: [],
+		pages: [{ page_idx: 0, blocks: [] }],
+		issues: [],
+	});
+	const loaded = await loadPackage(fixture);
+	assert.equal(loaded.sourceMarkdownDisposition, "runtime-derived");
+	assert.ok(loaded.issues.some((issue) => /原始 HTML 偏移.*安全阅读副本/.test(issue)));
+}
+
+async function testLegacySourcePdfUsesSourceRecordBinding() {
+	const sourcePdf = Buffer.from("%PDF-1.7\nlegacy-source\n", "utf8");
+	const fixture = baseFiles({ extraFiles: [["_extraction/source.pdf", sourcePdf]] });
+	const manifestPath = `${fixture.packagePath}/_extraction/manifest.json`;
+	const manifest = JSON.parse(fixture.files.get(manifestPath).toString("utf8"));
+	manifest.source = {
+		path: "ignored-host-specific-source.pdf",
+		size: sourcePdf.length,
+		sha256: sha256(sourcePdf),
+	};
+	fixture.files.set(manifestPath, jsonBytes(manifest));
+	const loaded = await loadPackage(fixture);
+	assert.deepEqual(Buffer.from(loaded.verifiedPdfBytes), sourcePdf);
+
+	manifest.source.sha256 = "f".repeat(64);
+	fixture.files.set(manifestPath, jsonBytes(manifest));
+	await assert.rejects(loadPackage(fixture), /source\.pdf.*旧版 manifest\.json 来源哈希不一致/);
 }
 
 async function testUnmanifestedViewerAssetRejected() {
@@ -317,7 +382,11 @@ async function testSymlinkedPapersAncestorRejected() {
 	await testPostReadLengthBudget();
 	await testDeepJsonRejectedBeforeNormalization();
 	await testViewerIndexFanoutFallsBackBeforeMapping();
-	await testActiveMarkdownPackageRejectedBeforeReaderLoad();
+	await testLegacyActiveMarkdownIsDerivedBeforeReaderLoad();
+	await testClaimedPassivePackageStillRejectsActiveMarkdown();
+	await testLegacyCompatibilityRunsOnlyAfterManifestVerification();
+	await testLegacyViewerCacheIsIgnoredAfterRuntimeDerivation();
+	await testLegacySourcePdfUsesSourceRecordBinding();
 	await testUnmanifestedViewerAssetRejected();
 	await testImagePixelBombRejected();
 	await testUnsupportedViewerImageFormatRejected();

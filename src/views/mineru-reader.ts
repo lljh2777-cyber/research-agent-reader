@@ -1517,6 +1517,10 @@ export class MineruReaderView extends ItemView {
 	private async openArticleMarkdown(): Promise<void> {
 		const readerPackage = this.readerPackage;
 		if (!readerPackage) return;
+		if (readerPackage.sourceMarkdownDisposition === "runtime-derived") {
+			new Notice("该旧版原文含活动 Markdown，只能通过安全阅读副本查看");
+			return;
+		}
 		if (this.plugin.openReaderSourceMarkdown) {
 			await this.plugin.openReaderSourceMarkdown(readerPackage.articlePath);
 			return;

@@ -110,6 +110,16 @@ function testPassiveDerivativeAndSafeProse() {
 	assert.ok(violationKinds("```mermaid\ngraph TD\n```").has("fenced-code"));
 }
 
+function testLegacyScientificHtmlKeepsTextButDropsTags() {
+	const passive = derivePassiveMineruMarkdown(
+		"# Chemistry\n\nH<sub>2</sub>O and x<sup>2</sup> remain readable.\n",
+	);
+	assert.match(passive, /H2O and x2 remain readable/);
+	assert.doesNotMatch(passive, /<\/?(?:sub|sup)>/i);
+	assert.doesNotThrow(() => assertPassiveMineruMarkdown(passive));
+}
+
 testActiveMarkdownIsClosedBeforeRendering();
 testPassiveDerivativeAndSafeProse();
+testLegacyScientificHtmlKeepsTextButDropsTags();
 console.log("SAFE_MARKDOWN_TESTS_OK");
