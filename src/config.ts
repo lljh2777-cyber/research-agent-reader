@@ -2,6 +2,7 @@ export const VIEW_TYPE = "agent-dashboard-research-vault";
 export const CODE_PRACTICE_VIEW_TYPE = "agent-dashboard-code-practice";
 export const QUERY_WIKI_VIEW_TYPE = "agent-dashboard-query-wiki";
 export const MINERU_READER_VIEW_TYPE = "agent-dashboard-mineru-reader";
+export const LEARNING_SESSION_VIEW_TYPE = "agent-dashboard-learning-session";
 
 export type CliBackendId = "codex-cli" | "claude-code" | "opencode";
 

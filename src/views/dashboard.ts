@@ -48,6 +48,7 @@ type GapsFilter = "all" | "high" | "medium" | "low";
 const ACTION_ICONS: Record<string, string> = {
 	"paper-ingest": "file-down",
 	"pdf-xray": "scan-search",
+	"paper-learning": "workflow",
 	"code-analysis": "code-xml",
 	"code-practice": "square-terminal",
 	"vault-retrieval": "search",
@@ -62,6 +63,7 @@ interface DashboardHost extends PluginHost {
 	stopDirectVaultQuery(runId: string): boolean;
 	stopVaultAction(runId: string): boolean;
 	activateQueryWikiView(initialInput?: string): Promise<void>;
+	activateLearningSessionView(articlePath?: string): Promise<void>;
 	activateCodePracticeView(): Promise<void>;
 	supportsFast(model: string): boolean;
 	lightPaperIngestAvailable(): { ready: boolean; reason: string };
@@ -581,6 +583,10 @@ export class DashboardView extends ItemView {
 		}
 		if (action.queryView) {
 			void this.plugin.activateQueryWikiView(options.initialInput || "");
+			return;
+		}
+		if (action.learningView) {
+			void this.plugin.activateLearningSessionView(options.initialInput || "");
 			return;
 		}
 		if (this.plugin.isActionRunning(action.id)) {

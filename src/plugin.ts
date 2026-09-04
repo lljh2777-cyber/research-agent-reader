@@ -66,6 +66,7 @@ import { CodePracticeView } from "./views/code-practice";
 import { DashboardView } from "./views/dashboard";
 import { MineruReaderView } from "./views/mineru-reader";
 import { QueryWikiView } from "./views/query-wiki";
+import { LearningSessionView } from "./views/learning-session";
 import { AnnotationPopover } from "./annotations/annotation-popover";
 import { AnnotationService } from "./annotations/annotation-service";
 import type { AnnotationRecord, AnnotationSelection } from "./annotations/types";
@@ -74,6 +75,7 @@ import {
 	MAX_QUERY_IMAGE_ATTACHMENTS,
 	MAX_QUERY_IMAGE_TOTAL_BYTES,
 	MAX_VAULT_IMAGE_BYTES,
+	LEARNING_SESSION_VIEW_TYPE,
 	MINERU_READER_VIEW_TYPE,
 	MODEL_OPTIONS,
 	QUERY_WIKI_VIEW_TYPE,
@@ -351,6 +353,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(CODE_PRACTICE_VIEW_TYPE, (leaf) => new CodePracticeView(leaf, this));
 		this.registerView(QUERY_WIKI_VIEW_TYPE, (leaf) => new QueryWikiView(leaf, this));
 		this.registerView(MINERU_READER_VIEW_TYPE, (leaf) => new MineruReaderView(leaf, this));
+		this.registerView(LEARNING_SESSION_VIEW_TYPE, (leaf) => new LearningSessionView(leaf, this));
 		this.app.workspace.onLayoutReady(() => {
 			this.consolidateMineruReaderLeaves();
 			void this.reconcileMissingPublishedPackages();
@@ -387,6 +390,14 @@ export default class AgentDashboardPlugin extends Plugin {
 					.setIcon("book-open-text")
 					.onClick(() => {
 						void this.activateMineruReaderView(file.path);
+					});
+			});
+			menu.addItem((item) => {
+				item
+					.setTitle("开始文献学习")
+					.setIcon("workflow")
+					.onClick(() => {
+						void this.activateLearningSessionView(file.path);
 					});
 			});
 		}));
@@ -446,6 +457,13 @@ export default class AgentDashboardPlugin extends Plugin {
 				if (!this.isReaderDocumentFile(file)) return false;
 				if (!checking) void this.activateMineruReaderView(file.path);
 				return true;
+			},
+		});
+		this.addCommand({
+			id: "open-paper-learning-session",
+			name: "开始文献学习",
+			callback: () => {
+				void this.activateLearningSessionView();
 			},
 		});
 		this.addCommand({
@@ -3137,6 +3155,42 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (leaf.view instanceof QueryWikiView) {
 			leaf.view.setInitialQuestion(initialQuestion);
 		}
+		await this.app.workspace.revealLeaf(leaf);
+	}
+
+	async activateLearningSessionView(articlePath = ""): Promise<void> {
+		const contextFile = this.app.workspace.getActiveFile() || this.lastContextFile;
+		const activeReaderPath = String(
+			this.app.workspace.getActiveViewOfType(MineruReaderView)?.getState().articlePath || "",
+		);
+		const resolvedPath = normalizePath(
+			articlePath
+				|| activeReaderPath
+				|| (this.isReaderDocumentFile(contextFile) ? contextFile.path : ""),
+		);
+		const file = this.app.vault.getAbstractFileByPath(resolvedPath);
+		if (!this.isReaderDocumentFile(file)) {
+			new Notice("请先选择已配置目录中的 Markdown 文献");
+			return;
+		}
+		const existing = this.app.workspace.getLeavesOfType(LEARNING_SESSION_VIEW_TYPE)[0];
+		const leaf = existing || this.app.workspace.getLeaf("tab");
+		if (!existing) {
+			await leaf.setViewState({
+				type: LEARNING_SESSION_VIEW_TYPE,
+				active: true,
+				state: { articlePath: file.path },
+			});
+		} else if (leaf.view instanceof LearningSessionView) {
+			await leaf.view.setArticlePath(file.path);
+		} else {
+			await leaf.setViewState({
+				type: LEARNING_SESSION_VIEW_TYPE,
+				active: true,
+				state: { articlePath: file.path },
+			});
+		}
+		this.app.workspace.setActiveLeaf(leaf, { focus: true });
 		await this.app.workspace.revealLeaf(leaf);
 	}
 
