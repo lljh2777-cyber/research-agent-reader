@@ -1,6 +1,6 @@
 {
 	"name": "research-agent-reader",
-	"version": "0.30.0",
+	"version": "0.31.0",
 	"private": true,
 	"description": "Desktop research reader and optional local-agent dashboard for Obsidian",
 	"author": "Liao Li",
