@@ -318,6 +318,7 @@ export class LearningSessionView extends ItemView {
 		const stage = spine.createDiv({ cls: "learning-session-spine-stage" });
 		stage.dataset.moduleId = module.id;
 		const status = moduleStatus(module, this.sessionState);
+		stage.addClass(`is-${status}`);
 		const mainNode = stage.createEl("button", {
 			cls: `learning-session-main-node is-${status}`,
 			attr: {
@@ -422,6 +423,12 @@ export class LearningSessionView extends ItemView {
 						? "上次回答失败，可在右侧重新尝试。"
 						: "在右侧让 AI 基于原文和知识库回答。",
 		});
+		if (branch.answerEvidence.length) {
+			answer.createSpan({
+				cls: "learning-session-tree-node-meta",
+				text: `${branch.answerEvidence.length} 条证据`,
+			});
+		}
 		answer.addEventListener("click", () => this.selectBranch(branch));
 
 		const followUps = this.sessionState.branches.filter((candidate) => (
@@ -468,6 +475,12 @@ export class LearningSessionView extends ItemView {
 		setIcon(title.createSpan(), evidenceIcon(evidence.kind));
 		title.createSpan({ text: evidenceLabel });
 		button.createSpan({ cls: "learning-session-tree-node-copy", text: evidence.label });
+		if (evidence.detail && evidence.detail !== evidence.label) {
+			button.createSpan({
+				cls: "learning-session-tree-node-detail",
+				text: compactNodeText(evidence.detail, 120),
+			});
+		}
 		button.addEventListener("click", () => {
 			this.sessionState.selectedNodeId = selectedNodeId;
 			this.selectedEvidenceId = evidence.id;

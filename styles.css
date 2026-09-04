@@ -6063,14 +6063,16 @@ body.agent-dashboard-mineru-resizing {
 
 /* Interactive paper-learning session */
 .learning-session-view {
-	--learning-main: #8b5cf6;
-	--learning-main-soft: color-mix(in srgb, var(--learning-main), transparent 86%);
-	--learning-question: #f59e0b;
-	--learning-question-soft: color-mix(in srgb, var(--learning-question), transparent 88%);
-	--learning-answer: #a78bfa;
-	--learning-answer-soft: color-mix(in srgb, var(--learning-answer), transparent 88%);
-	--learning-evidence: #22d3ee;
-	--learning-evidence-soft: color-mix(in srgb, var(--learning-evidence), transparent 89%);
+	--learning-main: #936df7;
+	--learning-main-soft: color-mix(in srgb, var(--learning-main), transparent 91%);
+	--learning-question: #efa72e;
+	--learning-question-soft: color-mix(in srgb, var(--learning-question), transparent 92%);
+	--learning-answer: #ad92f8;
+	--learning-answer-soft: color-mix(in srgb, var(--learning-answer), transparent 91%);
+	--learning-evidence: #35c5cf;
+	--learning-evidence-soft: color-mix(in srgb, var(--learning-evidence), transparent 92%);
+	--learning-card: color-mix(in srgb, var(--background-secondary), var(--background-primary) 28%);
+	--learning-card-border: color-mix(in srgb, var(--text-faint), transparent 70%);
 	width: 100%;
 	height: 100%;
 	min-width: 0;
@@ -6234,7 +6236,7 @@ body.agent-dashboard-mineru-resizing {
 
 .learning-session-workspace {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(300px, 28%);
+	grid-template-columns: minmax(0, 1fr) minmax(340px, 25%);
 	min-height: 0;
 }
 
@@ -6244,7 +6246,7 @@ body.agent-dashboard-mineru-resizing {
 	min-width: 0;
 	min-height: 0;
 	border-right: 1px solid var(--background-modifier-border);
-	background: var(--background-primary);
+	background: color-mix(in srgb, var(--background-primary), black 3%);
 }
 
 .learning-session-pane-header {
@@ -6252,9 +6254,9 @@ body.agent-dashboard-mineru-resizing {
 	align-items: center;
 	justify-content: space-between;
 	gap: 16px;
-	padding: 12px 16px;
+	padding: 13px 18px;
 	border-bottom: 1px solid var(--background-modifier-border);
-	background: color-mix(in srgb, var(--background-secondary), transparent 14%);
+	background: var(--background-primary);
 }
 
 .learning-session-pane-header > div:first-child {
@@ -6264,7 +6266,7 @@ body.agent-dashboard-mineru-resizing {
 
 .learning-session-pane-header strong {
 	font-size: 13px;
-	font-weight: 680;
+	font-weight: 720;
 }
 
 .learning-session-pane-header span {
@@ -6317,21 +6319,21 @@ body.agent-dashboard-mineru-resizing {
 .learning-session-map-track {
 	position: relative;
 	width: max-content;
-	min-width: 1020px;
+	min-width: 1040px;
 	min-height: max(100%, 780px);
-	padding: 28px 38px 54px;
+	padding: 30px 40px 54px;
 }
 
 .learning-session-spine {
 	position: relative;
 	display: grid;
-	width: 270px;
-	gap: 10px;
+	width: 282px;
+	gap: 8px;
 	align-content: start;
 }
 
 .learning-session-spine-stage {
-	--learning-route-x: 28px;
+	--learning-route-x: 32px;
 	position: relative;
 	display: flex;
 	min-height: 84px;
@@ -6339,7 +6341,7 @@ body.agent-dashboard-mineru-resizing {
 }
 
 .learning-session-spine-stage:nth-child(even) {
-	--learning-route-x: 42px;
+	--learning-route-x: 38px;
 }
 
 .learning-session-spine-stage:not(:last-child)::after {
@@ -6348,16 +6350,24 @@ body.agent-dashboard-mineru-resizing {
 	left: var(--learning-route-x);
 	z-index: 0;
 	width: 2px;
-	height: 95px;
+	height: 93px;
 	border-radius: 999px;
-	background: color-mix(in srgb, var(--learning-main), transparent 28%);
+	background: color-mix(in srgb, var(--learning-main), transparent 46%);
 	content: "";
-	transform: rotate(-8deg);
+	transform: rotate(-3deg);
 	transform-origin: top center;
 }
 
 .learning-session-spine-stage:nth-child(even):not(:last-child)::after {
-	transform: rotate(8deg);
+	transform: rotate(3deg);
+}
+
+.learning-session-spine-stage.is-done:not(:last-child)::after {
+	background: color-mix(in srgb, var(--color-green), transparent 56%);
+}
+
+.learning-session-spine-stage.is-current:not(:last-child)::after {
+	background: color-mix(in srgb, var(--learning-main), transparent 28%);
 }
 
 .learning-session-main-node {
@@ -6365,40 +6375,67 @@ body.agent-dashboard-mineru-resizing {
 	z-index: 2;
 	display: flex;
 	align-items: center;
-	gap: 9px;
-	width: 162px;
-	min-height: 60px;
-	margin-left: calc(var(--learning-route-x) + 23px);
-	padding: 9px 12px;
-	border: 1px solid color-mix(in srgb, var(--learning-main), transparent 44%);
-	border-radius: 10px;
-	background: color-mix(in srgb, var(--background-secondary), var(--learning-main) 5%);
+	gap: 10px;
+	width: 172px;
+	min-height: 58px;
+	margin-left: calc(var(--learning-route-x) + 28px);
+	padding: 10px 14px;
+	border: 1px solid var(--learning-card-border);
+	border-radius: 12px;
+	background: var(--learning-card);
 	color: var(--text-normal);
 	cursor: pointer;
 	text-align: left;
-	transition: border-color 140ms ease, background-color 140ms ease, width 160ms ease;
+	box-shadow: 0 5px 18px rgb(0 0 0 / 8%);
+	transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease, width 160ms ease;
+}
+
+.learning-session-main-node::before {
+	position: absolute;
+	top: 50%;
+	left: -16px;
+	width: 15px;
+	height: 1px;
+	background: color-mix(in srgb, var(--text-faint), transparent 45%);
+	content: "";
+}
+
+.learning-session-main-node.is-current::before,
+.learning-session-main-node.is-selected::before {
+	background: color-mix(in srgb, var(--learning-main), transparent 18%);
+}
+
+.learning-session-main-node.is-done::before {
+	background: color-mix(in srgb, var(--color-green), transparent 42%);
 }
 
 .learning-session-main-node:hover,
 .learning-session-main-node:focus-visible,
 .learning-session-main-node.is-selected {
-	border-color: var(--learning-main);
-	background: var(--learning-main-soft);
+	border-color: color-mix(in srgb, var(--learning-main), transparent 18%);
+	background: color-mix(in srgb, var(--learning-card), var(--learning-main) 8%);
 	outline: none;
 }
 
+.learning-session-main-node:hover,
+.learning-session-main-node:focus-visible {
+	transform: translateX(2px);
+}
+
 .learning-session-main-node.is-current {
-	width: 212px;
+	width: 228px;
 	border-color: var(--learning-main);
-	box-shadow: 0 0 0 3px var(--learning-main-soft), 0 10px 30px rgb(0 0 0 / 14%);
+	background: color-mix(in srgb, var(--learning-card), var(--learning-main) 11%);
+	box-shadow: 0 0 0 3px var(--learning-main-soft), 0 14px 38px rgb(0 0 0 / 18%);
 }
 
 .learning-session-main-node.is-selected {
-	width: 212px;
+	width: 228px;
 }
 
 .learning-session-main-node.is-done {
-	border-color: color-mix(in srgb, var(--color-green), transparent 42%);
+	border-color: var(--learning-card-border);
+	background: color-mix(in srgb, var(--learning-card), var(--color-green) 3%);
 }
 
 .learning-session-main-node.is-upcoming {
@@ -6407,12 +6444,12 @@ body.agent-dashboard-mineru-resizing {
 
 .learning-session-node-step {
 	position: absolute;
-	left: -36px;
+	left: -40px;
 	display: grid;
 	width: 24px;
 	height: 24px;
 	place-items: center;
-	border: 1px solid color-mix(in srgb, var(--learning-main), transparent 45%);
+	border: 1px solid color-mix(in srgb, var(--learning-main), transparent 35%);
 	border-radius: 50%;
 	background: var(--background-primary);
 	color: var(--learning-main);
@@ -6423,8 +6460,8 @@ body.agent-dashboard-mineru-resizing {
 }
 
 .learning-session-main-node.is-done .learning-session-node-step {
-	border-color: color-mix(in srgb, var(--color-green), transparent 45%);
-	background: color-mix(in srgb, var(--color-green), transparent 88%);
+	border-color: color-mix(in srgb, var(--color-green), transparent 38%);
+	background: color-mix(in srgb, var(--color-green), transparent 90%);
 	color: var(--color-green);
 }
 
@@ -6448,46 +6485,46 @@ body.agent-dashboard-mineru-resizing {
 
 .learning-session-node-label {
 	font-size: 13px;
-	font-weight: 700;
+	font-weight: 720;
 }
 
 .learning-session-node-kicker {
 	color: var(--text-muted);
-	font-size: 10px;
+	font-size: 10.5px;
 }
 
 .learning-session-mind-map {
 	position: absolute;
 	top: var(--learning-map-top);
-	left: 292px;
-	width: 660px;
+	left: 300px;
+	width: 690px;
 	min-height: 300px;
-	padding-left: 34px;
+	padding-left: 40px;
 }
 
 .learning-session-mind-map::before {
 	position: absolute;
 	top: 38px;
-	left: -15px;
-	width: 49px;
+	left: -12px;
+	width: 52px;
 	height: var(--learning-branch-drop);
-	border-top: 1px solid color-mix(in srgb, var(--learning-question), transparent 30%);
-	border-left: 1px solid color-mix(in srgb, var(--learning-question), transparent 30%);
-	border-radius: 8px 0 0;
+	border-top: 1px solid color-mix(in srgb, var(--learning-evidence), transparent 30%);
+	border-left: 1px solid color-mix(in srgb, var(--learning-evidence), transparent 30%);
+	border-radius: 13px 0 0;
 	content: "";
 }
 
 .learning-session-tree-row {
 	position: relative;
 	display: grid;
-	grid-template-columns: 160px 250px 170px;
+	grid-template-columns: 164px 270px 172px;
 	grid-template-areas:
 		"question answer followups"
 		"question evidence followups";
-	column-gap: 24px;
-	row-gap: 14px;
-	min-height: 228px;
-	margin-bottom: 28px;
+	column-gap: 22px;
+	row-gap: 16px;
+	min-height: 252px;
+	margin-bottom: 32px;
 }
 
 .learning-session-tree-node {
@@ -6495,22 +6532,24 @@ body.agent-dashboard-mineru-resizing {
 	z-index: 2;
 	display: grid;
 	align-content: start;
-	gap: 7px;
-	padding: 11px 12px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 9px;
-	background: var(--background-secondary);
+	gap: 9px;
+	padding: 13px 14px;
+	border: 1px solid var(--learning-card-border);
+	border-radius: 12px;
+	background: var(--learning-card);
 	color: var(--text-normal);
 	cursor: pointer;
 	text-align: left;
-	transition: border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+	box-shadow: 0 8px 24px rgb(0 0 0 / 10%);
+	transition: border-color 140ms ease, background-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
 }
 
 .learning-session-tree-node:hover,
 .learning-session-tree-node:focus-visible,
 .learning-session-tree-node.is-selected {
 	outline: none;
-	transform: translateY(-1px);
+	box-shadow: 0 0 0 3px color-mix(in srgb, currentColor, transparent 89%), 0 12px 30px rgb(0 0 0 / 15%);
+	transform: translateY(-2px);
 }
 
 .learning-session-tree-node-title {
@@ -6518,7 +6557,7 @@ body.agent-dashboard-mineru-resizing {
 	align-items: center;
 	gap: 6px;
 	font-family: var(--font-monospace);
-	font-size: 10px;
+	font-size: 10.5px;
 	font-weight: 750;
 	letter-spacing: 0.03em;
 }
@@ -6531,26 +6570,43 @@ body.agent-dashboard-mineru-resizing {
 .learning-session-tree-node-copy {
 	display: -webkit-box;
 	overflow: hidden;
-	font-size: 11px;
-	line-height: 1.48;
+	font-size: 11.5px;
+	line-height: 1.55;
+	overflow-wrap: anywhere;
+	white-space: normal;
 	-webkit-box-orient: vertical;
-	-webkit-line-clamp: 4;
+	-webkit-line-clamp: 5;
+}
+
+.learning-session-tree-node.is-answer .learning-session-tree-node-copy {
+	-webkit-line-clamp: 6;
+}
+
+.learning-session-tree-node-meta {
+	justify-self: start;
+	padding: 3px 7px;
+	border: 1px solid color-mix(in srgb, var(--learning-answer), transparent 58%);
+	border-radius: 999px;
+	color: color-mix(in srgb, var(--learning-answer), var(--text-normal) 18%);
+	font-family: var(--font-monospace);
+	font-size: 9px;
+	font-weight: 700;
 }
 
 .learning-session-tree-node.is-question {
 	grid-area: question;
 	align-self: start;
-	min-height: 86px;
-	border-color: color-mix(in srgb, var(--learning-question), transparent 36%);
+	min-height: 108px;
+	border-color: color-mix(in srgb, var(--learning-question), transparent 30%);
 	background: var(--learning-question-soft);
 }
 
 .learning-session-tree-node.is-question::after,
 .learning-session-tree-node.is-answer::after {
 	position: absolute;
-	top: 42px;
-	right: -29px;
-	width: 28px;
+	top: 53px;
+	right: -23px;
+	width: 22px;
 	height: 1px;
 	background: color-mix(in srgb, var(--learning-question), transparent 24%);
 	content: "";
@@ -6568,12 +6624,13 @@ body.agent-dashboard-mineru-resizing {
 .learning-session-tree-node.is-follow-up:focus-visible,
 .learning-session-tree-node.is-follow-up.is-selected {
 	border-color: var(--learning-question);
+	background: color-mix(in srgb, var(--learning-card), var(--learning-question) 10%);
 }
 
 .learning-session-tree-node.is-answer {
 	grid-area: answer;
-	min-height: 116px;
-	border-color: color-mix(in srgb, var(--learning-answer), transparent 38%);
+	min-height: 142px;
+	border-color: color-mix(in srgb, var(--learning-answer), transparent 24%);
 	background: var(--learning-answer-soft);
 }
 
@@ -6589,6 +6646,7 @@ body.agent-dashboard-mineru-resizing {
 .learning-session-tree-node.is-answer:focus-visible,
 .learning-session-tree-node.is-answer.is-selected {
 	border-color: var(--learning-answer);
+	background: color-mix(in srgb, var(--learning-card), var(--learning-answer) 11%);
 }
 
 .learning-session-tree-node.is-answer.is-sent .learning-session-tree-node-title svg {
@@ -6600,12 +6658,12 @@ body.agent-dashboard-mineru-resizing {
 	display: grid;
 	grid-area: followups;
 	align-content: start;
-	gap: 10px;
+	gap: 12px;
 }
 
 .learning-session-tree-node.is-follow-up {
-	min-height: 82px;
-	border-color: color-mix(in srgb, var(--learning-question), transparent 44%);
+	min-height: 102px;
+	border-color: color-mix(in srgb, var(--learning-question), transparent 38%);
 	background: var(--learning-question-soft);
 }
 
@@ -6622,8 +6680,8 @@ body.agent-dashboard-mineru-resizing {
 	position: relative;
 	display: grid;
 	grid-area: evidence;
-	gap: 8px;
-	padding-top: 14px;
+	gap: 9px;
+	padding-top: 17px;
 }
 
 .learning-session-tree-evidence::before {
@@ -6631,15 +6689,15 @@ body.agent-dashboard-mineru-resizing {
 	top: -1px;
 	left: 50%;
 	width: 1px;
-	height: 15px;
+	height: 18px;
 	background: color-mix(in srgb, var(--learning-evidence), transparent 28%);
 	content: "";
 }
 
 .learning-session-tree-node.is-evidence {
-	min-height: 54px;
-	padding: 8px 10px;
-	border-color: color-mix(in srgb, var(--learning-evidence), transparent 42%);
+	min-height: 72px;
+	padding: 9px 11px;
+	border-color: color-mix(in srgb, var(--learning-evidence), transparent 34%);
 	background: var(--learning-evidence-soft);
 }
 
@@ -6648,6 +6706,19 @@ body.agent-dashboard-mineru-resizing {
 }
 
 .learning-session-tree-node.is-evidence .learning-session-tree-node-copy {
+	font-weight: 650;
+	-webkit-line-clamp: 2;
+}
+
+.learning-session-tree-node-detail {
+	display: -webkit-box;
+	overflow: hidden;
+	color: var(--text-muted);
+	font-size: 9.5px;
+	line-height: 1.42;
+	overflow-wrap: anywhere;
+	white-space: normal;
+	-webkit-box-orient: vertical;
 	-webkit-line-clamp: 2;
 }
 
@@ -6712,9 +6783,9 @@ body.agent-dashboard-mineru-resizing {
 .learning-session-inspector {
 	min-width: 0;
 	min-height: 0;
-	padding: 18px;
+	padding: 20px;
 	overflow: auto;
-	background: var(--background-secondary);
+	background: color-mix(in srgb, var(--background-secondary), var(--background-primary) 16%);
 }
 
 .learning-session-inspector-header {
@@ -6784,7 +6855,7 @@ body.agent-dashboard-mineru-resizing {
 }
 
 .learning-session-inspector-section {
-	margin-top: 18px;
+	margin-top: 16px;
 }
 
 .learning-session-inspector-section h3,
@@ -6827,10 +6898,11 @@ body.agent-dashboard-mineru-resizing {
 }
 
 .learning-session-inspector-section.is-answer {
-	padding: 11px 12px;
-	border: 1px solid color-mix(in srgb, var(--learning-answer), transparent 62%);
-	border-radius: 9px;
-	background: var(--learning-answer-soft);
+	padding: 12px 13px;
+	border: 1px solid color-mix(in srgb, var(--learning-answer), transparent 68%);
+	border-left: 2px solid var(--learning-answer);
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--learning-answer-soft), var(--background-secondary) 34%);
 }
 
 .learning-session-inspector-section.is-answer h3 {
@@ -6873,14 +6945,14 @@ body.agent-dashboard-mineru-resizing {
 	margin: 0 0 10px;
 	overflow: hidden;
 	border: 1px solid var(--background-modifier-border);
-	border-radius: 9px;
+	border-radius: 11px;
 	background: var(--background-primary);
 }
 
 .learning-session-figure-preview img {
 	display: block;
 	width: 100%;
-	max-height: 250px;
+	max-height: 220px;
 	object-fit: contain;
 	background: white;
 }
@@ -6953,8 +7025,8 @@ body.agent-dashboard-mineru-resizing {
 }
 
 .learning-session-question-composer {
-	margin-top: 20px;
-	padding: 12px;
+	margin-top: 17px;
+	padding: 12px 13px;
 	border: 1px solid color-mix(in srgb, var(--learning-question), transparent 62%);
 	border-radius: 10px;
 	background: var(--learning-question-soft);
@@ -7014,7 +7086,13 @@ body.agent-dashboard-mineru-resizing {
 .learning-session-inspector-actions {
 	align-items: stretch;
 	gap: 7px;
-	margin-top: 16px;
+	position: sticky;
+	z-index: 4;
+	bottom: 0;
+	margin: 16px -4px 0;
+	padding: 11px 4px 10px;
+	border-top: 1px solid var(--background-modifier-border);
+	background: color-mix(in srgb, var(--background-secondary), var(--background-primary) 16%);
 }
 
 .learning-session-inspector-actions button {

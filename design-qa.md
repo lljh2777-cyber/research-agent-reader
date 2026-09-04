@@ -1,6 +1,58 @@
 # 文献学习视图 · Design QA
 
+## Latest Style Polish Pass
+
 **Comparison Target**
+
+- Accepted concept: Codex generated-image artifact `exec-83117c59-8747-440f-9a03-543a048f2595.png`（方案 3）
+- Before screenshot: Codex visualization artifact `01-style-audit-before-results.png`
+- Final implementation screenshot: Codex visualization artifact `05-style-polish-final-v4.png`
+- Full comparison input: Codex visualization artifact `style-polish-comparison-final-v4.png`
+- Focused branch comparison input: Codex visualization artifact `style-polish-focus-comparison-final-v4.png`
+- Native CSS viewport: Obsidian Desktop 1.13.7, `1707 × 1019`, device pixel ratio `1.5`; implementation screenshot `2561 × 1529`
+- Source pixels: `1536 × 1024`
+- State: dark theme, Bailey paper loaded, mainline at “核心结果”, one answered question, one follow-up, two answer-evidence nodes, verified paper figure visible
+- Capture method: native Obsidian Desktop through the official Obsidian CLI. Browser/IAB was not used because this is an Obsidian `ItemView`, not a browser route.
+
+**Audit Findings And Fix History**
+
+1. Initial audit (`01-style-audit-before-results.png`)
+   - [P2] The alternating route used large angles and read as a rough zigzag rather than a deliberate learning path.
+   - [P2] Completed cards carried full green outlines, making every stage compete with the active module.
+   - [P2] Question, answer, and follow-up cards had nearly equal visual weight while their copy was prematurely truncated to one line.
+   - [P2] A long orange right-angle connector visually separated the selected module from its mind-map branch.
+2. First polish (`02-style-polish-draft-v1.png`)
+   - Route movement was reduced, neutral card surfaces replaced the green boxes, and the active answer became the largest branch card.
+   - Remaining [P2]: inherited button white-space still collapsed branch copy to one line; inspector actions fell partly below the visible edge.
+3. Structural polish (`03-style-polish-draft-v2.png`, `04-style-polish-final-v3.png`)
+   - Added explicit multiline wrapping, semantic green-complete/purple-current route segments, short circle-to-card connectors, calmer shadows, and persistent inspector actions.
+4. Final refinement (`05-style-polish-final-v4.png`)
+   - Added an answer evidence-count badge and evidence summaries, so the lower evidence branch has meaningful density instead of oversized empty cards.
+   - Final inspection found no actionable P0/P1/P2 issue.
+
+**Required Fidelity Surfaces**
+
+- Fonts and typography: the final map uses Obsidian interface tokens with stronger labels, quieter supporting text, explicit multiline wrapping, and bounded clamps. Question, answer, follow-up, and evidence copy remain readable at the tested viewport.
+- Spacing and layout rhythm: the vertical spine stays in a narrow left lane; the question/answer/follow-up chain uses `164 / 270 / 172 px` columns; answer evidence hangs directly below the answer. The tree ends at `x = 1334`, before the inspector begins at `x = 1366.5`.
+- Colors and tokens: completed progress is green, the current stage is purple, questions are amber, answers lavender, and evidence cyan. Neutral cards no longer turn every completed stage into a competing status block.
+- Image quality: the right inspector continues to render the real extracted paper figure at its native aspect ratio; no placeholder or reconstructed scientific asset is used.
+- Copy and content: the final graph uses real paper/module text. It adds a `2 条证据` badge and concise evidence summaries that are absent from the mock but necessary for an auditable reading tool.
+
+**Interaction And Accessibility Checks**
+
+- Follow-up selection changed the persisted selected node to `qa-follow`.
+- Question selection restored the root branch; evidence selection exposed a visible selected state.
+- Sticky inspector actions remained fully inside the inspector viewport (`bottom ≤ inspector bottom`).
+- Buttons retain semantic button elements, focus-visible treatment, and text labels. Screenshot review cannot establish full WCAG conformance; keyboard order and screen-reader announcements remain implementation-level test concerns.
+- Obsidian captured no runtime errors after the interactions.
+
+**Residual P3 Differences**
+
+- The implementation uses a restrained near-vertical progress path rather than the concept's continuous bezier curve; this is intentional for predictable native layout.
+- The real state contains two verified answer sources instead of the concept's three illustrative figures.
+- The inspector is denser than the concept because it contains a real figure, full answer, sources, follow-up editor, and working actions.
+
+## Earlier Structural QA
 
 - Accepted concept path: Codex generated-image artifact `exec-83117c59-8747-440f-9a03-543a048f2595.png`（方案 3）
 - Implementation screenshot: Codex visualization artifact `learning-session-vertical-v8.png`
