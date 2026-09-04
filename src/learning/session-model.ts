@@ -8,7 +8,7 @@ export type LearningModuleId =
 	| "conclusion";
 
 export type LearningBranchSide = "above" | "below";
-export type LearningBranchStatus = "draft" | "sent";
+export type LearningBranchStatus = "draft" | "sent" | "answered" | "failed";
 
 export interface LearningSection {
 	heading: string;
@@ -37,9 +37,12 @@ export interface LearningModule {
 export interface LearningBranch {
 	id: string;
 	parentId: LearningModuleId;
+	parentBranchId: string;
 	question: string;
 	side: LearningBranchSide;
 	status: LearningBranchStatus;
+	answer: string;
+	answerEvidence: LearningEvidenceRef[];
 }
 
 export interface LearningSessionState {
@@ -112,6 +115,8 @@ export const LEARNING_MODULE_DEFINITIONS: readonly ModuleDefinition[] = [
 
 const MAX_BRANCHES = 80;
 const MAX_QUESTION_LENGTH = 500;
+const MAX_ANSWER_LENGTH = 8_000;
+const MAX_BRANCH_EVIDENCE = 12;
 
 function cleanInlineMarkdown(value: string): string {
 	return value
@@ -246,10 +251,26 @@ export function normalizeLearningSessionState(value: unknown): LearningSessionSt
 		branches.push({
 			id: String(branch.id || `question-${index + 1}`).slice(0, 120),
 			parentId: branch.parentId,
+			parentBranchId: String(branch.parentBranchId || "").slice(0, 120),
 			question,
 			side: branch.side === "below" ? "below" : "above",
-			status: branch.status === "sent" ? "sent" : "draft",
+			status: branch.status === "answered"
+				? "answered"
+				: branch.status === "failed"
+					? "failed"
+					: branch.status === "sent"
+						? "sent"
+						: "draft",
+			answer: String(branch.answer || "").trim().slice(0, MAX_ANSWER_LENGTH),
+			answerEvidence: normalizeBranchEvidence(branch.answerEvidence),
 		});
+	}
+	const branchIds = new Set(branches.map((branch) => branch.id));
+	for (const branch of branches) {
+		if (branch.parentBranchId === branch.id || !branchIds.has(branch.parentBranchId)) {
+			branch.parentBranchId = "";
+		}
+		if (branch.status === "answered" && !branch.answer) branch.status = "sent";
 	}
 	const selectedNodeId = String(record.selectedNodeId || activeModuleId);
 	return {
@@ -274,6 +295,7 @@ export function createLearningBranch(
 	question: string,
 	existingBranches: readonly LearningBranch[],
 	id = `question-${Date.now()}`,
+	parentBranchId = "",
 ): LearningBranch | null {
 	const normalizedQuestion = question.trim().replace(/\s+/g, " ").slice(0, MAX_QUESTION_LENGTH);
 	if (!normalizedQuestion) return null;
@@ -281,16 +303,72 @@ export function createLearningBranch(
 	return {
 		id,
 		parentId,
+		parentBranchId,
 		question: normalizedQuestion,
 		side: siblingCount % 2 === 0 ? "above" : "below",
 		status: "draft",
+		answer: "",
+		answerEvidence: [],
 	};
+}
+
+export function createLearningFollowUpBranch(
+	parentBranch: LearningBranch,
+	question: string,
+	existingBranches: readonly LearningBranch[],
+	id = `question-${Date.now()}`,
+): LearningBranch | null {
+	return createLearningBranch(
+		parentBranch.parentId,
+		question,
+		existingBranches,
+		id,
+		parentBranch.id,
+	);
+}
+
+export function applyLearningBranchAnswer(
+	branch: LearningBranch,
+	answer: string,
+	evidence: readonly LearningEvidenceRef[] = [],
+): void {
+	const normalizedAnswer = String(answer || "").trim().slice(0, MAX_ANSWER_LENGTH);
+	branch.answer = normalizedAnswer;
+	branch.answerEvidence = normalizeBranchEvidence(evidence);
+	branch.status = normalizedAnswer ? "answered" : "failed";
+}
+
+function normalizeBranchEvidence(value: unknown): LearningEvidenceRef[] {
+	if (!Array.isArray(value)) return [];
+	const seen = new Set<string>();
+	const normalized: LearningEvidenceRef[] = [];
+	for (const [index, item] of value.entries()) {
+		if (item === null || typeof item !== "object") continue;
+		const record = item as Record<string, unknown>;
+		const label = String(record.label || "").trim().slice(0, 500);
+		const detail = String(record.detail || "").trim().slice(0, 1_000);
+		if (!label && !detail) continue;
+		const id = String(record.id || `answer-evidence-${index + 1}`).slice(0, 160);
+		if (seen.has(id)) continue;
+		seen.add(id);
+		normalized.push({
+			id,
+			label: label || detail,
+			detail,
+			kind: record.kind === "figure" || record.kind === "section"
+				? record.kind
+				: "source",
+		});
+		if (normalized.length >= MAX_BRANCH_EVIDENCE) break;
+	}
+	return normalized;
 }
 
 export function buildLearningQuestionPrompt(
 	articlePath: string,
 	module: LearningModule,
 	question: string,
+	parentContext?: { question: string; answer: string },
 ): string {
 	const sectionContext = module.sectionHeadings.length
 		? `优先检查章节：${module.sectionHeadings.join("、")}。`
@@ -298,7 +376,10 @@ export function buildLearningQuestionPrompt(
 	return [
 		`我正在阅读文献 \`${articlePath}\`，当前主线模块是“${module.label}”。`,
 		sectionContext,
+		parentContext?.question
+			? `这是对先前问题“${parentContext.question}”及其回答的继续追问。先前回答摘要：${trimExcerpt(parentContext.answer, 500) || "尚未形成答案"}`
+			: "",
 		`问题：${question.trim()}`,
 		"请先基于当前文献与知识库证据回答，明确区分原文证据、知识库补充和推断；给出可回到原文核对的位置。",
-	].join("\n");
+	].filter(Boolean).join("\n");
 }
