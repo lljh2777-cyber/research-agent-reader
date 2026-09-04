@@ -4,7 +4,7 @@ Research Agent Reader is a desktop-only Obsidian plugin for reading research Mar
 reviewing validated MinerU document packages, annotating selected text, and
 connecting optional local AI-agent workflows.
 
-> Public release status: `0.30.0` beta is published at
+> Public release status: `0.31.0` beta is published at
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
