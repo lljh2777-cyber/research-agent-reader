@@ -2,11 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.31.0] - 2026-09-04
+
+### Added
+
+- 轻量文献入库在访问 Crossref 前会通过 Obsidian 内置 PDF.js 本地读取 PDF 元数据与第一页文本，提取标题/DOI 线索；若发现 DOI，工具层会强制先走 `crossref_doi` 精确核验，全部本地候选尝试失败后才允许最多两次模糊搜索。绝对路径不会进入模型提示，PDF 预检也不会上传原文件。
+- 轻量文献入库新增最终栅格人工身份确认门：文件名、PDF 元数据和文本层只用于发现候选；插件从同一授权快照渲染前 3 页供用户选择标题页，并要求明确确认 Crossref 记录。确认回执绑定任务 ID、快照 SHA-256、页面栅格 SHA-256、渲染参数和 Crossref 记录哈希；缺少回执、切换任务/PDF/记录或渲染失败时不会进入 MinerU 或 Wiki 写入阶段。
 
 ### Changed
 
+- 文献入库的任务默认策略现在可选择自动、轻量 Agent 或 Codex CLI 运行方式；各任务的模型覆盖改为由内置模型目录、CLI 探测结果和已配置自定义模型共同生成的下拉列表，未知的历史配置值仍会作为自定义项保留。
 - 轻量文献入库的「生成原文 Markdown」不再依赖工具包目录和 Python：插件直接调用 mineru-open-api CLI（npm），在插件内完成暂存、校验（单一 md/json、标题完整性、引用资产存在性与路径逃逸防护）与原子发布（create-only，写入阅读器兼容的 `_extraction/manifest.json` + `validation.json`）。设置 → 工具链与运行环境新增「组件就绪状态」清单（MinerU CLI / 工具包目录 / Python / Codex CLI 各自解锁什么、是否就绪）。
+
+### Fixed
+
+- 原子发布的 MinerU 原文包现在会在任务完成后把最终目录树显式同步到 Obsidian Vault 索引；插件启动时也会补同步磁盘已存在但文件列表尚未发现的 `papers/<citekey>/` 包。同步只刷新内存索引，不改写 `article.md`、图片、JSON 或 PDF。
+- 阅读器可安全加载旧版、已验证但仍含 `<sup>`、`<sub>` 等原始 HTML 的 MinerU 包：先按原始字节验证 manifest 大小与 SHA-256，再只在内存生成被动 Markdown 并重建 Viewer Index；旧包文件保持不变。声明已经安全闭合的新包若仍含活动 Markdown 会继续失败关闭，未绑定 manifest 的图片也不会被放行。
+- 外部安全审查后的轻量入库边界加固：本地 PDF 先按 128 MiB 上限、取消信号和前后文件状态生成私有不可变快照，并由 SHA-256 同时绑定身份预检、人工视觉确认与 MinerU 输入；Crossref 最终记录必须由用户对照该快照的最终渲染页面明确确认。精确重复的路径与 citekey 只从 Vault 工具回执推导。npm shim 只接受 `mineru-open-api` 包名及其声明的 bin 入口。MinerU 输出和阅读器加载均增加目录深度、文件数、累计字节、JSON 深度、图片数/像素及 manifest 覆盖预算，拒绝符号链接、junction 和特殊文件；同一 citekey 由发布锁串行化。停止/超时只有在实际观察到子进程关闭后才返回，暂存清理不跟随链接。任务侧车和 Vault 文本读取也增加了持久化前及读取前后的大小上限。这里的 SHA-256 用于同一次流程内的完整性与一致性校验，不代表签名、发布者身份或来源真实性。
+- 文献入库与阅读器的运行时规则已收敛为单一职责模块：入库提示词/输入解析不再与状态机和写入边界混杂，阅读位置恢复不再属于图片修复模块；`visual-repair.json` 现在明确只是派生缓存，阅读器始终从已验证的 `article.md` 与 `mineru-result.json` 生成当前确定性显示计划，旧包或同版本但内容不一致的缓存不能继续影响图片合并、图注归属或正文初始位置。视觉算法版本与兼容判断也改为单一常量，避免加载器和生成器各自维护版本分支。
+- 原生 MinerU 入库现在会在同一原子 staging 内生成、验证并由 manifest 的 size/SHA-256 绑定 `viewer-index.json`、`visual-repair.json` 与只读 `visual-candidates.json`；候选包只含确定性的复核 ID、几何与结构信号，不含资产路径或原文，也不会被阅读器自动执行。旧包缺少 sidecar 时仍会从原始 JSON 的页码、bbox、相邻关系、Markdown 图片顺序和图注信号在内存中重建。整页仅含连续视觉分片时可按精确页覆盖从 PDF 重建，完整大图与其内含重复子图也会按一一对应关系折叠；无 `source.pdf` 的裁剪计划强制降为复核。持久化和运行时两条路径共用输入哈希、块内容、Markdown occurrence、PDF 来源声明和结构资源上限的反向绑定，失败时整组回退原图；不修改 `article.md`、原始图片、JSON 或 PDF，现有包无需重新入库。
+- 轻量入库身份阶段改为插件强制的 Vault-first 顺序：必须先检索 `papers/`、`Clippings/` 与 `wiki/sources/`，可从已有候选取得未截断标题和 DOI 后直接进行 `crossref_doi` 精确核验；完成本地预检前 Crossref/Web 工具会拒绝调用。避免截断 PDF 文件名和模型错误改写检索词耗尽两次模糊搜索预算后误报冲突。
+- npm 0.5.x 的 `mineru-open-api` 使用无扩展名 Node 包装器查找平台原生程序；插件现在校验 npm 包结构后直接启动其中的 `mineru-open-api` 原生二进制，并让设置页 CLI 检查复用同一解析器，不再尝试把 Obsidian/Electron 当作 Node 运行时。旧逻辑会以 0 退出但留下空暂存目录。输出发现失败时也会列出暂存文件，便于区分空产物与布局变化。
+- 精确重复现在按两个独立产物层判断：`papers/` 与 `Clippings/` 同属原文层，`wiki/sources/` 属于分析层。已有分析笔记但缺原文时仅补 MinerU 包；已有 papers article 或 Clipping 但缺分析时读取该原文补 Wiki；两层都存在才整项 no-op。补全时沿用可确认的既有 citekey，不创建 `-2` 分叉记录，也不覆盖已有输出。
+- 轻量入库身份阶段不再允许模型无休止重复 Crossref 模糊搜索：每阶段最多两次，并在候选结果中明确引导 DOI 精确核验和 Vault 查重；提示词新增提交前工具清单。轻量 Agent 的单轮模型请求超时最低提升到 60 秒（仍受任务总预算约束），避免较长工具转录在 Direct API 默认 20 秒处中断。
+- 轻量文献入库现在能在同一次任务中读取刚由 MinerU 原子发布的 `papers/<citekey>/article.md`：摘要阶段使用绑定发布回执的 `article_read` 直接经 Vault adapter 取得标题、目录、摘要与主要章节证据包，不再等待 Obsidian 异步文件索引。模型未成功读取该回执或 MinerU 未返回有效文章时不会创建 `wiki/sources/` 摘要笔记，也不会静默降级为仅依据元数据生成。
+- 文献阅读器首次打开含图片的 Markdown 时，正文现在固定从顶部开始；右侧「图片与图注」仍可默认展示第一张图，但该参考栏默认值不再冒充已保存的正文阅读锚点并触发 `scrollIntoView`。已有真实阅读锚点或 PDF 页码的恢复行为保持不变。
+- MinerU 设置现在可通过 Obsidian SecretStorage 选择或创建 API Token，插件只在 `data.json` 中保存凭据名称，并在运行时通过 `MINERU_TOKEN` 传给 CLI；CLI 配置和系统环境变量仍可继续使用。Windows npm PowerShell shim 的版本检查会主动关闭标准输入，不再等待 10 秒超时；从 npm shim 解析出的 JavaScript 入口在 Obsidian/Electron 中以 Node 模式启动。
+- 轻量入库的身份核验和去重现在只接受工具生成的有界结构化回执：声明标题必须命中元数据候选，DOI 与标题必须来自同一精确 Crossref 回执，`none` 查重必须绑定完整标题或 DOI，`exact` 还必须由同一路径下的标题或 DOI 一致证据支持。
+- MinerU 包先在 Vault 同卷唯一 staging 中完整复制，再以单次目录 rename 暴露；复制、提交或并发失败会精确清理 staging（清理本身失败时报告唯一残留），不会暴露半包或覆盖既有包。manifest 不再记录宿主机绝对 PDF/CLI 路径，CLI 版本输出也只保留可识别的 SemVer。
+- 任务完整输出改为原子写入插件本地 `task-output/dashboard-runs/` 侧车，不再依赖 Toolkit 或回落到进程工作目录；侧车与 `data.json` 通过完成日志及两阶段清理标记对账，写入或最终保存失败不会把真实任务结果改判为失败。旧版内联长输出会在任务状态归一化后迁移到同一插件本地目录，再在 `data.json` 中保留有界快照。
 
 ## [0.30.0] - 2026-08-30
 

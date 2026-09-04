@@ -109,10 +109,9 @@ assert.match(plugin, /isConfiguredReaderMarkdownFile/);
 assert.match(plugin, /getActiveViewOfType\(MarkdownView\)/);
 assert.match(plugin, /readerAutoOpenBypass/);
 assert.match(view, /sourceKind === "markdown"/);
-assert.match(
-	view,
-	/sourceKind === "markdown" && !this\.readerState\.markdownAnchor\)[\s\S]{0,180}markdownScroller\?\.scrollTo\(\{ top: 0, behavior: "auto" \}\);[\s\S]{0,40}return;/,
-);
+assert.deepEqual(readerMarkdown.readerMarkdownRestoreTarget("visuals", "", 1), { kind: "top" });
+assert.match(view, /restoreTarget\.kind === "top"/);
+assert.doesNotMatch(view, /sourceKind === "mineru" \? this\.readerState\.currentVisualId/);
 assert.doesNotMatch(view, /article\.scrollIntoView\(\{ block: "start" \}\)/);
 assert.match(view, /getFirstLinkpathDest/);
 assert.match(settings, /readerMarkdownFolders: \["papers", "Clippings"\]/);

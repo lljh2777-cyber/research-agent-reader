@@ -4,16 +4,26 @@ import { App, TFile, normalizePath } from "obsidian";
 
 import {
 	buildRuntimeViewerIndex,
+	MINERU_VIEWER_LIMITS,
 	normalizeAssetPath,
 	normalizeBbox,
 	reclassifyRuntimeRunningHeaders,
 } from "./normalization";
 import {
-	captionLinkMatchesBlocks,
 	mergeStandaloneCaptionRepairGroups,
 	resolveVisualCaptionDetails,
 	visualLabelFromCaption,
 } from "./reader-markdown";
+import {
+	buildRuntimeVisualRepair,
+	CURRENT_VISUAL_REPAIR_ALGORITHM,
+	isSupportedVisualRepairAlgorithm,
+	validateVisualContracts,
+} from "./visual-repair";
+import { MINERU_RESOURCE_LIMITS, parseBoundedJson } from "./resource-limits";
+import { assertPassiveMineruMarkdown, derivePassiveMineruMarkdown } from "../security/safe-markdown";
+import { readTrustedVaultFile, resolveTrustedVaultPath } from "../runtime/trusted-vault-fs";
+import type { VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
 import type {
 	MineruReaderPackage,
 	MineruReaderVisual,
@@ -33,11 +43,19 @@ import type {
 type UnknownRecord = Record<string, unknown>;
 
 const MIB = 1024 * 1024;
-const MAX_ARTICLE_BYTES = 64 * MIB;
-const MAX_MINERU_JSON_BYTES = 256 * MIB;
-const MAX_CONTRACT_BYTES = 32 * MIB;
-const MAX_PDF_BYTES = 768 * MIB;
-const MAX_OUTPUT_ASSET_BYTES = 256 * MIB;
+const MAX_ARTICLE_BYTES = MINERU_RESOURCE_LIMITS.articleBytes;
+const MAX_MINERU_JSON_BYTES = MINERU_RESOURCE_LIMITS.mineruJsonBytes;
+const MAX_CONTRACT_BYTES = MINERU_RESOURCE_LIMITS.contractBytes;
+const MAX_MANIFEST_BYTES = MINERU_RESOURCE_LIMITS.manifestBytes;
+const MAX_VALIDATION_BYTES = MINERU_RESOURCE_LIMITS.validationBytes;
+const MAX_PDF_BYTES = MINERU_RESOURCE_LIMITS.pdfBytes;
+const MAX_OUTPUT_ASSET_BYTES = MINERU_RESOURCE_LIMITS.outputAssetBytes;
+const MAX_MANIFEST_RECORDS = MINERU_RESOURCE_LIMITS.manifestRecords;
+const MAX_PACKAGE_TOTAL_BYTES = MINERU_RESOURCE_LIMITS.packageTotalBytes;
+const MAX_IMAGE_COUNT = MINERU_RESOURCE_LIMITS.imageCount;
+const MAX_IMAGE_TOTAL_BYTES = MINERU_RESOURCE_LIMITS.imageTotalBytes;
+const MAX_IMAGE_PIXELS = MINERU_RESOURCE_LIMITS.imagePixels;
+const MAX_IMAGE_TOTAL_PIXELS = MINERU_RESOURCE_LIMITS.imageTotalPixels;
 
 function asRecord(value: unknown): UnknownRecord {
 	return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -47,7 +65,18 @@ function asRecord(value: unknown): UnknownRecord {
 
 function asStringArray(value: unknown): string[] {
 	if (!Array.isArray(value)) return [];
-	return value.map((item) => String(item || "").trim()).filter(Boolean);
+	if (value.length > MINERU_VIEWER_LIMITS.maxNestedStrings) {
+		throw new Error("Viewer Index 嵌套字符串数组超过安全上限");
+	}
+	const result: string[] = [];
+	for (const item of value) {
+		if (typeof item !== "string" || item.length > 2_000) {
+			throw new Error("Viewer Index 嵌套字符串值无效或过长");
+		}
+		const text = item.trim();
+		if (text) result.push(text);
+	}
+	return result;
 }
 
 const CAPTION_PART_KINDS = new Set<MineruCaptionPart["kind"]>([
@@ -63,11 +92,13 @@ function normalizeCaptionParts(
 	fallback: readonly MineruCaptionPart[] = [],
 ): MineruCaptionPart[] | null {
 	if (value === undefined) return fallback.map((part) => ({ ...part }));
-	if (!Array.isArray(value)) return null;
+	if (!Array.isArray(value) || value.length > MINERU_VIEWER_LIMITS.maxNestedStrings) return null;
 	const parts: MineruCaptionPart[] = [];
 	for (let index = 0; index < value.length; index += 1) {
 		const record = asRecord(value[index]);
-		const text = String(record.text || "").trim();
+		const rawText = record.text;
+		if (typeof rawText !== "string" || rawText.length > 2_000) return null;
+		const text = rawText.trim();
 		const kind = String(record.kind || "") as MineruCaptionPart["kind"];
 		const declaredIndex = record.index;
 		if (
@@ -85,7 +116,7 @@ function normalizeNextPagePlaceholders(
 	fallback: readonly MineruNextPagePlaceholder[] = [],
 ): MineruNextPagePlaceholder[] | null {
 	if (value === undefined) return (fallback || []).map((placeholder) => ({ ...placeholder }));
-	if (!Array.isArray(value)) return null;
+	if (!Array.isArray(value) || value.length > MINERU_VIEWER_LIMITS.maxNestedStrings) return null;
 	const placeholders: MineruNextPagePlaceholder[] = [];
 	for (const item of value) {
 		const record = asRecord(item);
@@ -122,9 +153,42 @@ function normalizeMarkdownTextRange(
 }
 
 function issueText(value: unknown): string {
-	if (typeof value === "string") return value;
+	if (typeof value === "string") return value.slice(0, 2_000);
 	const record = asRecord(value);
-	return String(record.message || record.code || JSON.stringify(value));
+	return String(record.message || record.code || "不受支持的 issue 记录").slice(0, 2_000);
+}
+
+function boundedStringArray(value: unknown, maxItems: number, maxChars = 2_000): string[] | null {
+	if (!Array.isArray(value) || value.length > maxItems) return null;
+	const result: string[] = [];
+	for (const item of value) {
+		if (typeof item !== "string" || item.length > maxChars) return null;
+		const text = item.trim();
+		if (text) result.push(text);
+	}
+	return result;
+}
+
+function safeScalarSignals(value: unknown): Record<string, string | number | boolean | null> | null {
+	const record = asRecord(value);
+	const entries = Object.entries(record);
+	if (entries.length > 64) return null;
+	const result: Record<string, string | number | boolean | null> = {};
+	for (const [key, item] of entries) {
+		if (!/^[a-z0-9_.-]{1,80}$/i.test(key)) return null;
+		if (typeof item === "string") {
+			if (item.length > 500) return null;
+			result[key] = item;
+		} else if (typeof item === "number") {
+			if (!Number.isFinite(item)) return null;
+			result[key] = item;
+		} else if (typeof item === "boolean" || item === null) {
+			result[key] = item;
+		} else {
+			return null;
+		}
+	}
+	return result;
 }
 
 function sha256(value: Uint8Array): string {
@@ -136,11 +200,7 @@ function decodeUtf8(value: ArrayBuffer | Uint8Array): string {
 }
 
 function parseJson(value: string, label: string): unknown {
-	try {
-		return JSON.parse(value);
-	} catch (error) {
-		throw new Error(`${label} 不是有效 JSON：${error instanceof Error ? error.message : String(error)}`);
-	}
+	return parseBoundedJson(value, label);
 }
 
 function normalizePackageArticlePath(value: string): string {
@@ -167,30 +227,47 @@ function findTFile(app: App, path: string): TFile | null {
 	return file instanceof TFile ? file : null;
 }
 
+function filesystemAdapter(app: App): VaultFilesystemAdapter {
+	return app.vault.adapter as unknown as VaultFilesystemAdapter;
+}
+
+async function assertPackageFileNoFollow(app: App, packagePath: string, file: TFile): Promise<void> {
+	const normalizedFile = normalizePath(file.path);
+	if (!normalizedFile.startsWith(`${packagePath}/`)) throw new Error(`原文包资产越出包根：${file.path}`);
+	await resolveTrustedVaultPath(filesystemAdapter(app), packagePath, { expectedType: "directory" });
+	await resolveTrustedVaultPath(filesystemAdapter(app), normalizedFile, { expectedType: "file" });
+}
+
 async function readRequiredBinary(
 	app: App,
 	path: string,
 	label: string,
 	maxBytes = MAX_MINERU_JSON_BYTES,
+	packagePath = "",
 ): Promise<{ file: TFile; bytes: Uint8Array; text: string }> {
 	const file = findTFile(app, path);
 	if (!file) throw new Error(`缺少 ${label}：${path}`);
+	if (packagePath) await assertPackageFileNoFollow(app, packagePath, file);
 	if (file.stat.size > maxBytes) {
 		throw new Error(`${label} 超过阅读器安全上限（${Math.round(maxBytes / MIB)} MiB）：${path}`);
 	}
-	const buffer = await app.vault.readBinary(file);
-	return { file, bytes: new Uint8Array(buffer), text: decodeUtf8(buffer) };
+	const bytes = new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), path, maxBytes));
+	return { file, bytes, text: decodeUtf8(bytes) };
 }
 
 async function readOptionalJson(
 	app: App,
 	path: string,
 	maxBytes = MAX_CONTRACT_BYTES,
+	packagePath = "",
 ): Promise<unknown | null> {
 	const file = findTFile(app, path);
 	if (!file) return null;
+	if (packagePath) await assertPackageFileNoFollow(app, packagePath, file);
 	if (file.stat.size > maxBytes) throw new Error(`${path} 超过阅读器安全上限`);
-	return parseJson(await app.vault.read(file), path);
+	const bytes = new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), path, maxBytes));
+	if (bytes.byteLength > maxBytes) throw new Error(`${path} 实际读取结果超过阅读器安全上限`);
+	return parseJson(decodeUtf8(bytes), path);
 }
 
 async function readOptionalDerivedJson(
@@ -198,6 +275,7 @@ async function readOptionalDerivedJson(
 	path: string,
 	issues: string[],
 	manifestRecord?: UnknownRecord,
+	packagePath = "",
 ): Promise<unknown | null> {
 	try {
 		const file = findTFile(app, path);
@@ -205,11 +283,15 @@ async function readOptionalDerivedJson(
 			if (manifestRecord) throw new Error("manifest.json 已登记该文件，但文件不存在");
 			return null;
 		}
+		if (packagePath) await assertPackageFileNoFollow(app, packagePath, file);
 		if (!manifestRecord) throw new Error("manifest.json 未登记该派生文件");
 		if (file.stat.size > MAX_CONTRACT_BYTES || Number(manifestRecord.size) !== file.stat.size) {
 			throw new Error("文件大小与 manifest.json 不一致或超过安全上限");
 		}
-		const bytes = new Uint8Array(await app.vault.readBinary(file));
+		const bytes = new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), path, MAX_CONTRACT_BYTES));
+		if (bytes.byteLength > MAX_CONTRACT_BYTES || bytes.byteLength !== file.stat.size) {
+			throw new Error("文件实际读取长度与记录不一致或超过安全上限");
+		}
 		const expectedHash = String(manifestRecord.sha256 || "").toLowerCase();
 		if (!/^[a-f0-9]{64}$/.test(expectedHash) || sha256(bytes) !== expectedHash) {
 			throw new Error("文件哈希与 manifest.json 不一致");
@@ -262,6 +344,9 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 	const captionNextPageFigureKeys = asStringArray(captionRecord.next_page_figure_keys).length
 		? asStringArray(captionRecord.next_page_figure_keys)
 		: [...(fallback?.caption?.next_page_figure_keys || [])];
+	const captionFormalFigureKeys = asStringArray(captionRecord.formal_figure_caption_keys).length
+		? asStringArray(captionRecord.formal_figure_caption_keys)
+		: [...(fallback?.caption?.formal_figure_caption_keys || [])];
 	const textRecord = asRecord(record.text);
 	const blockText = String(textRecord.text || fallback?.text?.text || "").trim();
 	const textFigureKeys = asStringArray(textRecord.figure_keys).length
@@ -270,6 +355,9 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 	const textLeadingFigureKey = String(
 		textRecord.leading_figure_key || fallback?.text?.leading_figure_key || "",
 	).trim().toLowerCase();
+	const textFormalFigureKeys = asStringArray(textRecord.formal_figure_caption_keys).length
+		? asStringArray(textRecord.formal_figure_caption_keys)
+		: [...(fallback?.text?.formal_figure_caption_keys || [])];
 	const assetPath = normalizeAssetPath(record.asset_path ?? fallback?.asset_path);
 	const bbox = normalizeBbox(record.bbox_norm ?? record.bbox, false) || fallback?.bbox_norm || null;
 	const rawRole = String(record.role || fallback?.role || "other");
@@ -293,6 +381,12 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 					item_count: Number(captionRecord.item_count || fallback?.caption?.item_count || 0),
 					figure_keys: captionFigureKeys,
 					leading_figure_key: captionLeadingFigureKey || undefined,
+					formal_figure_caption_keys: captionFormalFigureKeys,
+					leading_formal_figure_caption_key: String(
+						captionRecord.leading_formal_figure_caption_key
+						|| fallback?.caption?.leading_formal_figure_caption_key
+						|| "",
+					).trim().toLowerCase() || undefined,
 					next_page_marker: captionNextPageMarker,
 					next_page_figure_keys: captionNextPageFigureKeys,
 					next_page_placeholders: captionNextPagePlaceholders,
@@ -305,6 +399,9 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 					starts_with_panel_label: typeof captionRecord.starts_with_panel_label === "boolean"
 						? captionRecord.starts_with_panel_label
 						: fallback?.caption?.starts_with_panel_label,
+					long_item_count: Number(captionRecord.long_item_count ?? fallback?.caption?.long_item_count ?? 0),
+					figure_anchor_count: Number(captionRecord.figure_anchor_count ?? fallback?.caption?.figure_anchor_count ?? 0),
+					panel_label_count: Number(captionRecord.panel_label_count ?? fallback?.caption?.panel_label_count ?? 0),
 					next_page_reference_count: Number(
 						captionRecord.next_page_reference_count
 						?? fallback?.caption?.next_page_reference_count
@@ -321,6 +418,12 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 					item_count: Number(textRecord.item_count || fallback?.text?.item_count || 0),
 					figure_keys: textFigureKeys,
 					leading_figure_key: textLeadingFigureKey || undefined,
+					formal_figure_caption_keys: textFormalFigureKeys,
+					leading_formal_figure_caption_key: String(
+						textRecord.leading_formal_figure_caption_key
+						|| fallback?.text?.leading_formal_figure_caption_key
+						|| "",
+					).trim().toLowerCase() || undefined,
 					next_page_marker: typeof textRecord.next_page_marker === "boolean"
 						? textRecord.next_page_marker
 						: Boolean(fallback?.text?.next_page_marker),
@@ -349,7 +452,22 @@ function normalizeBlock(value: unknown, fallback?: MineruViewerBlock): MineruVie
 
 function normalizeViewerIndex(value: unknown, fallback: MineruViewerIndex): MineruViewerIndex | null {
 	const record = asRecord(value);
-	if (Number(record.schema_version) !== 1 || !Array.isArray(record.pages)) return null;
+	if (
+		Number(record.schema_version) !== 1
+		|| !Array.isArray(record.pages)
+		|| record.pages.length === 0
+		|| record.pages.length > MINERU_VIEWER_LIMITS.maxPages
+		|| (Array.isArray(record.markdown_images)
+			&& record.markdown_images.length > MINERU_VIEWER_LIMITS.maxMarkdownImages)
+		|| (Array.isArray(record.issues) && record.issues.length > MINERU_VIEWER_LIMITS.maxIssues)
+	) return null;
+	let totalBlocks = 0;
+	for (const pageValue of record.pages) {
+		const blocks = asRecord(pageValue).blocks;
+		if (!Array.isArray(blocks) || blocks.length > MINERU_VIEWER_LIMITS.maxBlocksPerPage) return null;
+		totalBlocks += blocks.length;
+		if (totalBlocks > MINERU_VIEWER_LIMITS.maxSourceElements) return null;
+	}
 	const fallbackBySource = new Map<number, MineruViewerBlock>();
 	fallback.pages.forEach((page) => page.blocks.forEach((block) => fallbackBySource.set(block.source_index, block)));
 	const pages: MineruViewerPage[] = [];
@@ -375,6 +493,8 @@ function normalizeViewerIndex(value: unknown, fallback: MineruViewerIndex): Mine
 				order: Number(image.order ?? order),
 				asset_path: normalizeAssetPath(image.asset_path),
 				occurrence: Number(image.occurrence || 0),
+				char_start: Number.isInteger(image.char_start) ? Number(image.char_start) : undefined,
+				char_end: Number.isInteger(image.char_end) ? Number(image.char_end) : undefined,
 			};
 		}).filter((image) => image.asset_path)
 		: fallback.markdown_images;
@@ -385,6 +505,9 @@ function normalizeViewerIndex(value: unknown, fallback: MineruViewerIndex): Mine
 		coordinate_system: asRecord(record.coordinate_system) as MineruViewerIndex["coordinate_system"],
 		pdf_source: asRecord(record.pdf_source) as MineruViewerIndex["pdf_source"],
 		markdown_images: markdownImages,
+		// Markdown caption ranges are always rebuilt from the verified article.md;
+		// a stored sidecar cannot introduce or rewrite logical figure ownership.
+		markdown_captions: [...(fallback.markdown_captions || [])],
 		pages: pages.sort((a, b) => a.page_idx - b.page_idx),
 		issues: Array.isArray(record.issues) ? record.issues.map(issueText) : [],
 	};
@@ -393,6 +516,7 @@ function normalizeViewerIndex(value: unknown, fallback: MineruViewerIndex): Mine
 function normalizeDecision(value: unknown): MineruRepairDecision {
 	if (value === "auto") return "auto";
 	if (value === "review") return "review";
+	if (value === "skip") return "skip";
 	return "keep-original";
 }
 
@@ -435,15 +559,25 @@ function normalizeCaptionLink(value: unknown): MineruCaptionLink | null {
 
 function normalizeRepair(value: unknown): MineruVisualRepair | null {
 	const record = asRecord(value);
-	if (Number(record.schema_version) !== 1 || !Array.isArray(record.groups)) return null;
+	if (Number(record.schema_version) !== 1
+		|| !Array.isArray(record.groups)
+		|| record.groups.length > 4_096) return null;
 	const algorithmVersion = String(record.algorithm_version || "");
-	if (!["visual-repair-v1.1", "visual-repair-v1.2", "visual-repair-v1.3", "visual-repair-v1.4", "visual-repair-v1.5", "visual-repair-v1.6"].includes(algorithmVersion)) return null;
+	if (!isSupportedVisualRepairAlgorithm(algorithmVersion)) return null;
 	const groups = record.groups.map((value): MineruVisualRepairGroup | null => {
 		const group = asRecord(value);
 		const replacement = asRecord(group.replacement);
 		const id = String(group.id || "").trim();
 		const pageIdx = Number(group.page_idx);
-		const memberBlockIds = asStringArray(group.member_block_ids);
+		const memberBlockIds = boundedStringArray(group.member_block_ids, 512);
+		const memberAssetPaths = boundedStringArray(group.member_asset_paths ?? [], 512);
+		const memberMarkdownImageIds = boundedStringArray(group.member_markdown_image_ids ?? [], 512);
+		const captionAnchorBlockIds = boundedStringArray(group.caption_anchor_block_ids ?? [], 512);
+		const reasonCodes = boundedStringArray(group.reason_codes ?? [], 256, 200);
+		const warningCodes = boundedStringArray(group.warning_codes ?? [], 256, 200);
+		const signals = safeScalarSignals(group.signals);
+		if (!memberBlockIds || !memberAssetPaths || !memberMarkdownImageIds
+			|| !captionAnchorBlockIds || !reasonCodes || !warningCodes || !signals) return null;
 		if (!id || !Number.isInteger(pageIdx) || pageIdx < 0 || memberBlockIds.length < 2) return null;
 		const bbox = normalizeBbox(replacement.bbox_norm ?? replacement.bbox);
 		const assetPath = normalizeAssetPath(
@@ -452,8 +586,10 @@ function normalizeRepair(value: unknown): MineruVisualRepair | null {
 		return {
 			id,
 			page_idx: pageIdx,
+			figure_key: String(group.figure_key || "").trim().toLowerCase() || undefined,
 			member_block_ids: memberBlockIds,
-			member_markdown_image_ids: asStringArray(group.member_markdown_image_ids),
+			member_asset_paths: memberAssetPaths,
+			member_markdown_image_ids: memberMarkdownImageIds,
 			decision: normalizeDecision(group.decision),
 			confidence: Math.max(0, Math.min(1, Number(group.confidence || 0))),
 			replacement: {
@@ -463,13 +599,15 @@ function normalizeRepair(value: unknown): MineruVisualRepair | null {
 				padding_norm: Math.max(0, Math.min(40, Number(replacement.padding_norm || 0))),
 				...(assetPath ? { asset_path: assetPath } : {}),
 			},
-			caption_anchor_block_ids: asStringArray(group.caption_anchor_block_ids),
-			signals: asRecord(group.signals),
-			reason_codes: asStringArray(group.reason_codes),
+			caption_anchor_block_ids: captionAnchorBlockIds,
+			signals,
+			reason_codes: reasonCodes,
+			warning_codes: warningCodes,
 			fallback: String(group.fallback || "original_assets"),
 		};
 	}).filter((group): group is MineruVisualRepairGroup => Boolean(group));
 	const rawCaptionLinks = Array.isArray(record.caption_links) ? record.caption_links : [];
+	if (rawCaptionLinks.length > 4_096) return null;
 	const captionLinks = rawCaptionLinks
 		.map(normalizeCaptionLink)
 		.filter((link): link is MineruCaptionLink => Boolean(link));
@@ -482,7 +620,9 @@ function normalizeRepair(value: unknown): MineruVisualRepair | null {
 		inputs: asRecord(record.inputs) as MineruVisualRepair["inputs"],
 		groups,
 		caption_links: captionLinks,
-		issues: Array.isArray(record.issues) ? record.issues.map(issueText) : [],
+		issues: Array.isArray(record.issues) && record.issues.length <= 4_096
+			? record.issues.map(issueText)
+			: [],
 	};
 }
 
@@ -492,6 +632,9 @@ function bboxArea(bbox: NormalizedBbox | null): number {
 
 function manifestRecords(value: unknown, label: string): Map<string, UnknownRecord> {
 	if (!Array.isArray(value)) throw new Error(`manifest.json 缺少 ${label} 文件清单`);
+	if (value.length > MAX_MANIFEST_RECORDS) {
+		throw new Error(`manifest.json 的 ${label} 记录数超过 ${MAX_MANIFEST_RECORDS}`);
+	}
 	const records = new Map<string, UnknownRecord>();
 	for (const item of value) {
 		const record = asRecord(item);
@@ -513,9 +656,28 @@ async function verifyManifestOutputs(
 	article: { bytes: Uint8Array },
 	mineru: { bytes: Uint8Array },
 	pdfPath: string | null,
-): Promise<void> {
+): Promise<{ verifiedAssetBlobs: Map<string, Blob>; verifiedPdfBytes: Uint8Array | null }> {
 	if (Number(manifest.schema_version) !== 1) throw new Error("manifest.json 版本不受支持");
 	const records = manifestRecords(manifest.outputs, "outputs");
+	const derivedRecords = optionalManifestRecords(manifest.derived_contracts);
+	if (records.size + derivedRecords.size > MAX_MANIFEST_RECORDS) {
+		throw new Error("manifest.json 总记录数超过安全上限");
+	}
+	let packageTotalBytes = 0;
+	let imageCount = 0;
+	let imageTotalBytes = 0;
+	for (const [relativePath, record] of [...records, ...derivedRecords]) {
+		const size = Number(record.size);
+		if (!Number.isSafeInteger(size) || size < 0) throw new Error(`manifest.json 含无效大小：${relativePath}`);
+		packageTotalBytes += size;
+		if (isRasterImagePath(relativePath)) {
+			imageCount += 1;
+			imageTotalBytes += size;
+		}
+	}
+	if (packageTotalBytes > MAX_PACKAGE_TOTAL_BYTES) throw new Error(`原文包累计大小超过 ${Math.round(MAX_PACKAGE_TOTAL_BYTES / MIB)} MiB`);
+	if (imageCount > MAX_IMAGE_COUNT) throw new Error(`原文包图片数超过 ${MAX_IMAGE_COUNT}`);
+	if (imageTotalBytes > MAX_IMAGE_TOTAL_BYTES) throw new Error(`原文包图片累计大小超过 ${Math.round(MAX_IMAGE_TOTAL_BYTES / MIB)} MiB`);
 	const knownBytes = new Map<string, Uint8Array>([
 		["article.md", article.bytes],
 		["mineru-result.json", mineru.bytes],
@@ -523,10 +685,15 @@ async function verifyManifestOutputs(
 	for (const required of knownBytes.keys()) {
 		if (!records.has(required)) throw new Error(`manifest.json 未登记核心文件：${required}`);
 	}
+	let decodedPixels = 0;
+	let sourcePdfOutputHash = "";
+	const verifiedAssetBlobs = new Map<string, Blob>();
+	let verifiedPdfBytes: Uint8Array | null = null;
 	for (const [relativePath, record] of records) {
 		const resolvedPath = resolvePackageAssetPath(packagePath, relativePath);
 		const file = findTFile(app, resolvedPath);
 		if (!resolvedPath || !file) throw new Error(`manifest.json 登记的文件不存在：${relativePath}`);
+		await assertPackageFileNoFollow(app, packagePath, file);
 		const expectedSize = Number(record.size);
 		if (!Number.isSafeInteger(expectedSize) || expectedSize < 0 || file.stat.size !== expectedSize) {
 			throw new Error(`原文包文件大小与 manifest.json 不一致：${relativePath}`);
@@ -535,13 +702,45 @@ async function verifyManifestOutputs(
 			? MAX_ARTICLE_BYTES
 			: relativePath === "mineru-result.json"
 				? MAX_MINERU_JSON_BYTES
-				: MAX_OUTPUT_ASSET_BYTES;
+				: relativePath === "_extraction/source.pdf"
+					? MAX_PDF_BYTES
+					: MAX_OUTPUT_ASSET_BYTES;
 		if (file.stat.size > maxBytes) throw new Error(`原文包文件超过阅读器安全上限：${relativePath}`);
-		const bytes = knownBytes.get(relativePath)
-			|| new Uint8Array(await app.vault.readBinary(file));
 		const expectedHash = String(record.sha256 || "").toLowerCase();
-		if (!/^[a-f0-9]{64}$/.test(expectedHash) || sha256(bytes) !== expectedHash) {
+		if (!/^[a-f0-9]{64}$/.test(expectedHash)) {
 			throw new Error(`原文包文件哈希与 manifest.json 不一致：${relativePath}`);
+		}
+		const bytes = knownBytes.get(relativePath)
+			|| new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), resolvedPath, maxBytes));
+		if (bytes.byteLength !== expectedSize || bytes.byteLength > maxBytes) {
+			throw new Error(`原文包文件实际读取长度不一致或超过安全上限：${relativePath}`);
+		}
+		if (sha256(bytes) !== expectedHash) {
+			throw new Error(`原文包文件哈希与 manifest.json 不一致：${relativePath}`);
+		}
+		if (relativePath === "_extraction/source.pdf") {
+			sourcePdfOutputHash = expectedHash;
+			verifiedPdfBytes = bytes;
+		}
+		if (isRasterImagePath(relativePath)) {
+			const dimensions = rasterImageDimensions(bytes, relativePath);
+			const pixels = dimensions.width * dimensions.height;
+			if (pixels <= 0 || pixels > MAX_IMAGE_PIXELS) {
+				throw new Error(`图片解码像素超过安全上限：${relativePath}`);
+			}
+			decodedPixels += pixels;
+			if (decodedPixels > MAX_IMAGE_TOTAL_PIXELS) throw new Error("原文包图片累计解码像素超过安全上限");
+			// Blob becomes the single retained authority representation. The
+			// transient verification buffer is released after this loop iteration.
+			if (!(bytes.buffer instanceof ArrayBuffer)
+				|| bytes.byteOffset !== 0
+				|| bytes.byteLength !== bytes.buffer.byteLength) {
+				throw new Error(`图片验证缓冲区不是独占 ArrayBuffer：${relativePath}`);
+			}
+			verifiedAssetBlobs.set(relativePath, new Blob(
+				[bytes.buffer],
+				{ type: rasterImageMime(relativePath) },
+			));
 		}
 	}
 	if (pdfPath) {
@@ -549,9 +748,148 @@ async function verifyManifestOutputs(
 		const source = asRecord(manifest.source);
 		const expectedHash = String(source.sha256 || "").toLowerCase();
 		if (!file || file.stat.size > MAX_PDF_BYTES) throw new Error("包内 source.pdf 缺失或超过安全上限");
-		const bytes = new Uint8Array(await app.vault.readBinary(file));
-		if (!/^[a-f0-9]{64}$/.test(expectedHash) || sha256(bytes) !== expectedHash) {
-			throw new Error("包内 source.pdf 与 manifest.json 来源哈希不一致");
+		if (records.has("_extraction/source.pdf") && sourcePdfOutputHash) {
+			if (!/^[a-f0-9]{64}$/.test(expectedHash) || sourcePdfOutputHash !== expectedHash) {
+				throw new Error("包内 source.pdf 与 manifest.json 来源哈希不一致");
+			}
+		} else {
+			// Legacy schema-v1 packages recorded the bundled source only in the
+			// source record. It remains authoritative only when both size and
+			// SHA-256 bind the exact verified bytes; the path string is ignored.
+			const expectedSize = Number(source.size);
+			if (!Number.isSafeInteger(expectedSize)
+				|| expectedSize < 0
+				|| file.stat.size !== expectedSize
+				|| !/^[a-f0-9]{64}$/.test(expectedHash)
+				|| packageTotalBytes + expectedSize > MAX_PACKAGE_TOTAL_BYTES) {
+				throw new Error("旧版 manifest.json 未完整绑定包内 source.pdf");
+			}
+			await assertPackageFileNoFollow(app, packagePath, file);
+			const bytes = new Uint8Array(await readTrustedVaultFile(
+				filesystemAdapter(app),
+				pdfPath,
+				MAX_PDF_BYTES,
+			));
+			if (bytes.byteLength !== expectedSize || sha256(bytes) !== expectedHash) {
+				throw new Error("包内 source.pdf 与旧版 manifest.json 来源哈希不一致");
+			}
+			verifiedPdfBytes = bytes;
+		}
+	}
+	return { verifiedAssetBlobs, verifiedPdfBytes };
+}
+
+function isRasterImagePath(value: string): boolean {
+	return /\.(?:png|jpe?g|gif|webp)$/i.test(value);
+}
+
+function rasterImageMime(value: string): string {
+	if (/\.png$/i.test(value)) return "image/png";
+	if (/\.webp$/i.test(value)) return "image/webp";
+	return "image/jpeg";
+}
+
+function rasterImageDimensions(bytes: Uint8Array, label: string): { width: number; height: number } {
+	if (bytes.length >= 24
+		&& bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+		for (let offset = 8; offset + 12 <= bytes.length;) {
+			const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+			const length = view.getUint32(offset);
+			if (length > bytes.length - offset - 12) throw new Error(`PNG chunk 长度无效：${label}`);
+			const type = String.fromCharCode(...bytes.slice(offset + 4, offset + 8));
+			if (type === "acTL") throw new Error(`阅读器拒绝动画 PNG：${label}`);
+			offset += 12 + length;
+			if (type === "IEND") break;
+		}
+		const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+		return { width: view.getUint32(16), height: view.getUint32(20) };
+	}
+	if (bytes.length >= 10 && String.fromCharCode(...bytes.slice(0, 3)) === "GIF") {
+		throw new Error(`阅读器拒绝 GIF（无法在解码前可靠核算动画帧像素）：${label}`);
+	}
+	if (bytes.length >= 30
+		&& String.fromCharCode(...bytes.slice(0, 4)) === "RIFF"
+		&& String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") {
+		const kind = String.fromCharCode(...bytes.slice(12, 16));
+		if (kind === "VP8X") {
+			let hasAnimationFrame = false;
+			for (let offset = 12; offset + 8 <= bytes.length;) {
+				const chunkSize = bytes[offset + 4]
+					| (bytes[offset + 5] << 8)
+					| (bytes[offset + 6] << 16)
+					| (bytes[offset + 7] << 24);
+				if (chunkSize < 0 || chunkSize > bytes.length - offset - 8) {
+					throw new Error(`WebP chunk 长度无效：${label}`);
+				}
+				if (bytes[offset] === 0x41 && bytes[offset + 1] === 0x4e
+					&& bytes[offset + 2] === 0x4d && bytes[offset + 3] === 0x46) {
+					hasAnimationFrame = true;
+					break;
+				}
+				offset += 8 + chunkSize + (chunkSize & 1);
+			}
+			if ((bytes[20] & 0x02) !== 0 || hasAnimationFrame) {
+				throw new Error(`阅读器拒绝动画 WebP：${label}`);
+			}
+			const width = 1 + bytes[24] + (bytes[25] << 8) + (bytes[26] << 16);
+			const height = 1 + bytes[27] + (bytes[28] << 8) + (bytes[29] << 16);
+			return { width, height };
+		}
+		if (kind === "VP8 " && bytes[23] === 0x9d && bytes[24] === 0x01 && bytes[25] === 0x2a) {
+			return {
+				width: (bytes[26] | (bytes[27] << 8)) & 0x3fff,
+				height: (bytes[28] | (bytes[29] << 8)) & 0x3fff,
+			};
+		}
+		if (kind === "VP8L" && bytes[20] === 0x2f) {
+			return {
+				width: 1 + bytes[21] + ((bytes[22] & 0x3f) << 8),
+				height: 1 + (bytes[22] >> 6) + (bytes[23] << 2) + ((bytes[24] & 0x0f) << 10),
+			};
+		}
+	}
+	if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+		let offset = 2;
+		while (offset + 9 < bytes.length) {
+			if (bytes[offset] !== 0xff) {
+				offset += 1;
+				continue;
+			}
+			const marker = bytes[offset + 1];
+			if (marker === 0xd8 || marker === 0xd9) {
+				offset += 2;
+				continue;
+			}
+			const length = (bytes[offset + 2] << 8) | bytes[offset + 3];
+			if (length < 2 || offset + 2 + length > bytes.length) break;
+			if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+				return {
+					width: (bytes[offset + 7] << 8) | bytes[offset + 8],
+					height: (bytes[offset + 5] << 8) | bytes[offset + 6],
+				};
+			}
+			offset += 2 + length;
+		}
+	}
+	throw new Error(`图片格式或尺寸头不受支持：${label}`);
+}
+
+function assertViewerAssetsManifested(
+	records: Map<string, UnknownRecord>,
+	indexes: readonly MineruViewerIndex[],
+): void {
+	const referenced = new Set<string>();
+	for (const index of indexes) {
+		for (const image of index.markdown_images || []) if (image.asset_path) referenced.add(image.asset_path);
+		for (const page of index.pages || []) {
+			for (const block of page.blocks || []) if (block.asset_path) referenced.add(block.asset_path);
+		}
+	}
+	for (const rawPath of referenced) {
+		const path = normalizeAssetPath(rawPath);
+		if (!path || !records.has(path)) throw new Error(`阅读器引用资产未登记在 manifest.json：${rawPath}`);
+		if (!isRasterImagePath(path)) {
+			throw new Error(`阅读器拒绝不受像素预算保护的图片格式：${rawPath}`);
 		}
 	}
 }
@@ -563,8 +901,7 @@ function markdownOrderForAsset(index: MineruViewerIndex, assetPath: string): num
 function buildVisuals(
 	index: MineruViewerIndex,
 	repair: MineruVisualRepair | null,
-	packagePath: string,
-	app: App,
+	verifiedAssetBlobs: ReadonlyMap<string, Blob>,
 	pdfPath: string | null,
 	issues: string[],
 ): MineruReaderVisual[] {
@@ -581,7 +918,7 @@ function buildVisuals(
 		if (members.length < 2) continue;
 		const rawAssetPaths = [...new Set(members.map((block) => block.asset_path || "").filter(Boolean))];
 		const assetPaths = rawAssetPaths.filter((assetPath) => {
-			const available = Boolean(findTFile(app, resolvePackageAssetPath(packagePath, assetPath)));
+			const available = verifiedAssetBlobs.has(normalizeAssetPath(assetPath));
 			if (!available) issues.push(`视觉修复跳过缺失图片：${assetPath}`);
 			return available;
 		});
@@ -608,7 +945,7 @@ function buildVisuals(
 		const orderedAssets = [...assetPaths].sort(
 			(a, b) => markdownOrderForAsset(index, a) - markdownOrderForAsset(index, b),
 		);
-		const captions = resolveVisualCaptionDetails(members, blocks, repair, group.page_idx);
+		const captions = resolveVisualCaptionDetails(members, blocks, repair, group.page_idx, index);
 		visuals.push({
 			id: group.id,
 			pageIdx: group.page_idx,
@@ -630,7 +967,7 @@ function buildVisuals(
 	for (const block of blocks) {
 		if (consumed.has(block.id) || !["visual", "table"].includes(block.role) || !block.asset_path) continue;
 		const assetPath = block.asset_path;
-		if (!findTFile(app, resolvePackageAssetPath(packagePath, assetPath))) {
+		if (!verifiedAssetBlobs.has(normalizeAssetPath(assetPath))) {
 			issues.push(`阅读器跳过缺失图片：${assetPath}`);
 			continue;
 		}
@@ -643,6 +980,7 @@ function buildVisuals(
 				blocks,
 				repair,
 				index.pages.find((page) => page.blocks.includes(block))?.page_idx || 0,
+				index,
 			),
 			memberBlockIds: [block.id],
 			memberAssetPaths: [assetPath],
@@ -682,80 +1020,13 @@ function viewerHashesMatch(
 		&& expectedMineru === mineruHash.toLowerCase();
 }
 
-function bboxContains(container: NormalizedBbox, child: NormalizedBbox): boolean {
-	return container[0] <= child[0] + 0.01
-		&& container[1] <= child[1] + 0.01
-		&& container[2] + 0.01 >= child[2]
-		&& container[3] + 0.01 >= child[3];
-}
-
-function repairMatchesIndex(
-	repair: MineruVisualRepair,
-	index: MineruViewerIndex,
-	articleHash: string,
-	mineruHash: string,
+function visualRepairPlanMatches(
+	stored: MineruVisualRepair,
+	active: MineruVisualRepair,
 ): boolean {
-	if (!viewerHashesMatch({ ...index, inputs: repair.inputs }, articleHash, mineruHash)) return false;
-	const blockById = new Map<string, { block: MineruViewerBlock; pageIdx: number }>();
-	index.pages.forEach((page) => page.blocks.forEach((block) => {
-		blockById.set(block.id, { block, pageIdx: page.page_idx });
-	}));
-	const markdownImageIds = new Set(index.markdown_images.map((image) => image.id));
-	const consumed = new Set<string>();
-	for (const group of repair.groups) {
-		const memberIds = group.member_block_ids;
-		if (memberIds.length < 2 || new Set(memberIds).size !== memberIds.length) return false;
-		const members = memberIds.map((id) => blockById.get(id));
-		if (members.some((member) => !member || member.pageIdx !== group.page_idx)) return false;
-		if (memberIds.some((id) => consumed.has(id))) return false;
-		memberIds.forEach((id) => consumed.add(id));
-		if ((group.member_markdown_image_ids || []).some((id) => !markdownImageIds.has(id))) return false;
-		if ((group.caption_anchor_block_ids || []).some((id) => !memberIds.includes(id))) return false;
-		if (group.replacement.mode === "existing_asset") {
-			if (!group.replacement.block_id || !memberIds.includes(group.replacement.block_id)) return false;
-			const memberAssets = new Set(members.map((member) => member?.block.asset_path).filter(Boolean));
-			if (!group.replacement.asset_path || !memberAssets.has(group.replacement.asset_path)) return false;
-		} else if (group.replacement.mode === "pdf_crop") {
-			const crop = group.replacement.bbox_norm;
-			if (!crop || members.some((member) => member?.block.bbox_norm && !bboxContains(crop, member.block.bbox_norm))) {
-				return false;
-			}
-		} else {
-			return false;
-		}
-	}
-	const linkedVisuals = new Set<string>();
-	const linkedCaptionBlocks = new Set<string>();
-	for (const link of repair.caption_links || []) {
-		if (linkedVisuals.has(link.visual_block_id)) return false;
-		linkedVisuals.add(link.visual_block_id);
-		const visual = blockById.get(link.visual_block_id);
-		if (
-			!visual
-			|| visual.pageIdx !== link.source_page_idx
-			|| visual.block.role !== "visual"
-			|| link.target_page_idx !== link.source_page_idx + 1
-			|| new Set(link.caption_block_ids).size !== link.caption_block_ids.length
-		) return false;
-		const captionBlocks = link.caption_block_ids.map((id) => blockById.get(id));
-		if (
-			captionBlocks.some((entry) => (
-				!entry
-				|| entry.pageIdx !== link.target_page_idx
-				|| !["text", "title"].includes(entry.block.role)
-				|| !String(entry.block.text?.text || "").trim()
-			))
-			|| link.caption_block_ids.some((id) => consumed.has(id))
-			|| link.caption_block_ids.some((id) => linkedCaptionBlocks.has(id))
-			|| !captionLinkMatchesBlocks(
-				link,
-				visual.block,
-				index.pages.find((page) => page.page_idx === link.target_page_idx)?.blocks || [],
-			)
-		) return false;
-		link.caption_block_ids.forEach((id) => linkedCaptionBlocks.add(id));
-	}
-	return true;
+	return stored.algorithm_version === active.algorithm_version
+		&& JSON.stringify(stored.groups) === JSON.stringify(active.groups)
+		&& JSON.stringify(stored.caption_links || []) === JSON.stringify(active.caption_links || []);
 }
 
 export class MineruPackageLoader {
@@ -768,44 +1039,89 @@ export class MineruPackageLoader {
 	async load(rawArticlePath: string): Promise<MineruReaderPackage> {
 		const articlePath = normalizePackageArticlePath(rawArticlePath);
 		const packagePath = packagePathFromArticle(articlePath);
-		const article = await readRequiredBinary(this.app, articlePath, "article.md", MAX_ARTICLE_BYTES);
+		const article = await readRequiredBinary(this.app, articlePath, "article.md", MAX_ARTICLE_BYTES, packagePath);
 		const mineru = await readRequiredBinary(
 			this.app,
 			`${packagePath}/mineru-result.json`,
 			"mineru-result.json",
 			MAX_MINERU_JSON_BYTES,
+			packagePath,
 		);
+		const manifestValue = await readOptionalJson(
+			this.app,
+			`${packagePath}/_extraction/manifest.json`,
+			MAX_MANIFEST_BYTES,
+			packagePath,
+		);
+		const manifest = asRecord(manifestValue);
+		const outputRecords = manifestRecords(manifest.outputs, "outputs");
+		const manifestedImages = new Set(
+			[...outputRecords.keys()].filter((relativePath) => isRasterImagePath(relativePath)),
+		);
+		const derivedRecords = optionalManifestRecords(manifest.derived_contracts);
 		const validationValue = await readOptionalJson(
 			this.app,
 			`${packagePath}/_extraction/validation.json`,
+			MAX_VALIDATION_BYTES,
+			packagePath,
 		);
 		const validation = asRecord(validationValue);
 		if (validation.status !== "passed") {
 			throw new Error("该 MinerU 包未通过 _extraction/validation.json 验证，阅读器拒绝加载");
 		}
-		const manifestValue = await readOptionalJson(
-			this.app,
-			`${packagePath}/_extraction/manifest.json`,
-		);
-		const manifest = asRecord(manifestValue);
-		const derivedRecords = optionalManifestRecords(manifest.derived_contracts);
 		const pdfPathCandidate = `${packagePath}/_extraction/source.pdf`;
 		const pdfPath = findTFile(this.app, pdfPathCandidate) ? pdfPathCandidate : null;
-		await verifyManifestOutputs(this.app, packagePath, manifest, article, mineru, pdfPath);
-		const mineruPayload = parseJson(mineru.text, "mineru-result.json");
-		const fallbackIndex = buildRuntimeViewerIndex(mineruPayload, article.text);
-		const issues = [...fallbackIndex.issues];
-		const articleHash = sha256(article.bytes);
+		const verified = await verifyManifestOutputs(this.app, packagePath, manifest, article, mineru, pdfPath);
+		let renderMarkdown = article.text;
+		let sourceMarkdownDisposition: MineruReaderPackage["sourceMarkdownDisposition"] = "passive";
+		try {
+			assertPassiveMineruMarkdown(renderMarkdown, manifestedImages);
+		} catch (error) {
+			const validationChecks = asRecord(validation.checks);
+			if (validationChecks.passive_markdown_closed === true) {
+				throw new Error(
+					`该 MinerU 包声明 article.md 已安全闭合，但实际校验失败：${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			renderMarkdown = derivePassiveMineruMarkdown(article.text);
+			assertPassiveMineruMarkdown(renderMarkdown, manifestedImages);
+			sourceMarkdownDisposition = "runtime-derived";
+		}
+		const articleHash = sha256(new TextEncoder().encode(renderMarkdown));
 		const mineruHash = sha256(mineru.bytes);
+		const mineruPayload = parseJson(mineru.text, "mineru-result.json");
+		const fallbackIndex = buildRuntimeViewerIndex(mineruPayload, renderMarkdown, {
+			articleSha256: articleHash,
+			mineruResultSha256: mineruHash,
+			packagedSourcePdf: Boolean(pdfPath),
+		});
+		const issues = [...fallbackIndex.issues];
+		if (sourceMarkdownDisposition === "runtime-derived") {
+			issues.push("旧版 article.md 含活动 Markdown；已在内存中生成安全阅读副本，磁盘原文件保持不变");
+		}
 		const contractValue = await readOptionalDerivedJson(
 			this.app,
 			`${packagePath}/_extraction/viewer-index.json`,
 			issues,
 			derivedRecords.get("_extraction/viewer-index.json"),
+			packagePath,
 		);
-		let viewerIndex = contractValue ? normalizeViewerIndex(contractValue, fallbackIndex) : null;
+		let viewerIndex: MineruViewerIndex | null = null;
+		if (contractValue) {
+			try {
+				viewerIndex = sourceMarkdownDisposition === "runtime-derived"
+					? null
+					: normalizeViewerIndex(contractValue, fallbackIndex);
+			} catch (error) {
+				issues.push(
+					`viewer-index.json 超过结构复杂度上限，已从原始 MinerU JSON 临时重建：${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
 		if (contractValue && !viewerIndex) {
-			issues.push("viewer-index.json 结构不受支持，已从原始 MinerU JSON 临时重建");
+			issues.push(sourceMarkdownDisposition === "runtime-derived"
+				? "旧版 Viewer Index 对应原始 HTML 偏移，已从安全阅读副本临时重建"
+				: "viewer-index.json 结构不受支持，已从原始 MinerU JSON 临时重建");
 		}
 		if (viewerIndex && !viewerHashesMatch(viewerIndex, articleHash, mineruHash)) {
 			issues.push("viewer-index.json 与原始文件哈希不一致，已从原始 MinerU JSON 临时重建");
@@ -813,34 +1129,89 @@ export class MineruPackageLoader {
 		}
 		viewerIndex ||= fallbackIndex;
 		viewerIndex = reclassifyRuntimeRunningHeaders(viewerIndex);
+		assertViewerAssetsManifested(outputRecords, [fallbackIndex, viewerIndex]);
 		issues.push(...viewerIndex.issues);
-		const repairValue = await readOptionalDerivedJson(
-			this.app,
-			`${packagePath}/_extraction/visual-repair.json`,
-			issues,
-			derivedRecords.get("_extraction/visual-repair.json"),
-		);
-		let visualRepair = repairValue ? normalizeRepair(repairValue) : null;
-		if (repairValue && !visualRepair) {
+		const repairValue = sourceMarkdownDisposition === "runtime-derived"
+			? null
+			: await readOptionalDerivedJson(
+				this.app,
+				`${packagePath}/_extraction/visual-repair.json`,
+				issues,
+				derivedRecords.get("_extraction/visual-repair.json"),
+				packagePath,
+			);
+		const storedVisualRepair = repairValue ? normalizeRepair(repairValue) : null;
+		if (repairValue && !storedVisualRepair) {
 			issues.push("visual-repair.json 结构或算法版本不受支持，已保留 MinerU 原图显示");
 		}
-		if (visualRepair && !repairMatchesIndex(visualRepair, viewerIndex, articleHash, mineruHash)) {
-			issues.push("visual-repair.json 与当前原文或阅读索引不一致，已保留 MinerU 原图显示");
+		if (storedVisualRepair && storedVisualRepair.algorithm_version !== CURRENT_VISUAL_REPAIR_ALGORITHM) {
+			issues.push(`visual-repair.json 使用旧逻辑（${storedVisualRepair.algorithm_version}），已按当前规则重新计算 Figure 所有权`);
+		}
+		if (storedVisualRepair?.algorithm_version === CURRENT_VISUAL_REPAIR_ALGORITHM) {
+			const storedErrors = validateVisualContracts({
+				viewerIndex,
+				visualRepair: storedVisualRepair,
+				sourceIndex: fallbackIndex,
+				articleHash,
+				mineruHash,
+			});
+			if (storedErrors.length) {
+				issues.push(`visual-repair.json 来源绑定失败，已忽略该缓存：${storedErrors.slice(0, 3).join("；")}`);
+			}
+		}
+
+		// visual-repair.json is a cache, never a second source of truth. Always
+		// derive the active plan from the verified article.md + MinerU JSON so a
+		// package created by an older plugin cannot keep old grouping behavior.
+		let visualRepair: MineruVisualRepair | null = buildRuntimeVisualRepair(viewerIndex);
+		let runtimeErrors = validateVisualContracts({
+			viewerIndex,
+			visualRepair,
+			sourceIndex: fallbackIndex,
+			articleHash,
+			mineruHash,
+		});
+		if (runtimeErrors.length && viewerIndex !== fallbackIndex) {
+			issues.push(`Viewer Index 派生数据未通过来源绑定，已从原始 MinerU JSON 重建：${runtimeErrors.slice(0, 3).join("；")}`);
+			viewerIndex = fallbackIndex;
+			visualRepair = buildRuntimeVisualRepair(viewerIndex);
+			runtimeErrors = validateVisualContracts({
+				viewerIndex,
+				visualRepair,
+				sourceIndex: fallbackIndex,
+				articleHash,
+				mineruHash,
+			});
+		}
+		if (runtimeErrors.length) {
+			issues.push(`运行时视觉重建未通过来源绑定，已保留 MinerU 原图：${runtimeErrors.slice(0, 3).join("；")}`);
 			visualRepair = null;
+		} else if (!storedVisualRepair) {
+			issues.push(pdfPath
+				? "未找到视觉修复缓存，阅读器已从已验证的 MinerU 产物生成当前显示计划"
+				: "未找到视觉修复缓存，阅读器已生成当前碎图组合计划（无 source.pdf，不启用 PDF 裁剪）");
+		} else if (
+			storedVisualRepair.algorithm_version === CURRENT_VISUAL_REPAIR_ALGORITHM
+			&& !visualRepairPlanMatches(storedVisualRepair, visualRepair)
+		) {
+			issues.push("visual-repair.json 与当前确定性规则不一致，已忽略缓存并使用运行时计划");
 		}
 		if (visualRepair) issues.push(...visualRepair.issues);
 		const externalPdfRecorded = Boolean(asRecord(manifest.source).path);
 		return {
 			sourceKind: "mineru",
+			sourceMarkdownDisposition,
 			packagePath,
 			articlePath,
-			title: titleFromMarkdown(article.text, packagePath),
-			articleMarkdown: article.text,
+			title: titleFromMarkdown(renderMarkdown, packagePath),
+			articleMarkdown: renderMarkdown,
 			mineruPayload,
 			viewerIndex,
 			visualRepair,
-			visuals: buildVisuals(viewerIndex, visualRepair, packagePath, this.app, pdfPath, issues),
+			visuals: buildVisuals(viewerIndex, visualRepair, verified.verifiedAssetBlobs, pdfPath, issues),
 			pdfPath,
+			verifiedAssetBlobs: verified.verifiedAssetBlobs,
+			verifiedPdfBytes: verified.verifiedPdfBytes,
 			externalPdfRecorded,
 			issues: [...new Set(issues.filter(Boolean))],
 		};

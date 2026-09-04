@@ -51,6 +51,9 @@ export interface MineruCaptionSummary {
 	starts_with_lowercase?: boolean;
 	starts_with_panel_label?: boolean;
 	ends_with_terminal_punctuation?: boolean;
+	long_item_count?: number;
+	figure_anchor_count?: number;
+	panel_label_count?: number;
 }
 
 export interface MineruTextSummary {
@@ -93,6 +96,18 @@ export interface MineruMarkdownImage {
 	order: number;
 	asset_path: string;
 	occurrence: number;
+	char_start?: number;
+	char_end?: number;
+}
+
+export interface MineruMarkdownFigureCaption {
+	id: string;
+	figure_key: string;
+	text: string;
+	char_start: number;
+	char_end: number;
+	before_markdown_image_id?: string;
+	after_markdown_image_id?: string;
 }
 
 export interface MineruViewerIndex {
@@ -112,17 +127,20 @@ export interface MineruViewerIndex {
 		manifest_source_fallback?: boolean;
 	};
 	markdown_images: MineruMarkdownImage[];
+	markdown_captions?: MineruMarkdownFigureCaption[];
 	pages: MineruViewerPage[];
 	issues: string[];
 }
 
-export type MineruRepairDecision = "auto" | "review" | "keep-original";
+export type MineruRepairDecision = "auto" | "review" | "skip" | "keep-original";
 export type MineruReplacementMode = "existing_asset" | "pdf_crop" | "none";
 
 export interface MineruVisualRepairGroup {
 	id: string;
 	page_idx: number;
+	figure_key?: string;
 	member_block_ids: string[];
+	member_asset_paths?: string[];
 	member_markdown_image_ids?: string[];
 	decision: MineruRepairDecision;
 	confidence: number;
@@ -137,6 +155,7 @@ export interface MineruVisualRepairGroup {
 	caption_anchor_block_ids?: string[];
 	signals?: Record<string, unknown>;
 	reason_codes?: string[];
+	warning_codes?: string[];
 	fallback?: string;
 }
 
@@ -182,7 +201,7 @@ export interface MineruReaderVisual {
 	}>;
 	captionSourceImageBounds?: {
 		beforeMarkdownImageId: string;
-		afterMarkdownImageId: string;
+		afterMarkdownImageId?: string;
 	};
 	captionPageIdx?: number;
 	captionStatus?: "complete" | "partial";
@@ -225,6 +244,7 @@ export interface MineruReaderVisual {
 
 export interface MineruReaderPackage {
 	sourceKind: "mineru" | "markdown";
+	sourceMarkdownDisposition: "passive" | "runtime-derived";
 	packagePath: string;
 	articlePath: string;
 	title: string;
@@ -234,6 +254,9 @@ export interface MineruReaderPackage {
 	visualRepair: MineruVisualRepair | null;
 	visuals: MineruReaderVisual[];
 	pdfPath: string | null;
+	/** Immutable Blobs created during manifest verification; renderers never re-read paths. */
+	verifiedAssetBlobs: Map<string, Blob>;
+	verifiedPdfBytes: Uint8Array | null;
 	externalPdfRecorded: boolean;
 	issues: string[];
 }

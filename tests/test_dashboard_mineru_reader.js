@@ -36,6 +36,19 @@ function loadTsModule(relativePath) {
 
 const normalization = loadTsModule("src/mineru/normalization.ts");
 const markdown = loadTsModule("src/mineru/reader-markdown.ts");
+const visualCandidates = loadTsModule("src/mineru/visual-candidates.ts");
+const visualRepair = loadTsModule("src/mineru/visual-repair.ts");
+
+assert.deepEqual(markdown.readerMarkdownRestoreTarget("visuals", "", 1), { kind: "top" });
+assert.deepEqual(markdown.readerMarkdownRestoreTarget("pdf", "", 1), { kind: "top" });
+assert.deepEqual(markdown.readerMarkdownRestoreTarget("pdf", "", 4), {
+	kind: "page",
+	pageNumber: 4,
+});
+assert.deepEqual(markdown.readerMarkdownRestoreTarget("visuals", "figure-2", 1), {
+	kind: "visual",
+	visualId: "figure-2",
+});
 
 const v1 = [
 	{
@@ -102,6 +115,486 @@ assert.equal(normalization.formalFigureCaptionKeyFromText("Figure 2 provides the
 assert.equal(normalization.formalFigureCaptionKeyFromText("Our Figure 2 is discussed here."), "");
 assert.equal(normalization.formalFigureCaptionKeyFromText("Figure 2 map"), "");
 assert.equal(normalization.classifyCaptionPart("Fig. 5c–g shows the result."), "other");
+
+const runtimeRepairMarkdown = [
+	"![](images/panel-a.jpg)",
+	"![](images/panel-b.jpg)",
+	"![](images/panel-c.jpg)",
+	"![](images/panel-d.jpg)",
+].join("\n");
+const runtimeArticleHash = "a".repeat(64);
+const runtimeMineruHash = "b".repeat(64);
+const runtimeRepairPayload = [
+	{ type: "image", page_idx: 0, bbox: [100, 100, 300, 300], img_path: "images/panel-a.jpg", image_caption: ["A"] },
+	{ type: "image", page_idx: 0, bbox: [310, 100, 510, 300], img_path: "images/panel-b.jpg", image_caption: ["B"] },
+	{ type: "image", page_idx: 0, bbox: [100, 310, 300, 510], img_path: "images/panel-c.jpg", image_caption: ["C"] },
+	{ type: "image", page_idx: 0, bbox: [310, 310, 510, 510], img_path: "images/panel-d.jpg", image_caption: ["D"] },
+];
+const runtimeRepairIndex = normalization.buildRuntimeViewerIndex(
+	runtimeRepairPayload,
+	runtimeRepairMarkdown,
+	{ articleSha256: runtimeArticleHash, mineruResultSha256: runtimeMineruHash, packagedSourcePdf: true },
+);
+const runtimeRepairPlan = visualRepair.buildRuntimeVisualRepair(runtimeRepairIndex);
+assert.equal(runtimeRepairPlan.groups.length, 1);
+assert.equal(runtimeRepairPlan.groups[0].decision, "auto");
+assert.equal(runtimeRepairPlan.groups[0].replacement.mode, "pdf_crop");
+assert.deepEqual(runtimeRepairPlan.groups[0].replacement.bbox_norm, [100, 100, 510, 510]);
+assert.equal(runtimeRepairPlan.groups[0].member_markdown_image_ids.length, 4);
+assert.deepEqual(visualRepair.validateVisualContracts({
+	viewerIndex: runtimeRepairIndex,
+	visualRepair: runtimeRepairPlan,
+	sourceIndex: runtimeRepairIndex,
+	articleHash: runtimeArticleHash,
+	mineruHash: runtimeMineruHash,
+}), []);
+
+const visualOnlyStripMarkdown = Array.from(
+	{ length: 5 },
+	(_value, index) => `![](images/page-strip-${index + 1}.jpg)`,
+).join("\n");
+const visualOnlyStripPayload = Array.from({ length: 5 }, (_value, index) => ({
+	type: "image",
+	page_idx: 6,
+	bbox: [100, 50 + index * 180, 900, 228 + index * 180],
+	img_path: `images/page-strip-${index + 1}.jpg`,
+	...(index === 0 ? { image_caption: ["B"] } : {}),
+}));
+const visualOnlyStripIndex = normalization.buildRuntimeViewerIndex(
+	visualOnlyStripPayload,
+	visualOnlyStripMarkdown,
+	{ packagedSourcePdf: true },
+);
+const visualOnlyStripPlan = visualRepair.buildRuntimeVisualRepair(visualOnlyStripIndex);
+assert.equal(visualOnlyStripPlan.algorithm_version, "visual-repair-v1.11");
+assert.equal(visualOnlyStripPlan.groups.length, 1);
+assert.equal(visualOnlyStripPlan.groups[0].decision, "auto");
+assert.equal(visualOnlyStripPlan.groups[0].confidence, 0.9);
+assert.ok(visualOnlyStripPlan.groups[0].reason_codes.includes("visual_only_page_exact_coverage"));
+assert.equal(visualOnlyStripPlan.groups[0].signals.visual_only_page_exact_coverage, true);
+
+const visualOnlyWithBodyIndex = normalization.buildRuntimeViewerIndex(
+	[
+		...visualOnlyStripPayload,
+		{ type: "text", page_idx: 6, bbox: [100, 950, 900, 980], text: "正文证据必须阻止整页视觉自动合并。" },
+	],
+	visualOnlyStripMarkdown,
+	{ packagedSourcePdf: true },
+);
+assert.equal(visualRepair.buildRuntimeVisualRepair(visualOnlyWithBodyIndex).groups[0].decision, "review");
+
+// Logical Figure ownership comes from one formal caption identity plus the
+// exact article.md image run. Body text on the page must not prevent a valid
+// multi-asset Figure from being reconstructed.
+const captionOwnedMarkdown = [
+	"Introductory body text.",
+	"![](images/caption-owned-a.jpg)",
+	"![](images/caption-owned-b.jpg)",
+	"![](images/caption-owned-c.jpg)",
+	"Fig. 2. A formal caption for the complete multi-panel figure.",
+	"Following body text.",
+].join("\n");
+const captionOwnedPayload = [
+	{ type: "text", page_idx: 4, bbox: [80, 40, 920, 90], text: "Introductory body text." },
+	{ type: "image", page_idx: 4, bbox: [80, 120, 360, 420], img_path: "images/caption-owned-a.jpg" },
+	{ type: "image", page_idx: 4, bbox: [370, 120, 650, 420], img_path: "images/caption-owned-b.jpg" },
+	{
+		type: "image",
+		page_idx: 4,
+		bbox: [660, 120, 920, 420],
+		img_path: "images/caption-owned-c.jpg",
+		image_caption: ["Fig. 2. A formal caption for the complete multi-panel figure."],
+	},
+	{ type: "text", page_idx: 4, bbox: [80, 450, 920, 500], text: "Following body text." },
+];
+const captionOwnedIndex = normalization.buildRuntimeViewerIndex(
+	captionOwnedPayload,
+	captionOwnedMarkdown,
+	{ packagedSourcePdf: true },
+);
+const captionOwnedPlan = visualRepair.buildRuntimeVisualRepair(captionOwnedIndex);
+const captionOwnedAuto = captionOwnedPlan.groups.filter((group) => group.decision === "auto");
+assert.equal(captionOwnedAuto.length, 1);
+assert.equal(captionOwnedAuto[0].figure_key, "figure:2");
+assert.equal(captionOwnedAuto[0].member_block_ids.length, 3);
+assert.ok(captionOwnedAuto[0].reason_codes.includes("formal_caption_page_ownership"));
+const captionOwnedBlocks = captionOwnedIndex.pages.flatMap((page) => page.blocks);
+const captionOwnedDetails = markdown.resolveVisualCaptionDetails(
+	captionOwnedAuto[0].member_block_ids.map((id) => captionOwnedBlocks.find((block) => block.id === id)),
+	captionOwnedBlocks,
+	captionOwnedPlan,
+	4,
+	captionOwnedIndex,
+);
+assert.equal(markdown.visualLabelFromCaption(captionOwnedDetails.caption, 1), "Fig. 2");
+assert.equal(captionOwnedDetails.captionSourceProjections.length, 1);
+const captionOwnedPrepared = markdown.prepareReaderMarkdown(captionOwnedMarkdown, [{
+	id: "caption-owned-figure",
+	pageIdx: 4,
+	label: "Fig. 2",
+	...captionOwnedDetails,
+	memberBlockIds: captionOwnedAuto[0].member_block_ids,
+	memberAssetPaths: [
+		"images/caption-owned-a.jpg",
+		"images/caption-owned-b.jpg",
+		"images/caption-owned-c.jpg",
+	],
+	memberMarkdownImageIds: captionOwnedAuto[0].member_markdown_image_ids,
+	anchorAssetPath: "images/caption-owned-a.jpg",
+	display: { mode: "pdf-crop", bbox: [80, 120, 920, 420], padding: 8 },
+	repairDecision: "auto",
+	confidence: 0.98,
+}], captionOwnedIndex);
+assert.doesNotMatch(captionOwnedPrepared, /Fig\. 2\. A formal caption/);
+assert.match(captionOwnedPrepared, /Introductory body text\./);
+assert.match(captionOwnedPrepared, /Following body text\./);
+
+// When the caption is between two image runs, a key already anchored to the
+// previous visual page is excluded and the remaining formal caption owns the
+// following run. This also covers MinerU JSON that omitted the new caption.
+const boundaryOwnedMarkdown = [
+	"![](images/previous.jpg)",
+	"Fig. 1. Caption for the previous figure.",
+	"Extended Data Fig. 9. Caption present only in article Markdown.",
+	"![](images/boundary-a.jpg)",
+	"![](images/boundary-b.jpg)",
+].join("\n");
+const boundaryOwnedIndex = normalization.buildRuntimeViewerIndex([
+	{
+		type: "image",
+		page_idx: 0,
+		bbox: [100, 100, 900, 700],
+		img_path: "images/previous.jpg",
+		image_caption: ["Fig. 1. Caption for the previous figure."],
+	},
+	{ type: "image", page_idx: 1, bbox: [100, 100, 480, 700], img_path: "images/boundary-a.jpg" },
+	{ type: "image", page_idx: 1, bbox: [520, 100, 900, 700], img_path: "images/boundary-b.jpg" },
+], boundaryOwnedMarkdown, { packagedSourcePdf: true });
+assert.deepEqual(
+	boundaryOwnedIndex.markdown_captions.map((caption) => caption.figure_key),
+	["figure:1", "extended-data-figure:9"],
+);
+const boundaryOwnedPlan = visualRepair.buildRuntimeVisualRepair(boundaryOwnedIndex);
+const boundaryOwnedGroup = boundaryOwnedPlan.groups.find((group) => group.figure_key === "extended-data-figure:9");
+assert.ok(boundaryOwnedGroup);
+assert.equal(boundaryOwnedGroup.decision, "auto");
+assert.equal(boundaryOwnedGroup.member_block_ids.length, 2);
+const boundaryBlocks = boundaryOwnedIndex.pages.flatMap((page) => page.blocks);
+const boundaryDetails = markdown.resolveVisualCaptionDetails(
+	boundaryOwnedGroup.member_block_ids.map((id) => boundaryBlocks.find((block) => block.id === id)),
+	boundaryBlocks,
+	boundaryOwnedPlan,
+	1,
+	boundaryOwnedIndex,
+);
+assert.equal(markdown.visualLabelFromCaption(boundaryDetails.caption, 1), "Extended Data Fig. 9");
+
+const visualOnlyWithoutPdfIndex = normalization.buildRuntimeViewerIndex(
+	visualOnlyStripPayload,
+	visualOnlyStripMarkdown,
+	{ articleSha256: runtimeArticleHash, mineruResultSha256: runtimeMineruHash },
+);
+const visualOnlyWithoutPdfPlan = visualRepair.buildRuntimeVisualRepair(visualOnlyWithoutPdfIndex);
+assert.equal(visualOnlyWithoutPdfPlan.groups[0].decision, "review");
+assert.ok(visualOnlyWithoutPdfPlan.groups[0].warning_codes.includes("source_pdf_unavailable"));
+assert.deepEqual(visualRepair.validateVisualContracts({
+	viewerIndex: visualOnlyWithoutPdfIndex,
+	visualRepair: visualOnlyWithoutPdfPlan,
+	sourceIndex: visualOnlyWithoutPdfIndex,
+	articleHash: runtimeArticleHash,
+	mineruHash: runtimeMineruHash,
+}), []);
+const forgedNoPdfAuto = structuredClone(visualOnlyWithoutPdfPlan);
+forgedNoPdfAuto.groups[0].decision = "auto";
+forgedNoPdfAuto.groups[0].confidence = 0.9;
+assert.ok(visualRepair.validateVisualContracts({
+	viewerIndex: visualOnlyWithoutPdfIndex,
+	visualRepair: forgedNoPdfAuto,
+	sourceIndex: visualOnlyWithoutPdfIndex,
+	articleHash: runtimeArticleHash,
+	mineruHash: runtimeMineruHash,
+}).some((error) => error.includes("不得自动执行 pdf_crop")));
+
+const fullCompositeCaption = "Fig. 5 | Complete full-page composite. (A) First panel. (B) Second panel. (C) Third panel. (D) Fourth panel. (E) Fifth panel. (F) Sixth panel. (G) Seventh panel. (H) Eighth panel. (I) Ninth panel.";
+const fullCompositeBody = "Following body paragraph remains present and must never be absorbed into the caption projection.";
+const fullCompositeMarkdown = [
+	...Array.from({ length: 9 }, (_value, index) => [
+		String.fromCharCode(65 + index),
+		`![](images/full-composite-${index + 1}.jpg)`,
+		`panel-${index + 1} ${"fragment metadata ".repeat(14)}`,
+	].join("\n")),
+	fullCompositeCaption,
+	fullCompositeBody,
+	"![](images/following-figure.jpg)",
+].join("\n\n");
+const fullCompositePayload = [
+	...Array.from({ length: 9 }, (_value, index) => ({
+		type: "image",
+		page_idx: 10,
+		bbox: index === 0
+			? [100, 80, 590, 300]
+			: [100 + (index % 3) * 270, 80 + Math.floor(index / 3) * 270, 320 + (index % 3) * 270, 300 + Math.floor(index / 3) * 270],
+		img_path: `images/full-composite-${index + 1}.jpg`,
+		image_caption: [String.fromCharCode(65 + index)],
+	})),
+	{ type: "text", page_idx: 11, bbox: [100, 50, 900, 170], text: fullCompositeCaption },
+	{ type: "text", page_idx: 11, bbox: [100, 180, 900, 260], text: fullCompositeBody },
+	{ type: "image", page_idx: 11, bbox: [100, 500, 900, 800], img_path: "images/following-figure.jpg" },
+];
+const fullCompositeIndex = normalization.buildRuntimeViewerIndex(
+	fullCompositePayload,
+	fullCompositeMarkdown,
+	{ packagedSourcePdf: true },
+);
+const fullCompositePlan = visualRepair.buildRuntimeVisualRepair(fullCompositeIndex);
+assert.equal(fullCompositePlan.groups.length, 1);
+assert.equal(fullCompositePlan.groups[0].decision, "auto");
+assert.equal(fullCompositePlan.groups[0].member_block_ids.length, 9);
+assert.deepEqual(fullCompositePlan.groups[0].replacement.bbox_norm, [100, 80, 860, 840]);
+assert.ok(fullCompositePlan.groups[0].reason_codes.includes("visual_only_page_full_coverage"));
+assert.equal(fullCompositePlan.groups[0].signals.enclosing_alias_count, 1);
+const fullCompositeBlocks = fullCompositeIndex.pages.find((page) => page.page_idx === 10).blocks
+	.filter((block) => block.role === "visual");
+const fullCompositeDetails = markdown.resolveVisualCaptionDetails(
+	fullCompositeBlocks,
+	fullCompositeIndex.pages.flatMap((page) => page.blocks),
+	fullCompositePlan,
+	10,
+);
+assert.equal(fullCompositeDetails.caption, fullCompositeCaption);
+assert.equal(fullCompositeDetails.captionPageIdx, 11);
+assert.deepEqual(fullCompositeDetails.pageRange, [10, 11]);
+assert.equal(fullCompositeDetails.captionSourceProjections.length, 2);
+assert.equal(fullCompositeDetails.captionSourceProjections[0].suppress, true);
+assert.equal(fullCompositeDetails.captionSourceProjections[1].suppress, false);
+const fullCompositePrepared = markdown.prepareReaderMarkdown(
+	fullCompositeMarkdown,
+	[{
+		id: fullCompositePlan.groups[0].id,
+		pageIdx: 10,
+		label: "Fig. 5",
+		...fullCompositeDetails,
+		memberBlockIds: fullCompositeBlocks.map((block) => block.id),
+		memberAssetPaths: fullCompositeBlocks.map((block) => block.asset_path),
+		memberMarkdownImageIds: [...fullCompositePlan.groups[0].member_markdown_image_ids],
+		anchorAssetPath: fullCompositeBlocks[0].asset_path,
+		display: { mode: "pdf-crop", bbox: [100, 80, 860, 840], padding: 6 },
+		repairDecision: "auto",
+		confidence: 0.93,
+	}],
+	fullCompositeIndex,
+);
+assert.ok(!fullCompositePrepared.includes(fullCompositeCaption));
+assert.ok(fullCompositePrepared.includes(fullCompositeBody));
+
+const secondFormalCaption = "Fig. 6 | A second formal caption makes the next-page ownership ambiguous. (A) First panel. (B) Second panel. (C) Third panel.";
+const ambiguousFullCompositeMarkdown = fullCompositeMarkdown.replace(fullCompositeBody, secondFormalCaption);
+const ambiguousFullCompositePayload = fullCompositePayload.map((block) => (
+	block.type === "text" && block.text === fullCompositeBody
+		? { ...block, text: secondFormalCaption }
+		: block
+));
+const ambiguousFullCompositeIndex = normalization.buildRuntimeViewerIndex(
+	ambiguousFullCompositePayload,
+	ambiguousFullCompositeMarkdown,
+	{ packagedSourcePdf: true },
+);
+const ambiguousFullCompositePlan = visualRepair.buildRuntimeVisualRepair(ambiguousFullCompositeIndex);
+const ambiguousFullCompositeBlocks = ambiguousFullCompositeIndex.pages.find((page) => page.page_idx === 10).blocks
+	.filter((block) => block.role === "visual");
+assert.equal(markdown.resolveVisualCaptionDetails(
+	ambiguousFullCompositeBlocks,
+	ambiguousFullCompositeIndex.pages.flatMap((page) => page.blocks),
+	ambiguousFullCompositePlan,
+	10,
+).caption, "");
+
+const terminalFullPageCaption = "Fig. 6 | Terminal full-page figure. (A) First verified panel. (B) Second verified panel. (C) Third verified panel. (D) Fourth verified panel.";
+const terminalFullPageBody = "Terminal following body remains visible after the exact caption projection.";
+const terminalFullPageMarkdown = [
+	"![](images/earlier-figure.jpg)",
+	"![](images/terminal-full-page.jpg)",
+	terminalFullPageCaption,
+	terminalFullPageBody,
+].join("\n\n");
+const terminalFullPageIndex = normalization.buildRuntimeViewerIndex([
+	{ type: "image", page_idx: 0, bbox: [100, 100, 300, 300], img_path: "images/earlier-figure.jpg" },
+	{ type: "image", page_idx: 2, bbox: [100, 50, 900, 950], img_path: "images/terminal-full-page.jpg" },
+	{ type: "text", page_idx: 3, bbox: [50, 50, 950, 220], text: terminalFullPageCaption },
+	{ type: "text", page_idx: 3, bbox: [50, 240, 950, 330], text: terminalFullPageBody },
+], terminalFullPageMarkdown, { packagedSourcePdf: true });
+const terminalFullPageBlock = terminalFullPageIndex.pages.find((page) => page.page_idx === 2).blocks[0];
+const terminalFullPageDetails = markdown.resolveVisualCaptionDetails(
+	[terminalFullPageBlock],
+	terminalFullPageIndex.pages.flatMap((page) => page.blocks),
+	null,
+	2,
+);
+assert.equal(terminalFullPageDetails.caption, terminalFullPageCaption);
+assert.deepEqual(terminalFullPageDetails.captionSourceImageBounds, {
+	beforeMarkdownImageId: "md-img-0001",
+});
+const terminalFullPagePrepared = markdown.prepareReaderMarkdown(
+	terminalFullPageMarkdown,
+	[{
+		id: "terminal-full-page",
+		pageIdx: 2,
+		label: "Fig. 6",
+		...terminalFullPageDetails,
+		memberBlockIds: [terminalFullPageBlock.id],
+		memberAssetPaths: [terminalFullPageBlock.asset_path],
+		memberMarkdownImageIds: [...terminalFullPageBlock.markdown_image_ids],
+		anchorAssetPath: terminalFullPageBlock.asset_path,
+		display: { mode: "asset", assetPath: terminalFullPageBlock.asset_path },
+		repairDecision: "keep-original",
+		confidence: 1,
+	}],
+	terminalFullPageIndex,
+);
+assert.ok(!terminalFullPagePrepared.includes(terminalFullPageCaption));
+assert.ok(terminalFullPagePrepared.includes(terminalFullPageBody));
+
+const smallTerminalIndex = normalization.buildRuntimeViewerIndex([
+	{ type: "image", page_idx: 2, bbox: [100, 100, 400, 400], img_path: "images/small-terminal.jpg" },
+	{ type: "text", page_idx: 3, bbox: [50, 50, 950, 220], text: terminalFullPageCaption },
+	{ type: "text", page_idx: 3, bbox: [50, 240, 950, 330], text: terminalFullPageBody },
+], terminalFullPageMarkdown.replace("earlier-figure.jpg", "small-terminal.jpg"), { packagedSourcePdf: true });
+const smallTerminalBlock = smallTerminalIndex.pages.find((page) => page.page_idx === 2).blocks[0];
+assert.equal(markdown.resolveVisualCaptionDetails(
+	[smallTerminalBlock],
+	smallTerminalIndex.pages.flatMap((page) => page.blocks),
+	null,
+	2,
+).caption, "");
+
+const fullCompositeWithBodyIndex = normalization.buildRuntimeViewerIndex(
+	[
+		...fullCompositePayload.slice(0, 9),
+		{ type: "text", page_idx: 10, bbox: [100, 850, 900, 900], text: "A real body block prevents full-page consolidation." },
+		...fullCompositePayload.slice(9),
+	],
+	fullCompositeMarkdown,
+	{ packagedSourcePdf: true },
+);
+assert.ok(visualRepair.buildRuntimeVisualRepair(fullCompositeWithBodyIndex).groups.every((group) => (
+	!group.reason_codes.includes("visual_only_page_full_coverage")
+)));
+
+const overlappingCropGroups = visualRepair.downgradeOverlappingAutoCropGroups([{
+	id: "overlap-left",
+	page_idx: 10,
+	member_block_ids: ["a", "b"],
+	decision: "auto",
+	confidence: 0.9,
+	replacement: { mode: "pdf_crop", bbox_norm: [100, 100, 700, 700] },
+}, {
+	id: "overlap-right",
+	page_idx: 10,
+	member_block_ids: ["c", "d"],
+	decision: "auto",
+	confidence: 0.91,
+	replacement: { mode: "pdf_crop", bbox_norm: [500, 500, 900, 900] },
+}], []);
+assert.ok(overlappingCropGroups.every((group) => group.decision === "review"));
+assert.ok(overlappingCropGroups.every((group) => group.warning_codes.includes("overlapping_auto_crop_groups")));
+
+const reviewCandidates = visualCandidates.buildVisualCandidates(
+	visualOnlyWithoutPdfIndex,
+	visualOnlyWithoutPdfPlan,
+);
+assert.equal(reviewCandidates.status, "ready");
+assert.equal(reviewCandidates.candidates.length, 1);
+assert.equal(reviewCandidates.candidates[0].kind, "fragment_group");
+assert.equal(reviewCandidates.candidates[0].review_state, "review");
+assert.equal(JSON.stringify(reviewCandidates).includes("page-strip-"), false, "candidate packet must omit asset paths");
+assert.deepEqual(visualCandidates.validateVisualCandidates(
+	reviewCandidates,
+	visualOnlyWithoutPdfIndex,
+	visualOnlyWithoutPdfPlan,
+), []);
+const selfConsistentCandidateTamper = structuredClone(reviewCandidates);
+selfConsistentCandidateTamper.candidates[0].base_confidence = 0.7;
+selfConsistentCandidateTamper.candidate_package_sha256 = visualCandidates.visualCandidatePackageSha256(
+	selfConsistentCandidateTamper,
+);
+assert.ok(visualCandidates.validateVisualCandidates(
+	selfConsistentCandidateTamper,
+	visualOnlyWithoutPdfIndex,
+	visualOnlyWithoutPdfPlan,
+).some((error) => error.includes("不是由当前输入规范重建")));
+
+const enclosingAliasMarkdown = [
+	"![](images/whole-figure.jpg)",
+	"![](images/alias-a.jpg)",
+	"![](images/alias-b.jpg)",
+	"![](images/alias-c.jpg)",
+].join("\n");
+const enclosingAliasIndex = normalization.buildRuntimeViewerIndex([
+	{ type: "image", page_idx: 12, bbox: [100, 100, 900, 800], img_path: "images/whole-figure.jpg" },
+	{ type: "image", page_idx: 12, bbox: [120, 130, 360, 360], img_path: "images/alias-a.jpg" },
+	{ type: "image", page_idx: 12, bbox: [380, 130, 620, 360], img_path: "images/alias-b.jpg" },
+	{ type: "image", page_idx: 12, bbox: [640, 130, 880, 360], img_path: "images/alias-c.jpg" },
+], enclosingAliasMarkdown);
+const enclosingAliasPlan = visualRepair.buildRuntimeVisualRepair(enclosingAliasIndex);
+assert.equal(enclosingAliasPlan.groups.length, 1);
+assert.equal(enclosingAliasPlan.groups[0].replacement.mode, "existing_asset");
+assert.equal(enclosingAliasPlan.groups[0].decision, "auto");
+assert.ok(enclosingAliasPlan.groups[0].reason_codes.includes("complete_enclosing_asset_exact_aliases"));
+const tamperedRuntimeIndex = structuredClone(runtimeRepairIndex);
+tamperedRuntimeIndex.pages[0].blocks[0].asset_path = "images/forged.jpg";
+assert.ok(visualRepair.validateVisualContracts({
+	viewerIndex: tamperedRuntimeIndex,
+	visualRepair: runtimeRepairPlan,
+	sourceIndex: runtimeRepairIndex,
+	articleHash: runtimeArticleHash,
+	mineruHash: runtimeMineruHash,
+}).some((error) => error.includes("来源绑定不一致")));
+const tamperedCaptionIndex = structuredClone(runtimeRepairIndex);
+tamperedCaptionIndex.pages[0].blocks[0].caption.text = "伪造图注";
+assert.ok(visualRepair.validateVisualContracts({
+	viewerIndex: tamperedCaptionIndex,
+	visualRepair: runtimeRepairPlan,
+	sourceIndex: runtimeRepairIndex,
+	articleHash: runtimeArticleHash,
+	mineruHash: runtimeMineruHash,
+}).some((error) => error.includes("块来源绑定不一致")));
+const incompleteMemberMapping = structuredClone(runtimeRepairPlan);
+incompleteMemberMapping.groups[0].member_markdown_image_ids.pop();
+assert.ok(visualRepair.validateVisualContracts({
+	viewerIndex: runtimeRepairIndex,
+	visualRepair: incompleteMemberMapping,
+	sourceIndex: runtimeRepairIndex,
+	articleHash: runtimeArticleHash,
+	mineruHash: runtimeMineruHash,
+}).some((error) => error.includes("未精确绑定成员")));
+
+assert.throws(
+	() => normalization.buildRuntimeViewerIndex(
+		Array.from({ length: 8193 }, (_value, index) => ({ type: "text", page_idx: index })),
+		"# Too many",
+	),
+	/元素数超过/,
+);
+assert.throws(
+	() => normalization.buildRuntimeViewerIndex(
+		[{ type: "text", page_idx: 2048, bbox: [1, 1, 10, 10], text: "out of range" }],
+		"# Invalid page",
+	),
+	/page_idx/,
+);
+assert.throws(
+	() => normalization.buildRuntimeViewerIndex([], Array.from(
+		{ length: 4097 },
+		(_value, index) => `![](images/${index}.png)`,
+	).join("\n")),
+	/图片引用数超过/,
+);
+
+const isolatedRepairIndex = normalization.buildRuntimeViewerIndex([
+	{ type: "image", page_idx: 0, bbox: [50, 50, 200, 200], img_path: "images/left.jpg" },
+	{ type: "image", page_idx: 0, bbox: [700, 700, 900, 900], img_path: "images/right.jpg" },
+], "![](images/left.jpg)\n\n![](images/right.jpg)\n");
+assert.equal(visualRepair.buildRuntimeVisualRepair(isolatedRepairIndex).groups.length, 0);
 assert.equal(normalization.classifyCaptionPart("(a)"), "panel-label");
 assert.equal(normalization.classifyCaptionPart("a-d"), "other");
 assert.equal(
@@ -1647,6 +2140,48 @@ assert.deepEqual(mergedNestedDuplicateGroups[0].member_markdown_image_ids, [
 	"md-img-0001",
 	"md-img-0002",
 ]);
+assert.deepEqual(mergedNestedDuplicateGroups[0].member_asset_paths, [
+	"images/repeated-pqr.jpg",
+	"images/whole-left.jpg",
+	"images/whole-right.jpg",
+]);
+const nestedContractArticleHash = "c".repeat(64);
+const nestedContractMineruHash = "d".repeat(64);
+const nestedContractIndex = structuredClone(nestedDuplicateIndex);
+nestedContractIndex.inputs = {
+	article: { path: "article.md", sha256: nestedContractArticleHash },
+	mineru_result: { path: "mineru-result.json", sha256: nestedContractMineruHash },
+};
+nestedContractIndex.pdf_source = {
+	packaged_path: "_extraction/source.pdf",
+	manifest_source_fallback: true,
+};
+const nestedContractRepair = {
+	schema_version: 1,
+	algorithm_version: "visual-repair-v1.11",
+	viewer_index: "runtime",
+	status: "complete",
+	inputs: nestedContractIndex.inputs,
+	groups: mergedNestedDuplicateGroups,
+	caption_links: [],
+	issues: [],
+};
+assert.deepEqual(visualRepair.validateVisualContracts({
+	viewerIndex: nestedContractIndex,
+	visualRepair: nestedContractRepair,
+	sourceIndex: nestedContractIndex,
+	articleHash: nestedContractArticleHash,
+	mineruHash: nestedContractMineruHash,
+}), []);
+const staleNestedAssetContract = structuredClone(nestedContractRepair);
+staleNestedAssetContract.groups[0].member_asset_paths.pop();
+assert.ok(visualRepair.validateVisualContracts({
+	viewerIndex: nestedContractIndex,
+	visualRepair: staleNestedAssetContract,
+	sourceIndex: nestedContractIndex,
+	articleHash: nestedContractArticleHash,
+	mineruHash: nestedContractMineruHash,
+}).some((error) => error.includes("资产清单不一致")));
 assert.deepEqual(mergedNestedDuplicateGroups[0].caption_anchor_block_ids, [nestedSourceBlocks[2].id]);
 assert.ok(mergedNestedDuplicateGroups[0].reason_codes.includes("nested_visual_overlap_deduplicated"));
 const nestedDuplicateDetails = markdown.resolveVisualCaptionDetails(
@@ -2137,6 +2672,26 @@ assert.ok(!prepared.includes("images/b.jpg"));
 assert.ok(!prepared.includes("Fig. 1. Complete caption"));
 assert.ok(prepared.includes("images/unrelated.jpg"));
 
+const budgetMarkdown = `# Budget\n\n![](images/a.jpg)\n\nFig. 1. Complete caption\n\n${"body\n".repeat(800_000)}`;
+const budgetVisuals = Array.from({ length: 32 }, (_value, index) => ({
+	...visual,
+	id: `budget-${index}`,
+	memberAssetPaths: index === 0 ? ["images/a.jpg"] : [`images/not-present-${index}.jpg`],
+	memberMarkdownImageIds: index === 0 ? ["md-img-0000"] : [],
+}));
+const budgetStarted = performance.now();
+const budgetPrepared = markdown.prepareReaderMarkdown(
+	budgetMarkdown,
+	budgetVisuals,
+	undefined,
+	{ removeUnmappedImages: true, maxProjectionWork: 1_000_000 },
+);
+const budgetElapsedMs = performance.now() - budgetStarted;
+assert.ok(budgetElapsedMs < 2_500, `projection budget fallback took ${budgetElapsedMs.toFixed(1)} ms`);
+assert.equal((budgetPrepared.match(/data-visual-id=/g) || []).length, 1);
+assert.match(budgetPrepared, /Fig\. 1\. Complete caption/);
+assert.match(budgetPrepared, /data-reader-page="1"/);
+
 const pagedMarkdown = "# Example\n\nFirst page paragraph.\n\nSecond page paragraph.\n";
 const pagedIndex = normalization.buildRuntimeViewerIndex([
 	[{ type: "text", bbox: [0, 0, 100, 100], text: "First page paragraph." }],
@@ -2205,6 +2760,7 @@ assert.equal(
 	"Extended Data Figure 1",
 );
 assert.equal(markdown.selectVisualCaption(["Fig. 2 shows the model performance."]), "");
+assert.equal(markdown.selectVisualCaption(["D F", "C", "E"]), "");
 assert.equal(
 	markdown.selectVisualCaption([
 		"d Application 1: Anticipation and targeted discovery",
@@ -2551,6 +3107,7 @@ const config = read("src/config.ts");
 const plugin = read("src/plugin.ts");
 const view = read("src/views/mineru-reader.ts");
 const loader = read("src/mineru/package-loader.ts");
+const visualRepairSource = read("src/mineru/visual-repair.ts");
 const pdfRenderer = read("src/mineru/pdf-renderer.ts");
 const styles = read("styles.css");
 
@@ -2597,8 +3154,29 @@ assert.match(view, /paintPdfImageCompatibilityLayer/);
 assert.match(view, /imageFallback/);
 assert.match(view, /block\.source_type !== "image"/);
 assert.match(pdfRenderer, /convertToViewportPoint/);
+assert.match(pdfRenderer, /loadBytes\(sourceBytes/);
+assert.doesNotMatch(pdfRenderer, /vault\.readBinary/);
+assert.match(pdfRenderer, /document\.numPages > MINERU_RESOURCE_LIMITS\.pdfPages/);
+assert.match(pdfRenderer, /pageAspectRatio/);
+assert.match(pdfRenderer, /canvasDimension/);
+assert.match(pdfRenderer, /activeCanvasPixels/);
+assert.match(view, /const firstPage = Math\.max\(1, this\.readerState\.pdfPage - 1\)/);
+assert.match(view, /const lastPage = Math\.min\(this\.pdfRenderer\.numPages, this\.readerState\.pdfPage \+ 1\)/);
+assert.doesNotMatch(view, /pageNumber <= this\.pdfRenderer\.numPages/);
+assert.match(view, /verifiedResourceUrls/);
+assert.match(view, /URL\.revokeObjectURL/);
+assert.doesNotMatch(view, /await this\.app\.vault\.readBinary/);
+assert.match(view, /if \(readerPackage\.sourceKind === "mineru"\)[\s\S]*?this\.resourceUrl\(assetPath\)/);
+assert.doesNotMatch(view, /sourceKind === "markdown"\s*\?[^:]+:\s*this\.app\.vault\.getAbstractFileByPath/);
 assert.doesNotMatch(pdfRenderer, /Array\.isArray\(transform\)/);
-assert.match(view, /reader\.readAsDataURL/);
+assert.match(view, /verifiedAssetBlobs\.get/);
+assert.match(view, /URL\.createObjectURL\(blob\)/);
+assert.doesNotMatch(view, /readAsDataURL|Uint8Array\.from/);
+assert.match(loader, /new Blob\([\s\S]*?\[bytes\.buffer\]/);
+assert.doesNotMatch(loader, /Uint8Array\.from\(bytes\)|bytes\.slice\(\)/);
+assert.doesNotMatch(pdfRenderer, /sourceBytes\.slice\(\)/);
+assert.match(view, /this\.readerPackage = null/);
+assert.match(view, /auditCanvas/);
 assert.match(view, /await compatibilityImage\.decode\(\)/);
 assert.match(view, /agent-dashboard-mineru-pdf-image-layer/);
 assert.match(view, /data-reader-page/);
@@ -2609,6 +3187,8 @@ assert.doesNotMatch(view, /visualTargets/);
 assert.match(view, /markdown_text_range/);
 assert.match(view, /syncStateForMode/);
 assert.match(view, /alignedReaderScrollTop/);
+assert.match(view, /readerMarkdownRestoreTarget/);
+assert.doesNotMatch(view, /sourceKind === "mineru" \? this\.readerState\.currentVisualId/);
 assert.match(view, /this\.readerState\.mode !== "pdf" \|\| this\.readerState\.followPdfReading/);
 assert.match(view, /window\.getSelection\(\)/);
 assert.match(view, /!selection\.isCollapsed && selection\.toString\(\)\.trim\(\)/);
@@ -2627,13 +3207,18 @@ assert.match(view, /图注第/);
 assert.match(view, /MinerU 未提取到全部续栏文字/);
 assert.match(loader, /viewer-index\.json/);
 assert.match(loader, /visual-repair\.json/);
-assert.match(loader, /visual-repair-v1\.6/);
+assert.equal(visualRepair.CURRENT_VISUAL_REPAIR_ALGORITHM, "visual-repair-v1.11");
+assert.equal(visualRepair.isSupportedVisualRepairAlgorithm("visual-repair-v1.8"), true);
+assert.equal(visualRepair.isSupportedVisualRepairAlgorithm("visual-repair-v0"), false);
 assert.match(loader, /caption_links/);
-assert.match(loader, /captionLinkMatchesBlocks/);
 assert.match(loader, /viewerHashesMatch/);
-assert.match(loader, /repairMatchesIndex/);
+assert.match(loader, /validateVisualContracts/);
+assert.match(visualRepairSource, /captionLinkMatchesBlocks/);
+assert.match(visualRepairSource, /validateVisualContracts/);
 assert.match(loader, /reclassifyRuntimeRunningHeaders\(viewerIndex\)/);
 assert.match(loader, /verifyManifestOutputs/);
+assert.match(loader, /await verifyManifestOutputs[\s\S]*?derivePassiveMineruMarkdown/);
+assert.match(view, /sourceMarkdownDisposition === "runtime-derived"[\s\S]*?return;[\s\S]*?openReaderSourceMarkdown/);
 assert.match(loader, /readOptionalDerivedJson/);
 assert.match(loader, /manifest\.json 已登记该文件，但文件不存在/);
 assert.match(loader, /captionRecord\.items \?\? captionRecord\.parts/);

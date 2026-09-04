@@ -45,16 +45,21 @@ const sourceFiles = execFileSync("git", [
 	"--cached",
 	"--others",
 	"--exclude-standard",
-	"--",
-	"src",
-	"scripts",
-	"README.md",
-	"docs",
 ], {
 	cwd: root,
 	encoding: "utf8",
 }).split(/\r?\n/).filter(Boolean);
+const publicTextExtensions = new Set([
+	".css", ".js", ".json", ".md", ".mjs", ".ts", ".yaml", ".yml",
+]);
+const publicTextNames = new Set([
+	".editorconfig", ".gitattributes", ".gitignore", "LICENSE",
+]);
 const sourceText = sourceFiles
+	.filter((relativePath) => (
+		publicTextExtensions.has(path.extname(relativePath).toLowerCase())
+		|| publicTextNames.has(path.basename(relativePath))
+	))
 	.filter((relativePath) => fs.existsSync(path.join(root, relativePath)))
 	.map((relativePath) => read(relativePath))
 	.join("\n");

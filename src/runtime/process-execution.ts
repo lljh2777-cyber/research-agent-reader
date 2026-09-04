@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 
 import type { DashboardAction } from "../actions";
+import { resolveMineruCommand } from "../agent/mineru-publish";
 import {
 	getCliBackendLabel,
 	MODEL_OPTIONS,
@@ -967,7 +968,22 @@ export class ProcessExecutionService {
 			let stderr = "";
 			let settled = false;
 			let timer = 0;
-			const invocation = prepareCliSpawn(executable, ["version"]);
+			let invocation: { executable: string; args: string[] };
+			try {
+				const resolved = resolveMineruCommand(executable);
+				invocation = { executable: resolved.command, args: [...resolved.baseArgs, "version"] };
+			} catch (error) {
+				resolve({
+					ok: false,
+					type: "configuration",
+					endpoint,
+					model: settings.mineruDefaultModel,
+					message: error instanceof Error ? error.message : String(error),
+					responseTimeMs: Date.now() - startedAt,
+					testedAt: new Date().toISOString(),
+				});
+				return;
+			}
 			const child = spawn(invocation.executable, invocation.args, {
 				cwd: resolveCliProcessCwd(settings.toolkitRoot),
 				shell: false,
@@ -1002,6 +1018,9 @@ export class ProcessExecutionService {
 				}
 				finish(false, "local-service-offline", stderr.trim() || stdout.trim() || `MinerU CLI 退出码 ${code}`);
 			});
+			// npm's PowerShell shim pipes stdin to its Node child and will wait
+			// forever unless the parent closes the pipe. The probe has no input.
+			child.stdin.end();
 			timer = window.setTimeout(() => {
 				if (!child.killed) child.kill();
 				finish(false, "timeout", "MinerU CLI 版本检查超过 10 秒");

@@ -7,6 +7,18 @@ import {
 	nextPageCaptionPlaceholderFromText,
 	normalizeAssetPath,
 } from "./normalization";
+import { logicalFigureOwnershipForPage } from "./figure-ownership";
+export {
+	alignedReaderScrollTop,
+	readerElementOffset,
+	readerMarkdownRestoreTarget,
+	readerPageAtViewportTop,
+	readerPageBoundaryIndex,
+} from "./reader-position";
+export type {
+	MineruReaderViewportBlock,
+	ReaderMarkdownRestoreTarget,
+} from "./reader-position";
 import type {
 	MineruCaptionLink,
 	MineruReaderVisual,
@@ -48,88 +60,6 @@ export interface PdfCaptionContinuationRegion {
 
 export interface PdfCaptionContinuationText extends PdfCaptionContinuationRegion {
 	text: string;
-}
-
-export interface MineruReaderViewportBlock {
-	pageNumber: number;
-	top: number;
-	bottom: number;
-}
-
-/**
- * Pick one monotonic DOM boundary for a source page. An inline marker survived
- * the same Markdown suppression/rendering pipeline as the visible text, so it
- * is stronger evidence than a later normalized-text search. The latter is a
- * compatibility fallback for older or partially indexed packages only.
- */
-export function readerPageBoundaryIndex(
-	exactIndices: readonly number[],
-	fallbackIndices: readonly number[],
-	previousIndex: number,
-	allowDocumentStart = false,
-): number {
-	const firstAfterPrevious = (values: readonly number[]): number => [...values]
-		.filter((value) => Number.isInteger(value) && value > previousIndex)
-		.sort((left, right) => left - right)[0] ?? -1;
-	const exact = firstAfterPrevious(exactIndices);
-	if (exact >= 0) return exact;
-	const fallback = firstAfterPrevious(fallbackIndices);
-	if (fallback >= 0) return fallback;
-	return allowDocumentStart && previousIndex < 0 ? 0 : -1;
-}
-
-/**
- * Resolve the page owned by the first visible Markdown line. Blocks crossing
- * the viewport top win over later blocks, so a partially visible paragraph is
- * still attributed to the page where that rendered block begins.
- */
-export function readerPageAtViewportTop(
-	blocks: readonly MineruReaderViewportBlock[],
-	viewportTop: number,
-	viewportBottom: number,
-	fallbackPage = 1,
-): number {
-	const top = Number.isFinite(viewportTop) ? viewportTop : 0;
-	const bottom = Number.isFinite(viewportBottom)
-		? Math.max(top, viewportBottom)
-		: Number.POSITIVE_INFINITY;
-	const visible = blocks
-		.filter((block) => (
-			Number.isFinite(block.pageNumber)
-			&& block.pageNumber > 0
-			&& Number.isFinite(block.top)
-			&& Number.isFinite(block.bottom)
-			&& block.bottom > top + 0.5
-			&& block.top < bottom - 0.5
-		))
-		.sort((left, right) => {
-			const leftVisibleTop = Math.max(top, left.top);
-			const rightVisibleTop = Math.max(top, right.top);
-			return leftVisibleTop - rightVisibleTop
-				|| left.top - right.top
-				|| left.bottom - right.bottom;
-		});
-	return Math.max(1, Math.floor(visible[0]?.pageNumber || fallbackPage));
-}
-
-export function readerElementOffset(
-	scrollTop: number,
-	elementTop: number,
-	scrollerTop: number,
-): number {
-	return Math.max(0, scrollTop + elementTop - scrollerTop);
-}
-
-export function alignedReaderScrollTop(
-	scrollTop: number,
-	elementTop: number,
-	scrollerTop: number,
-	leadingInset = 0,
-): number {
-	return Math.max(
-		0,
-		readerElementOffset(scrollTop, elementTop, scrollerTop) - Math.max(0, leadingInset),
-	);
 }
 
 type SamePageCaptionProjection = NonNullable<
@@ -616,6 +546,9 @@ export function mergeNestedVisualRepairGroups(
 		const merged: MineruVisualRepairGroup = {
 			...outer,
 			member_block_ids: memberBlockIds,
+			member_asset_paths: [...new Set(memberBlockIds
+				.map((id) => blockById.get(id)?.asset_path || "")
+				.filter(Boolean))].sort(),
 			member_markdown_image_ids: memberMarkdownImageIds,
 			caption_anchor_block_ids: [...new Set([
 				...(outer.caption_anchor_block_ids || []),
@@ -768,6 +701,9 @@ export function mergeStandaloneCaptionRepairGroups(
 		result.push({
 			...primary.group,
 			member_block_ids: memberIds,
+			member_asset_paths: [...new Set(memberIds
+				.map((id) => blockById.get(id)?.asset_path || "")
+				.filter(Boolean))].sort(),
 			member_markdown_image_ids: markdownIds,
 			confidence: Math.min(...component.map((entry) => entry.group.confidence)),
 			replacement: {
@@ -1126,12 +1062,14 @@ function verifiedSourceProjectionRanges(
 		const projections = visual.captionSourceProjections || [];
 		const bounds = visual.captionSourceImageBounds;
 		const beforeImage = bounds ? occurrences.get(bounds.beforeMarkdownImageId) : undefined;
-		const afterImage = bounds ? occurrences.get(bounds.afterMarkdownImageId) : undefined;
+		const afterImage = bounds?.afterMarkdownImageId
+			? occurrences.get(bounds.afterMarkdownImageId)
+			: undefined;
 		if (
 			!projections.length
 			|| !beforeImage
-			|| !afterImage
-			|| beforeImage.start >= afterImage.start
+			|| (Boolean(bounds?.afterMarkdownImageId) && !afterImage)
+			|| beforeImage.start >= (afterImage?.start ?? markdown.length)
 		) continue;
 		const verified: Array<{ start: number; end: number }> = [];
 		let valid = true;
@@ -1164,7 +1102,7 @@ function verifiedSourceProjectionRanges(
 		if (!valid || verified.length !== projections.length) continue;
 		if (
 			verified[0].start < beforeImage.end
-			|| verified[verified.length - 1].end > afterImage.start
+			|| verified[verified.length - 1].end > (afterImage?.start ?? markdown.length)
 		) continue;
 		for (let index = 1; index < verified.length; index += 1) {
 			const previous = verified[index - 1];
@@ -1182,8 +1120,12 @@ function verifiedSourceProjectionRanges(
 		const occurrenceBound = verified.length === 1
 			&& (localRangesByVisual.get(visual.id) || []).some((localRange) =>
 				localRange.end <= verified[0].start
-				&& !markdown.slice(localRange.end, verified[0].start).trim());
-		if (!targetChainBound && !occurrenceBound) continue;
+					&& !markdown.slice(localRange.end, verified[0].start).trim());
+		const exactFormalCaptionBound = verified.length === 1
+			&& Boolean(formalFigureCaptionKeyFromText(projections[0].text))
+			&& formalFigureCaptionKeyFromText(projections[0].text)
+				=== formalFigureCaptionKeyFromText(visual.caption);
+		if (!targetChainBound && !occurrenceBound && !exactFormalCaptionBound) continue;
 		verified.forEach((range, index) => {
 			if (projections[index].suppress !== false) ranges.push(range);
 		});
@@ -1215,8 +1157,6 @@ function verifiedBoundedHeadingRanges(
 			!/^<table\b[^>]*>[\s\S]*<\/table>$/i.test(source)
 			|| markdown.slice(lineStart, range.start).trim()
 			|| markdown.slice(range.end, lineEnd).trim()
-			|| markdown.indexOf(source) !== range.start
-			|| markdown.indexOf(source, range.start + source.length) >= 0
 		) return null;
 		return { start: range.start, end: range.end };
 	};
@@ -1275,14 +1215,32 @@ function verifiedInlineCaptionRanges(
 			if (
 				!projection.text
 				|| exact !== projection.text
-				|| markdown.indexOf(projection.text) !== projection.start
-				|| markdown.indexOf(projection.text, projection.start + projection.text.length) >= 0
 				|| !hasSequentialCaptionPanels(visual.captionParts[0] || visual.caption, exact)
 			) continue;
 			ranges.push({ start: projection.start, end: projection.end });
 		}
 	}
 	return ranges;
+}
+
+interface ReaderMarkdownEdit {
+	start: number;
+	end: number;
+	replacement: string;
+}
+
+function applyReaderMarkdownEdits(markdown: string, edits: readonly ReaderMarkdownEdit[]): string {
+	const ordered = [...edits].sort((left, right) => left.start - right.start || right.end - left.end);
+	const output: string[] = [];
+	let cursor = 0;
+	for (const edit of ordered) {
+		if (!Number.isInteger(edit.start) || !Number.isInteger(edit.end)
+			|| edit.start < cursor || edit.end < edit.start || edit.end > markdown.length) continue;
+		output.push(markdown.slice(cursor, edit.start), edit.replacement);
+		cursor = edit.end;
+	}
+	output.push(markdown.slice(cursor));
+	return output.join("");
 }
 
 function suppressProjectedReaderText(
@@ -1347,12 +1305,10 @@ function suppressProjectedReaderText(
 	for (const range of verifiedInlineCaptionRanges(markdown, visuals, viewerIndex)) {
 		ranges.set(`${range.start}:${range.end}`, range);
 	}
-	return [...ranges.values()]
-		.sort((left, right) => right.start - left.start)
-		.reduce(
-			(result, range) => `${result.slice(0, range.start)}${result.slice(range.end)}`,
-			markdown,
-		);
+	return applyReaderMarkdownEdits(
+		markdown,
+		[...ranges.values()].map((range) => ({ ...range, replacement: "" })),
+	);
 }
 
 function sameIds(actual: readonly string[], expected: readonly string[]): boolean {
@@ -1406,10 +1362,10 @@ function sourceImageBoundsForProjectionBlocks(
 		.reverse()
 		.find((entry) => entry.block.source_index < firstSourceIndex);
 	const after = mappedVisuals.find((entry) => entry.block.source_index > lastSourceIndex);
-	if (!before || !after) return null;
+	if (!before) return null;
 	const intervalTextBlocks = allBlocks.filter((block) =>
 		block.source_index > before.block.source_index
-		&& block.source_index < after.block.source_index
+		&& block.source_index < (after?.block.source_index ?? Number.POSITIVE_INFINITY)
 		&& ["text", "title"].includes(block.role)
 		&& Boolean(blockText(block)));
 	for (const projectionBlock of projectionBlocks) {
@@ -1418,7 +1374,7 @@ function sourceImageBoundsForProjectionBlocks(
 	}
 	return {
 		beforeMarkdownImageId: before.markdownImageId,
-		afterMarkdownImageId: after.markdownImageId,
+		...(after ? { afterMarkdownImageId: after.markdownImageId } : {}),
 	};
 }
 
@@ -1891,7 +1847,47 @@ export function prepareReaderMarkdown(
 	markdown: string,
 	visuals: readonly MineruReaderVisual[],
 	viewerIndex?: MineruViewerIndex,
+	options: { removeUnmappedImages?: boolean; maxProjectionWork?: number } = {},
 ): string {
+	const projectedWork = markdown.length * Math.max(1, visuals.length);
+	const maxProjectionWork = Math.max(1_000_000, options.maxProjectionWork || 96_000_000);
+	if (projectedWork > maxProjectionWork) {
+		// Fail soft on display repair, not on content safety. A single regex pass
+		// still replaces every image with a plugin-owned anchor (or removes an
+		// unbound image), but expensive caption/table projections are skipped.
+		const imageToVisual = new Map<string, string>();
+		const assetCandidates = new Map<string, Set<string>>();
+		visuals.forEach((visual) => {
+			(visual.memberMarkdownImageIds || []).forEach((imageId) => imageToVisual.set(imageId, visual.id));
+			visual.memberAssetPaths.forEach((assetPath) => {
+				const candidates = assetCandidates.get(assetPath) || new Set<string>();
+				candidates.add(visual.id);
+				assetCandidates.set(assetPath, candidates);
+			});
+		});
+		let imageOrder = 0;
+		const inserted = new Set<string>();
+		IMAGE_TOKEN_RE.lastIndex = 0;
+		let passive = markdown.replace(
+			IMAGE_TOKEN_RE,
+			(_match, _alt: string, anglePath: string, plainPath: string, htmlPath: string) => {
+				const assetPath = normalizeAssetPath(anglePath || plainPath || htmlPath || "");
+				const imageId = `md-img-${String(imageOrder).padStart(4, "0")}`;
+				imageOrder += 1;
+				const candidates = assetPath ? assetCandidates.get(assetPath) : undefined;
+				const visualId = imageToVisual.get(imageId)
+					|| (candidates?.size === 1 ? [...candidates][0] : undefined);
+				if (!visualId) return options.removeUnmappedImages ? "" : _match;
+				if (inserted.has(visualId)) return "";
+				inserted.add(visualId);
+				return `<span class="agent-dashboard-mineru-reading-anchor" data-visual-id="${escapeHtmlAttribute(visualId)}" aria-label="图像位置"></span>`;
+			},
+		);
+		const firstLineEnd = passive.indexOf("\n");
+		const firstPagePosition = firstLineEnd >= 0 ? firstLineEnd + 1 : passive.length;
+		passive = `${passive.slice(0, firstPagePosition)}<span class="agent-dashboard-mineru-page-anchor" data-reader-page="1" aria-hidden="true"></span>${passive.slice(firstPagePosition)}`;
+		return passive;
+	}
 	const atomicCaptures = visuals.flatMap((visual) => {
 		const projection = visual.atomicBlockProjection;
 		if (!projection) return [];
@@ -1920,10 +1916,6 @@ export function prepareReaderMarkdown(
 			!/^<table\b[^>]*>[\s\S]*<\/table>$/i.test(tableText)
 			|| !captionText
 			|| captionContent.trim() !== captionText
-			|| markdown.indexOf(tableText) !== tableRange.start
-			|| markdown.indexOf(tableText, tableRange.start + tableText.length) >= 0
-			|| markdown.indexOf(captionText) !== captionRange.start + captionContent.indexOf(captionText)
-			|| markdown.indexOf(captionText, captionRange.start + captionContent.indexOf(captionText) + captionText.length) >= 0
 			|| markdown.slice(tableRange.end, captionRange.start).trim()
 			|| (captionRange.start > 0 && markdown[captionRange.start - 1] !== "\n")
 			|| (captionRange.end < markdown.length && markdown[captionRange.end - 1] !== "\n")
@@ -1981,7 +1973,7 @@ export function prepareReaderMarkdown(
 			const candidates = assetPath ? assetCandidates.get(assetPath) : undefined;
 			const visualId = imageToVisual.get(imageId)
 				|| (candidates?.size === 1 ? [...candidates][0] : undefined);
-			if (!visualId) return _match;
+			if (!visualId) return options.removeUnmappedImages ? "" : _match;
 			if (inserted.has(visualId)) return "";
 			inserted.add(visualId);
 			return `<span class="agent-dashboard-mineru-reading-anchor" data-visual-id="${escapeHtmlAttribute(visualId)}" aria-label="图像位置"></span>`;
@@ -1992,12 +1984,18 @@ export function prepareReaderMarkdown(
 		if (!located) return [];
 		return [{ capture, ...located }];
 	}).sort((left, right) => right.tableStart - left.tableStart);
+	const atomicEdits: ReaderMarkdownEdit[] = [];
 	for (const replacement of atomicReplacements) {
 		if (inserted.has(replacement.capture.visualId)) continue;
 		const anchor = `<span class="agent-dashboard-mineru-reading-anchor" data-visual-id="${escapeHtmlAttribute(replacement.capture.visualId)}" aria-label="图像位置"></span>`;
-		prepared = `${prepared.slice(0, replacement.tableStart)}${anchor}${prepared.slice(replacement.tableEnd, replacement.captionStart)}${prepared.slice(replacement.captionEnd)}`;
+		atomicEdits.push({
+			start: replacement.tableStart,
+			end: replacement.captionEnd,
+			replacement: `${anchor}${prepared.slice(replacement.tableEnd, replacement.captionStart)}`,
+		});
 		inserted.add(replacement.capture.visualId);
 	}
+	prepared = applyReaderMarkdownEdits(prepared, atomicEdits);
 	if (!viewerIndex?.pages.length) return prepared;
 
 	const positionsByPage = new Map<number, number[]>();
@@ -2007,16 +2005,17 @@ export function prepareReaderMarkdown(
 		positions.push(position);
 		positionsByPage.set(pageIdx, positions);
 	};
-	for (const page of viewerIndex.pages) {
-		for (const block of page.blocks) {
-			const range = block.markdown_text_range || block.markdown_table_range;
-			if (
-				!range
-				|| range.offset_unit !== "utf16-code-unit"
-				|| range.start < 0
-				|| range.end <= range.start
-				|| range.end > markdown.length
-			) continue;
+	// Text-only pages get one bounded lookup apiece. This path is disabled when
+	// its declared character-scan budget would exceed the same hard operation
+	// budget used above; no per-block full-document search remains.
+	if (projectedWork + prepared.length * viewerIndex.pages.length <= maxProjectionWork) {
+		for (const page of viewerIndex.pages) {
+			if ((positionsByPage.get(page.page_idx) || []).length) continue;
+			const range = page.blocks
+				.map((block) => block.markdown_text_range || block.markdown_table_range)
+				.find((candidate) => candidate?.offset_unit === "utf16-code-unit"
+					&& candidate.start >= 0 && candidate.end > candidate.start && candidate.end <= markdown.length);
+			if (!range) continue;
 			const source = markdown.slice(range.start, range.end);
 			if (!source.trim()) continue;
 			const position = prepared.indexOf(source);
@@ -2038,11 +2037,93 @@ export function prepareReaderMarkdown(
 		insertions.push({ pageNumber: page.page_idx + 1, position });
 		previousPosition = position;
 	}
-	for (const insertion of insertions.sort((left, right) => right.position - left.position)) {
-		const anchor = `<span class="agent-dashboard-mineru-page-anchor" data-reader-page="${insertion.pageNumber}" aria-hidden="true"></span>`;
-		prepared = `${prepared.slice(0, insertion.position)}${anchor}${prepared.slice(insertion.position)}`;
+	return applyReaderMarkdownEdits(prepared, insertions.map((insertion) => ({
+		start: insertion.position,
+		end: insertion.position,
+		replacement: `<span class="agent-dashboard-mineru-page-anchor" data-reader-page="${insertion.pageNumber}" aria-hidden="true"></span>`,
+	})));
+}
+
+/**
+ * A full-page composite sometimes has no "see next page" placeholder because
+ * the page contains only figure pixels. Bind the following-page caption only
+ * under the stricter page-level repair proof: the caption must be the first
+ * meaningful target-page block, be a complete formal caption with several
+ * panel markers, and be followed by one independently ranged body block. The
+ * second block is retained as a non-suppressed boundary so caption removal is
+ * exact and cannot consume the following paragraph.
+ */
+function followingPageFullCompositeCaptionDetails(
+	blocks: readonly MineruViewerBlock[],
+	allBlocks: readonly MineruViewerBlock[],
+	pageIdx: number,
+): Pick<
+	MineruReaderVisual,
+	"caption" | "captionParts" | "captionSourceBlockIds" | "captionSourceProjections" | "captionInlineProjections" | "captionSourceImageBounds" | "captionPageIdx" | "captionStatus"
+> | null {
+	if (!blocks.length || blocks.some((block) => block.role !== "visual" || blockPageIdx(block) !== pageIdx)) {
+		return null;
 	}
-	return prepared;
+	const memberIds = new Set(blocks.map((block) => block.id));
+	const pageMeaningful = allBlocks.filter((block) => (
+		blockPageIdx(block) === pageIdx && block.role !== "discarded"
+	));
+	if (pageMeaningful.length !== memberIds.size || pageMeaningful.some((block) => !memberIds.has(block.id))) {
+		return null;
+	}
+	const targetPageIdx = pageIdx + 1;
+	const targetMeaningful = allBlocks
+		.filter((block) => blockPageIdx(block) === targetPageIdx && block.role !== "discarded")
+		.filter((block) => !["text", "title"].includes(block.role) || Boolean(blockText(block)))
+		.sort((left, right) => left.page_order - right.page_order || left.source_index - right.source_index);
+	const anchor = targetMeaningful[0];
+	const anchorText = blockText(anchor);
+	if (
+		!anchor
+		|| !isTopTextBlock(anchor)
+		|| !formalFigureCaptionKeyFromText(anchorText)
+		|| anchorText.length < 80
+		|| captionPanelMarkers(anchorText).length < 3
+		|| !endsWithTerminalPunctuation(anchorText)
+		|| !anchor.markdown_text_range
+		|| anchor.markdown_text_range.offset_unit !== "utf16-code-unit"
+	) return null;
+	const boundary = targetMeaningful[1];
+	const boundaryText = blockText(boundary);
+	if (
+		!boundary
+		|| !["text", "title"].includes(boundary.role)
+		|| !boundaryText
+		|| Boolean(figureKeyFromText(boundaryText))
+		|| !boundary.markdown_text_range
+		|| boundary.markdown_text_range.offset_unit !== "utf16-code-unit"
+	) return null;
+	const bounds = sourceImageBoundsForProjectionBlocks([anchor, boundary], allBlocks);
+	if (!bounds) return null;
+	const lastMemberMarkdownId = blocks
+		.flatMap((block) => block.markdown_image_ids || [])
+		.sort((left, right) => (markdownImageOrder(right) ?? -1) - (markdownImageOrder(left) ?? -1))[0];
+	if (!lastMemberMarkdownId || bounds.beforeMarkdownImageId !== lastMemberMarkdownId) return null;
+	return {
+		caption: anchorText,
+		captionParts: [anchorText],
+		captionSourceBlockIds: [anchor.id],
+		captionSourceProjections: [{
+			start: anchor.markdown_text_range.start,
+			end: anchor.markdown_text_range.end,
+			text: anchorText,
+			suppress: true,
+		}, {
+			start: boundary.markdown_text_range.start,
+			end: boundary.markdown_text_range.end,
+			text: boundaryText,
+			suppress: false,
+		}],
+		captionInlineProjections: [],
+		captionSourceImageBounds: bounds,
+		captionPageIdx: targetPageIdx,
+		captionStatus: "complete",
+	};
 }
 
 export function resolveVisualCaptionDetails(
@@ -2050,11 +2131,98 @@ export function resolveVisualCaptionDetails(
 	allBlocks: readonly MineruViewerBlock[],
 	repair: MineruVisualRepair | null,
 	pageIdx: number,
+	viewerIndex?: MineruViewerIndex,
 ): Pick<
 	MineruReaderVisual,
 	"caption" | "captionParts" | "captionSourceBlockIds" | "captionSourceProjections" | "captionInlineProjections" | "captionSourceImageBounds" | "captionPageIdx" | "captionStatus" | "pageRange" | "panelLabelProjections" | "samePageCaptionProjections" | "atomicBlockProjection" | "boundedHeadingProjections"
 > {
 	const memberIds = new Set(blocks.map((block) => block.id));
+	const logicalOwnership = viewerIndex
+		? logicalFigureOwnershipForPage(
+			viewerIndex,
+			viewerIndex.pages.find((page) => page.page_idx === pageIdx)?.blocks || [],
+		)
+		: null;
+	const exactLogicalOwnership = logicalOwnership
+		&& logicalOwnership.members.length === memberIds.size
+		&& logicalOwnership.members.every((block) => memberIds.has(block.id))
+		? logicalOwnership
+		: null;
+	if (exactLogicalOwnership) {
+		const { figureKey, caption: markdownCaption } = exactLogicalOwnership;
+		const matchingSourceBlocks = allBlocks.filter((block) => (
+			block.caption?.formal_figure_caption_keys?.includes(figureKey)
+			|| block.text?.formal_figure_caption_keys?.includes(figureKey)
+			|| block.caption?.leading_formal_figure_caption_key === figureKey
+			|| block.text?.leading_formal_figure_caption_key === figureKey
+		));
+		const sourceParts = matchingSourceBlocks.flatMap((block) => [
+			String(block.caption?.text || "").trim(),
+			String(block.text?.text || "").trim(),
+		]).filter((text) => formalFigureCaptionKeyFromText(text) === figureKey);
+		const samePageCaption = samePageCaptionDetails(blocks, allBlocks, pageIdx);
+		const captionPageIndices = matchingSourceBlocks
+			.map(blockPageIdx)
+			.filter((value): value is number => value !== null);
+		const captionPageIdx = captionPageIndices.length
+			? Math.min(...captionPageIndices)
+			: pageIdx;
+		const hasSourceBounds = Boolean(markdownCaption.before_markdown_image_id);
+		return {
+			caption: selectVisualCaption([
+				...sourceParts,
+				samePageCaption.caption,
+				markdownCaption.text,
+			]),
+			captionParts: [markdownCaption.text],
+			captionSourceBlockIds: matchingSourceBlocks.map((block) => block.id),
+			captionSourceProjections: hasSourceBounds ? [{
+				start: markdownCaption.char_start,
+				end: markdownCaption.char_end,
+				text: markdownCaption.text,
+				suppress: true,
+			}] : [],
+			captionInlineProjections: [],
+			captionSourceImageBounds: hasSourceBounds ? {
+				beforeMarkdownImageId: markdownCaption.before_markdown_image_id!,
+				...(markdownCaption.after_markdown_image_id
+					? { afterMarkdownImageId: markdownCaption.after_markdown_image_id }
+					: {}),
+			} : undefined,
+			captionPageIdx,
+			captionStatus: "complete",
+			panelLabelProjections: panelLabelProjectionsForBlocks(blocks, allBlocks, pageIdx),
+			boundedHeadingProjections: runningHeaderProjectionsForPages(
+				allBlocks,
+				new Set([pageIdx, captionPageIdx]),
+			),
+			samePageCaptionProjections: samePageCaption.samePageCaptionProjections,
+			...(samePageCaption.atomicBlockProjection
+				? { atomicBlockProjection: samePageCaption.atomicBlockProjection }
+				: {}),
+			pageRange: [Math.min(pageIdx, captionPageIdx), Math.max(pageIdx, captionPageIdx)],
+		};
+	}
+	const exactPageGroups = (repair?.groups || []).filter((group) => (
+		group.page_idx === pageIdx
+		&& group.decision === "auto"
+		&& group.member_block_ids.length === memberIds.size
+		&& group.member_block_ids.every((id) => memberIds.has(id))
+	));
+	const hasVerifiedPageGroup = exactPageGroups.length === 1 && exactPageGroups[0].reason_codes?.some((reason) => [
+		"visual_only_page_full_coverage",
+		"visual_only_page_exact_coverage",
+		"complete_enclosing_asset_exact_aliases",
+	].includes(reason));
+	const singleFullPageVisual = blocks.length === 1
+		&& Boolean(blocks[0].bbox_norm)
+		&& bboxArea(blocks[0].bbox_norm!) / 1_000_000 >= 0.6;
+	const pageMeaningful = allBlocks.filter((block) => blockPageIdx(block) === pageIdx && block.role !== "discarded");
+	const ownsWholeVisualPage = pageMeaningful.length === memberIds.size
+		&& pageMeaningful.every((block) => block.role === "visual" && memberIds.has(block.id));
+	const fullPageCaption = ownsWholeVisualPage && (hasVerifiedPageGroup || singleFullPageVisual)
+		? followingPageFullCompositeCaptionDetails(blocks, allBlocks, pageIdx)
+		: null;
 	const storedLinks = (repair?.caption_links || []).filter((candidate) => memberIds.has(candidate.visual_block_id));
 	const link = storedLinks.length === 1
 		? storedLinks[0]
@@ -2067,6 +2235,19 @@ export function resolveVisualCaptionDetails(
 	const samePageCaption = samePageCaptionDetails(blocks, allBlocks, pageIdx);
 	const panelLabelProjections = panelLabelProjectionsForBlocks(blocks, allBlocks, pageIdx);
 	const samePageHeadingProjections = runningHeaderProjectionsForPages(allBlocks, new Set([pageIdx]));
+	if (fullPageCaption) {
+		return {
+			...samePageCaption,
+			...fullPageCaption,
+			panelLabelProjections,
+			boundedHeadingProjections: runningHeaderProjectionsForPages(
+				allBlocks,
+				new Set([pageIdx, pageIdx + 1]),
+			),
+			samePageCaptionProjections: samePageCaption.samePageCaptionProjections,
+			pageRange: [pageIdx, pageIdx + 1],
+		};
+	}
 	const targetPageBlocks = allBlocks.filter((block) => blockPageIdx(block) === link?.target_page_idx);
 	if (!link) {
 		return {
@@ -2168,8 +2349,11 @@ export function selectVisualCaption(captions: readonly string[]): string {
 	if (figureCaptions.length) {
 		return figureCaptions.sort((left, right) => right.length - left.length)[0];
 	}
-	const safeFallbacks = unique.filter((caption) => !figureKeyFromText(caption));
+	const safeFallbacks = unique.filter((caption) => (
+		!figureKeyFromText(caption)
+		&& !isPanelLabelText(caption)
+	));
 	const longCaptions = safeFallbacks.filter((caption) => caption.length >= 24);
 	if (longCaptions.length) return longCaptions.join(" ");
-	return safeFallbacks.sort((left, right) => right.length - left.length)[0] || "";
+	return "";
 }

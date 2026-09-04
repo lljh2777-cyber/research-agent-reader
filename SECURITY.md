@@ -2,16 +2,16 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest published release. Until the first
-public release, the `main` branch is the only supported development line.
+Security fixes are applied to the latest published beta release and the `main`
+branch. Older beta releases are not maintained after a newer release is
+published.
 
 ## Reporting a vulnerability
 
 Do not disclose a vulnerability in a public issue before the maintainer has had
-an opportunity to assess it. Contact the maintainer through GitHub private
-vulnerability reporting after the public repository is created. If private
-reporting is unavailable, open a minimal issue requesting a private contact
-channel without including exploit details.
+an opportunity to assess it. Use GitHub private vulnerability reporting. If
+private reporting is unavailable, open a minimal issue requesting a private
+contact channel without including exploit details.
 
 ## Trust boundaries
 
@@ -22,8 +22,19 @@ actions may modify vault files and therefore use bounded paths, task history,
 validation, and rollback contracts.
 
 The plugin does not install or update external executables. Users must install
-and authenticate optional CLI backends themselves. Direct API keys are selected
-through Obsidian SecretStorage and are not stored in plugin `data.json`.
+optional CLI backends themselves. Direct API keys and an optional MinerU API
+token are selected through Obsidian SecretStorage and are not stored in plugin
+`data.json`; only their secret IDs are persisted. A selected MinerU token is
+passed to the launched CLI as `MINERU_TOKEN`. MinerU CLI-managed authentication
+and an existing environment variable remain supported alternatives.
+
+Completed task output can include model/tool traces, command output, and Vault
+excerpts selected for that run. Full output is stored locally beside the plugin
+under `task-output/dashboard-runs/`; `data.json` keeps only a bounded snapshot
+and the registered sidecar path. Clearing completed task history removes those
+registered sidecars. The plugin does not infer deletion permission merely from
+an unreferenced file, so compatibility outputs from older beta versions may
+require explicit manual review.
 
 ## Light agent (Direct API tool loop)
 
@@ -32,22 +43,55 @@ loop inside the plugin. Its boundaries are enforced in code, not by prompt:
 
 - Tools are allowlisted per workflow phase; phases run in a fixed order
   (identity/dedup → extraction → note commit) controlled by the plugin.
-- Vault reads and listings are restricted to `wiki/sources` and `papers`;
+- Vault identity reads and listings are restricted to `wiki/sources`, `papers`, and `Clippings`;
   traversal (`..`) and out-of-scope paths are rejected.
 - Network access is limited to domain-bound metadata lookups (Crossref); the
   plugin constructs the URLs, so model-controlled text can only fill query
   parameters.
-- The MinerU helper always receives the exact PDF path the user confirmed in
-  the modal (remote-upload confirmation still applies); the model cannot
-  select or substitute files.
+- The MinerU helper receives the immutable private snapshot derived from the
+  exact PDF selected and authorized by the user (remote-upload confirmation
+  still applies); it never receives a model-selected path.
+- PDF filenames, metadata, and text-layer extraction are discovery hints only.
+  Before a bibliographic identity can authorize extraction or a Wiki write,
+  the user must visually confirm a final PDF.js raster from the immutable
+  authorized snapshot against the plugin-bound Crossref record. The receipt
+  is bound to the task ID, snapshot SHA-256, raster SHA-256, render parameters,
+  and Crossref record hash; it cannot be replayed for another task or PDF.
 - Wiki writes are performed by the plugin from validated model-supplied
   fields into `wiki/sources/<citekey>.md`, create-only; existing notes are
   never overwritten.
+- MinerU and model text are treated as untrusted active-Markdown input. The
+  original MinerU Markdown bytes are retained only as
+  `_extraction/article.raw.txt`; the rendered `article.md` is a deterministic
+  passive derivative. Fenced/indented code, raw HTML, embeds, reference-style
+  or external images, plugin directives, and unbound media are neutralized or
+  rejected before Obsidian's global Markdown processor chain. Model-authored Source Notes use
+  the same boundary with an even stricter no-image profile.
 - Tool output is size-capped and the run has step/wall-clock budgets;
   cancellation aborts in-flight requests and subprocesses.
 - Tool results and web content are untrusted input and may contain prompt
   injection; the plugin treats them as data, and only the user's modal input
   and the plugin's own state can change what tools are allowed to do.
+
+## Environmental trust assumption
+
+Research Agent Reader defends against untrusted PDFs, remote MinerU output,
+model responses, logical path traversal, symbolic links, junctions, special
+files, and ordinary TOCTOU changes observable through file identity and real
+path checks.
+
+The plugin does not claim to resist a malicious local process running under the
+same operating-system account with equivalent filesystem permissions. Such a
+process can move or replace a validated directory inode while it is in use and
+can also directly modify the Vault, plugin installation, configuration,
+private temporary files, or Obsidian process state. Cross-platform JavaScript
+path APIs cannot provide a complete mandatory-integrity boundary against that
+attacker.
+
+Accordingly, the Vault root, plugin installation directory, and plugin-owned
+temporary directory are assumed not to be actively rewritten by an equally
+privileged malicious local process during an operation. Observable identity
+changes still fail closed.
 
 When reporting a vulnerability, include the plugin version, Obsidian version,
 operating system, affected feature, minimal reproduction, and whether an

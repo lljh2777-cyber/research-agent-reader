@@ -31,6 +31,40 @@ export interface AgentToolResult {
 	output: string;
 	/** Human-readable one-line summary kept in the run trace. */
 	summary?: string;
+	/**
+	 * Tool-owned facts kept separately from model-visible prose. The loop
+	 * normalizes and bounds this object before recording it as a receipt, so
+	 * semantic gates can consume typed observations instead of parsing output.
+	 */
+	receiptData?: AgentToolReceiptData;
+}
+
+/** One path/title pair observed by a tool (for example a Vault search hit). */
+export interface AgentToolReceiptCandidate {
+	path: string;
+	title: string;
+}
+
+/** One title/DOI pair and its supporting bibliographic metadata. */
+export interface AgentToolReceiptBibliographicRecord {
+	title: string;
+	doi: string;
+	authors: string;
+	year: string;
+}
+
+/**
+ * Structured facts emitted by trusted tool implementations. Every member is
+ * optional because different tools observe different kinds of evidence.
+ */
+export interface AgentToolReceiptData {
+	query?: string;
+	queryTerms?: string[];
+	titles?: string[];
+	dois?: string[];
+	paths?: string[];
+	candidates?: AgentToolReceiptCandidate[];
+	bibliographicRecords?: AgentToolReceiptBibliographicRecord[];
 }
 
 export interface AgentLoopTurn {
@@ -54,6 +88,8 @@ export interface AgentLoopRequest {
 	maxToolOutputChars?: number;
 	/** Max characters per single tool result. */
 	maxToolResultChars?: number;
+	/** Optional timeout for each provider turn; still capped by the loop deadline. */
+	providerTimeoutMs?: number;
 	/**
 	 * Run-level abort signal owned by the caller. When it fires, the loop's
 	 * internal signal aborts too — including while a tool is executing — so
@@ -84,6 +120,12 @@ export interface AgentToolCallReceipt {
 	ok: boolean;
 	/** Compact argument summary for receipt checks (e.g. the queried DOI). */
 	argsSummary: string;
+	/** Tool-owned result summary (counts, verified DOI, or read range). */
+	resultSummary?: string;
+	/** Bounded diagnostic excerpt; semantic gates use structured data below. */
+	evidencePreview?: string;
+	/** Bounded, tool-owned observations for plugin-side semantic gates. */
+	data?: AgentToolReceiptData;
 }
 
 export interface AgentLoopResult {

@@ -5,12 +5,21 @@ import {
 	publishMineruPackage,
 	type MineruCommandRequest,
 	type MineruPublishArgs,
+	type MineruPublishContext,
 } from "./mineru-publish";
 import type { AgentTool, AgentToolContext } from "./types";
+import { createTrustedVaultTextFile, readTrustedVaultFile } from "../runtime/trusted-vault-fs";
+import { validateModelNoteBodyMarkdown } from "../security/safe-markdown";
 
 /** Max characters of one vault file handed to the model per read. */
 const VAULT_READ_CHAR_LIMIT = 16000;
+const ARTICLE_OVERVIEW_CHAR_LIMIT = 22000;
+const ARTICLE_HEAD_CHAR_LIMIT = 4000;
+const ARTICLE_PAGE_CHAR_LIMIT = 16000;
 const VAULT_LIST_LIMIT = 200;
+const VAULT_DOI_SCAN_FILE_LIMIT = 5000;
+const MAX_VAULT_TEXT_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_DOI_SCAN_TOTAL_BYTES = 64 * 1024 * 1024;
 
 export interface VaultToolDeps {
 	app: {
@@ -20,13 +29,22 @@ export interface VaultToolDeps {
 			getFiles(): Array<{ path: string; extension?: string }>;
 			read(file: TFile): Promise<string>;
 			adapter: {
+				getBasePath?(): string;
+				getFullPath?(path: string): string;
 				exists(path: string, sensitive?: boolean): Promise<boolean>;
 				write(path: string, data: string): Promise<void>;
 				mkdir(path: string): Promise<void>;
 				read(path: string): Promise<string>;
+				stat?(path: string): Promise<{ size: number } | null>;
 			};
 		};
 	};
+}
+
+function assertTextFileSize(file: TFile, label: string): void {
+	if (Number(file.stat?.size || 0) > MAX_VAULT_TEXT_FILE_BYTES) {
+		throw new Error(`${label} 超过 8 MiB 文本读取上限`);
+	}
 }
 
 export interface HttpToolDeps {
@@ -70,6 +88,57 @@ function withinPrefixes(path: string, prefixes: readonly string[]): boolean {
 	return prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 
+function decodeFrontmatterScalar(raw: string): string {
+	const value = raw.trim();
+	if (!value) return "";
+	if (value.startsWith('"')) {
+		try {
+			const parsed = JSON.parse(value) as unknown;
+			return typeof parsed === "string" ? parsed.trim() : "";
+		} catch {
+			return value.slice(1, value.endsWith('"') ? -1 : undefined).trim();
+		}
+	}
+	if (value.startsWith("'")) {
+		const inner = value.slice(1, value.endsWith("'") ? -1 : undefined);
+		return inner.replace(/''/g, "'").trim();
+	}
+	return value.replace(/\s+#.*$/, "").trim();
+}
+
+function normalizeObservedDoi(raw: string): string {
+	return String(raw || "")
+		.trim()
+		.replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
+}
+
+function extractVaultIdentity(content: string): { title: string; doi: string } {
+	const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)?.[1] || "";
+	const titleLine = /^title:[ \t]*(.+)$/mi.exec(frontmatter)?.[1] || "";
+	const doiLine = /^doi:[ \t]*(.+)$/mi.exec(frontmatter)?.[1] || "";
+	const h1 = /^#[ \t]+(.+?)\s*$/m.exec(content)?.[1] || "";
+	return {
+		title: decodeFrontmatterScalar(titleLine) || h1.trim(),
+		doi: normalizeObservedDoi(decodeFrontmatterScalar(doiLine)),
+	};
+}
+
+function extractObservedDois(texts: readonly string[]): string[] {
+	const dois: string[] = [];
+	const seen = new Set<string>();
+	for (const text of texts) {
+		for (const match of String(text || "").matchAll(/10\.\d{4,9}\/[-._;()/:A-Z0-9]+/gi)) {
+			const doi = normalizeObservedDoi(match[0]);
+			const key = doi.toLowerCase();
+			if (!doi || seen.has(key)) continue;
+			seen.add(key);
+			dois.push(doi);
+			if (dois.length >= 50) return dois;
+		}
+	}
+	return dois;
+}
+
 /**
  * Read-scoped vault read tool. The ingest flow only needs wiki/sources and
  * papers; broader vault content stays outside the model's reach so untrusted
@@ -96,13 +165,198 @@ export function createVaultReadTool(deps: VaultToolDeps, allowedPrefixes: readon
 			if (["png", "jpg", "jpeg", "webp", "gif", "pdf"].includes(file.extension.toLowerCase())) {
 				throw new Error(`vault_read 只支持文本文件，收到 .${file.extension}`);
 			}
-			const content = await deps.app.vault.read(file);
+			assertTextFileSize(file, path);
+			const content = (await readTrustedVaultFile(
+				deps.app.vault.adapter,
+				path,
+				MAX_VAULT_TEXT_FILE_BYTES,
+			)).toString("utf8");
 			const offset = Math.max(0, Math.round(Number(args.offset)) || 0);
 			const slice = content.slice(offset, offset + VAULT_READ_CHAR_LIMIT);
 			const header = `path=${path} 共 ${content.length} 字符，本次返回 ${slice.length}（offset ${offset}）`;
+			const identity = extractVaultIdentity(content);
 			return {
 				output: `${header}\n\n${slice}${offset + slice.length < content.length ? "\n…[未完，用 offset 继续读]" : ""}`,
 				summary: header,
+				receiptData: {
+					query: path,
+					paths: [path],
+					...(identity.title ? { titles: [identity.title], candidates: [{ path, title: identity.title }] } : {}),
+					...(identity.doi ? { dois: [identity.doi] } : {}),
+				},
+			};
+		},
+	};
+}
+
+interface MarkdownSection {
+	level: number;
+	title: string;
+	start: number;
+	end: number;
+}
+
+export interface ArticleEvidencePacket {
+	content: string;
+	sections: string[];
+	selectedChars: number;
+}
+
+function markdownSections(content: string): MarkdownSection[] {
+	const headings = [...content.matchAll(/^(#{1,6})[ \t]+(.+?)\s*$/gm)].map((match) => ({
+		level: match[1].length,
+		title: match[2].trim(),
+		start: match.index || 0,
+	}));
+	return headings.map((heading, index) => {
+		let end = content.length;
+		for (let next = index + 1; next < headings.length; next += 1) {
+			if (headings[next].level <= heading.level) {
+				end = headings[next].start;
+				break;
+			}
+		}
+		return { ...heading, end };
+	});
+}
+
+function normalizeHeading(value: string): string {
+	return String(value || "")
+		.toLowerCase()
+		.replace(/^\s*(?:\d+(?:\.\d+)*|[ivxlcdm]+)[.)、:\s-]+/i, "")
+		.replace(/&/g, " and ")
+		.replace(/[\s_–—-]+/g, " ")
+		.replace(/[：:。.]\s*$/g, "")
+		.trim();
+}
+
+const ARTICLE_SECTION_GROUPS: ReadonlyArray<{ label: string; terms: readonly string[]; cap: number }> = [
+	{ label: "摘要", terms: ["abstract", "summary", "摘要"], cap: 5000 },
+	{ label: "引言", terms: ["introduction", "background", "引言", "前言", "研究背景"], cap: 3000 },
+	{ label: "方法", terms: ["methods", "methodology", "materials and methods", "方法", "材料与方法"], cap: 2500 },
+	{ label: "结果", terms: ["results", "findings", "结果", "研究结果"], cap: 3500 },
+	{ label: "讨论", terms: ["discussion", "讨论"], cap: 3500 },
+	{ label: "结论", terms: ["conclusion", "conclusions", "总结", "结论"], cap: 3500 },
+	{ label: "局限", terms: ["limitations", "limitation", "局限", "局限性"], cap: 2500 },
+];
+
+/**
+ * Builds a deterministic, bounded abstract-level evidence packet from a
+ * MinerU article. This avoids asking the model to guess offsets in a long
+ * document while preserving the paper's own section text and headings.
+ */
+export function buildArticleEvidencePacket(content: string): ArticleEvidencePacket {
+	const source = String(content || "");
+	const sections = markdownSections(source);
+	const outline = sections
+		.filter((section) => section.level <= 3)
+		.slice(0, 80)
+		.map((section) => `${"  ".repeat(Math.max(0, section.level - 1))}- ${section.title}`)
+		.join("\n")
+		.slice(0, 3500);
+	const selectedRanges: Array<{ start: number; end: number; label: string }> = [];
+	const documentTitleStart = sections[0]?.start ?? -1;
+	for (const group of ARTICLE_SECTION_GROUPS) {
+		const match = sections.find((section) => {
+			// The first heading is the document title; later H1 headings may be
+			// legitimate top-level article sections in MinerU output.
+			if (section.start === documentTitleStart) return false;
+			const heading = normalizeHeading(section.title);
+			return group.terms.some((term) => heading === term || heading.startsWith(`${term} `));
+		});
+		if (!match) continue;
+		selectedRanges.push({
+			start: match.start,
+			end: Math.min(match.end, match.start + group.cap),
+			label: group.label,
+		});
+	}
+	selectedRanges.sort((left, right) => left.start - right.start);
+
+	const blocks: string[] = [];
+	const labels: string[] = [];
+	let remaining = ARTICLE_OVERVIEW_CHAR_LIMIT;
+	const append = (label: string, text: string): void => {
+		const cleaned = text.trim();
+		if (!cleaned || remaining <= 0) return;
+		const value = cleaned.slice(0, remaining);
+		blocks.push(`### ${label}\n${value}`);
+		labels.push(label);
+		remaining -= value.length;
+	};
+	if (outline) append("文章目录", outline);
+	append("文首摘录", source.slice(0, ARTICLE_HEAD_CHAR_LIMIT));
+	for (const range of selectedRanges) {
+		append(`${range.label}小节`, source.slice(range.start, range.end));
+	}
+	if (!selectedRanges.some((range) => range.label === "讨论" || range.label === "结论")) {
+		append("文末摘录", source.slice(Math.max(0, source.length - 3000)));
+	}
+	if (!blocks.length) append("正文摘录", source.slice(0, ARTICLE_OVERVIEW_CHAR_LIMIT));
+	const packet = blocks.join("\n\n");
+	return { content: packet, sections: labels, selectedChars: packet.length };
+}
+
+/**
+ * Read tool bound to one plugin-verified source Markdown. The model cannot
+ * supply or alter the path. The source may be papers/<citekey>/article.md or
+ * an existing Clippings/*.md document. Adapter reads also avoid Obsidian's
+ * asynchronous index race after an atomic MinerU publish.
+ */
+export function createBoundArticleReadTool(deps: VaultToolDeps, articleVaultPath: string): AgentTool {
+	const path = normalizeVaultRelative(articleVaultPath);
+	const sourcePath = /^papers\/[^/]+\/article\.md$/i.test(path)
+		|| /^Clippings\/.+\.md$/i.test(path);
+	if (pathEscapesScope(path) || !sourcePath) {
+		throw new Error(`原文回执路径不合法：${articleVaultPath}`);
+	}
+	return {
+		name: "article_read",
+		description: "读取插件已核验并固定绑定的原文层 Markdown（papers article.md 或 Clippings 文档）。overview 返回摘要级证据包；page 可按 offset 补读原文。生成文章 Wiki 前必须先成功调用 overview。",
+		parameters: {
+			mode: "可选：overview（默认，标题/目录/摘要/主要章节证据包）或 page（原文分页）",
+			offset: "mode=page 时可选，从第几个字符开始读，默认 0",
+		},
+		required: [],
+		async execute(args, context) {
+			if (context.signal.aborted) throw new Error("任务已取消");
+			const content = (await readTrustedVaultFile(
+				deps.app.vault.adapter,
+				path,
+				MAX_VAULT_TEXT_FILE_BYTES,
+			)).toString("utf8");
+			if (context.signal.aborted) throw new Error("任务已取消");
+			const mode = String(args.mode || "overview").trim().toLowerCase();
+			const identity = extractVaultIdentity(content);
+			if (mode === "overview") {
+				const packet = buildArticleEvidencePacket(content);
+				const header = `path=${path} mode=overview 共 ${content.length} 字符，证据包 ${packet.selectedChars} 字符，小节：${packet.sections.join("、") || "正文摘录"}`;
+				return {
+					output: `${header}\n\n${packet.content}`,
+					summary: header,
+					receiptData: {
+						query: path,
+						queryTerms: ["overview", ...packet.sections],
+						paths: [path],
+						...(identity.title ? { titles: [identity.title], candidates: [{ path, title: identity.title }] } : {}),
+						...(identity.doi ? { dois: [identity.doi] } : {}),
+					},
+				};
+			}
+			if (mode !== "page") throw new Error(`article_read mode 不支持：${mode}`);
+			const offset = Math.max(0, Math.min(content.length, Math.round(Number(args.offset)) || 0));
+			const slice = content.slice(offset, offset + ARTICLE_PAGE_CHAR_LIMIT);
+			const header = `path=${path} mode=page 共 ${content.length} 字符，本次返回 ${slice.length}（offset ${offset}）`;
+			return {
+				output: `${header}\n\n${slice}${offset + slice.length < content.length ? "\n…[未完，用 offset 继续读]" : ""}`,
+				summary: header,
+				receiptData: {
+					query: path,
+					queryTerms: ["page", `offset:${offset}`],
+					paths: [path],
+					...(identity.title ? { titles: [identity.title], candidates: [{ path, title: identity.title }] } : {}),
+					...(identity.doi ? { dois: [identity.doi] } : {}),
+				},
 			};
 		},
 	};
@@ -136,6 +390,78 @@ export function createVaultListTool(deps: VaultToolDeps, allowedPrefixes: readon
 			return {
 				output: paths.length ? paths.join("\n") : "该目录下没有匹配文件。",
 				summary: `${paths.length} 个 .${extension} 文件`,
+				receiptData: {
+					...(folder ? { query: folder } : {}),
+					paths,
+				},
+			};
+		},
+	};
+}
+
+/**
+ * Exact DOI lookup over authoritative Markdown frontmatter in both layers. A DOI must not
+ * use the generic lexical tokenizer: shared registrar prefixes otherwise
+ * create unrelated candidates that cannot be safely cleared.
+ */
+export function createVaultDoiSearchTool(
+	deps: VaultToolDeps,
+	allowedPrefixes: readonly string[],
+): AgentTool {
+	return {
+		name: "vault_doi_search",
+		description: "在 wiki/sources 分析层及 papers/Clippings 原文层的 Markdown frontmatter 中按完整 DOI 精确查重；只比较 doi 字段，不扫描正文引用。",
+		parameters: { doi: "已由 Crossref 核验的完整 DOI，例如 10.1000/example" },
+		required: ["doi"],
+		async execute(args, context) {
+			const doi = normalizeObservedDoi(String(args.doi || ""));
+			if (!/^10\.\d{4,9}\/\S+$/i.test(doi)) throw new Error(`DOI 格式不合法：${doi}`);
+			const sourceNotes = deps.app.vault.getMarkdownFiles()
+				.filter((file) => {
+					const filePath = String(file.path || "").replace(/\\/g, "/");
+					return withinPrefixes(filePath, allowedPrefixes);
+				})
+				.sort((a, b) => String(a.path).localeCompare(String(b.path)));
+			if (sourceNotes.length > VAULT_DOI_SCAN_FILE_LIMIT) {
+				throw new Error(`原文与分析 Markdown 数量超过 DOI 精确查重上限 ${VAULT_DOI_SCAN_FILE_LIMIT}，不能安全判定 none`);
+			}
+			const declaredBytes = sourceNotes.reduce((total, file) => (
+				total + Number((file as TFile).stat?.size || 0)
+			), 0);
+			if (declaredBytes > MAX_DOI_SCAN_TOTAL_BYTES) {
+				throw new Error("DOI 精确查重的 Markdown 累计大小超过 64 MiB 安全预算");
+			}
+			const candidates: Array<{ path: string; title: string }> = [];
+			let observedBytes = 0;
+			for (const file of sourceNotes) {
+				if (context.signal.aborted || context.remainingMs() <= 0) throw new Error("DOI 精确查重已取消或超时");
+				assertTextFileSize(file as TFile, String(file.path));
+				const content = (await readTrustedVaultFile(
+					deps.app.vault.adapter,
+					String(file.path),
+					MAX_VAULT_TEXT_FILE_BYTES,
+				)).toString("utf8");
+				observedBytes += Buffer.byteLength(content, "utf8");
+				if (observedBytes > MAX_DOI_SCAN_TOTAL_BYTES) {
+					throw new Error("DOI 精确查重实际读取累计超过 64 MiB 安全预算");
+				}
+				const observed = extractVaultIdentity(content);
+				if (normalizeObservedDoi(observed.doi).toLowerCase() !== doi.toLowerCase()) continue;
+				candidates.push({ path: String(file.path), title: observed.title });
+			}
+			const lines = candidates.map((candidate, index) => (
+				`${index + 1}. ${candidate.path} — ${candidate.title || "（无标题）"}`
+			));
+			return {
+				output: lines.length ? `找到 ${lines.length} 个同 DOI 的原文或分析 Markdown：\n${lines.join("\n")}` : "没有找到同 DOI 的原文或分析 Markdown。",
+				summary: `${candidates.length} 个同 DOI Markdown`,
+				receiptData: {
+					query: doi,
+					...(candidates.length ? { dois: [doi] } : {}),
+					paths: candidates.map((candidate) => candidate.path),
+					titles: candidates.map((candidate) => candidate.title).filter(Boolean),
+					candidates,
+				},
 			};
 		},
 	};
@@ -149,7 +475,7 @@ export function createVaultListTool(deps: VaultToolDeps, allowedPrefixes: readon
 export function createCrossrefSearchTool(deps: HttpToolDeps): AgentTool {
 	return {
 		name: "crossref_search",
-		description: "在 Crossref 中按标题/关键词检索文献元数据（DOI、作者、年份、期刊）。返回前 5 条候选。",
+		description: "在 Crossref 中按标题/关键词检索文献元数据（DOI、作者、年份、期刊）。返回前 5 条候选；找到匹配候选后应改用 crossref_doi 精确核验，不要重复搜索。",
 		parameters: {
 			query: "标题或书目关键词，例如：Novae a graph-based foundation model",
 		},
@@ -160,11 +486,24 @@ export function createCrossrefSearchTool(deps: HttpToolDeps): AgentTool {
 			const url = `https://api.crossref.org/works?query.bibliographic=${encodeURIComponent(query)}&rows=5`;
 			const response = await deps.httpGetJson(url, 20_000, { signal: context.signal });
 			if (response.status !== 200) throw new Error(`Crossref HTTP ${response.status}`);
-			const items = extractCrossrefItems(response.json);
-			if (!items.length) return { output: "Crossref 没有返回候选。", summary: "0 条候选" };
+			const records = extractCrossrefRecords(response.json);
+			const items = records.map((record, index) => formatCrossrefRecord(record, index));
+			if (!items.length) {
+				return {
+					output: "Crossref 没有返回候选。",
+					summary: "0 条候选",
+					receiptData: { query },
+				};
+			}
 			return {
-				output: items.join("\n\n"),
+				output: `${items.join("\n\n")}\n\n下一步：选择标题相符候选的 DOI，调用 crossref_doi 精确核验；然后执行 Vault 标题与 DOI 查重。除非候选均不匹配，不要再次调用 crossref_search。`,
 				summary: `${items.length} 条候选`,
+				receiptData: {
+					query,
+					titles: records.map((record) => record.title).filter(Boolean),
+					dois: records.map((record) => record.doi).filter(Boolean),
+					bibliographicRecords: records.map(toReceiptBibliographicRecord),
+				},
 			};
 		},
 	};
@@ -179,23 +518,54 @@ export function createCrossrefDoiTool(deps: HttpToolDeps): AgentTool {
 		},
 		required: ["doi"],
 		async execute(args, context) {
-			const doi = String(args.doi || "").trim().replace(/^https?:\/\/doi\.org\//i, "");
+			const doi = String(args.doi || "").trim().replace(/^https?:\/\/doi\.org\//i, "").slice(0, 300);
 			if (!/^10\.\d{4,9}\/\S+$/.test(doi)) throw new Error(`DOI 格式不合法：${doi}`);
 			const url = `https://api.crossref.org/works/${encodeURIComponent(doi)}`;
 			const response = await deps.httpGetJson(url, 20_000, { signal: context.signal });
 			if (response.status === 404) throw new Error(`Crossref 没有这个 DOI：${doi}`);
 			if (response.status !== 200) throw new Error(`Crossref HTTP ${response.status}`);
-			const items = extractCrossrefItems(response.json);
-			if (!items.length) throw new Error("Crossref 返回无法解析");
-			return { output: items.join("\n\n"), summary: `DOI ${doi} 已核验` };
+			const records = extractCrossrefRecords(response.json);
+			if (!records.length) throw new Error("Crossref 返回无法解析");
+			return {
+				output: records.map((record, index) => formatCrossrefRecord(record, index)).join("\n\n"),
+				summary: `DOI ${doi} 已核验`,
+				receiptData: {
+					query: doi,
+					titles: records.map((record) => record.title).filter(Boolean),
+					dois: records.map((record) => record.doi).filter(Boolean),
+					bibliographicRecords: records.map(toReceiptBibliographicRecord),
+				},
+			};
 		},
 	};
 }
 
-function extractCrossrefItems(json: unknown): string[] {
+interface CrossrefRecord {
+	doi: string;
+	title: string;
+	authors: string;
+	year: string;
+	container: string;
+}
+
+function toReceiptBibliographicRecord(record: CrossrefRecord): {
+	title: string;
+	doi: string;
+	authors: string;
+	year: string;
+} {
+	return {
+		title: record.title,
+		doi: record.doi,
+		authors: record.authors,
+		year: record.year,
+	};
+}
+
+function extractCrossrefRecords(json: unknown): CrossrefRecord[] {
 	const message = (json as { message?: { items?: unknown } } | null)?.message;
 	const rawItems = Array.isArray(message?.items) ? message.items : [message];
-	return rawItems.filter(Boolean).slice(0, 5).map((item, index) => {
+	return rawItems.filter(Boolean).slice(0, 5).map((item) => {
 		const record = item as {
 			DOI?: string;
 			title?: string[];
@@ -204,21 +574,31 @@ function extractCrossrefItems(json: unknown): string[] {
 			"container-title"?: string[];
 			type?: string;
 		};
-		const title = String(record.title?.[0] || "（无标题）");
+		const title = String(record.title?.[0] || "").trim();
 		const authors = (record.author || []).slice(0, 4)
 			.map((author) => [author.family, author.given].filter(Boolean).join(" "))
 			.filter(Boolean)
 			.join("; ");
-		const year = record.issued?.["date-parts"]?.[0]?.[0] || "";
+		const year = String(record.issued?.["date-parts"]?.[0]?.[0] || "");
 		const container = String(record["container-title"]?.[0] || "");
-		return [
-			`[${index + 1}] DOI: ${record.DOI || "（无）"}`,
-			`标题: ${title}`,
-			authors ? `作者: ${authors}` : "",
-			year ? `年份: ${year}` : "",
-			container ? `期刊: ${container}` : "",
-		].filter(Boolean).join("\n");
+		return {
+			doi: normalizeObservedDoi(String(record.DOI || "")),
+			title,
+			authors,
+			year,
+			container,
+		};
 	});
+}
+
+function formatCrossrefRecord(record: CrossrefRecord, index: number): string {
+	return [
+		`[${index + 1}] DOI: ${record.doi || "（无）"}`,
+		`标题: ${record.title || "（无标题）"}`,
+		record.authors ? `作者: ${record.authors}` : "",
+		record.year ? `年份: ${record.year}` : "",
+		record.container ? `期刊: ${record.container}` : "",
+	].filter(Boolean).join("\n");
 }
 
 export function createVaultSearchTool(retriever: {
@@ -244,13 +624,25 @@ export function createVaultSearchTool(retriever: {
 			// considers out-of-scope files; the belt-and-braces output filter
 			// below guarantees no out-of-scope path can reach the model.
 			const result = await retriever.retrieve(question, [], { allowedPrefixes: [...allowedPrefixes] });
+			if (result.scope_complete === false) {
+				const total = Number(result.scope_total_files || 0);
+				throw new Error(
+					`Vault 去重检索范围不完整（范围内 ${total || "超过 5000"} 个 Markdown）；无法安全确认没有重复，已停止入库`,
+				);
+			}
 			const seeds = Array.isArray(result.lexical_seeds) ? result.lexical_seeds : [];
+			const queryTerms = Array.isArray(result.lexical_terms)
+				? result.lexical_terms
+					.filter((term): term is string => typeof term === "string")
+					.map((term) => term.trim())
+					.filter(Boolean)
+				: [];
 			const inScope = seeds.filter((seed) => {
 				const path = String((seed as { path?: string }).path || "").replace(/\\/g, "/");
 				return allowedPrefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 			});
-			const lines = inScope
-				.slice(0, limit)
+			const selected = inScope.slice(0, limit);
+			const lines = selected
 				.map((seed, index) => {
 					const record = seed as { path?: string; title?: string; score?: number };
 					return `${index + 1}. ${String(record.path || "")} — ${String(record.title || "").slice(0, 120)}（score ${Number(record.score || 0).toFixed(2)}）`;
@@ -260,9 +652,154 @@ export function createVaultSearchTool(retriever: {
 					? `共 ${inScope.length} 个候选，前 ${lines.length}：\n${lines.join("\n")}`
 					: "没有找到相关笔记。",
 				summary: `${inScope.length} 个候选`,
+					receiptData: {
+						query: question,
+						queryTerms,
+						// The model-visible output may honor a smaller display limit, but the
+						// security receipt must retain every already-bounded retriever hit so
+						// a model cannot hide a later duplicate with limit=1.
+						paths: inScope.map((seed) => String((seed as { path?: string }).path || "")),
+						titles: inScope.map((seed) => String((seed as { title?: string }).title || "")).filter(Boolean),
+						candidates: inScope.map((seed) => {
+						const record = seed as { path?: string; title?: string };
+						return { path: String(record.path || ""), title: String(record.title || "") };
+					}),
+				},
 			};
 		},
 	};
+}
+
+/**
+ * Identity-stage Vault access is capability-scoped. The model can request a
+ * deterministic search owned by the plugin, then inspect bounded metadata for
+ * only those task-local candidates; it never supplies or enumerates paths.
+ */
+export function createIdentityVaultCandidateTools(
+	deps: VaultToolDeps,
+	retriever: {
+		retrieve(
+			question: string,
+			expandedTerms?: string[],
+			options?: { allowedPrefixes?: string[] },
+		): Promise<Record<string, unknown>>;
+	},
+	fixedQueries: readonly string[],
+	allowedPrefixes: readonly string[],
+): [AgentTool, AgentTool] {
+	const registry = new Map<string, { path: string; title: string; doi: string }>();
+	let searched = false;
+	let reads = 0;
+	let readBytes = 0;
+	const search: AgentTool = {
+		name: "vault_candidates",
+		description: "执行插件根据本地 PDF 证据预先确定的 Vault 查重查询。模型不能修改查询或目录；返回任务内候选句柄。",
+		parameters: {},
+		required: [],
+		async execute() {
+			if (searched) throw new Error("vault_candidates 本阶段只能调用一次");
+			searched = true;
+			const candidates: Array<{ path: string; title: string; doi: string }> = [];
+			const queryTerms = new Set<string>();
+			for (const query of fixedQueries.slice(0, 3)) {
+				const result = await retriever.retrieve(query, [], { allowedPrefixes: [...allowedPrefixes] });
+				if (result.scope_complete === false) {
+					throw new Error("Vault 去重检索范围不完整，无法安全确认重复状态");
+				}
+				for (const term of Array.isArray(result.lexical_terms) ? result.lexical_terms : []) {
+					if (typeof term === "string" && term.trim()) queryTerms.add(term.trim());
+				}
+				for (const seed of Array.isArray(result.lexical_seeds) ? result.lexical_seeds : []) {
+					const record = seed as { path?: string; title?: string };
+					const candidatePath = String(record.path || "").replace(/\\/g, "/");
+					if (!withinPrefixes(candidatePath, allowedPrefixes)) continue;
+					if (candidates.some((candidate) => candidate.path === candidatePath)) continue;
+					candidates.push({ path: candidatePath, title: String(record.title || "").slice(0, 500), doi: "" });
+					if (candidates.length >= 8) break;
+				}
+				if (candidates.length >= 8) break;
+			}
+			let metadataBytes = 0;
+			for (const candidate of candidates) {
+				const file = deps.app.vault.getAbstractFileByPath(candidate.path);
+				if (!(file instanceof TFile)) throw new Error("Vault 候选文件不存在或已发生变化");
+				assertTextFileSize(file, candidate.path);
+				const content = (await readTrustedVaultFile(
+					deps.app.vault.adapter,
+					candidate.path,
+					MAX_VAULT_TEXT_FILE_BYTES,
+				)).toString("utf8");
+				metadataBytes += Buffer.byteLength(content, "utf8");
+				if (metadataBytes > 24 * 1024 * 1024) {
+					throw new Error("Vault 候选元数据预检超过本阶段安全预算");
+				}
+				const identity = extractVaultIdentity(content);
+				candidate.title = identity.title || candidate.title;
+				candidate.doi = identity.doi;
+			}
+			for (const [index, candidate] of candidates.entries()) {
+				registry.set(`vault-candidate-${index + 1}`, candidate);
+			}
+			const output = candidates.length
+				? candidates.map((candidate, index) => (
+					`${index + 1}. candidate_id=vault-candidate-${index + 1}；标题=${candidate.title || "（索引未提供）"}；层=${candidate.path.startsWith("wiki/sources/") ? "analysis" : "source"}`
+				)).join("\n")
+				: "当前插件固定查询没有找到 Vault 候选。";
+			return {
+				output,
+				summary: `${candidates.length} 个任务内 Vault 候选`,
+				receiptData: {
+					query: fixedQueries.join(" | "),
+					queryTerms: [...queryTerms],
+					paths: candidates.map((candidate) => candidate.path),
+					titles: candidates.map((candidate) => candidate.title).filter(Boolean),
+					dois: candidates.map((candidate) => candidate.doi).filter(Boolean),
+					candidates,
+				},
+			};
+		},
+	};
+	const read: AgentTool = {
+		name: "vault_candidate_read",
+		description: "读取当前任务 Vault 候选的标题与 DOI 元数据。只接受 vault_candidates 返回的 candidate_id，不接受路径。",
+		parameters: { candidate_id: "vault_candidates 返回的任务内候选句柄" },
+		required: ["candidate_id"],
+		async execute(args) {
+			if (!searched) throw new Error("必须先调用 vault_candidates");
+			if (reads >= 3) throw new Error("vault_candidate_read 本阶段最多读取 3 个候选");
+			const id = String(args.candidate_id || "").trim();
+			const candidate = registry.get(id);
+			if (!candidate) throw new Error("候选句柄无效、过期或不属于当前任务");
+			const file = deps.app.vault.getAbstractFileByPath(candidate.path);
+			if (!(file instanceof TFile)) throw new Error("候选文件不存在或已发生变化");
+			assertTextFileSize(file, candidate.path);
+			const content = (await readTrustedVaultFile(
+				deps.app.vault.adapter,
+				candidate.path,
+				MAX_VAULT_TEXT_FILE_BYTES,
+			)).toString("utf8");
+			const bytes = Buffer.byteLength(content, "utf8");
+			if (bytes > MAX_VAULT_TEXT_FILE_BYTES || readBytes + bytes > 24 * 1024 * 1024) {
+				throw new Error("Vault 候选读取超过本阶段安全预算");
+			}
+			reads += 1;
+			readBytes += bytes;
+			const identity = extractVaultIdentity(content);
+			const layer = candidate.path.startsWith("wiki/sources/") ? "analysis" : "source";
+			return {
+				output: `candidate_id=${id}\n层=${layer}\n标题=${identity.title || candidate.title || "（无）"}\nDOI=${identity.doi || "（无）"}`,
+				summary: `${id} 元数据已读取`,
+					receiptData: {
+					query: id,
+					paths: [candidate.path],
+					titles: [identity.title || candidate.title].filter(Boolean),
+						dois: identity.doi ? [identity.doi] : candidate.doi ? [candidate.doi] : [],
+					candidates: [{ path: candidate.path, title: identity.title || candidate.title }],
+				},
+			};
+		},
+	};
+	return [search, read];
 }
 
 export interface TavilySearchDeps {
@@ -293,13 +830,32 @@ export function createWebSearchTool(deps: TavilySearchDeps): AgentTool {
 				maxResults: deps.maxResults,
 				timeoutMs: Math.min(deps.timeoutMs, Math.max(5_000, context.remainingMs())),
 			});
-			if (!results.length) return { output: "没有搜索到结果。", summary: "0 条结果" };
+			if (!results.length) {
+				return {
+					output: "没有搜索到结果。",
+					summary: "0 条结果",
+					receiptData: { query: queries.join(" | ") },
+				};
+			}
 			const blocks = results.map((result, index) => {
 				return `[${index + 1}] ${result.title}\nURL: ${result.url}\n${result.content.slice(0, 800)}`;
 			});
 			return {
 				output: blocks.join("\n\n"),
 				summary: `${results.length} 条结果`,
+				receiptData: {
+					query: queries.join(" | "),
+					titles: results.map((result) => result.title).filter(Boolean),
+					// Tavily snippets are prose, not authoritative structured metadata;
+					// only DOI-shaped result URLs are promoted into receipt facts.
+					dois: extractObservedDois(results.map((result) => result.url)),
+					bibliographicRecords: results.map((result) => ({
+						title: result.title,
+						doi: extractObservedDois([result.url])[0] || "",
+						authors: "",
+						year: "",
+					})),
+				},
 			};
 		},
 	};
@@ -327,7 +883,7 @@ export interface MineruPackageReceipt {
 export async function runAuthorizedMineruExtract(
 	deps: MineruToolDeps,
 	args: MineruExtractArgs,
-	context: { signal: AbortSignal; timeoutMs: number },
+	context: MineruPublishContext & { validateBeforeCommit(articleMarkdown: string): void },
 ): Promise<MineruPackageReceipt> {
 	return publishMineruPackage(
 		{
@@ -382,18 +938,31 @@ export function yamlSafeScalar(value: string): string {
  */
 function findDisallowedLinkTargets(body: string): string[] {
 	const targets: string[] = [];
+	// Reject every Markdown image form up front, including full/collapsed/
+	// shortcut reference images such as ![alt][id], ![alt][], and ![id].
+	// The note schema intentionally permits no model-authored image nodes.
+	for (const match of body.matchAll(/!\[/g)) {
+		targets.push(`image:${match[0]}`);
+	}
 	for (const match of body.matchAll(/\[\[([^\]]+)\]\]/g)) {
 		targets.push(`wikilink:${match[1]}`);
 	}
 	for (const match of body.matchAll(/\[[^\]]*\]\(\s*<?([^)\s>]+)>?[^)]*\)/g)) {
 		targets.push(match[1]);
 	}
+	for (const match of body.matchAll(/<([A-Za-z][A-Za-z0-9+.-]*:[^>\r\n]+)>/g)) {
+		targets.push(`uri-autolink:${match[1]}`);
+	}
 	// Reference definitions: target, optional <angle> target, and optional
 	// "double"/'single'/(paren) title after it.
 	for (const match of body.matchAll(/^[ \t]{0,3}\[[^\]\r\n]+\]:[ \t]*(?:<([^>\r\n]+)>|(\S+))(?:[ \t]+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^)\r\n]*\)))?[ \t]*$/gm)) {
 		targets.push(match[1] || match[2] || "");
 	}
-	return targets.filter((target) => !/^(https?:\/\/|mailto:|#)/i.test(target));
+	return targets.filter((target) => (
+		target.startsWith("image:")
+		|| target.startsWith("uri-autolink:")
+		|| !/^(https?:\/\/|mailto:|#)/i.test(target)
+	));
 }
 
 /**
@@ -426,6 +995,8 @@ export function validateSourceNoteContent(content: string): string[] {
 	for (const required of ["title:", "title_zh:", "type: \"source\"", "depth: \"abstract-level\"", "registry_status: \"pending\""]) {
 		if (!match[1].includes(required)) violations.push(`frontmatter 缺少 ${required}`);
 	}
+	const titleZhLine = /^title_zh:[ \t]*(.*)$/mi.exec(match[1])?.[1] || "";
+	if (!decodeFrontmatterScalar(titleZhLine)) violations.push("frontmatter 的 title_zh 不能为空");
 	const rawHtml = RAW_HTML_TAG_PATTERN.exec(rest);
 	if (rawHtml) {
 		violations.push(
@@ -436,7 +1007,14 @@ export function validateSourceNoteContent(content: string): string[] {
 	const disallowed = findDisallowedLinkTargets(rest);
 	if (disallowed.length) {
 		violations.push(
-			`正文包含不允许的 Vault 内部链接（${disallowed.slice(0, 3).map((target) => target.slice(0, 60)).join("、")}）；主目录间禁止互链，模型生成的正文字段暂不包含任何内部链接`,
+			`正文包含不允许的链接或图片（${disallowed.slice(0, 3).map((target) => target.slice(0, 60)).join("、")}）；禁止 Vault 内部链接、Markdown 图片与 URI 自动链接`,
+		);
+		return violations;
+	}
+	const activeMarkdown = validateModelNoteBodyMarkdown(rest);
+	if (activeMarkdown.length) {
+		violations.push(
+			`正文包含活动或非白名单 Markdown（${activeMarkdown.slice(0, 3).map((item) => item.detail).join("、")}）；只允许纯文本、段落、有限列表、强调和普通 https/mailto 外链`,
 		);
 	}
 	return violations;
@@ -508,6 +1086,7 @@ export async function commitSourceNote(
 		throw new Error(`citekey 不合法：${citekey}`);
 	}
 	if (!fields.title.trim()) throw new Error("笔记缺少核验后的原文标题");
+	if (!fields.title_zh.trim()) throw new Error("笔记缺少审校后的简体中文标题 title_zh");
 	const path = normalizePath(`wiki/sources/${citekey}.md`);
 	if (pathEscapesScope(path)) throw new Error(`派生路径不合法：wiki/sources/${citekey}.md`);
 	const content = buildSourceNoteMarkdown(citekey, fields, depthNote);
@@ -515,23 +1094,18 @@ export async function commitSourceNote(
 	if (violations.length) {
 		throw new Error(`生成的笔记未通过结构校验：${violations.join("；")}`);
 	}
-	const segments = path.split("/");
-	for (let index = 1; index < segments.length; index += 1) {
-		const folder = segments.slice(0, index).join("/");
-		if (folder && !(await deps.app.vault.adapter.exists(folder, true))) {
-			await deps.app.vault.adapter.mkdir(folder);
-		}
-	}
 	if (options.signal?.aborted) throw new Error("任务已取消，未写入文件");
-	// Atomic create: fails when the file appeared between the earlier dedup
-	// check and now (another task or sync service), instead of overwriting.
 	try {
-		await deps.app.vault.create(path, content);
+		await createTrustedVaultTextFile(deps.app.vault.adapter, path, content);
 	} catch (createError) {
 		const message = createError instanceof Error ? createError.message : String(createError);
 		throw new Error(`创建笔记失败（已存在同名文件时不会覆盖）：${message.slice(0, 200)}`);
 	}
-	const written = await deps.app.vault.adapter.read(path);
+	const written = (await readTrustedVaultFile(
+		deps.app.vault.adapter,
+		path,
+		MAX_VAULT_TEXT_FILE_BYTES,
+	)).toString("utf8");
 	if (written !== content) {
 		throw new Error("写入后回读校验不一致，请人工检查该文件");
 	}

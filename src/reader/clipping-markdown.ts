@@ -230,6 +230,7 @@ export function buildMarkdownReaderPackage(
 	};
 	return {
 		sourceKind: "markdown",
+		sourceMarkdownDisposition: "passive",
 		packagePath,
 		articlePath: normalizedPath,
 		title: titleFromMarkdown(articleMarkdown, normalizedPath),
@@ -239,6 +240,8 @@ export function buildMarkdownReaderPackage(
 		visualRepair: null,
 		visuals: figures.map(clippingVisual),
 		pdfPath: null,
+		verifiedAssetBlobs: new Map(),
+		verifiedPdfBytes: null,
 		externalPdfRecorded: false,
 		issues: [],
 	};

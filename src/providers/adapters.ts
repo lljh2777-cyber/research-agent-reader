@@ -243,6 +243,7 @@ export class OpenAIProvider extends LLMProvider {
 				max_output_tokens: request.maxTokens || 256,
 				store: false,
 			},
+			timeoutMs: options.timeoutMs,
 			registerCancel: options.registerCancel,
 		});
 		const payload = this.requireJson(result, "文本生成");
@@ -338,6 +339,7 @@ export class AnthropicProvider extends LLMProvider {
 			method: "POST",
 			headers: await this.headers(),
 			body: this.messageBody(request),
+			timeoutMs: options.timeoutMs,
 			registerCancel: options.registerCancel,
 		});
 		const payload = this.requireJson(result, "文本生成");
@@ -556,6 +558,7 @@ export class OllamaProvider extends LLMProvider {
 			method: "POST",
 			headers: await this.headers(),
 			body: this.chatBody(request),
+			timeoutMs: options.timeoutMs,
 			registerCancel: options.registerCancel,
 		});
 		const payload = this.requireJson(result, "文本生成");

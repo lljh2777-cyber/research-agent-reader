@@ -8,6 +8,7 @@ This checklist separates automated repository checks from the manual Obsidian ch
 - Confirm TypeScript, the minified production build, tests, release metadata, privacy disclosures, and the clean-Vault fixture all pass.
 - Confirm `main.js`, `manifest.json`, and `styles.css` are attached individually to a GitHub release whose tag exactly matches `manifest.json` without a `v` prefix.
 - Confirm no `data.json`, credentials, private documents, test Vault, or local absolute paths are committed or attached.
+- Confirm the README privacy section still discloses plugin-local full task-output sidecars, their possible Vault/model trace content, and the supported cleanup behavior.
 
 ## Clean-Vault desktop QA
 
@@ -48,12 +49,11 @@ Recommended public images:
 
 Keep source screenshots in a future `screenshots/` directory only after they have been reviewed for privacy and licensing.
 
-## Metadata decisions requiring maintainer confirmation
+## Community-directory metadata requiring maintainer confirmation
 
 - Author display name and author URL.
 - MIT license ownership year/name.
 - Repository owner and URL.
-- Initial public version (`0.29.0` beta or a later version).
 - Whether to accept donations and therefore add `fundingUrl`.
 
-The confirmed public identity is `Research Agent Reader` with the permanent ID `research-agent-reader`. This replaced the unavailable provisional ID `agent-dashboard` before the first public release. Re-check uniqueness immediately before submission because the Community directory can change.
+The confirmed public identity is `Research Agent Reader` with the permanent ID `research-agent-reader`. This replaced the unavailable provisional ID `agent-dashboard` before the initial GitHub release. Re-check uniqueness immediately before Community-directory submission because the directory can change.

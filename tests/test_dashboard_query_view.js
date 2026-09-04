@@ -200,6 +200,16 @@ assert.ok(
 		&& runtimeSettingsSource.includes("queryMessageLimit"),
 	"settings persistence should define task defaults and bounded history controls",
 );
+const taskHistorySettingStart = settingsSource.indexOf('.setName("任务历史保留数量")');
+const taskHistorySettingEnd = settingsSource.indexOf('.setName("查询会话保留数量")');
+const taskHistorySettingSource = settingsSource.slice(taskHistorySettingStart, taskHistorySettingEnd);
+assert.ok(
+	taskHistorySettingStart >= 0
+		&& taskHistorySettingEnd > taskHistorySettingStart
+		&& taskHistorySettingSource.includes(".addDropdown(")
+		&& !taskHistorySettingSource.includes(".addText("),
+	"destructive task-history pruning must require a discrete selection, not fire on intermediate text input",
+);
 assert.ok(
 	settingsSource.includes('setIcon(chevron, "chevron-right")')
 		&& settingsSource.includes('"aria-label": "返回设置首页"'),
@@ -274,7 +284,7 @@ assert.ok(
 	"CLI executable detection should include common package-manager locations",
 );
 assert.ok(
-	!runtimeSettingsSource.includes("C:\\\\Users\\\\Thomas Wade"),
+	!/[A-Za-z]:\\\\Users\\\\/i.test(runtimeSettingsSource),
 	"CLI defaults must not contain a user-specific executable path",
 );
 assert.ok(

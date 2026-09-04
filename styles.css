@@ -5980,3 +5980,79 @@ body.agent-dashboard-mineru-resizing {
 		animation-iteration-count: 1 !important;
 	}
 }
+.agent-dashboard-identity-confirmation-modal {
+	width: min(1100px, 92vw);
+}
+
+.agent-dashboard-identity-confirmation-warning {
+	color: var(--text-warning);
+	font-weight: 600;
+}
+
+.agent-dashboard-identity-confirmation-layout {
+	display: grid;
+	grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+	gap: 18px;
+	max-height: 68vh;
+}
+
+.agent-dashboard-identity-confirmation-visual,
+.agent-dashboard-identity-confirmation-record {
+	min-width: 0;
+	overflow: auto;
+}
+
+.agent-dashboard-identity-confirmation-page-control,
+.agent-dashboard-identity-confirmation-actions {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+
+.agent-dashboard-identity-confirmation-preview {
+	display: block;
+	width: 100%;
+	max-height: 58vh;
+	margin-top: 8px;
+	object-fit: contain;
+	background: #fff;
+	border: 1px solid var(--background-modifier-border);
+}
+
+.agent-dashboard-identity-confirmation-status {
+	margin-top: 8px;
+	color: var(--text-muted);
+}
+
+.agent-dashboard-identity-confirmation-field {
+	margin-bottom: 12px;
+}
+
+.agent-dashboard-identity-confirmation-field > strong {
+	display: block;
+	margin-bottom: 3px;
+}
+
+.agent-dashboard-identity-confirmation-field > div {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.agent-dashboard-identity-confirmation-hints {
+	margin-top: 16px;
+}
+
+.agent-dashboard-identity-confirmation-hints > summary {
+	margin-bottom: 10px;
+}
+
+.agent-dashboard-identity-confirmation-actions {
+	justify-content: flex-end;
+	margin-top: 18px;
+}
+
+@media (max-width: 760px) {
+	.agent-dashboard-identity-confirmation-layout {
+		grid-template-columns: 1fr;
+	}
+}

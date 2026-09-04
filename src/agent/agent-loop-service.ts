@@ -9,6 +9,16 @@ import type {
 } from "../types/contracts";
 import type { DashboardSettings } from "../runtime/settings";
 import { runBoundedAgentLoop } from "./loop";
+import { MineruPreCommitValidationError } from "./mineru-publish";
+import {
+	createAuthorizedPdfSnapshot,
+	disposeAuthorizedPdfSnapshot,
+	extractLocalPdfIdentityEvidence,
+	renderAuthorizedPdfIdentityPage,
+	type AuthorizedPdfSnapshot,
+	type AuthorizedPdfPageRaster,
+	type LocalPdfIdentityEvidence,
+} from "./pdf-identity";
 import {
 	buildDraftSystemPrompt,
 	buildDraftTools,
@@ -16,23 +26,33 @@ import {
 	buildIdentitySystemPrompt,
 	buildIdentityTools,
 	buildIdentityUserMessage,
+	bindIdentityMetadataFromReceipts,
+	deriveBibliographicCitekey,
 	commitSourceNote,
+	crossrefRecordHash,
 	evaluateDraftPhase,
 	computeIngestOutcomeStatus,
 	mineruReadiness,
 	parseIdentityResult,
 	parseNoteDraft,
+	planExactDuplicateOutputs,
 	resolveArticleVaultPath,
+	resolveExactDuplicateCitekey,
+	resolveExactDuplicateLayers,
 	resolveUniqueCitekey,
 	runAuthorizedMineruExtract,
 	validateIdentityReceipts,
+	validateHumanIdentityConfirmation,
+	validateDraftReceipts,
 	VaultWriteJournal,
 	type PaperIngestFlowOptions,
 	type PaperIngestIdentity,
 	type PaperIngestNoteDraft,
 	type PaperIngestReceipts,
+	type HumanIdentityConfirmationReceipt,
 } from "./paper-ingest-flow";
 import type { AgentLoopResult, AgentLoopStep } from "./types";
+import { readTrustedVaultFile, type VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
 
 export interface AgentLoopServiceDeps {
 	app: App;
@@ -53,8 +73,6 @@ export interface AgentLoopServiceDeps {
 	} | null;
 	/** Absolute filesystem path of the active vault, or "" when unavailable. */
 	getVaultRoot(): string;
-	/** Filesystem existence probe for toolkit-side paths; injectable for tests. */
-	pathExists(absolutePath: string): boolean;
 	/** Spawns the resolved MinerU CLI command; injectable for tests. */
 	runMineruCommand(request: {
 		command: string;
@@ -64,6 +82,19 @@ export interface AgentLoopServiceDeps {
 		timeoutMs: number;
 		signal: AbortSignal;
 	}): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+	confirmPaperIdentity(request: HumanIdentityConfirmationRequest): Promise<HumanIdentityConfirmationReceipt | null>;
+}
+
+export interface HumanIdentityConfirmationRequest {
+	taskId: string;
+	snapshotSha256: string;
+	snapshotSize: number;
+	pageCount: number;
+	identity: Readonly<PaperIngestIdentity>;
+	localEvidence: Readonly<LocalPdfIdentityEvidence>;
+	crossrefRecordHash: string;
+	signal: AbortSignal;
+	renderPage(pageNumber: number, signal: AbortSignal): Promise<AuthorizedPdfPageRaster>;
 }
 
 export interface AgentRunHandle {
@@ -72,6 +103,7 @@ export interface AgentRunHandle {
 
 interface ActiveAgentRun {
 	handle: AgentRunHandle;
+	completion: Promise<void>;
 }
 
 /** Final structured result; paths come from plugin receipts, not model claims. */
@@ -131,6 +163,8 @@ interface IngestState {
 	draft: PaperIngestNoteDraft | null;
 	titleConflict: boolean;
 	duplicateNoOp: boolean;
+	existingSourcePath: string;
+	existingAnalysisPath: string;
 	cancelled: boolean;
 	/** Set when the total wall-clock budget timer aborted the run. */
 	budgetAborted: boolean;
@@ -155,8 +189,9 @@ export class AgentLoopService {
 		return true;
 	}
 
-	/** Cancels every active run; called from plugin.onunload(). */
-	shutdown(): void {
+	/** Cancels every active run and resolves only after their cleanup barriers settle. */
+	async shutdown(): Promise<void> {
+		const completions = [...this.activeRuns.values()].map((active) => active.completion);
 		for (const active of this.activeRuns.values()) {
 			try {
 				active.handle.cancel();
@@ -164,7 +199,18 @@ export class AgentLoopService {
 				console.warn("Could not cancel light-agent run during shutdown", cancelError);
 			}
 		}
-		this.activeRuns.clear();
+		if (!completions.length) return;
+		let timeout: ReturnType<typeof setTimeout> | null = null;
+		try {
+			await Promise.race([
+				Promise.allSettled(completions),
+				new Promise<void>((_, reject) => {
+					timeout = setTimeout(() => reject(new Error("轻量 Agent 卸载清理超过 30 秒")), 30_000);
+				}),
+			]);
+		} finally {
+			if (timeout) clearTimeout(timeout);
+		}
 	}
 
 	async runPaperIngest(
@@ -180,6 +226,8 @@ export class AgentLoopService {
 		}
 
 		const abortController = new AbortController();
+		let resolveCompletion!: () => void;
+		const completion = new Promise<void>((resolve) => { resolveCompletion = resolve; });
 		// Hard wall-clock budget: when it fires the run-level signal aborts
 		// everything (loops, HTTP, MinerU). Later phases may only run while
 		// budget remains — never re-added via a minimum floor.
@@ -188,6 +236,7 @@ export class AgentLoopService {
 			Math.min(4 * 60 * 60 * 1000, (Math.round(settings.taskTimeoutMinutes) || 60) * 60 * 1000),
 		);
 		let budgetTimer: ReturnType<typeof setTimeout> | null = null;
+		let authorizedPdfSnapshot: AuthorizedPdfSnapshot | null = null;
 		const state: IngestState = {
 			traces: [],
 			notes: [],
@@ -200,6 +249,8 @@ export class AgentLoopService {
 			draft: null,
 			titleConflict: false,
 			duplicateNoOp: false,
+			existingSourcePath: "",
+			existingAnalysisPath: "",
 			cancelled: false,
 			budgetAborted: false,
 		};
@@ -210,6 +261,7 @@ export class AgentLoopService {
 					abortController.abort();
 				},
 			},
+			completion,
 		});
 		budgetTimer = setTimeout(() => {
 			state.budgetAborted = true;
@@ -230,6 +282,14 @@ export class AgentLoopService {
 			const toolDeps = this.buildToolDeps(settings, retriever, abortController.signal);
 			const maxStepsPerPhase = Math.max(3, Math.min(20, Math.round(settings.lightAgentMaxSteps) || 10));
 			const maxTokens = Math.max(512, Math.min(8192, Math.round(settings.lightAgentMaxOutputTokens) || 4096));
+			// Agent turns carry a growing tool transcript and often need longer
+			// than a connection probe. Keep the profile's larger value, but give
+			// light-agent turns a practical 60-second floor; the phase/run wall
+			// deadline remains the hard upper bound inside runBoundedAgentLoop.
+			const providerTurnTimeoutMs = Math.max(
+				60_000,
+				Math.min(120_000, resolved.provider.config.timeoutSeconds * 1000),
+			);
 			const isCancelled = (): boolean => state.cancelled;
 			// Raw remaining budget — never padded back up to a minimum, so the
 			// total wall clock is a hard ceiling.
@@ -240,18 +300,39 @@ export class AgentLoopService {
 				return false;
 			};
 
-			// ---- Phase 1: identity + dedup (model loop, read-only tools) ----
+			// ---- Phase 1: local PDF preflight + identity/dedup model loop ----
+			emitStatus("running", "阶段一 · 本地 PDF 身份预检");
+			if (options.sourcePdfPath) {
+				authorizedPdfSnapshot = await createAuthorizedPdfSnapshot(options.sourcePdfPath, {
+					signal: abortController.signal,
+				});
+			}
+			const localPdfEvidence = await extractLocalPdfIdentityEvidence(authorizedPdfSnapshot?.path || "", {
+				signal: abortController.signal,
+				displayFileName: authorizedPdfSnapshot?.originalFileName,
+			});
+			if (localPdfEvidence.status === "available") {
+				emitStatus("running", localPdfEvidence.doiCandidates.length
+					? `阶段一 · 本地 PDF 已提取 ${localPdfEvidence.doiCandidates.length} 个 DOI 候选`
+					: "阶段一 · 本地 PDF 元数据与第一页已读取");
+			} else if (options.sourcePdfPath) {
+				state.notes.push(localPdfEvidence.warning);
+			}
 			emitStatus("running", "阶段一 · 身份核验与去重");
 			const identityLoop = await runBoundedAgentLoop({
 				system: buildIdentitySystemPrompt(options),
-				user: buildIdentityUserMessage(options),
-				tools: buildIdentityTools(toolDeps),
+				user: buildIdentityUserMessage(options, localPdfEvidence),
+				tools: buildIdentityTools(toolDeps, localPdfEvidence, {
+					candidateTitle: options.identityCandidateTitle,
+					candidateDoi: options.identityCandidateDoi,
+				}),
 				provider: resolved.provider,
 				model: resolved.model,
 				maxTokens,
 				maxSteps: maxStepsPerPhase,
 				timeoutMs: loopTimeout(),
 				maxToolOutputChars: 60000,
+				providerTimeoutMs: providerTurnTimeoutMs,
 				signal: abortController.signal,
 				isCancelled,
 				onStep: onStep("身份核验"),
@@ -274,38 +355,107 @@ export class AgentLoopService {
 			const identity = state.identity;
 			state.conflicts.push(...identity.conflicts);
 			state.duplicates.push(...identity.duplicates);
-			state.notes.push(...identity.notes);
+
+			// Bind canonical bibliographic fields before dedup validation so the
+			// searched identity and the identity eventually committed are identical.
+			bindIdentityMetadataFromReceipts(identity, identityLoop.toolCalls);
 
 			// Gate: the model must have actually done the verification work.
-			const receiptProblems = validateIdentityReceipts(identity, identityLoop.toolCalls);
+			const receiptProblems = validateIdentityReceipts(
+				identity,
+				identityLoop.toolCalls,
+				authorizedPdfSnapshot ? localPdfEvidence : undefined,
+			);
 			if (receiptProblems.length) {
 				state.errors.push(`阶段一未满足插件侧凭据要求：${receiptProblems.join("；")}`);
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
-
 			if (identity.status === "conflict") {
+				state.notes.push(...identity.notes);
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
 			if (identity.duplicateStatus === "possible") {
+				state.notes.push(...identity.notes);
 				state.conflicts.push(`疑似重复，需要人工确认：${identity.duplicates.join("；") || "见检索结果"}`);
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
-			if (identity.duplicateStatus === "exact") {
-				state.duplicateNoOp = true;
-				state.notes.push(`已存在完全相同文献，跳过生成：${identity.duplicates.join("；") || "见检索结果"}`);
+			if (!authorizedPdfSnapshot) {
+				state.conflicts.push("没有授权 PDF 快照，无法完成人工视觉身份确认");
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
+			emitStatus("waiting", "等待人工确认 PDF 页面与书目记录");
+			const confirmation = await this.deps.confirmPaperIdentity({
+				taskId: runId,
+				snapshotSha256: authorizedPdfSnapshot.sha256,
+				snapshotSize: authorizedPdfSnapshot.size,
+				pageCount: localPdfEvidence.pageCount,
+				identity: Object.freeze({ ...identity }),
+				localEvidence: Object.freeze({ ...localPdfEvidence }),
+				crossrefRecordHash: crossrefRecordHash(identity),
+				signal: abortController.signal,
+				renderPage: (pageNumber, signal) => renderAuthorizedPdfIdentityPage(
+					authorizedPdfSnapshot!,
+					pageNumber,
+					{ signal },
+				),
+			});
+			const confirmationProblems = validateHumanIdentityConfirmation(confirmation, {
+				taskId: runId,
+				snapshotSha256: authorizedPdfSnapshot.sha256,
+				snapshotSize: authorizedPdfSnapshot.size,
+				identity,
+			});
+			if (confirmationProblems.length) {
+				state.conflicts.push(`人工身份确认未完成：${confirmationProblems.join("；")}`);
+				return this.finish(state, options, profileId, resolved, emitStatus);
+			}
+			state.notes.push(`已人工确认授权 PDF 第 ${confirmation!.pageNumber} 页与 Crossref 书目记录一致`);
+			if (identity.duplicateStatus === "exact") {
+				const observedLayers = resolveExactDuplicateLayers(identity, identityLoop.toolCalls);
+				if (observedLayers.conflict) {
+					state.conflicts.push(observedLayers.conflict);
+					return this.finish(state, options, profileId, resolved, emitStatus);
+				}
+				const existingCitekey = resolveExactDuplicateCitekey(identity, identityLoop.toolCalls);
+				if (existingCitekey && existingCitekey !== identity.citekey) {
+					state.notes.push(`沿用现有重复记录的 citekey：${existingCitekey}`);
+					identity.citekey = existingCitekey;
+				} else if (!existingCitekey) {
+					const derivedBase = deriveBibliographicCitekey(identity);
+					const derived = await this.resolveCitekeyUniqueness(derivedBase);
+					identity.citekey = derived.citekey;
+					state.notes.push(`现有原文路径不含可信 citekey，插件由已核验书目信息确定：${derived.citekey}`);
+				}
+				const existing = await this.resolveExistingOutputs(identity.citekey, observedLayers);
+				state.existingSourcePath = existing.sourcePath;
+				state.existingAnalysisPath = existing.analysisPath;
+				const duplicatePlan = planExactDuplicateOutputs(options, existing);
+				if (duplicatePlan.noOp) {
+					state.duplicateNoOp = true;
+					state.notes.push(...identity.notes);
+					state.notes.push(`相同文献的所需输出均已存在，跳过生成：${identity.duplicates.join("；") || "见检索结果"}`);
+					return this.finish(state, options, profileId, resolved, emitStatus);
+				}
+				const missing = [
+					duplicatePlan.needsMarkdown ? "MinerU 原文包" : "",
+					duplicatePlan.needsWiki ? "文章 Wiki" : "",
+				].filter(Boolean).join("、");
+				state.notes.push(`已确认相同文献；保留既有输出，仅补全缺失的${missing}`);
+			}
+			if (identity.duplicateStatus === "none") state.notes.push(...identity.notes);
 			emitStatus("running", `阶段一完成 · citekey ${identity.citekey}`);
 
-			// Deterministic citekey uniqueness across vault and toolkit target.
-			const citekeyCheck = await this.resolveCitekeyUniqueness(identity.citekey);
-			if (citekeyCheck.renamed) {
-				identity.citekey = citekeyCheck.citekey;
-				state.notes.push(`citekey 已被占用，自动改为 ${citekeyCheck.citekey}`);
+			// Deterministic citekey uniqueness inside the active Vault.
+			if (identity.duplicateStatus === "none") {
+				const citekeyCheck = await this.resolveCitekeyUniqueness(identity.citekey);
+				if (citekeyCheck.renamed) {
+					identity.citekey = citekeyCheck.citekey;
+					state.notes.push(`citekey 已被占用，自动改为 ${citekeyCheck.citekey}`);
+				}
 			}
 
 			// ---- Phase 2: MinerU extraction (deterministic, authorized PDF only) ----
-			if (options.createArticleMarkdown) {
+			if (options.createArticleMarkdown && !state.existingSourcePath) {
 				emitStatus("running", "阶段二 · MinerU 原文提取");
 				if (!ensureBudget()) {
 					return this.finish(state, options, profileId, resolved, emitStatus);
@@ -319,18 +469,27 @@ export class AgentLoopService {
 					if (!readiness.ready) {
 						state.notes.push(`无法生成原文 Markdown：${readiness.reason}`);
 					} else {
-						await this.runExtractionPhase(options, identity, toolDeps, abortController, deadline, state);
+						await this.runExtractionPhase(
+							options,
+							identity,
+							toolDeps,
+							abortController,
+							deadline,
+							state,
+							authorizedPdfSnapshot,
+						);
 					}
 				}
 			}
 
 			// ---- Phase 3: note draft fields (model loop) + plugin commit ----
-			if (!ensureBudget()) {
-				return this.finish(state, options, profileId, resolved, emitStatus);
-			}
+			const draftArticlePath = state.receipts.articleVaultPath || state.existingSourcePath;
+			const draftOptions = state.existingAnalysisPath
+				? { ...options, createArticleWiki: false }
+				: options;
 			const draftDecision = evaluateDraftPhase(
-				options,
-				state.receipts.articleVaultPath,
+				draftOptions,
+				draftArticlePath,
 				state.titleConflict,
 			);
 			if (draftDecision.blocker) {
@@ -339,17 +498,27 @@ export class AgentLoopService {
 				state.notes.push(draftDecision.downgradeNote);
 			}
 			if (draftDecision.run) {
+				if (!ensureBudget()) {
+					return this.finish(state, options, profileId, resolved, emitStatus);
+				}
 				emitStatus("running", "阶段三 · 整理文章 Wiki 字段");
 				const draftLoop = await runBoundedAgentLoop({
-					system: buildDraftSystemPrompt(options, identity.citekey, identity.title),
+					system: buildDraftSystemPrompt(
+						options,
+						identity.citekey,
+						identity.title,
+						draftArticlePath,
+					),
 					user: buildDraftUserMessage(identity.citekey, identity.title),
-					tools: buildDraftTools(toolDeps),
+					tools: buildDraftTools(toolDeps, draftArticlePath),
 					provider: resolved.provider,
 					model: resolved.model,
 					maxTokens,
 					maxSteps: Math.min(maxStepsPerPhase, 8),
 					timeoutMs: loopTimeout(),
 					maxToolOutputChars: 60000,
+					maxToolResultChars: 24000,
+					providerTimeoutMs: providerTurnTimeoutMs,
 					signal: abortController.signal,
 					isCancelled,
 					onStep: onStep("文章 Wiki"),
@@ -359,45 +528,56 @@ export class AgentLoopService {
 					state.errors.push(deriveStopError(state, draftLoop));
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}
-					state.draft = parseNoteDraft(draftLoop.final);
-					if (!state.draft) {
-						state.errors.push("阶段三未返回可解析的笔记字段");
+				const draftReceiptProblems = validateDraftReceipts(
+					draftArticlePath,
+					identity.title,
+					draftLoop.toolCalls,
+				);
+				if (draftReceiptProblems.length) {
+					state.errors.push(`阶段三未满足插件侧原文凭据要求：${draftReceiptProblems.join("；")}`);
+					return this.finish(state, options, profileId, resolved, emitStatus);
+				}
+				state.draft = parseNoteDraft(draftLoop.final);
+				if (!state.draft) {
+					state.errors.push("阶段三未返回可解析的笔记字段");
+				} else {
+					state.notes.push(...state.draft.notes);
+					// One resolved translation is used for both the note and final
+					// result. Empty title_zh is a hard schema failure: never create a
+					// source note that violates the public vault contract.
+					const resolvedTitleZh = state.draft.title_zh || identity.title_zh || "";
+					if (!resolvedTitleZh) {
+						state.errors.push("title_zh 未能审校，未创建文章 Wiki");
 					} else {
-						state.notes.push(...state.draft.notes);
-						// One resolved translation used for both the note and the
-						// final result, so they can never diverge.
-						const resolvedTitleZh = state.draft.title_zh || identity.title_zh || "";
-						if (!resolvedTitleZh) {
-							state.notes.push("title_zh 未能审校，笔记保留空值");
-						}
 						state.draft.title_zh = resolvedTitleZh;
 						try {
-						const receipt = await commitSourceNote(
-							toolDeps.vault,
-							identity.citekey,
-							{
-								title: identity.title || state.draft.title,
-								title_zh: state.draft.title_zh,
-								authors: identity.authors,
-								year: identity.year,
-								doi: identity.doi,
-								researchQuestion: state.draft.researchQuestion,
-								conclusion: state.draft.conclusion,
-								motivation: state.draft.motivation,
-								evidenceGaps: state.draft.evidenceGaps,
-								notes: [],
-							},
-							"",
-							{ signal: abortController.signal },
-						);
-						state.journal.record(receipt);
-						state.receipts.writes = state.journal.receipts();
-					} catch (commitError) {
-						const message = commitError instanceof Error ? commitError.message : String(commitError);
-						if (message.includes("已存在同名文件")) {
-							state.conflicts.push(`笔记写入未完成：${message}`);
-						} else {
-							state.errors.push(`笔记写入失败：${message}`);
+							const receipt = await commitSourceNote(
+								toolDeps.vault,
+								identity.citekey,
+								{
+									title: identity.title || state.draft.title,
+									title_zh: state.draft.title_zh,
+									authors: identity.authors,
+									year: identity.year,
+									doi: identity.doi,
+									researchQuestion: state.draft.researchQuestion,
+									conclusion: state.draft.conclusion,
+									motivation: state.draft.motivation,
+									evidenceGaps: state.draft.evidenceGaps,
+									notes: [],
+								},
+								"",
+								{ signal: abortController.signal },
+							);
+							state.journal.record(receipt);
+							state.receipts.writes = state.journal.receipts();
+						} catch (commitError) {
+							const message = commitError instanceof Error ? commitError.message : String(commitError);
+							if (message.includes("已存在同名文件")) {
+								state.conflicts.push(`笔记写入未完成：${message}`);
+							} else {
+								state.errors.push(`笔记写入失败：${message}`);
+							}
 						}
 					}
 				}
@@ -411,7 +591,9 @@ export class AgentLoopService {
 			return this.finish(state, options, profileId, resolved, emitStatus);
 		} finally {
 			if (budgetTimer !== null) clearTimeout(budgetTimer);
+			await disposeAuthorizedPdfSnapshot(authorizedPdfSnapshot);
 			this.activeRuns.delete(runId);
+			resolveCompletion();
 		}
 	}
 
@@ -423,6 +605,7 @@ export class AgentLoopService {
 		abortController: AbortController,
 		deadline: number,
 		state: IngestState,
+		authorizedPdfSnapshot: AuthorizedPdfSnapshot | null,
 	): Promise<void> {
 		const remaining = deadline - Date.now();
 		if (remaining < 60_000) {
@@ -434,10 +617,16 @@ export class AgentLoopService {
 			remaining,
 		);
 		try {
+			if (!authorizedPdfSnapshot) {
+				state.errors.push("本次任务没有可用的 PDF 授权快照，未启动 MinerU");
+				return;
+			}
 			state.receipts.mineruPackage = await runAuthorizedMineruExtract(
 				toolDeps.mineru,
 				{
-					source: options.sourcePdfPath,
+					source: authorizedPdfSnapshot.path,
+					sourceName: authorizedPdfSnapshot.originalFileName,
+					expectedSourceSha256: authorizedPdfSnapshot.sha256,
 					citekey: identity.citekey,
 					model: options.mineruModel,
 					language: options.mineruLanguage,
@@ -448,7 +637,17 @@ export class AgentLoopService {
 					timeoutSeconds: Math.round(timeoutMs / 1000),
 					includeSourcePdf: options.mineruIncludeSourcePdf,
 				},
-				{ signal: abortController.signal, timeoutMs },
+				{
+					signal: abortController.signal,
+					timeoutMs,
+					validateBeforeCommit: (articleMarkdown) => {
+						if (!articleMarkdownTitleMatches(articleMarkdown, identity.title)) {
+							throw new MineruPreCommitValidationError(
+								`article.md 开头与核验标题不一致：${identity.title}`,
+							);
+						}
+					},
+				},
 			);
 			const vaultRoot = this.deps.getVaultRoot();
 			if (!vaultRoot) {
@@ -462,50 +661,65 @@ export class AgentLoopService {
 			);
 			if (!state.receipts.articleVaultPath) {
 				state.errors.push(
-					`MinerU 发布位置（${state.receipts.mineruPackage.packagePath}）不在当前 Vault 内；结果未计入本次入库。请确认当前 Vault 即工具链目录下的 knowledge-base 文件夹（设置 → 工具链与运行环境）`,
+					`MinerU 发布位置（${state.receipts.mineruPackage.packagePath}）不在当前 Vault 内；结果未计入本次入库。请检查当前 Vault 与发布回执路径。`,
 				);
 				return;
 			}
 			state.notes.push(`原文包已发布：${state.receipts.articleVaultPath.replace(/\/article\.md$/, "")}`);
-			state.titleConflict = !(await articleHeadContainsTitle(
-				toolDeps.vault,
-				state.receipts.articleVaultPath,
-				identity.title,
-			));
-			if (state.titleConflict) {
-				state.conflicts.push(`article.md 开头与核验标题不一致：${identity.title}`);
-			}
+			// The exact same-volume package copy was title-validated synchronously
+			// immediately before its atomic rename. Do not re-read through Obsidian's
+			// asynchronous TFile index here: a just-published article may not be in
+			// metadataCache yet even though the committed package is complete.
 		} catch (mineruError) {
 			if (state.cancelled) return;
+			if (mineruError instanceof MineruPreCommitValidationError) {
+				state.titleConflict = true;
+				state.conflicts.push(mineruError.message);
+				if (mineruError.cleanupFailed) {
+					state.errors.push(
+						`MinerU 标题冲突后 staging 清理失败并保留：${mineruError.stagingBasename}`,
+					);
+				}
+				return;
+			}
 			state.errors.push(
 				`MinerU 提取失败：${mineruError instanceof Error ? mineruError.message : String(mineruError)}`,
 			);
 		}
 	}
 
-	/** Vault + toolkit publish target existence check for the citekey. */
+	/** Active-Vault note/package existence check for the citekey. */
 	private async resolveCitekeyUniqueness(
 		base: string,
 	): Promise<{ citekey: string; renamed: boolean }> {
 		const vault = this.deps.app.vault;
-		const toolkitRoot = String(this.deps.getSettings().toolkitRoot || "").replace(/[\\/]+$/, "");
 		const exists = async (citekey: string): Promise<boolean> => {
 			const notePath = `wiki/sources/${citekey}.md`;
-			const packagePaths = [
-				`papers/${citekey}/article.md`,
-				`knowledge-base/papers/${citekey}/article.md`,
-			];
+			const packagePath = `papers/${citekey}/article.md`;
 			if (vault.getAbstractFileByPath(notePath)) return true;
-			for (const candidate of packagePaths) {
-				if (await vault.adapter.exists(candidate, true)) return true;
-			}
-			if (toolkitRoot) {
-				const toolkitPackage = `${toolkitRoot}/knowledge-base/papers/${citekey}`;
-				if (this.deps.pathExists(toolkitPackage)) return true;
-			}
-			return false;
+			return vault.adapter.exists(packagePath, true);
 		};
 		return resolveUniqueCitekey(base, exists);
+	}
+
+	private async resolveExistingOutputs(
+		_citekey: string,
+		observed: { sourcePath: string; analysisPath: string },
+	): Promise<{ sourcePath: string; analysisPath: string }> {
+		const adapter = this.deps.app.vault.adapter;
+		const observedSource = observed.sourcePath && await adapter.exists(observed.sourcePath, true)
+			? observed.sourcePath
+			: "";
+		const observedAnalysis = observed.analysisPath && await adapter.exists(observed.analysisPath, true)
+			? observed.analysisPath
+			: "";
+		return {
+			// Exact-duplicate decisions are receipt-bound. A conventional path that
+			// happens to share the model's citekey is not evidence that this PDF's
+			// source or analysis layer already exists.
+			sourcePath: observedSource,
+			analysisPath: observedAnalysis,
+		};
 	}
 
 	private buildToolDeps(
@@ -594,11 +808,13 @@ export class AgentLoopService {
 
 		const markdownSatisfied = state.duplicateNoOp
 			|| !options.createArticleMarkdown
+			|| Boolean(state.existingSourcePath)
 			|| (state.receipts.mineruPackage !== null
 				&& Boolean(state.receipts.articleVaultPath)
 				&& !state.titleConflict);
 		const wikiSatisfied = state.duplicateNoOp
 			|| !options.createArticleWiki
+			|| Boolean(state.existingAnalysisPath)
 			|| state.receipts.writes.length > 0;
 		const identityConflict = state.identity?.status === "conflict";
 
@@ -616,14 +832,18 @@ export class AgentLoopService {
 				? "completed"
 				: "failed";
 
+		const filesWritten = [
+			...(state.receipts.articleVaultPath ? [state.receipts.articleVaultPath] : []),
+			...state.journal.paths(),
+		];
 		const result: PaperIngestFinalResult = {
 			status,
 			citekey: state.identity?.citekey || "",
 			title: state.identity?.title || state.draft?.title || "",
-			title_zh: state.identity?.title_zh || state.draft?.title_zh || "",
-			articlePath: state.receipts.articleVaultPath,
-			wikiPath: state.receipts.writes[0]?.path || "",
-			filesWritten: [...state.journal.paths()],
+			title_zh: resolvePaperTitleZh(state.identity, state.draft),
+			articlePath: state.receipts.articleVaultPath || state.existingSourcePath,
+			wikiPath: state.receipts.writes[0]?.path || state.existingAnalysisPath,
+			filesWritten,
 			duplicates: [...state.duplicates],
 			conflicts,
 			errors,
@@ -656,7 +876,7 @@ export class AgentLoopService {
 			events: [],
 			result,
 			loopStatus,
-			filesWritten: [...state.journal.paths()],
+			filesWritten: [...result.filesWritten],
 			artifacts,
 			executionConfig: {
 				backend: "direct-api",
@@ -668,6 +888,14 @@ export class AgentLoopService {
 			},
 		};
 	}
+}
+
+/** Draft normalization owns the translation committed to the Wiki note. */
+export function resolvePaperTitleZh(
+	identity: Pick<PaperIngestIdentity, "title_zh"> | null,
+	draft: Pick<PaperIngestNoteDraft, "title_zh"> | null,
+): string {
+	return draft?.title_zh || identity?.title_zh || "";
 }
 
 /** Loop-level stop reason, reclassified when the budget timer fired. */
@@ -696,23 +924,75 @@ function describeLoopStatus(status: AgentLoopResult["status"]): string {
 
 /** Plugin-side title consistency gate on the published article. */
 export async function articleHeadContainsTitle(
-	deps: { app: { vault: { getAbstractFileByPath(path: string): unknown; read(file: unknown): Promise<string> } } },
+	deps: { app: { vault: {
+		getAbstractFileByPath(path: string): unknown;
+		adapter: VaultFilesystemAdapter;
+	} } },
 	articleVaultPath: string,
 	title: string,
 ): Promise<boolean> {
-	const normalizedTitle = normalizeTitle(title);
-	// Empty or very short titles cannot pass the gate on their own.
-	if (normalizedTitle.replace(/\s/g, "").length < 8) return false;
 	const file = deps.app.vault.getAbstractFileByPath(articleVaultPath);
 	if (!file) return false;
-	const content = await deps.app.vault.read(file);
-	const head = normalizeTitle(content.slice(0, 6000));
-	const prefixLength = Math.min(48, normalizedTitle.length);
-	return head.includes(normalizedTitle.slice(0, prefixLength));
+	const content = (await readTrustedVaultFile(
+		deps.app.vault.adapter,
+		articleVaultPath,
+		8 * 1024 * 1024,
+	)).toString("utf8");
+	return articleMarkdownTitleMatches(content, title);
+}
+
+/** Pure title gate shared by pre-commit staging and post-publish read-back. */
+export function articleMarkdownTitleMatches(content: string, title: string): boolean {
+	const normalizedTitle = normalizeTitle(title);
+	// Match an actual H1, not an incidental mention in the article body.
+	if (normalizedTitle.replace(/\s/g, "").length < 4) return false;
+	const firstH1 = firstMarkdownH1(String(content || "").slice(0, 6000));
+	return normalizeTitle(firstH1 || "") === normalizedTitle;
+}
+
+function firstMarkdownH1(content: string): string {
+	const lines = String(content || "").split(/\r?\n/);
+	let inFrontmatter = lines[0]?.trim() === "---";
+	let fence: { marker: "`" | "~"; length: number } | null = null;
+	for (let index = 0; index < lines.length; index += 1) {
+		const line = lines[index];
+		if (inFrontmatter) {
+			if (index > 0 && line.trim() === "---") inFrontmatter = false;
+			continue;
+		}
+		if (fence) {
+			const closingFence = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(line);
+			if (closingFence) {
+				const run = closingFence[1];
+				const marker = run[0] as "`" | "~";
+				if (fence.marker === marker && run.length >= fence.length) fence = null;
+			}
+			continue;
+		}
+		const openingFence = /^[ \t]*(`{3,}|~{3,})/.exec(line);
+		if (openingFence) {
+			const run = openingFence[1];
+			fence = { marker: run[0] as "`" | "~", length: run.length };
+			continue;
+		}
+		const heading = /^#[ \t]+(.+?)\s*$/.exec(line)?.[1] || "";
+		if (heading) return heading;
+	}
+	return "";
 }
 
 function normalizeTitle(value: string): string {
-	return String(value || "").toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, " ").trim();
+	return String(value || "")
+		.replace(/<[^>]*>/g, " ")
+		.replace(/&amp;/gi, "&")
+		.replace(/&quot;/gi, '"')
+		.replace(/&apos;|&#39;/gi, "'")
+		.replace(/&lt;/gi, "<")
+		.replace(/&gt;/gi, ">")
+		.normalize("NFKC")
+		.toLowerCase()
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
+		.trim();
 }
 
 function formatStructuredResult(result: PaperIngestFinalResult): string {

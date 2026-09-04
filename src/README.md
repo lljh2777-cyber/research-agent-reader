@@ -12,7 +12,7 @@ src/actions.ts               Dashboard action registry and action-level model de
 src/config.ts                Stable view IDs, limits, model options, provider definitions
 src/annotations/             Reading-view selection, annotation Markdown, popover, and archive handoff
 src/agent/                   Bounded light-agent loop, per-phase tool allowlists, phase-gated
-                             paper-ingest state machine, and receipt-based result contracts
+                             paper-ingest state machine, receipt contracts, and isolated prompt/input policy
 src/modals/                  Action input, task result, practice-note, and image-picker dialogs
 src/providers/adapters.ts    Direct API and Codex CLI provider implementations
 src/providers/http-transport.ts
@@ -22,14 +22,16 @@ src/providers/shared.ts      Provider URL, payload, model-list, and error helper
 src/query/direct-query-service.ts
                              Direct API retrieval cascade, prompt, streaming, and result orchestration
 src/query/normalization.ts   Persisted query attachment, source, path, and citation contracts
-src/mineru/                 MinerU package normalization, validated loading, visual-repair contracts,
-                            Markdown anchors, and PDF.js rendering
+src/mineru/                 MinerU package normalization, validated loading, deterministic visual plans,
+                            Markdown projection, reading-position policy, and PDF.js rendering
 src/reader/                 Generic Markdown/Clipping figure-caption parsing and reader source loading
 src/runtime/settings.ts      Executable discovery and persisted setting defaults
 src/runtime/lifecycle-state.ts
                              Active process, provider, and query-run state
 src/runtime/process-execution.ts
                              Typed Python/Codex child-process execution and cleanup
+src/runtime/mineru-process.ts
+                             MinerU process-tree stop/timeout confirmation and bounded output
 src/runtime/persistence.ts   Version-tolerant state decoding and serialized saves
 src/services/dashboard-data.ts
                              Incremental vault scan and Dashboard metric/gap derivation
@@ -87,13 +89,34 @@ Page changes are derived from each mapped block's viewport position, rather than
 assuming a theme-specific Obsidian scroll wrapper. A capture-phase document scroll
 listener also sees themes that hide the actual scrolling layer inside their Markdown
 renderer, while requestAnimationFrame coalesces duplicate scroll notifications.
-When `_extraction/visual-repair.json` identifies a high-confidence fragmented
-figure, the reader displays either the enclosing MinerU asset or a PDF crop;
+The reader always derives its active visual plan from the verified `article.md`
+and `mineru-result.json`. `_extraction/visual-repair.json` is a manifest-bound
+cache and audit artifact, not a second source of truth; stale or semantically
+different caches are ignored. When the current deterministic plan identifies a
+high-confidence fragmented figure, the reader displays either the enclosing MinerU asset or a PDF crop;
 the original assets remain the safe fallback. A PDF.js loading failure is also
 isolated to the reference pane: Markdown and packaged image assets remain
-readable, and the compatibility notice records the degraded mode. The same derived contract can
+readable, and the compatibility notice records the degraded mode. Native intake
+generates and manifest-binds `viewer-index.json`, `visual-repair.json`, and the
+prose-free `visual-candidates.json` review packet in
+the package staging area. Legacy packages rebuild the same plan in memory, and
+every active plan is rebound to the source Markdown/JSON hashes, block identities,
+caption/text summaries, asset paths, exact Markdown occurrences, and crop
+geometry before use. `visual-candidates.json` exposes only deterministic
+`review` groups, normalized geometry, structural signals, and candidate IDs;
+the reader never auto-applies it. Structural page/block/image limits reject
+pathological contracts before projection. The same derived contract can
 link an explicit “see next page” placeholder to a uniquely matching formal
-figure caption at the top of the immediately following page. Formal anchors
+figure caption at the top of the immediately following page.
+
+Auto repair also accepts two deterministic evidence patterns that do not need
+a formal caption: one candidate exactly covers every non-marginal block on a
+visual-only page with a packaged source PDF, or one complete extracted asset
+geometrically encloses at least two uniquely referenced child assets. A page
+containing body text, or a legacy package without the source PDF, remains
+review-only for the whole-page crop path.
+
+Formal anchors
 support `Fig.`/`Figure`, `Extended Data`, `Supplementary`, and `Supporting`
 prefixes, integer or decimal identifiers, and either an explicit separator or
 direct title text. A candidate whose title begins with a descriptive reference

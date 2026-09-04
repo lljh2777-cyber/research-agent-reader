@@ -1,7 +1,8 @@
-import { App, TFile, loadPdfJs } from "obsidian";
+import { loadPdfJs } from "obsidian";
 
 import { paddedBbox } from "./normalization";
 import type { NormalizedBbox } from "./types";
+import { MINERU_RESOURCE_LIMITS } from "./resource-limits";
 
 interface PdfViewport {
 	width: number;
@@ -77,6 +78,8 @@ export class MineruPdfRenderer {
 	private pageGeneration = 0;
 	private cropGeneration = 0;
 	private renderQuality: "standard" | "high" = "standard";
+	private readonly canvasPixels = new Map<HTMLCanvasElement, number>();
+	private activeCanvasPixels = 0;
 
 	setRenderQuality(value: "standard" | "high"): void {
 		this.renderQuality = value === "high" ? "high" : "standard";
@@ -86,17 +89,18 @@ export class MineruPdfRenderer {
 		return this.document?.numPages || 0;
 	}
 
-	async load(app: App, pdfPath: string): Promise<void> {
+	async loadBytes(sourceBytes: Uint8Array): Promise<void> {
 		const generation = ++this.generation;
 		await this.clearResources();
 		if (generation !== this.generation) return;
-		const file = app.vault.getAbstractFileByPath(pdfPath);
-		if (!(file instanceof TFile)) throw new Error(`未找到阅读器 PDF：${pdfPath}`);
-		const bytes = new Uint8Array(await app.vault.readBinary(file));
-		if (generation !== this.generation) return;
+		if (!sourceBytes.byteLength || sourceBytes.byteLength > MINERU_RESOURCE_LIMITS.pdfBytes) {
+			throw new Error("阅读器 PDF 为空或超过安全上限");
+		}
 		const pdfjs = await loadPdfJs();
 		if (generation !== this.generation) return;
-		const loadingTask = pdfjs.getDocument({ data: bytes }) as PdfLoadingTask;
+		// Hand the verified authority buffer directly to PDF.js. The caller drops
+		// its reference after this method returns, avoiding a second full-PDF copy.
+		const loadingTask = pdfjs.getDocument({ data: sourceBytes }) as PdfLoadingTask;
 		this.loadingTask = loadingTask;
 		const document = await loadingTask.promise;
 		if (generation !== this.generation) {
@@ -104,6 +108,11 @@ export class MineruPdfRenderer {
 			return;
 		}
 		if (this.loadingTask === loadingTask) this.loadingTask = null;
+		if (!Number.isInteger(document.numPages) || document.numPages < 1
+			|| document.numPages > MINERU_RESOURCE_LIMITS.pdfPages) {
+			await document.destroy();
+			throw new Error(`PDF 页数无效或超过 ${MINERU_RESOURCE_LIMITS.pdfPages} 页安全上限`);
+		}
 		this.document = document;
 	}
 
@@ -122,11 +131,12 @@ export class MineruPdfRenderer {
 			throw new DOMException("PDF page render superseded", "AbortError");
 		}
 		const baseViewport = page.getViewport({ scale: 1 });
+		this.assertViewport(baseViewport);
 		const fitScale = Math.max(0.25, availableWidth / Math.max(1, baseViewport.width));
 		const viewport = page.getViewport({ scale: fitScale * Math.max(0.4, Math.min(4, zoom)) });
+		this.assertViewport(viewport);
 		const ratio = outputScale(this.renderQuality);
-		canvas.width = Math.max(1, Math.floor(viewport.width * ratio));
-		canvas.height = Math.max(1, Math.floor(viewport.height * ratio));
+		this.allocateCanvas(canvas, viewport.width * ratio, viewport.height * ratio);
 		canvas.style.width = `${Math.floor(viewport.width)}px`;
 		canvas.style.height = `${Math.floor(viewport.height)}px`;
 		const task = page.render({
@@ -243,17 +253,18 @@ export class MineruPdfRenderer {
 			throw new DOMException("PDF crop render superseded", "AbortError");
 		}
 		const baseViewport = page.getViewport({ scale: 1 });
+		this.assertViewport(baseViewport);
 		const crop = paddedBbox(bbox, padding);
 		const cropWidthAtOne = baseViewport.width * (crop[2] - crop[0]) / 1000;
 		const scale = Math.max(0.5, Math.min(4, availableWidth / Math.max(1, cropWidthAtOne)));
 		const viewport = page.getViewport({ scale });
+		this.assertViewport(viewport);
 		const left = viewport.width * crop[0] / 1000;
 		const top = viewport.height * crop[1] / 1000;
 		const width = viewport.width * (crop[2] - crop[0]) / 1000;
 		const height = viewport.height * (crop[3] - crop[1]) / 1000;
 		const ratio = outputScale(this.renderQuality);
-		canvas.width = Math.max(1, Math.floor(width * ratio));
-		canvas.height = Math.max(1, Math.floor(height * ratio));
+		this.allocateCanvas(canvas, width * ratio, height * ratio);
 		canvas.style.width = `${Math.floor(width)}px`;
 		canvas.style.height = `${Math.floor(height)}px`;
 		const task = page.render({
@@ -287,6 +298,7 @@ export class MineruPdfRenderer {
 			}
 		}
 		this.pageTasks.clear();
+		this.releaseCanvasResources();
 	}
 
 	cancelCropRender(): void {
@@ -299,6 +311,7 @@ export class MineruPdfRenderer {
 			}
 		}
 		this.cropTasks.clear();
+		this.releaseCanvasResources();
 	}
 
 	async destroy(): Promise<void> {
@@ -313,6 +326,7 @@ export class MineruPdfRenderer {
 		const loadingTask = this.loadingTask;
 		this.document = null;
 		this.loadingTask = null;
+		this.releaseCanvasResources();
 		if (document) {
 			try {
 				await document.destroy();
@@ -326,5 +340,43 @@ export class MineruPdfRenderer {
 				// Ignore teardown races.
 			}
 		}
+	}
+
+	private assertViewport(viewport: PdfViewport): void {
+		const { width, height } = viewport;
+		if (![width, height].every((value) => Number.isFinite(value) && value > 0)) {
+			throw new Error("PDF 页面尺寸无效");
+		}
+		const aspect = Math.max(width / height, height / width);
+		if (aspect > MINERU_RESOURCE_LIMITS.pageAspectRatio) throw new Error("PDF 页面长宽比超过安全上限");
+	}
+
+	private allocateCanvas(canvas: HTMLCanvasElement, rawWidth: number, rawHeight: number): void {
+		const width = Math.max(1, Math.floor(rawWidth));
+		const height = Math.max(1, Math.floor(rawHeight));
+		const pixels = width * height;
+		if (width > MINERU_RESOURCE_LIMITS.canvasDimension
+			|| height > MINERU_RESOURCE_LIMITS.canvasDimension
+			|| !Number.isSafeInteger(pixels)
+			|| pixels > MINERU_RESOURCE_LIMITS.canvasPixels) {
+			throw new Error("PDF Canvas 尺寸或像素数超过安全上限");
+		}
+		const previous = this.canvasPixels.get(canvas) || 0;
+		if (this.activeCanvasPixels - previous + pixels > MINERU_RESOURCE_LIMITS.activeCanvasPixels) {
+			throw new Error("PDF 活动画布累计像素超过安全上限");
+		}
+		this.activeCanvasPixels = this.activeCanvasPixels - previous + pixels;
+		this.canvasPixels.set(canvas, pixels);
+		canvas.width = width;
+		canvas.height = height;
+	}
+
+	private releaseCanvasResources(): void {
+		for (const canvas of this.canvasPixels.keys()) {
+			canvas.width = 0;
+			canvas.height = 0;
+		}
+		this.canvasPixels.clear();
+		this.activeCanvasPixels = 0;
 	}
 }

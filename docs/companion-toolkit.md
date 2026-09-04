@@ -32,19 +32,25 @@ is still required for AI-assisted lint repair and other advanced write actions.
 CLI (or any coding agent). The model behind a user's Direct API profile drives
 a bounded, phase-gated tool loop inside the plugin: identity verification via
 `crossref_search` / `crossref_doi` (plugin-constructed URLs), vault lexical
-search, and capped reads restricted to `wiki/sources` and `papers`.
+search, and capped identity reads restricted to `wiki/sources`, `papers`, and
+`Clippings`.
 
 The model never writes files and never chooses extraction paths:
 
 - When the selected output includes original Markdown, the plugin runs the
   conversion itself: it spawns the user-configured `mineru-open-api` CLI
-  directly (npm; no Python and no toolkit required), validates the
+  directly (npm; no Python and no toolkit required). Automatic and saved CLI
+  paths must resolve to a package whose `package.json` name and declared bin
+  entry are both `mineru-open-api`; arbitrary native executables are rejected.
+  The plugin validates the
   extraction with the same gates as the toolkit helper (single md/json,
   non-empty article with a title heading, every referenced asset present
   inside the package), and publishes create-only into the active vault at
   `papers/<citekey>/` with a reader-compatible `_extraction/manifest.json`
-  and `validation.json`. The source is always the exact PDF the user
-  authorized; a same-citekey package is never overwritten or claimed.
+  and `validation.json`. Before any remote extraction, the plugin copies the
+  selected ordinary PDF into a private, bounded, SHA-256-addressed snapshot;
+  both local identity evidence and MinerU consume that same immutable byte
+  sequence. A same-citekey package is never overwritten or claimed.
 - The wiki note is written by the plugin from model-supplied *fields* into
   `wiki/sources/<citekey>.md` via the vault's atomic create (never
   overwriting), with safe single-line YAML scalars, bibliographic metadata
@@ -52,7 +58,10 @@ The model never writes files and never chooses extraction paths:
   `registry_status: pending` frontmatter.
 - "Verified" identity results are additionally gated on plugin-observed tool
   receipts (at least one metadata lookup, one dedup lookup, and exact DOI
-  verification whenever a DOI is claimed).
+  verification whenever a DOI is claimed) plus an explicit human visual
+  confirmation. The user compares a final PDF.js raster from the authorized
+  snapshot with the plugin-bound Crossref record; filenames, metadata, and
+  PDF text-layer candidates remain discovery hints only.
 
 The light runner never updates `papers.csv`, `references.bib`, or index/log
 pages — those registry files remain the Codex CLI pipeline's job, which can

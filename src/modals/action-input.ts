@@ -304,7 +304,7 @@ export class ActionInputModal extends Modal {
 		});
 		section.createDiv({
 			cls: "agent-dashboard-run-config-note",
-			text: "流程由插件分阶段强制：先身份核验与去重（只读 + 白名单元数据接口），再由插件用你确认的 PDF 运行 MinerU，最后模型仅返回笔记字段、由插件生成文件（仅 wiki/sources/，不覆盖已有笔记）。未配置 MinerU 时不会读取 PDF 正文。不更新 papers.csv 与 references.bib（完整登记请用 Codex CLI 方式）。",
+			text: "流程由插件分阶段强制：本地 PDF 元数据与文本层只用于发现候选；Crossref 核验后，你必须亲眼确认授权快照最终渲染的标题页与书目记录一致。确认完成后再分别检查原文层（papers + Clippings）和分析层（wiki/sources），两层相互独立且均不覆盖已有内容，缺什么补什么。不更新 papers.csv 与 references.bib（完整登记请用 Codex CLI 方式）。",
 		});
 	}
 
@@ -323,7 +323,25 @@ export class ActionInputModal extends Modal {
 			section.createEl("h3", { text: "本次输出" });
 			section.createEl("p", {
 				cls: "agent-dashboard-action-options-description",
-				text: "身份核验、去重和元数据准备始终执行；以下两个输出可以独立选择。",
+				text: "身份核验与元数据准备始终执行。papers/ 与 Clippings/ 同属原文层，wiki/sources/ 是独立分析层；以下两个输出分别查重、分别补全。",
+			});
+			const identityHints = section.createDiv({
+				cls: "agent-dashboard-mineru-grid",
+				attr: { "aria-label": "扫描件身份检索提示" },
+			});
+			const candidateTitleField = identityHints.createDiv({ cls: "agent-dashboard-mineru-field" });
+			const candidateTitleCopy = candidateTitleField.createDiv();
+			candidateTitleCopy.createEl("strong", { text: "候选标题（可选）" });
+			candidateTitleCopy.createSpan({ text: "扫描件、通用文件名或无文本层 PDF 可填写；只用于固定检索，不作为身份权威。" });
+			const candidateTitle = candidateTitleField.createEl("input", {
+				attr: { type: "text", maxlength: "500", "aria-label": "候选标题" },
+			});
+			const candidateDoiField = identityHints.createDiv({ cls: "agent-dashboard-mineru-field" });
+			const candidateDoiCopy = candidateDoiField.createDiv();
+			candidateDoiCopy.createEl("strong", { text: "候选 DOI（可选）" });
+			candidateDoiCopy.createSpan({ text: "将优先进行 Crossref DOI 精确核验；仍需核对最终栅格页面。" });
+			const candidateDoi = candidateDoiField.createEl("input", {
+				attr: { type: "text", maxlength: "200", placeholder: "10.xxxx/xxxxx", "aria-label": "候选 DOI" },
 			});
 			const mineruAvailable = describeCliExecutable(
 				"mineru",
@@ -335,7 +353,7 @@ export class ActionInputModal extends Modal {
 			const markdownOption = this.createCheckboxOption(
 				section,
 				"生成原文 Markdown",
-				"使用 MinerU precision extract 生成 article.md、结构化 JSON、图片和可验证的提取记录。",
+				"若 papers/ 或 Clippings/ 已有同一原文则直接复用；否则用 MinerU precision extract 在 papers/ 生成完整 Markdown 包。",
 				lightMarkdownReady,
 			);
 			this.paperIngestMarkdownOption = markdownOption;
@@ -513,7 +531,7 @@ export class ActionInputModal extends Modal {
 			const wikiOption = this.createCheckboxOption(
 				section,
 				"创建初步文章 Wiki",
-				"创建或更新 wiki/sources 下的 abstract-level 文章节点。",
+				"在 wiki/sources 下 create-only 创建 abstract-level 文章节点，不覆盖已有笔记。",
 				true,
 			);
 			const sourceField = section.createDiv({
@@ -522,15 +540,23 @@ export class ActionInputModal extends Modal {
 			const sourceCopy = sourceField.createDiv();
 			sourceCopy.createEl("strong", { text: "文章 Wiki 内容来源" });
 			sourceCopy.createEl("span", {
-				text: "自动模式优先使用本次或已有的已验证 article.md，否则回退到原始 PDF。",
+				text: this.runner === "light-agent"
+					? "轻量 Agent 固定读取查重确认的原文层 Markdown：已有 papers/Clippings 原文就复用，否则读取本次 MinerU article.md；提取失败不会静默改用元数据。"
+					: "自动模式优先使用本次或已有的已验证 article.md，否则回退到原始 PDF。",
 			});
 			const sourceSelect = sourceField.createEl("select", {
 				attr: { "aria-label": "文章 Wiki 内容来源" },
 			});
-			sourceSelect.createEl("option", { text: "自动选择", attr: { value: "auto" } });
-			sourceSelect.createEl("option", { text: "原始 PDF", attr: { value: "pdf" } });
-			sourceSelect.createEl("option", { text: "已有 article.md", attr: { value: "article" } });
-			sourceSelect.value = this.plugin.settings.mineruDefaultArticleWikiSource;
+			if (this.runner === "light-agent") {
+				sourceSelect.createEl("option", { text: "元数据与用户说明（不读取 PDF）", attr: { value: "auto" } });
+				sourceSelect.createEl("option", { text: "原文层 Markdown（papers / Clippings）", attr: { value: "article" } });
+				sourceSelect.value = markdownOption.checked ? "article" : "auto";
+			} else {
+				sourceSelect.createEl("option", { text: "自动选择", attr: { value: "auto" } });
+				sourceSelect.createEl("option", { text: "原始 PDF", attr: { value: "pdf" } });
+				sourceSelect.createEl("option", { text: "已有 article.md", attr: { value: "article" } });
+				sourceSelect.value = this.plugin.settings.mineruDefaultArticleWikiSource;
+			}
 
 			const normalizePages = (): string | null => {
 				const text = pagesInput.value.trim().replace(/，/g, ",");
@@ -555,7 +581,12 @@ export class ActionInputModal extends Modal {
 				const markdownEnabled = markdownOption.checked;
 				mineruPanel.hidden = !markdownEnabled;
 				if (mineruWarning) mineruWarning.hidden = !markdownEnabled;
-				sourceSelect.disabled = !wikiOption.checked;
+				if (this.runner === "light-agent") {
+					sourceSelect.value = markdownEnabled ? "article" : "auto";
+					sourceSelect.disabled = true;
+				} else {
+					sourceSelect.disabled = !wikiOption.checked;
+				}
 				section.toggleClass(
 					"is-invalid",
 					(!markdownOption.checked && !wikiOption.checked)
@@ -568,6 +599,8 @@ export class ActionInputModal extends Modal {
 			wikiOption.addEventListener("change", sync);
 			sourceSelect.addEventListener("change", onChange);
 			for (const control of [
+				candidateTitle,
+				candidateDoi,
 				model.select,
 				language.select,
 				includeSourcePdf,
@@ -585,6 +618,8 @@ export class ActionInputModal extends Modal {
 
 			return {
 				getOptions: () => ({
+					identityCandidateTitle: candidateTitle.value.trim().slice(0, 500),
+					identityCandidateDoi: candidateDoi.value.trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "").slice(0, 200),
 					createArticleMarkdown: markdownOption.checked,
 					createArticleWiki: wikiOption.checked,
 					articleWikiSource: sourceSelect.value === "pdf"
@@ -607,6 +642,8 @@ export class ActionInputModal extends Modal {
 					mineruRemoteConfirmed: uploadConfirmation ? uploadConfirmation.checked : true,
 				}),
 				isValid: () => {
+					const doiHint = candidateDoi.value.trim().replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, "");
+					if (doiHint && !/^10\.\d{4,9}\/\S+$/i.test(doiHint)) return false;
 					if (!markdownOption.checked && !wikiOption.checked) return false;
 					if (!markdownOption.checked) return true;
 					const extractionReady = this.runner === "light-agent"

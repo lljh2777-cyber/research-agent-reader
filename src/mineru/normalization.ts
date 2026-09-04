@@ -3,6 +3,7 @@ import type {
 	MineruCaptionPart,
 	MineruCaptionPartKind,
 	MineruCaptionSummary,
+	MineruMarkdownFigureCaption,
 	MineruMarkdownImage,
 	MineruViewerBlock,
 	MineruViewerIndex,
@@ -11,6 +12,24 @@ import type {
 } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
+
+export const MINERU_VIEWER_LIMITS = {
+	maxSourceElements: 8192,
+	maxPages: 2048,
+	maxBlocksPerPage: 512,
+	maxMarkdownImages: 4096,
+	maxMarkdownCaptions: 4096,
+	maxIssues: 512,
+	maxNestedStrings: 512,
+	maxTextDepth: 32,
+	maxTextValues: 8192,
+} as const;
+
+export interface RuntimeViewerIndexOptions {
+	articleSha256?: string;
+	mineruResultSha256?: string;
+	packagedSourcePdf?: boolean;
+}
 
 const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)/g;
 const HTML_IMAGE_RE = /<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi;
@@ -36,27 +55,45 @@ function asRecord(value: unknown): UnknownRecord {
 		: {};
 }
 
-function asText(value: unknown): string {
+function consumeTextBudget(budget: { remaining: number }, depth: number): void {
+	if (depth > MINERU_VIEWER_LIMITS.maxTextDepth) {
+		throw new Error("MinerU 文本结构嵌套过深");
+	}
+	budget.remaining -= 1;
+	if (budget.remaining < 0) throw new Error("MinerU 单元素文本值超过安全上限");
+}
+
+function asText(
+	value: unknown,
+	depth = 0,
+	budget: { remaining: number } = { remaining: MINERU_VIEWER_LIMITS.maxTextValues },
+): string {
+	consumeTextBudget(budget, depth);
 	if (typeof value === "string") return value.trim();
 	if (Array.isArray(value)) {
-		return value.map((item) => asText(item)).filter(Boolean).join(" ").trim();
+		return value.map((item) => asText(item, depth + 1, budget)).filter(Boolean).join(" ").trim();
 	}
 	if (value === null || typeof value !== "object") return "";
 	const record = asRecord(value);
 	const nested = record.content ?? record.text ?? record.value;
-	return nested === undefined || nested === value ? "" : asText(nested);
+	return nested === undefined || nested === value ? "" : asText(nested, depth + 1, budget);
 }
 
-function asTextParts(value: unknown): string[] {
+function asTextParts(
+	value: unknown,
+	depth = 0,
+	budget: { remaining: number } = { remaining: MINERU_VIEWER_LIMITS.maxTextValues },
+): string[] {
+	consumeTextBudget(budget, depth);
 	if (typeof value === "string") {
 		const text = value.trim();
 		return text ? [text] : [];
 	}
-	if (Array.isArray(value)) return value.flatMap((item) => asTextParts(item));
+	if (Array.isArray(value)) return value.flatMap((item) => asTextParts(item, depth + 1, budget));
 	if (value === null || typeof value !== "object") return [];
 	const record = asRecord(value);
 	const nested = record.content ?? record.text ?? record.value;
-	return nested === undefined || nested === value ? [] : asTextParts(nested);
+	return nested === undefined || nested === value ? [] : asTextParts(nested, depth + 1, budget);
 }
 
 function firstTextParts(...values: unknown[]): string[] {
@@ -286,6 +323,9 @@ function extractCaption(record: UnknownRecord, sourceType: string): MineruCaptio
 	const placeholder = nextPagePlaceholders[0]?.text || "";
 	const figureKey = figureKeyFromText(text)
 		|| (placeholder ? formalFigureCaptionKeyFromText(placeholder) : "");
+	const formalFigureKeys = [...new Set(parts
+		.map((part) => formalFigureCaptionKeyFromText(part.text))
+		.filter(Boolean))];
 	return {
 		text,
 		parts,
@@ -293,11 +333,18 @@ function extractCaption(record: UnknownRecord, sourceType: string): MineruCaptio
 		item_count: Math.max(1, itemCount),
 		figure_keys: figureKey ? [figureKey] : [],
 		leading_figure_key: figureKey || undefined,
+		formal_figure_caption_keys: formalFigureKeys,
+		leading_formal_figure_caption_key: formalFigureCaptionKeyFromText(parts[0]?.text || "") || undefined,
 		next_page_marker: hasNextPageMarker,
 		next_page_figure_keys: hasNextPageMarker && figureKey ? [figureKey] : [],
 		next_page_placeholders: nextPagePlaceholders,
 		next_page_reference_count: hasNextPageMarker ? 1 : 0,
+		starts_with_lowercase: firstAlphaIsLowercase(parts[0]?.text || ""),
+		starts_with_panel_label: parts[0]?.kind === "panel-label",
 		ends_with_terminal_punctuation: endsWithTerminalPunctuation(text),
+		long_item_count: parts.filter((part) => part.text.length >= 30).length,
+		figure_anchor_count: parts.filter((part) => Boolean(formalFigureCaptionKeyFromText(part.text))).length,
+		panel_label_count: parts.filter((part) => part.kind === "panel-label").length,
 	};
 }
 
@@ -306,14 +353,19 @@ function extractTextSummary(record: UnknownRecord): MineruViewerBlock["text"] | 
 	const text = firstString(record.text, content.paragraph_content, record.content, record.list_items);
 	if (!text) return undefined;
 	const figureKey = figureKeyFromText(text);
+	const formalFigureKey = formalFigureCaptionKeyFromText(text);
 	return {
 		text,
 		char_count: text.length,
 		item_count: 1,
 		figure_keys: figureKey ? [figureKey] : [],
 		leading_figure_key: figureKey || undefined,
+		formal_figure_caption_keys: formalFigureKey ? [formalFigureKey] : [],
+		leading_formal_figure_caption_key: formalFigureKey || undefined,
 		next_page_marker: false,
 		next_page_figure_keys: [],
+		starts_with_lowercase: firstAlphaIsLowercase(text),
+		starts_with_panel_label: isPanelLabelText(text),
 		ends_with_terminal_punctuation: /[.!?。！？]\s*$/.test(text),
 	};
 }
@@ -330,40 +382,71 @@ function flattenMineruPayload(payload: unknown): FlatMineruElement[] {
 	const flattened: FlatMineruElement[] = [];
 	let sourceIndex = 0;
 	if (payload.every(Array.isArray)) {
+		if (payload.length > MINERU_VIEWER_LIMITS.maxPages) {
+			throw new Error("MinerU 页数超过 Viewer Index 安全上限");
+		}
 		payload.forEach((page, pageIdx) => {
+			if ((page as unknown[]).length > MINERU_VIEWER_LIMITS.maxBlocksPerPage) {
+				throw new Error(`MinerU 第 ${pageIdx + 1} 页元素数超过安全上限`);
+			}
 			(page as unknown[]).forEach((item, pageOrder) => {
+				if (sourceIndex >= MINERU_VIEWER_LIMITS.maxSourceElements) {
+					throw new Error("MinerU 元素数超过 Viewer Index 安全上限");
+				}
 				flattened.push({ record: asRecord(item), pageIdx, sourceIndex, pageOrder });
 				sourceIndex += 1;
 			});
 		});
 		return flattened;
 	}
+	if (payload.length > MINERU_VIEWER_LIMITS.maxSourceElements) {
+		throw new Error("MinerU 元素数超过 Viewer Index 安全上限");
+	}
 	const pageOrders = new Map<number, number>();
 	payload.forEach((item, index) => {
 		const record = asRecord(item);
 		const rawPage = Number(record.page_idx ?? record.pageIndex ?? 0);
-		const pageIdx = Number.isInteger(rawPage) && rawPage >= 0 ? rawPage : 0;
+		if (!Number.isInteger(rawPage) || rawPage < 0 || rawPage >= MINERU_VIEWER_LIMITS.maxPages) {
+			throw new Error("MinerU 元素含超出安全范围的 page_idx");
+		}
+		const pageIdx = rawPage;
 		const pageOrder = pageOrders.get(pageIdx) || 0;
+		if (pageOrder >= MINERU_VIEWER_LIMITS.maxBlocksPerPage) {
+			throw new Error(`MinerU 第 ${pageIdx + 1} 页元素数超过安全上限`);
+		}
 		pageOrders.set(pageIdx, pageOrder + 1);
 		flattened.push({ record, pageIdx, sourceIndex: index, pageOrder });
 	});
+	if (pageOrders.size > MINERU_VIEWER_LIMITS.maxPages) {
+		throw new Error("MinerU 页数超过 Viewer Index 安全上限");
+	}
 	return flattened;
 }
 
 export function extractMarkdownImages(markdown: string): MineruMarkdownImage[] {
 	const images: MineruMarkdownImage[] = [];
 	const occurrences = new Map<string, number>();
-	const matches: Array<{ start: number; assetPath: string }> = [];
+	const matches: Array<{ start: number; end: number; assetPath: string }> = [];
 	MARKDOWN_IMAGE_RE.lastIndex = 0;
 	HTML_IMAGE_RE.lastIndex = 0;
 	let match: RegExpExecArray | null;
 	while ((match = MARKDOWN_IMAGE_RE.exec(markdown)) !== null) {
 		const assetPath = normalizeAssetPath(match[1] || match[2]);
-		if (assetPath) matches.push({ start: match.index, assetPath });
+		if (assetPath) {
+			if (matches.length >= MINERU_VIEWER_LIMITS.maxMarkdownImages) {
+				throw new Error("Markdown 图片引用数超过 Viewer Index 安全上限");
+			}
+			matches.push({ start: match.index, end: match.index + match[0].length, assetPath });
+		}
 	}
 	while ((match = HTML_IMAGE_RE.exec(markdown)) !== null) {
 		const assetPath = normalizeAssetPath(match[1]);
-		if (assetPath) matches.push({ start: match.index, assetPath });
+		if (assetPath) {
+			if (matches.length >= MINERU_VIEWER_LIMITS.maxMarkdownImages) {
+				throw new Error("Markdown 图片引用数超过 Viewer Index 安全上限");
+			}
+			matches.push({ start: match.index, end: match.index + match[0].length, assetPath });
+		}
 	}
 	matches.sort((left, right) => left.start - right.start);
 	for (const matchRecord of matches) {
@@ -376,9 +459,48 @@ export function extractMarkdownImages(markdown: string): MineruMarkdownImage[] {
 			order: images.length,
 			asset_path: assetPath,
 			occurrence,
+			char_start: matchRecord.start,
+			char_end: matchRecord.end,
 		});
 	}
 	return images;
+}
+
+export function extractMarkdownFigureCaptions(
+	markdown: string,
+	images: readonly MineruMarkdownImage[],
+): MineruMarkdownFigureCaption[] {
+	const captions: MineruMarkdownFigureCaption[] = [];
+	let start = 0;
+	while (start < markdown.length) {
+		const newline = markdown.indexOf("\n", start);
+		const contentEnd = newline < 0 ? markdown.length : newline;
+		const end = newline < 0 ? markdown.length : newline + 1;
+		const text = markdown.slice(start, contentEnd).trim();
+		const figureKey = formalFigureCaptionKeyFromText(text);
+		if (figureKey) {
+			if (captions.length >= MINERU_VIEWER_LIMITS.maxMarkdownCaptions) {
+				throw new Error("Markdown 正式图注超过 Viewer Index 安全上限");
+			}
+			const before = [...images].reverse().find((image) => (
+				Number.isInteger(image.char_end) && image.char_end! <= start
+			));
+			const after = images.find((image) => (
+				Number.isInteger(image.char_start) && image.char_start! >= end
+			));
+			captions.push({
+				id: `md-caption-${String(captions.length).padStart(4, "0")}`,
+				figure_key: figureKey,
+				text,
+				char_start: start,
+				char_end: end,
+				...(before ? { before_markdown_image_id: before.id } : {}),
+				...(after ? { after_markdown_image_id: after.id } : {}),
+			});
+		}
+		start = end;
+	}
+	return captions;
 }
 
 /**
@@ -408,12 +530,17 @@ function uniqueStandaloneMarkdownTextRangeCandidates(
 	return ranges;
 }
 
-export function buildRuntimeViewerIndex(payload: unknown, markdown: string): MineruViewerIndex {
+export function buildRuntimeViewerIndex(
+	payload: unknown,
+	markdown: string,
+	options: RuntimeViewerIndexOptions = {},
+): MineruViewerIndex {
 	const issues: string[] = [];
 	const elements = flattenMineruPayload(payload);
 	const nestedByPage = Array.isArray(payload) && payload.length > 0 && payload.every(Array.isArray);
 	if (!elements.length) issues.push("MinerU JSON 没有可识别的元素数组");
 	const markdownImages = extractMarkdownImages(markdown);
+	const markdownCaptions = extractMarkdownFigureCaptions(markdown, markdownImages);
 	const imageIds = new Map<string, string[]>();
 	const imageCursors = new Map<string, number>();
 	markdownImages.forEach((image) => {
@@ -467,6 +594,16 @@ export function buildRuntimeViewerIndex(payload: unknown, markdown: string): Min
 			if (range) block.markdown_text_range = range;
 		}
 	}
+	const articleHash = String(options.articleSha256 || "").toLowerCase();
+	const mineruHash = String(options.mineruResultSha256 || "").toLowerCase();
+	const hashInputs = /^[a-f0-9]{64}$/.test(articleHash) && /^[a-f0-9]{64}$/.test(mineruHash)
+		? {
+			inputs: {
+				article: { path: "article.md", sha256: articleHash },
+				mineru_result: { path: "mineru-result.json", sha256: mineruHash },
+			},
+		}
+		: {};
 	return reclassifyRuntimeRunningHeaders({
 		schema_version: 1,
 		status: !elements.length || locatedBlockCount === 0
@@ -475,7 +612,13 @@ export function buildRuntimeViewerIndex(payload: unknown, markdown: string): Min
 				? "partial"
 				: "complete",
 		coordinate_system: { kind: "normalized-page", extent: 1000, page_index_base: 0 },
+		...hashInputs,
+		pdf_source: {
+			packaged_path: options.packagedSourcePdf ? "_extraction/source.pdf" : undefined,
+			manifest_source_fallback: true,
+		},
 		markdown_images: markdownImages,
+		markdown_captions: markdownCaptions,
 		pages: normalizedPages,
 		issues,
 	});

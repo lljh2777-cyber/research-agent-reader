@@ -726,6 +726,8 @@ export class DashboardView extends ItemView {
 		const flowOptions: PaperIngestFlowOptions = {
 			sourcePdfPath: parsedInput.sourcePdfPath,
 			requestNotes: parsedInput.requestNotes,
+			identityCandidateTitle: String(actionOptions.identityCandidateTitle || "").trim().slice(0, 500),
+			identityCandidateDoi: String(actionOptions.identityCandidateDoi || "").trim().slice(0, 200),
 			createArticleMarkdown: actionOptions.createArticleMarkdown !== false,
 			createArticleWiki: actionOptions.createArticleWiki !== false,
 			articleWikiSource: actionOptions.articleWikiSource === "pdf"

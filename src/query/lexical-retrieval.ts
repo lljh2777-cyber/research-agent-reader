@@ -44,9 +44,12 @@ export function tokenizeForLexicalRetrieval(
 	input: string,
 	maxTokens: number = QUERY_TOKEN_LIMIT,
 ): string[] {
-	const text = String(input || "").toLowerCase();
+	const text = String(input || "").normalize("NFKC").toLowerCase();
 	const tokens = new Set<string>();
-	for (const match of text.matchAll(/[a-z0-9][a-z0-9+#._-]{1,}/g)) {
+	// Split Han runs away before extracting other Unicode word tokens so mixed
+	// scientific text such as `p53基因` keeps both `p53` and the Han bigrams.
+	const nonHanText = text.replace(/\p{Script=Han}+/gu, " ");
+	for (const match of nonHanText.matchAll(/[\p{L}\p{M}\p{N}][\p{L}\p{M}\p{N}+#._-]{1,}/gu)) {
 		const token = match[0].replace(/^[._-]+|[._-]+$/g, "");
 		if (token.length >= 2) tokens.add(token);
 	}
@@ -90,10 +93,14 @@ export class LexicalVaultRetriever {
 		expandedTerms: string[] = [],
 		options: { allowedPrefixes?: string[] } = {},
 	): Promise<Record<string, unknown>> {
-		await this.refreshIndex();
 		const allowedPrefixes = (options.allowedPrefixes || [])
 			.map((prefix) => String(prefix || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, ""))
 			.filter(Boolean);
+		const scopedIndex = allowedPrefixes.length
+			? await this.buildScopedIndex(allowedPrefixes)
+			: null;
+		if (!scopedIndex) await this.refreshIndex();
+		const documents = scopedIndex?.documents || this.documents;
 		const withinScope = (filePath: string): boolean => {
 			if (!allowedPrefixes.length) return true;
 			return allowedPrefixes.some((prefix) => filePath === prefix || filePath.startsWith(`${prefix}/`));
@@ -107,7 +114,7 @@ export class LexicalVaultRetriever {
 			.slice(0, MAX_QUERY_TERMS);
 		const phrase = String(question || "").trim().toLowerCase().slice(0, 60);
 		const scored: Array<{ path: string; score: number; mtime: number }> = [];
-		for (const [filePath, document] of this.documents) {
+		for (const [filePath, document] of documents) {
 			if (!withinScope(filePath)) continue;
 			let score = 0;
 			let reinforced = false;
@@ -154,7 +161,7 @@ export class LexicalVaultRetriever {
 			lexical_terms: terms,
 			lexical_seeds: top.map((item) => ({
 				path: item.path,
-				title: this.documents.get(item.path)?.title
+				title: documents.get(item.path)?.title
 					|| item.path.replace(/\.md$/i, ""),
 				score: item.score,
 			})),
@@ -162,31 +169,73 @@ export class LexicalVaultRetriever {
 			graph_expansion: [],
 			engine: "in-plugin-lexical",
 			retriever: { selected: "in-plugin-lexical" },
-			indexed_files: this.documents.size,
+			indexed_files: documents.size,
+			scope_complete: scopedIndex?.complete ?? true,
+			scope_total_files: scopedIndex?.totalFiles ?? documents.size,
 		};
 	}
 
-	private async refreshIndex(): Promise<void> {
+	private eligibleMarkdownFiles(): TFile[] {
 		const vault = this.app?.vault;
-		if (!vault || typeof vault.getMarkdownFiles !== "function") return;
-		const files = vault.getMarkdownFiles()
-			.filter((file) => file instanceof TFile
+		if (!vault || typeof vault.getMarkdownFiles !== "function") return [];
+		return vault.getMarkdownFiles()
+			.filter((file): file is TFile => file instanceof TFile
 				&& !String(file.path || "").startsWith(".")
-				&& String(file.path || "").toLowerCase().endsWith(".md"))
-			.sort((a, b) => (
-				(Number(b.stat?.mtime) || 0) - (Number(a.stat?.mtime) || 0)
-				|| String(a.path).localeCompare(String(b.path))
-			))
+				&& String(file.path || "").toLowerCase().endsWith(".md"));
+	}
+
+	private sortByFreshness(files: TFile[]): TFile[] {
+		return files.sort((a, b) => (
+			(Number(b.stat?.mtime) || 0) - (Number(a.stat?.mtime) || 0)
+			|| String(a.path).localeCompare(String(b.path))
+		));
+	}
+
+	/**
+	 * Identity/dedup searches use an isolated, scope-first index. This keeps
+	 * 5,000 newer unrelated Vault notes from evicting an older source note,
+	 * without mutating the shared full-Vault query cache. If the allowed scope
+	 * itself exceeds the bound, callers receive an explicit incomplete marker
+	 * and the ingest tool fails closed instead of accepting duplicateStatus=none.
+	 */
+	private async buildScopedIndex(
+		allowedPrefixes: readonly string[],
+	): Promise<{ documents: Map<string, LexicalDocument>; complete: boolean; totalFiles: number }> {
+		const files = this.sortByFreshness(this.eligibleMarkdownFiles().filter((file) => {
+			const filePath = String(file.path || "").replace(/\\/g, "/");
+			return allowedPrefixes.some((prefix) => (
+				filePath === prefix || filePath.startsWith(`${prefix}/`)
+			));
+		}));
+		if (files.length > MAX_INDEX_FILES) {
+			return { documents: new Map(), complete: false, totalFiles: files.length };
+		}
+		const documents = new Map<string, LexicalDocument>();
+		await this.indexFiles(files, documents);
+		return { documents, complete: true, totalFiles: files.length };
+	}
+
+	private async refreshIndex(): Promise<void> {
+		const files = this.sortByFreshness(this.eligibleMarkdownFiles())
 			.slice(0, MAX_INDEX_FILES);
 		const livePaths = new Set(files.map((file) => String(file.path)));
 		for (const existingPath of [...this.documents.keys()]) {
 			if (!livePaths.has(existingPath)) this.documents.delete(existingPath);
 		}
+		await this.indexFiles(files, this.documents);
+	}
+
+	private async indexFiles(
+		files: readonly TFile[],
+		documents: Map<string, LexicalDocument>,
+	): Promise<void> {
+		const vault = this.app?.vault;
+		if (!vault) return;
 		const deadline = this.now() + MAX_INDEX_TIME_BUDGET_MS;
 		for (const file of files) {
 			const filePath = String(file.path);
 			const mtime = Number(file.stat?.mtime) || 0;
-			const cached = this.documents.get(filePath);
+			const cached = documents.get(filePath);
 			// Entries whose body was never indexed (the time budget ran out on a
 			// previous pass) must be retried instead of being skipped forever.
 			if (cached && cached.mtime === mtime && cached.bodyIndexed) continue;
@@ -213,7 +262,7 @@ export class LexicalVaultRetriever {
 					document.bodyIndexed = false;
 				}
 			}
-			this.documents.set(filePath, document);
+			documents.set(filePath, document);
 		}
 	}
 
@@ -224,6 +273,9 @@ export class LexicalVaultRetriever {
 			const cache = this.app?.metadataCache?.getFileCache?.(file);
 			const frontmatter = cache?.frontmatter as Record<string, unknown> | undefined;
 			const frontmatterTitle = String(frontmatter?.title || "").trim();
+			const firstH1 = Array.isArray(cache?.headings)
+				? String(cache.headings.find((heading) => Number(heading?.level) === 1)?.heading || "").trim()
+				: "";
 			const collect = (value: unknown) => {
 				if (Array.isArray(value)) {
 					value.forEach((item) => tags.push(String(item || "").trim()));
@@ -236,7 +288,11 @@ export class LexicalVaultRetriever {
 			if (Array.isArray(cache?.tags)) {
 				cache.tags.forEach((item) => tags.push(String(item?.tag || "").replace(/^#/, "").trim()));
 			}
-			return { title: [title, frontmatterTitle].filter(Boolean).join(" "), tags };
+			// The basename is indexed separately by refreshIndex. Expose the
+			// canonical frontmatter title to callers so a search receipt can bind a
+			// candidate to the paper identity instead of returning
+			// "<citekey> <paper title>" as one synthetic title.
+			return { title: frontmatterTitle || firstH1 || title, tags };
 		} catch {
 			return { title, tags };
 		}
