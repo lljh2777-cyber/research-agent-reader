@@ -19,6 +19,7 @@ const processExecution = readPlugin("src/runtime/process-execution.ts");
 const mineruProcess = readPlugin("src/runtime/mineru-process.ts");
 const pluginSource = readPlugin("src/plugin.ts");
 const mineruPublish = readPlugin("src/agent/mineru-publish.ts");
+const vaultTreeReconcile = readPlugin("src/runtime/vault-tree-reconcile.ts");
 
 assert.match(actions, /id:\s*"paper-ingest"[\s\S]*agent:\s*"paper-intake-pipeline"/);
 assert.match(actions, /id:\s*"pdf-xray"[\s\S]*已有 MinerU article\.md/);
@@ -72,6 +73,11 @@ assert.match(identityConfirmationModal, /await this\.preview\.decode\(\)/);
 assert.match(identityConfirmationModal, /generation !== this\.loadGeneration/);
 assert.match(identityConfirmationModal, /this\.confirmButton\?\.setAttribute\("disabled", "true"\)/);
 assert.match(dashboard, /serializeActionRequest\(/);
+assert.match(pluginSource, /outcome\.filesWritten\.includes\(articlePath\)[\s\S]*?reconcilePublishedPackage\(articlePath\)/);
+assert.match(pluginSource, /reconcilePublishedVaultTree/);
+assert.match(pluginSource, /onLayoutReady[\s\S]*?reconcileMissingPublishedPackages/);
+assert.match(pluginSource, /adapter\.list\("papers"\)[\s\S]*?adapter\.exists\(articlePath, true\)/);
+assert.match(vaultTreeReconcile, /reconcileInternalFile/);
 // Stop routing must be resolved by the plugin (loop → direct query →
 // process), never inferred from executionConfig.backend in the dashboard.
 assert.match(dashboard, /requestStopRun\(run: TaskRun\): void[\s\S]*?stopTaskRun\(run\.id\)/);

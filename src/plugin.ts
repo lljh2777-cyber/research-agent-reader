@@ -31,6 +31,7 @@ import {
 	normalizeReaderMarkdownFolders,
 } from "./runtime/settings";
 import type { DashboardSettings } from "./runtime/settings";
+import { reconcilePublishedVaultTree } from "./runtime/vault-tree-reconcile";
 import {
 	ObsidianCliService,
 	type ObsidianCliConnectionResult,
@@ -352,6 +353,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(MINERU_READER_VIEW_TYPE, (leaf) => new MineruReaderView(leaf, this));
 		this.app.workspace.onLayoutReady(() => {
 			this.consolidateMineruReaderLeaves();
+			void this.reconcileMissingPublishedPackages();
 			const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
 			if (markdownView?.file && this.isConfiguredReaderMarkdownFile(markdownView.file)) {
 				void this.activateMineruReaderView(markdownView.file.path, markdownView.leaf);
@@ -2558,7 +2560,11 @@ export default class AgentDashboardPlugin extends Plugin {
 	): Promise<AgentLoopRunOutcome> {
 		this.lightAgentResults.delete(runId);
 		return this.agentLoopService.runPaperIngest(runId, options, profileId, hooks)
-			.then((outcome) => {
+			.then(async (outcome) => {
+				const articlePath = outcome.artifacts.articlePath;
+				if (articlePath && outcome.filesWritten.includes(articlePath)) {
+					await this.reconcilePublishedPackage(articlePath);
+				}
 				this.lightAgentResults.set(runId, outcome);
 				return outcome;
 			})
@@ -2566,6 +2572,56 @@ export default class AgentDashboardPlugin extends Plugin {
 				this.lightAgentResults.delete(runId);
 				throw error;
 			});
+	}
+
+	private async reconcilePublishedPackage(articlePath: string, notifyOnFailure = true): Promise<boolean> {
+		const normalizedArticle = normalizePath(articlePath);
+		const packageRoot = normalizedArticle.replace(/\/article\.md$/i, "");
+		try {
+			const result = await reconcilePublishedVaultTree(
+				this.app.vault.adapter as typeof this.app.vault.adapter & {
+					reconcileInternalFile?(path: string): void | Promise<void>;
+				},
+				packageRoot,
+				() => this.app.vault.getAbstractFileByPath(normalizedArticle) instanceof TFile,
+			);
+			if (!result.supported || !result.articleIndexed) {
+				console.warn("Published MinerU package is waiting for Obsidian Vault reconciliation", {
+					packageRoot,
+					supported: result.supported,
+					reconciledEntries: result.reconciledEntries,
+				});
+				if (notifyOnFailure) {
+					new Notice("原文包已发布，但 Obsidian 文件目录尚未同步；请执行“重新加载应用”");
+				}
+			}
+			return result.articleIndexed;
+		} catch (error) {
+			console.warn("Could not reconcile published MinerU package with the Obsidian Vault index", error);
+			if (notifyOnFailure) {
+				new Notice("原文包已发布，但 Obsidian 文件目录刷新失败；请执行“重新加载应用”");
+			}
+			return false;
+		}
+	}
+
+	private async reconcileMissingPublishedPackages(): Promise<void> {
+		try {
+			if (!await this.app.vault.adapter.exists("papers", true)) return;
+			const listed = await this.app.vault.adapter.list("papers");
+			const packageRoots = listed.folders
+				.map((folder) => normalizePath(folder))
+				.filter((folder) => /^papers\/[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(folder))
+				.slice(0, 4_096);
+			for (const packageRoot of packageRoots) {
+				const articlePath = `${packageRoot}/article.md`;
+				if (this.app.vault.getAbstractFileByPath(articlePath) instanceof TFile) continue;
+				if (!await this.app.vault.adapter.exists(articlePath, true)) continue;
+				await this.reconcilePublishedPackage(articlePath, false);
+			}
+		} catch (error) {
+			console.warn("Could not reconcile unindexed MinerU packages during startup", error);
+		}
 	}
 
 	getLightAgentRunResult(runId: string): AgentLoopRunOutcome | null {
