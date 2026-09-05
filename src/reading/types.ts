@@ -40,6 +40,7 @@ export interface ReadingBranch {
 	mainSnapshot: string;
 	mainHeadId: string | null;
 	ancestorContext: string;
+	ancestorSummary?: string;
 	nodeIds: string[];
 	summary: string;
 	summarizedCount: number;

@@ -5,6 +5,7 @@ import { ACTION_BY_ID } from "../actions";
 import { READING_VIEW_TYPE, type ReadingNode, type ReadingQuote, type ReadingSession, type ReadingWindow } from "../reading/types";
 import { readingNode } from "../reading/session";
 import { layoutReading } from "../reading/layout";
+import { resolveReadingQuote } from "../reading/selection";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
 const element = <K extends keyof HTMLElementTagNameMap>(parent: HTMLElement, tag: K, className = "", text = ""): HTMLElementTagNameMap[K] => {
@@ -189,7 +190,8 @@ export class ReadingWorkspaceView extends ItemView {
 		const content = element(article, "div", "reading-answer-content");
 		void MarkdownRenderer.render(this.app, node.content || this.plugin.getReadingEngine().streamed(this.sessionId, node.id) || "正在准备讲解…", content, "", this.renderer);
 		const selectionAction = button(article, "选中文字后追问", () => this.captureQuote(node, content));
-		content.onmouseup = () => { const selected = window.getSelection(); if (selected?.toString().trim() && content.contains(selected.anchorNode) && content.contains(selected.focusNode)) { selectionAction.classList.add("is-ready"); } };
+		selectionAction.disabled = node.status !== "done";
+		content.onmouseup = () => { const selected = window.getSelection(); if (node.status === "done" && selected?.toString().trim() && content.contains(selected.anchorNode) && content.contains(selected.focusNode)) { this.captureQuote(node, content); } };
 		for (const evidence of node.evidence) button(article, evidence.label + (evidence.visualInspected ? " · 已查看图像" : ""), () => this.showEvidence(node.id, evidence.id));
 		if (node.error) element(article, "p", "reading-error", node.error);
 		if (node.status === "failed" || node.status === "interrupted") button(article, "重试", () => this.handle(this.service.generate(this.sessionId, node.id)));
@@ -198,9 +200,11 @@ export class ReadingWorkspaceView extends ItemView {
 	private captureQuote(node: ReadingNode, content: HTMLElement): void {
 		const selected = window.getSelection(); const text = selected?.toString().trim() || "";
 		if (!text || !content.contains(selected?.anchorNode || null)) { new Notice("先在这条回答中选中文字"); return; }
-		const start = node.content.indexOf(text);
-		if (start < 0) { new Notice("该选区含格式标记，请选择一段连续文字"); return; }
-		this.quote = { nodeId: node.id, text, start, end: start + text.length };
+		try {
+			const range = selected!.getRangeAt(0); const before = range.cloneRange(); before.selectNodeContents(content); before.setEnd(range.startContainer, range.startOffset);
+			const after = range.cloneRange(); after.selectNodeContents(content); after.setStart(range.endContainer, range.endOffset);
+			this.quote = resolveReadingQuote(node.id, node.content, text, before.toString(), after.toString());
+		} catch (error) { new Notice(String(error)); return; }
 		this.handle(this.service.repository.transact(this.sessionId, (session) => { session.ui.selectedId = node.id; this.ensureWindow(session, node.id); }).then(() => {
 			this.render(true); this.contentEl.querySelector<HTMLTextAreaElement>(".reading-float textarea")?.focus();
 		}));
@@ -211,6 +215,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const box = element(parent, "div", "reading-composer"); const localKey = sessionId + "|" + key;
 		const quoted = this.quote && this.quote.nodeId === target ? this.quote : undefined;
 		element(box, "small", "", quoted ? "引用追问：" + quoted.text.slice(0, 80) : branchId ? "继续这条支线" : "基于：" + (target ? readingNode(session, target).title : "请先开始主线"));
+		if (quoted) button(box, "取消引用", () => { this.quote = undefined; this.render(true); });
 		const input = element(box, "textarea"); input.rows = 2; input.placeholder = "输入你想了解的问题…"; input.dataset.composer = key;
 		input.value = this.localDrafts.get(localKey) ?? session.ui.drafts[key] ?? "";
 		input.oninput = () => { const value = input.value; this.localDrafts.set(localKey, value); clearTimeout(this.draftTimers.get(localKey));
