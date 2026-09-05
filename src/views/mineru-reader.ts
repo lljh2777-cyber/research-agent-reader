@@ -202,6 +202,17 @@ export class MineruReaderView extends ItemView {
 		this.requestStateSave();
 	}
 
+	/** Explicit evidence navigation must also work in the figure display mode. */
+	revealReadingPage(page: number): void {
+		const article = this.markdownScroller?.querySelector<HTMLElement>(".agent-dashboard-mineru-article");
+		if (!article || !Number.isInteger(page) || page < 1) return;
+		this.readerState.markdownAnchor = "";
+		this.readerState.markdownPage = page; this.readerState.pdfPage = page;
+		this.restoreMarkdownPosition(article, { kind: "page", pageNumber: page });
+		if (this.readerState.mode === "pdf") this.scrollPdfToPage(page, "auto");
+		this.updateMarkdownPageStatus(); this.requestStateSave();
+	}
+
 	async onOpen(): Promise<void> {
 		this.opened = true;
 		if (!this.readerState.articlePath) {

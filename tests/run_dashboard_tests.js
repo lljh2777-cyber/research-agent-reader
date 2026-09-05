@@ -5,6 +5,7 @@ const path = require("path");
 
 const projectRoot = path.resolve(__dirname, "..");
 const commands = [
+	[process.execPath, ["tests/run_reading_tests.js"]],
 	[process.execPath, ["tests/test_release_metadata.js"]],
 	[process.execPath, ["tests/test_dashboard_providers.js"]],
 	[process.execPath, ["tests/test_dashboard_direct_api_boundary.js"]],

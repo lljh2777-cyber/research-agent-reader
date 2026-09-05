@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- PDF 深读默认打开交互阅读空间：主线箭头逐步讲解，双模式导图、可固定和拖动的小窗、连续支线与划选子支线共享同一会话。
+- 新增独立阅读存储、自动恢复、节点草稿与主线背景快照；旧支线保留创建时背景，长对话压缩上下文并保留完整本地记录。
+- 原始 PDF 和已验证 MinerU 包统一提供原文证据；Direct API 与独立只读 Codex CLI 加载仓库内的通用导读 SKILL，校验输出后推进主线。
+- 按需检索本地知识库、查看来源与页面图像，并将节点、支线或完整学习会话导出到 `wiki/qa/`。原有一次性深读和独立知识库对话继续保留。
+- 新增不执行文件清理的 `pnpm test:reading` 回归入口，以及显式运行的 Obsidian 交互验收脚本。
+
 ### Fixed
 
 - `papers/` 与 `Clippings/` 的批注独立保存选区定位信息，不再改写原文或创建跨目录来源链接；重新划选同一文字可打开原有批注。

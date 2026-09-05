@@ -21,11 +21,19 @@ export function readingExportContent(session: ReadingSession, scope: ReadingExpo
 		"原文位置：" + readingPathCode(session.source.path), "", "会话：" + readingPathCode(session.id), ""];
 	for (const node of nodes) {
 		body.push("## " + safeReadingMarkdown(node.title).trim(), "", "节点：" + readingPathCode(node.id) + (node.parentId ? "；起点：" + readingPathCode(node.parentId) : "；主线起点"), "");
+		const trail: string[] = []; let current = node;
+		while (current.branchId) {
+			const branch = session.branches.find((b) => b.id === current.branchId)!;
+			trail.unshift("支线 " + (session.branches.indexOf(branch) + 1) + " 第 " + (branch.nodeIds.indexOf(current.id) + 1) + " 轮");
+			current = session.nodes.find((n) => n.id === branch.parentNodeId)!;
+		}
+		trail.unshift("主线第 " + (session.mainIds.indexOf(current.id) + 1) + " 单元");
+		body.push("学习位置：" + trail.join(" → "), "");
 		if (node.question) body.push("问题：" + safeReadingMarkdown(node.question), "");
 		if (node.quote) body.push("引用：" + safeReadingMarkdown(node.quote.text), "");
 		body.push(safeReadingMarkdown(node.content), "", "依据：", "");
 		for (const evidence of node.evidence) body.push("- " + readingPathCode(evidence.id) + " " + (evidence.kind === "paper" ? "本文" : "知识库补充") + "：" + readingPathCode(evidence.path)
-			+ (evidence.page ? "，第 " + evidence.page + " 页" : "") + (evidence.visualInspected ? "，已查看图像" : ""));
+			+ (evidence.page ? "，第 " + evidence.page + " 页" : "") + (evidence.start !== undefined ? "，阅读文本字符 " + evidence.start + "–" + evidence.end : "") + (evidence.visualInspected ? "，已查看图像" : ""));
 		body.push("");
 	}
 	return ["---", "title: " + JSON.stringify(session.title + " · 学习记录"), "type: qa", "tags: [qa, reading]", "created: " + new Date().toISOString(), "reading_session: " + JSON.stringify(session.id), "---", "", ...body].join("\n");

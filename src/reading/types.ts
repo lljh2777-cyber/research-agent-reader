@@ -49,6 +49,7 @@ export interface ReadingBranch {
 export interface ReadingWindow {
 	key: string; nodeId: string; pinned: boolean; minimized: boolean;
 	x: number; y: number; width: number; height: number;
+	scrollTop?: number;
 }
 export interface ReadingSession {
 	version: 1;
@@ -68,6 +69,7 @@ export interface ReadingSession {
 	demo?: boolean;
 	ui: {
 		mode: "split" | "map"; split: number; selectedId: string;
+		mainFocusId?: string; mainScroll?: number; pendingQuote?: ReadingQuote;
 		zoom: number; scrollX: number; scrollY: number;
 		collapsed: string[]; drafts: Record<string, string>; windows: ReadingWindow[];
 	};

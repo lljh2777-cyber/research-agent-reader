@@ -3141,11 +3141,12 @@ export default class AgentDashboardPlugin extends Plugin {
 					path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader"));
 				const profile = this.getProviderProfile(session.backend);
 				if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
-				return new DirectReadingBackend(this.createLLMProvider(profile), profile.name, profile.model, profile.lastTest.streamingVerified === true);
+				return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, profile.lastTest.streamingVerified === true);
 			}, async (query) => {
-				const trace = await this.getLexicalRetriever().retrieve(query, [], { allowedPrefixes: ["wiki"] });
+				const prefixes = ["sources", "concepts", "methods", "datasets", "synthesis", "mocs", "projects", "entities", "code", "r", "linux"].map((folder) => "wiki/" + folder);
+				const trace = await this.getLexicalRetriever().retrieve(query, [], { allowedPrefixes: prefixes });
 				const evidence = await this.readVaultEvidencePacket(trace);
-				return evidence.slice(0, 4).map((item) => ({ id: "vault-" + readingHash(item.path).slice(0, 12), kind: "vault" as const,
+				return evidence.filter((item) => prefixes.some((prefix) => item.path.startsWith(prefix + "/"))).slice(0, 4).map((item) => ({ id: "vault-" + readingHash(item.path).slice(0, 12), kind: "vault" as const,
 					path: item.path, label: item.path.split("/").slice(-1)[0], text: item.content.slice(0, 6000) }));
 			});
 		}
@@ -3208,6 +3209,13 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.isMineruArticleFile(file) || this.isConfiguredReaderMarkdownFile(file);
 	}
 
+	async openReadingEvidence(articlePath: string, page?: number): Promise<void> {
+		await this.activateMineruReaderView(articlePath);
+		const view = this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE)[0]?.view;
+		if (view instanceof MineruReaderView && page) {
+			view.revealReadingPage(page);
+		}
+	}
 	async activateMineruReaderView(articlePath = "", preferredLeaf?: WorkspaceLeaf): Promise<void> {
 		const contextFile = this.app.workspace.getActiveFile() || this.lastContextFile;
 		const resolvedPath = normalizePath(

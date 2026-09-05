@@ -52,6 +52,7 @@ export function addReadingNode(session: ReadingSession, branchId: string | null,
 		branchId, question, title: question.slice(0, 36) || "准备讲解", content: "", status: "pending", error: "",
 		createdAt: new Date().toISOString(), evidence: [], ...(quote ? { quote } : {}) };
 	session.nodes.push(node); ids.push(node.id); session.ui.selectedId = node.id;
+	if (!branch) session.ui.mainFocusId = node.id;
 	return node;
 }
 export function validateReadingSession(value: unknown): ReadingSession {
@@ -83,5 +84,33 @@ export function validateReadingSession(value: unknown): ReadingSession {
 		branches.add(branch.id); checkChain(branch.nodeIds, branch.id, branch.parentNodeId);
 	}
 	if (attached.size !== nodes.size) throw new Error("阅读会话包含孤立节点");
+	if (typeof session.title !== "string" || typeof session.backend !== "string" || typeof session.model !== "string"
+		|| typeof session.mainSummary !== "string" || typeof session.completed !== "boolean" || !Array.isArray(session.outline)
+		|| session.outline.some((title) => typeof title !== "string") || !Array.isArray(session.ui.windows)
+		|| !Array.isArray(session.ui.collapsed) || session.ui.collapsed.some((id) => typeof id !== "string")
+		|| !session.ui.drafts || typeof session.ui.drafts !== "object" || Array.isArray(session.ui.drafts)
+		|| Object.values(session.ui.drafts).some((value) => typeof value !== "string")) throw new Error("阅读会话界面或记忆格式无效");
+	for (const node of session.nodes) {
+		if (typeof node.title !== "string" || typeof node.error !== "string" || node.evidence.some((item) => !item || typeof item.id !== "string"
+			|| typeof item.text !== "string" || typeof item.path !== "string" || typeof item.label !== "string" || !["paper", "vault"].includes(item.kind))) throw new Error("阅读证据格式无效");
+	}
+	for (const branch of session.branches) {
+		if (typeof branch.summary !== "string" || !Number.isInteger(branch.summarizedCount) || branch.summarizedCount < 0 || branch.summarizedCount > branch.nodeIds.length) throw new Error("支线记忆位置无效");
+	}
+	const clamp = (value: number, fallback: number, min: number, max: number): number => Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+	session.ui.mode = session.ui.mode === "map" ? "map" : "split";
+	session.ui.split = clamp(session.ui.split, 0.5, 0.25, 0.75); session.ui.zoom = clamp(session.ui.zoom, 1, 0.4, 1.8);
+	session.ui.scrollX = clamp(session.ui.scrollX, 0, 0, 1_000_000); session.ui.scrollY = clamp(session.ui.scrollY, 0, 0, 1_000_000);
+	session.ui.mainScroll = clamp(session.ui.mainScroll || 0, 0, 0, 1_000_000);
+	if (!nodes.has(session.ui.selectedId)) session.ui.selectedId = session.mainIds[session.mainIds.length - 1] || "";
+	if (!session.mainIds.includes(session.ui.mainFocusId || "")) session.ui.mainFocusId = session.mainIds[session.mainIds.length - 1];
+	session.ui.windows = session.ui.windows.filter((item) => item && typeof item.key === "string" && nodes.has(item.nodeId)).map((item) => ({
+		...item, pinned: item.pinned === true, minimized: item.minimized === true, x: clamp(item.x, 48, 0, 10000), y: clamp(item.y, 70, 0, 10000),
+		width: clamp(item.width, 520, 280, 4000), height: clamp(item.height, 480, 220, 4000), scrollTop: clamp(item.scrollTop || 0, 0, 0, 1_000_000),
+	}));
+	if (session.ui.pendingQuote) {
+		const quote = session.ui.pendingQuote; const source = nodes.get(quote.nodeId);
+		if (!source || source.content.slice(quote.start, quote.end) !== quote.text) session.ui.pendingQuote = undefined;
+	}
 	return session;
 }

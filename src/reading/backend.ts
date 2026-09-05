@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import { setTimeout, clearTimeout } from "node:timers";
 import type { LLMProvider } from "../providers/adapters";
 import type { ChatMessage } from "../config";
 import type { ReadingBackend, ReadingBackendRequest } from "./types";
@@ -18,7 +19,7 @@ export class DirectReadingBackend implements ReadingBackend {
 		let cancel: (() => void) | undefined;
 		const abort = (): void => cancel?.(); request.signal.addEventListener("abort", abort, { once: true });
 		try {
-			const options = { registerCancel: (callback: () => void) => { cancel = callback; if (request.signal.aborted) callback(); } };
+			const options = { timeoutMs: 120_000, registerCancel: (callback: () => void) => { cancel = callback; if (request.signal.aborted) callback(); } };
 			const payload = { model: this.model, messages, maxTokens: 6000 };
 			const result = this.streaming ? await this.provider.stream(payload, (delta) => request.onDelta?.(delta), options) : await this.provider.complete(payload, options);
 			request.signal.throwIfAborted();

@@ -6082,6 +6082,7 @@ body.agent-dashboard-mineru-resizing {
 .reading-map-node > .reading-advance { position:absolute; right:-32px; top:20px; width:28px; height:28px !important; font-size:19px !important; color:var(--text-on-accent); background:var(--interactive-accent); }
 .reading-answer { padding:0 0 22px; margin-bottom:22px; border-bottom:1px solid var(--background-modifier-border); overflow-wrap:anywhere; }
 .reading-answer h3 { font-size:1.15em; margin:12px 0; }
+.reading-answer-content, .reading-answer-content *, .reading-evidence-text, .reading-question, .reading-quote { user-select:text !important; -webkit-user-select:text !important; }
 .reading-answer > button { margin:4px; font-size:12px; }
 .reading-question { background:var(--background-secondary); border-radius:12px; padding:12px; white-space:pre-wrap; }
 .reading-quote { margin:10px 0; padding:6px 12px; color:var(--text-muted); border-left:3px solid var(--interactive-accent); }

@@ -1,4 +1,5 @@
 import { Component, ItemView, MarkdownRenderer, Modal, Notice, type WorkspaceLeaf } from "obsidian";
+import { setTimeout, clearTimeout } from "node:timers";
 import type AgentDashboardPlugin from "../plugin";
 import { ActionInputModal } from "../modals/action-input";
 import { ACTION_BY_ID } from "../actions";
@@ -23,6 +24,8 @@ export class ReadingWorkspaceView extends ItemView {
 	private signature = "";
 	private renderer = new Component();
 	private draftTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private scrollTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	private scrollEdits = new Map<string, { sessionId: string; edit: (ui: ReadingSession["ui"]) => void }>();
 	private localDrafts = new Map<string, string>();
 	private quote?: ReadingQuote;
 	private activeWindow = "";
@@ -34,7 +37,7 @@ export class ReadingWorkspaceView extends ItemView {
 	getState(): Record<string, unknown> { return { sessionId: this.sessionId }; }
 	async setState(state: unknown): Promise<void> {
 		const id = (state as { sessionId?: string })?.sessionId;
-		if (id) { this.sessionId = id; if (this.service) this.render(true); }
+		if (id) { if (this.service?.repository.sessions.has(id)) this.selectSession(id); else this.sessionId = id; }
 	}
 	async onOpen(): Promise<void> {
 		this.service = this.plugin.getReadingWorkspace(); await this.service.ready();
@@ -46,12 +49,15 @@ export class ReadingWorkspaceView extends ItemView {
 				if (answer.dataset.answerId === nodeId) { const body = answer.querySelector(".reading-answer-content"); if (body) body.textContent = text; }
 			});
 		});
+		this.quote = this.session?.ui.pendingQuote;
 		this.render(true);
 		if (this.service.repository.errors.length) new Notice("部分阅读会话无法加载，文件已保留：" + this.service.repository.errors.join("；"), 10000);
 	}
 	async onClose(): Promise<void> {
 		this.unsubscribe?.(); this.unsubscribeStream?.(); this.cleanupDrag?.(); this.renderer.unload();
 		for (const timer of this.draftTimers.values()) clearTimeout(timer);
+		for (const timer of this.scrollTimers.values()) clearTimeout(timer);
+		for (const pending of this.scrollEdits.values()) await this.service.repository.transact(pending.sessionId, (session) => pending.edit(session.ui)).catch((error) => new Notice(String(error)));
 		for (const [key, value] of this.localDrafts) { const separator = key.indexOf("|"); const id = key.slice(0, separator); const target = key.slice(separator + 1);
 			await this.service.repository.transact(id, (session) => { session.ui.drafts[target] = value; }).catch((error) => new Notice(String(error))); }
 	}
@@ -60,12 +66,19 @@ export class ReadingWorkspaceView extends ItemView {
 	private updateUI(edit: (ui: ReadingSession["ui"]) => void): void {
 		const id = this.sessionId; this.handle(this.service.repository.transact(id, (session) => edit(session.ui)));
 	}
-	private selectSession(id: string): void { this.sessionId = id; this.quote = undefined; this.render(true); this.app.workspace.requestSaveLayout(); }
+	private selectSession(id: string): void { this.sessionId = id; this.quote = this.service.repository.get(id).ui.pendingQuote; this.signature = ""; this.contentEl.replaceChildren(); this.render(true); this.app.workspace.requestSaveLayout(); }
+	private rememberScroll(key: string, edit: (ui: ReadingSession["ui"]) => void): void {
+		const sessionId = this.sessionId; const fullKey = sessionId + ":" + key;
+		this.scrollEdits.set(fullKey, { sessionId, edit }); clearTimeout(this.scrollTimers.get(fullKey));
+		this.scrollTimers.set(fullKey, setTimeout(() => { this.scrollEdits.delete(fullKey); this.handle(this.service.repository.transact(sessionId, (draft) => edit(draft.ui))); }, 250));
+	}
 	private render(force = false): void {
 		const session = this.session;
 		const signature = JSON.stringify(session ? [session.id, session.nodes, session.outline, session.completed, session.backend, session.model,
-			session.ui.mode, session.ui.split, session.ui.selectedId, session.ui.zoom, session.ui.windows, session.ui.collapsed] : null);
+			session.ui.mode, session.ui.split, session.ui.selectedId, session.ui.mainFocusId, session.ui.pendingQuote, session.ui.zoom,
+			session.ui.windows.map(({ scrollTop: _scroll, ...geometry }) => geometry), session.ui.collapsed] : null);
 		if (!force && this.signature === signature) return; this.signature = signature;
+		this.cleanupDrag?.();
 		const oldScroll = new Map<string, [number, number]>();
 		this.contentEl.querySelectorAll<HTMLElement>("[data-scroll-key]").forEach((node) => oldScroll.set(node.dataset.scrollKey!, [node.scrollLeft, node.scrollTop]));
 		const focused = this.contentEl.contains(document.activeElement) ? document.activeElement as HTMLTextAreaElement : null;
@@ -95,6 +108,7 @@ export class ReadingWorkspaceView extends ItemView {
 		if (session.ui.mode === "split") {
 			const chat = element(body, "div", "reading-main-chat"); chat.style.flexBasis = (session.ui.split * 100) + "%";
 			const messages = element(chat, "div", "reading-messages"); messages.dataset.scrollKey = "main";
+			messages.onscroll = () => { const top = messages.scrollTop; this.rememberScroll("main", (ui) => { ui.mainScroll = top; }); };
 			if (session.outline.length) { const details = element(messages, "details", "reading-outline"); element(details, "summary", "", "主线提纲"); session.outline.forEach((title, i) => element(details, "p", "", (i + 1) + ". " + title)); }
 			for (const id of session.mainIds) this.renderAnswer(messages, readingNode(session, id));
 			if (!session.mainIds.length) button(messages, "开始讲解 →", () => this.handle(this.service.advance(session.id)));
@@ -104,13 +118,16 @@ export class ReadingWorkspaceView extends ItemView {
 		}
 		const mapArea = element(body, "div", "reading-map-area");
 		const map = element(mapArea, "div", "reading-map-scroll"); map.dataset.scrollKey = "map";
+		map.onscroll = () => { const x = map.scrollLeft; const y = map.scrollTop; this.rememberScroll("map", (ui) => { ui.scrollX = x; ui.scrollY = y; }); };
 		this.renderMap(map, session);
 		if (session.ui.mode === "map") this.renderComposer(mapArea, "main");
 		if (!session.mainIds.length) button(mapArea, "开始讲解 →", () => this.handle(this.service.advance(session.id)));
 		const windows = element(this.contentEl, "div", "reading-windows");
 		for (const floating of session.ui.windows) this.renderWindow(windows, floating);
 		this.contentEl.querySelectorAll<HTMLElement>("[data-scroll-key]").forEach((node) => {
-			const saved = oldScroll.get(node.dataset.scrollKey!); if (saved) { node.scrollLeft = saved[0]; node.scrollTop = saved[1]; }
+			const key = node.dataset.scrollKey!;
+			const saved = oldScroll.get(key) || (key === "main" ? [0, session.ui.mainScroll || 0] : key === "map" ? [session.ui.scrollX, session.ui.scrollY] : [0, session.ui.windows.find((w) => w.key === key)?.scrollTop || 0]);
+			node.style.scrollBehavior = "auto"; node.scrollLeft = saved[0]; node.scrollTop = saved[1]; node.style.scrollBehavior = "";
 		});
 		if (focusKey) { const input = [...this.contentEl.querySelectorAll<HTMLTextAreaElement>("textarea[data-composer]")].find((item) => item.dataset.composer === focusKey);
 			input?.focus({ preventScroll: true }); if (input && cursor != null) input.setSelectionRange(cursor, cursor); }
@@ -143,6 +160,8 @@ export class ReadingWorkspaceView extends ItemView {
 		this.quote = undefined;
 		this.handle(this.service.repository.transact(session.id, (draft) => {
 			draft.ui.selectedId = id;
+			draft.ui.pendingQuote = undefined;
+			if (!node.branchId) draft.ui.mainFocusId = id;
 			if (draft.ui.mode === "map" || node.branchId) this.ensureWindow(draft, id);
 		}).then(() => {
 			const selector = node.branchId || session.ui.mode === "map" ? ".reading-float [data-answer-id]" : ".reading-main-chat [data-answer-id]";
@@ -176,6 +195,7 @@ export class ReadingWorkspaceView extends ItemView {
 		});
 		if (state.minimized) return;
 		const messages = element(floating, "div", "reading-messages"); messages.dataset.scrollKey = state.key;
+		messages.onscroll = () => { const top = messages.scrollTop; this.rememberScroll(state.key, (ui) => { const saved = ui.windows.find((w) => w.key === state.key); if (saved) saved.scrollTop = top; }); };
 		const ids = node.branchId ? session.branches.find((branch) => branch.id === node.branchId)!.nodeIds : [node.id];
 		ids.forEach((id) => this.renderAnswer(messages, readingNode(session, id)));
 		this.renderComposer(floating, state.key, node.branchId || undefined, node.id);
@@ -189,7 +209,8 @@ export class ReadingWorkspaceView extends ItemView {
 		element(article, "h3", "", node.title);
 		if (node.quote) element(article, "blockquote", "reading-quote", node.quote.text);
 		const content = element(article, "div", "reading-answer-content");
-		try { void MarkdownRenderer.render(this.app, safeReadingMarkdown(node.content || this.plugin.getReadingEngine().streamed(this.sessionId, node.id) || "正在准备讲解…"), content, "", this.renderer); }
+		const placeholder = node.status === "failed" || node.status === "interrupted" ? "本单元尚未完成，可在下方重试。" : "正在准备讲解…";
+		try { void MarkdownRenderer.render(this.app, safeReadingMarkdown(node.content || this.plugin.getReadingEngine().streamed(this.sessionId, node.id) || placeholder), content, "", this.renderer).catch(() => { content.textContent = node.content; }); }
 		catch { content.textContent = node.content; }
 		const selectionAction = button(article, "选中文字后追问", () => this.captureQuote(node, content));
 		selectionAction.disabled = node.status !== "done";
@@ -213,26 +234,30 @@ export class ReadingWorkspaceView extends ItemView {
 			const after = range.cloneRange(); after.selectNodeContents(content); after.setStart(range.endContainer, range.endOffset);
 			this.quote = resolveReadingQuote(node.id, node.content, text, before.toString(), after.toString());
 		} catch (error) { new Notice(String(error)); return; }
-		this.handle(this.service.repository.transact(this.sessionId, (session) => { session.ui.selectedId = node.id; this.ensureWindow(session, node.id); }).then(() => {
+		this.handle(this.service.repository.transact(this.sessionId, (session) => { session.ui.selectedId = node.id; session.ui.pendingQuote = this.quote; this.ensureWindow(session, node.id); }).then(() => {
 			this.render(true); this.contentEl.querySelector<HTMLTextAreaElement>(".reading-float textarea")?.focus();
 		}));
 	}
 	private renderComposer(parent: HTMLElement, key: string, branchId?: string, nodeId?: string): void {
 		const session = this.session!; const sessionId = session.id;
-		const target = nodeId || (session.nodes.find((node) => node.id === session.ui.selectedId && !node.branchId)?.id) || session.mainIds[session.mainIds.length - 1];
+		const target = nodeId || session.ui.mainFocusId || session.mainIds[session.mainIds.length - 1];
+		key = key === "main" ? "main:" + (target || "") : key;
 		const box = element(parent, "div", "reading-composer"); const localKey = sessionId + "|" + key;
 		const quoted = this.quote && this.quote.nodeId === target ? this.quote : undefined;
 		element(box, "small", "", quoted ? "引用追问：" + quoted.text.slice(0, 80) : branchId ? "继续这条支线" : "基于：" + (target ? readingNode(session, target).title : "请先开始主线"));
-		if (quoted) button(box, "取消引用", () => { this.quote = undefined; this.render(true); });
+		if (quoted) button(box, "取消引用", () => { this.quote = undefined; this.updateUI((ui) => { ui.pendingQuote = undefined; }); this.render(true); });
 		const input = element(box, "textarea"); input.rows = 2; input.placeholder = "输入你想了解的问题…"; input.dataset.composer = key;
 		input.value = this.localDrafts.get(localKey) ?? session.ui.drafts[key] ?? "";
 		input.oninput = () => { const value = input.value; this.localDrafts.set(localKey, value); clearTimeout(this.draftTimers.get(localKey));
 			this.draftTimers.set(localKey, setTimeout(() => { this.handle(this.service.repository.transact(sessionId, (draft) => { draft.ui.drafts[key] = value; })); }, 400)); };
+		let sending = false;
 		const send = async (): Promise<void> => {
-			if (!target || !input.value.trim()) return; const question = input.value;
-			const id = await this.service.ask(sessionId, quoted?.nodeId || target, question, quoted ? undefined : branchId, quoted);
-			this.quote = undefined; this.localDrafts.set(localKey, ""); clearTimeout(this.draftTimers.get(localKey));
-			await this.service.repository.transact(sessionId, (draft) => { draft.ui.drafts[key] = ""; this.ensureWindow(draft, id); });
+			if (sending || !target || !input.value.trim()) return; const question = input.value; sending = true;
+			try {
+				const id = await this.service.ask(sessionId, quoted?.nodeId || target, question, quoted ? undefined : branchId, quoted);
+				this.quote = undefined; this.localDrafts.set(localKey, ""); clearTimeout(this.draftTimers.get(localKey));
+				await this.service.repository.transact(sessionId, (draft) => { draft.ui.pendingQuote = undefined; draft.ui.drafts[key] = ""; this.ensureWindow(draft, id); });
+			} finally { sending = false; }
 		};
 		button(box, "发送", () => this.handle(send()));
 		input.onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); this.handle(send()); } };
@@ -264,11 +289,12 @@ export class ReadingWorkspaceView extends ItemView {
 	private showEvidence(nodeId: string, evidenceId: string): void {
 		const item = readingNode(this.session!, nodeId).evidence.find((evidence) => evidence.id === evidenceId); if (!item) return;
 		const modal = new Modal(this.app); modal.titleEl.setText(item.label); element(modal.contentEl, "p", "", item.path + (item.page ? " · 第 " + item.page + " 页" : ""));
+		if (item.start !== undefined) element(modal.contentEl, "p", "", "阅读文本字符位置：" + item.start + "–" + item.end + (item.page ? "" : "；页码未唯一匹配，以本段原文为准"));
 		element(modal.contentEl, "pre", "reading-evidence-text", item.text);
 		if (item.kind === "vault") button(modal.contentEl, "打开来源笔记", () => { this.plugin.openVaultFile(item.path); modal.close(); });
-		if (item.kind === "paper" && this.session!.source.kind === "article") button(modal.contentEl, "在阅读器打开原文", () => this.handle(this.plugin.activateMineruReaderView(item.path)));
+		if (item.kind === "paper" && this.session!.source.kind === "article") button(modal.contentEl, "在阅读器打开原文", () => this.handle(this.service.document(this.sessionId).then(async (source) => { await source.verify(); await this.plugin.openReadingEvidence(item.path, item.page); modal.close(); })));
 		if (item.kind === "paper") this.handle(this.service.document(this.sessionId).then(async (document) => {
-			await document.verify(); const image = await document.image(item); if (image) { const img = element(modal.contentEl, "img"); img.src = image.dataUrl; img.style.maxWidth = "100%"; }
+			await document.verify(); const image = await document.image(document.source.kind === "pdf" && item.page ? { ...item, asset: "pdf-page" } : item); if (image) { const img = element(modal.contentEl, "img"); img.src = image.dataUrl; img.style.maxWidth = "100%"; }
 		})); modal.open();
 	}
 	private openModel(): void {

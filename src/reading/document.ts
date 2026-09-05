@@ -17,11 +17,19 @@ export interface ReadingDocument {
 	source: ReadingSource;
 	evidence: ReadingEvidence[];
 	catalog: string;
-	image(evidence: ReadingEvidence): Promise<ReadingImage | null>;
+	image(evidence: ReadingEvidence, signal?: AbortSignal): Promise<ReadingImage | null>;
 	verify(): Promise<void>;
 	destroy(): Promise<void>;
 }
 export const readingHash = (bytes: Uint8Array | string): string => createHash("sha256").update(bytes).digest("hex");
+export function readingCatalog(evidence: ReadingEvidence[]): string {
+	// Preserve every location even when a paper needs shorter preview snippets.
+	const locations = evidence.map((item) => item.id + (item.asset ? " [图像] " : " ") + item.label.slice(0, 100));
+	const remaining = 48_000 - locations.join("\n").length - evidence.length;
+	if (remaining < 0) throw new Error("原文证据目录超过本轮支持范围，请选择较小的论文文件");
+	const previewLength = Math.min(240, Math.floor(remaining / Math.max(1, evidence.length)));
+	return locations.map((location, index) => location + " " + evidence[index].text.replace(/\s+/g, " ").slice(0, previewLength)).join("\n");
+}
 export function textEvidence(text: string, sourcePath: string, page?: number): ReadingEvidence[] {
 	const blocks: ReadingEvidence[] = [];
 	let section = page ? "第 " + page + " 页" : "正文";
@@ -43,6 +51,11 @@ export function textEvidence(text: string, sourcePath: string, page?: number): R
 		start += line.length;
 	}
 	flush(); return blocks;
+}
+export function uniqueEvidencePage(item: ReadingEvidence, locations: Array<{ page: number; start: number; end: number }>): number | undefined {
+	if (item.start === undefined || item.end === undefined) return undefined;
+	const pages = new Set(locations.filter((range) => range.start < item.end! && range.end > item.start!).map((range) => range.page));
+	return pages.size === 1 ? [...pages][0] : undefined;
 }
 export function selectReadingEvidence(document: ReadingDocument, query: string, step: number, preferredIds: string[] = []): ReadingEvidence[] {
 	const terms = tokenizeForLexicalRetrieval(query, 60);
@@ -101,10 +114,10 @@ export class ReadingDocumentLoader {
 					page: number, text: text.trim() ? text.slice(0, 1200) : "此页无可用文本层，需要视觉读取。", asset: "pdf-page" });
 			}
 			const source: ReadingSource = { kind: "pdf", path: filename, fingerprint, title: path.basename(filename, path.extname(filename)) };
-			return { source, evidence, catalog: evidence.filter((item) => !item.asset || !evidence.some((other) => !other.asset && other.page === item.page))
-				.map((item) => item.id + " " + item.label + " " + item.text.slice(0, 280)).join("\n").slice(0, 48_000),
+			return { source, evidence, catalog: readingCatalog(evidence),
 				verify: async () => { if (readingHash(await read()) !== fingerprint) throw new Error("原始 PDF 已变化，请保留旧会话并重新选择来源创建会话"); },
-				destroy: () => pdf.destroy(), image: async (item) => {
+				destroy: () => pdf.destroy(), image: async (item, signal) => {
+					signal?.throwIfAborted();
 					if (!item.asset || !item.page) return null;
 					const page = await pdf.getPage(item.page); const original = page.getViewport({ scale: 1 });
 					const scale = Math.min(2, 1600 / Math.max(original.width, original.height));
@@ -113,7 +126,11 @@ export class ReadingDocumentLoader {
 					const canvas = document.createElement("canvas"); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
 					try {
 						const context = canvas.getContext("2d"); if (!context) throw new Error("PDF 图像渲染不可用");
-						await page.render({ canvasContext: context, viewport, background: "white" }).promise;
+						// Evidence is offscreen: print intent avoids waiting for a foreground animation frame.
+						const render = page.render({ canvasContext: context, viewport, background: "white", intent: "print" });
+						const cancel = (): void => render.cancel(); signal?.addEventListener("abort", cancel, { once: true });
+						try { if (signal?.aborted) cancel(); await render.promise; signal?.throwIfAborted(); }
+						finally { signal?.removeEventListener("abort", cancel); }
 						return { evidenceId: item.id, dataUrl: canvas.toDataURL("image/png") };
 					} finally { canvas.width = 0; canvas.height = 0; }
 				} };
@@ -122,7 +139,6 @@ export class ReadingDocumentLoader {
 	private async article(articlePath: string): Promise<ReadingDocument> {
 		if (!/^papers\/[^/]+\/article\.md$/.test(articlePath)) throw new Error("请选择 papers/<citekey>/article.md 已验证原文包");
 		const loader = new MineruPackageLoader(this.app);
-		const loaded = await loader.load(articlePath);
 		const fingerprint = async (): Promise<string> => {
 			const file = this.app.vault.getAbstractFileByPath(articlePath);
 			const manifest = this.app.vault.getAbstractFileByPath(articlePath.replace(/article\.md$/, "_extraction/manifest.json"));
@@ -130,12 +146,12 @@ export class ReadingDocumentLoader {
 			return readingHash(Buffer.concat([Buffer.from(await this.app.vault.readBinary(file)), Buffer.from(await this.app.vault.readBinary(manifest))]));
 		};
 		const hash = await fingerprint();
+		const loaded = await loader.load(articlePath);
+		if (await fingerprint() !== hash) throw new Error("读取期间原文包已变化，请重新选择来源");
 		const evidence = textEvidence(loaded.articleMarkdown, articlePath);
-		for (const item of evidence) {
-			const page = loaded.viewerIndex.pages.find((p) => p.blocks.some((block) => block.markdown_text_range
-				&& block.markdown_text_range.start <= item.start! && block.markdown_text_range.end > item.start!));
-			if (page) item.page = page.page_idx + 1;
-		}
+		const locations = loaded.viewerIndex.pages.flatMap((page) => page.blocks.flatMap((block) => [block.markdown_text_range, block.markdown_table_range]
+			.filter((range) => range !== undefined).map((range) => ({ page: page.page_idx + 1, start: range!.start, end: range!.end }))));
+		for (const item of evidence) item.page = uniqueEvidencePage(item, locations);
 		loaded.visuals.forEach((visual, index) => {
 			const assets = visual.memberAssetPaths.length ? visual.memberAssetPaths : [visual.anchorAssetPath];
 			assets.filter((asset) => loaded.verifiedAssetBlobs.has(asset)).forEach((asset, part) => evidence.push({
@@ -144,7 +160,7 @@ export class ReadingDocumentLoader {
 			}));
 		});
 		return { source: { kind: "article", path: articlePath, fingerprint: hash, title: loaded.title }, evidence,
-			catalog: evidence.map((item) => item.id + " " + item.label + " " + item.text.slice(0, 240)).join("\n").slice(0, 48_000),
+			catalog: readingCatalog(evidence),
 			verify: async () => { await loader.load(articlePath); if (await fingerprint() !== hash) throw new Error("原文包已变化，请重新选择来源创建会话"); },
 			destroy: async () => { loaded.verifiedAssetBlobs.clear(); loaded.verifiedPdfBytes = null; },
 			image: async (item) => {

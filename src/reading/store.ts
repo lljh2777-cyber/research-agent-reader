@@ -53,7 +53,7 @@ export class ReadingRepository {
 	private listeners = new Set<(id: string) => void>();
 	constructor(private readonly storage: ReadingStorage) {}
 	subscribe(listener: (id: string) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-	private emit(id: string): void { this.listeners.forEach((listener) => listener(id)); }
+	private emit(id: string): void { this.listeners.forEach((listener) => { try { listener(id); } catch (error) { console.error("Reading view update failed", error); } }); }
 	async load(): Promise<void> {
 		for (const id of await this.storage.list()) {
 			try {
@@ -63,7 +63,7 @@ export class ReadingRepository {
 				for (const node of session.nodes) if (node.status === "running" || node.status === "pending") {
 					node.status = "interrupted"; node.error = "上次生成已中断，可重试"; interrupted = true;
 				}
-				if (interrupted) await this.storage.write(id, JSON.stringify(session));
+				if (interrupted) await this.storage.write(id, JSON.stringify(session)).catch((error) => { this.errors.push(id + "：中断状态未能保存，历史仍可读取：" + String(error)); });
 				this.sessions.set(id, session);
 			} catch (error) { this.errors.push(id + ": " + String(error)); }
 		}

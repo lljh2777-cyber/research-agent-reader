@@ -9,6 +9,7 @@ export class ReadingWorkspaceService {
 	readonly loader: ReadingDocumentLoader;
 	private documents = new Map<string, ReadingDocument>();
 	private initialization: Promise<void> | null = null;
+	private tasks = new Set<Promise<void>>();
 	generateHandler?: (sessionId: string, nodeId: string) => Promise<void>;
 	stopHandler?: (sessionId: string, nodeId: string) => void;
 	disposeHandler?: () => void;
@@ -61,7 +62,12 @@ export class ReadingWorkspaceService {
 		void this.generate(sessionId, id).catch(() => undefined);
 		return id;
 	}
-	async generate(sessionId: string, id: string): Promise<void> {
+	generate(sessionId: string, id: string): Promise<void> {
+		const task = this.runGeneration(sessionId, id); this.tasks.add(task);
+		void task.finally(() => this.tasks.delete(task)).catch(() => undefined);
+		return task;
+	}
+	private async runGeneration(sessionId: string, id: string): Promise<void> {
 		if (this.repository.get(sessionId).demo) {
 			await this.repository.transact(sessionId, (session) => {
 				const node = readingNode(session, id); node.status = "done"; node.title = node.question.slice(0, 24) || "下一步示例讲解";
@@ -75,7 +81,7 @@ export class ReadingWorkspaceService {
 	}
 	stop(sessionId: string, id: string): void { this.stopHandler?.(sessionId, id); }
 	async dispose(): Promise<void> {
-		this.disposeHandler?.(); await this.repository.flush();
+		this.disposeHandler?.(); await Promise.allSettled([...this.tasks]); await this.repository.flush();
 		await Promise.allSettled([...this.documents.values()].map((document) => document.destroy())); this.documents.clear();
 	}
 }

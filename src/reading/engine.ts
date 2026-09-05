@@ -1,4 +1,5 @@
 import teachingSkill from "../../skills/paper-guided-reading/SKILL.md";
+import { setTimeout, clearTimeout } from "node:timers";
 import { readingNode, completedMainContext } from "./session";
 import { selectReadingEvidence } from "./document";
 import type { ReadingWorkspaceService } from "./workspace";
@@ -67,8 +68,12 @@ export class ReadingEngine {
 		}
 		const history = branch.nodeIds.map((id) => readingNode(session, id)).filter((item) => item.id !== nodeId && item.status === "done");
 		const pending = history.slice(branch.summarizedCount);
-		if (pending.reduce((sum, item) => sum + item.question.length + item.content.length, 0) > 22_000 && pending.length > 4) {
-			const old = pending.slice(0, -4); let summary = branch.summary;
+		let remaining = pending.reduce((sum, item) => sum + item.question.length + item.content.length, 0);
+		if (remaining > 22_000) {
+			let count = Math.max(0, pending.length - 4);
+			remaining -= pending.slice(0, count).reduce((sum, item) => sum + item.question.length + item.content.length, 0);
+			while (remaining > 22_000 && count < pending.length) { const item = pending[count++]; remaining -= item.question.length + item.content.length; }
+			const old = pending.slice(0, count); let summary = branch.summary;
 			for (const item of old) for (let start = 0; start < item.content.length; start += 18_000) summary = await summarize(summary + "\n问题：" + item.question + "\n" + item.content.slice(start, start + 18_000));
 			await this.workspace.repository.transact(sessionId, (draft) => { const current = draft.branches.find((item) => item.id === branch.id)!; current.summary = summary; current.summarizedCount = branch.summarizedCount + old.length; });
 		}
@@ -81,11 +86,13 @@ export class ReadingEngine {
 		const timer = setTimeout(() => controller.abort(), 300_000);
 		try {
 			await repository.transact(sessionId, (session) => { const node = readingNode(session, nodeId); node.status = "running"; node.error = ""; node.content = ""; });
+			this.emit(sessionId, nodeId, "正在准备阅读背景和本文证据…");
 			const backend = this.backendFor(repository.get(sessionId));
 			await this.prepareMemory(sessionId, nodeId, backend, controller.signal);
 			const session = structuredClone(repository.get(sessionId)); const node = readingNode(session, nodeId);
 			const document = await this.workspace.document(sessionId);
 			await document.verify(); controller.signal.throwIfAborted();
+			this.emit(sessionId, nodeId, "正在选择本单元所需的原文证据…");
 			const context = readingContext(session, nodeId);
 			const completedCount = session.mainIds.filter((id) => readingNode(session, id).status === "done").length;
 			const selectionPrompt = JSON.stringify({ action: node.branchId ? "追问" : "下一步主线", question: node.question, quote: node.quote?.text,
@@ -96,6 +103,7 @@ export class ReadingEngine {
 			const ids = Array.isArray(selection.ids) ? selection.ids.filter((id): id is string => typeof id === "string") : [];
 			if (!ids.length || ids.length > 8 || ids.some((id) => !document.evidence.some((item) => item.id === id))) throw new Error("模型未选择有效原文证据，请重试");
 			const evidence = selectReadingEvidence(document, String(selection.query || node.question), completedCount, ids);
+			if (ids.some((id) => !evidence.some((item) => item.id === id))) throw new Error("所选证据超过本轮上下文容量，请缩小问题范围后重试");
 			let retrieval: { query: string; paths: string[]; error?: string } | undefined;
 			if (typeof selection.vaultQuery === "string" && selection.vaultQuery.trim() && this.vaultSearch) {
 				const query = selection.vaultQuery.trim().slice(0, 500); retrieval = { query, paths: [] };
@@ -103,12 +111,16 @@ export class ReadingEngine {
 				catch (error) { retrieval.error = "知识库检索失败：" + String(error); }
 			}
 			const images: ReadingImage[] = [];
-			const visualRequired = selection.needsVisual === true || evidence.every((item) => Boolean(item.asset));
+			const requiredVisuals = ids.filter((id) => document.evidence.find((item) => item.id === id)?.asset);
+			const visualRequired = selection.needsVisual === true || requiredVisuals.length > 0 || evidence.every((item) => Boolean(item.asset));
+			if (requiredVisuals.length > 3) throw new Error("本轮选取的图像超过 3 张，请将问题拆分为较小的图表单元");
 			if (visualRequired && !backend.images) throw new Error("本轮需要阅读图像；当前模型未启用视觉能力。请切换模型后重试，图表尚未核验");
-			if (backend.images) for (const item of evidence.filter((item) => item.asset).slice(0, 3)) {
-				controller.signal.throwIfAborted(); const image = await document.image(item); if (image) { images.push(image); item.visualInspected = true; }
+			if (backend.images) for (const item of evidence.filter((item) => item.asset).sort((a, b) => Number(requiredVisuals.includes(b.id)) - Number(requiredVisuals.includes(a.id))).slice(0, 3)) {
+				controller.signal.throwIfAborted(); const image = await document.image(item, controller.signal); if (image) { images.push(image); item.visualInspected = true; }
 			}
 			if (visualRequired && !images.length) throw new Error("需要的图像无法读取，图表尚未核验");
+			if (requiredVisuals.some((id) => !images.some((image) => image.evidenceId === id))) throw new Error("选中的图像未完整加载，请重试");
+			this.emit(sessionId, nodeId, "已读取 " + evidence.length + " 条证据" + (images.length ? "和 " + images.length + " 张图像" : "") + "，正在生成讲解…");
 			const prompt = JSON.stringify({ action: node.branchId ? "回答支线追问" : completedCount ? "继续下一个主线单元" : "生成整体提纲并讲解第一单元",
 				question: node.question, quote: node.quote?.text, context, outline: session.outline, completedUnits: completedCount,
 				retrieval: retrieval ? { query: retrieval.query, found: retrieval.paths.length, error: retrieval.error, instruction: "若没有足够补充依据，明确写 Vault 中未找到足够依据" } : null,
@@ -122,6 +134,7 @@ export class ReadingEngine {
 					try { this.emit(sessionId, nodeId, JSON.parse('"' + match[1] + '"')); } catch { /* Incomplete escape; retain previous frame. */ }
 				} } });
 			controller.signal.throwIfAborted(); const result = validateReadingResult(raw, evidence, !node.branchId);
+			await document.verify(); controller.signal.throwIfAborted();
 			await repository.transact(sessionId, (draft) => {
 				const target = readingNode(draft, nodeId); target.title = result.title; target.content = result.content; target.status = "done"; target.error = "";
 				target.evidence = evidence.filter((item) => result.evidenceIds.includes(item.id)); target.provider = backend.name; target.model = backend.model;
