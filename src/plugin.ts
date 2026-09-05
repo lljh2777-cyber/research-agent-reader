@@ -65,7 +65,7 @@ import { requestHumanIdentityConfirmation } from "./modals/human-identity-confir
 import { CodePracticeView } from "./views/code-practice";
 import { DashboardView } from "./views/dashboard";
 import { MineruReaderView } from "./views/mineru-reader";
-import { QueryWikiView, type QueryWikiCompletionHandler } from "./views/query-wiki";
+import { QueryWikiView } from "./views/query-wiki";
 import { LearningSessionView } from "./views/learning-session";
 import { AnnotationPopover } from "./annotations/annotation-popover";
 import { AnnotationService } from "./annotations/annotation-service";
@@ -3146,17 +3146,14 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.app.workspace.revealLeaf(leaf);
 	}
 
-	async activateQueryWikiView(
-		initialQuestion = "",
-		completionHandler?: QueryWikiCompletionHandler,
-	): Promise<void> {
+	async activateQueryWikiView(initialQuestion = ""): Promise<void> {
 		const existing = this.app.workspace.getLeavesOfType(QUERY_WIKI_VIEW_TYPE)[0];
 		const leaf = existing || this.app.workspace.getRightLeaf(false) || this.app.workspace.getLeaf(true);
 		if (!existing) {
 			await leaf.setViewState({ type: QUERY_WIKI_VIEW_TYPE, active: true });
 		}
 		if (leaf.view instanceof QueryWikiView) {
-			leaf.view.setInitialQuestion(initialQuestion, completionHandler);
+			leaf.view.setInitialQuestion(initialQuestion);
 		}
 		await this.app.workspace.revealLeaf(leaf);
 	}

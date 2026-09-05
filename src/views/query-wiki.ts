@@ -34,7 +34,6 @@ import {
 	normalizeQueryWebSources,
 	normalizeVaultImageAttachments,
 	type QueryVaultSource,
-	type QueryWebSource,
 	type VaultImageAttachment,
 } from "../query/normalization";
 import { makeVaultSourcePathResolver } from "../services/vault-evidence";
@@ -114,16 +113,6 @@ interface QueryRunnerHooks {
 	onEvent?: (event: DashboardProcessEvent) => void;
 }
 
-export interface QueryWikiCompletionPayload {
-	status: "done" | "failed" | "interrupted";
-	answer: string;
-	error: string;
-	vaultSources: QueryVaultSource[];
-	webSources: QueryWebSource[];
-}
-
-export type QueryWikiCompletionHandler = (payload: QueryWikiCompletionPayload) => void;
-
 interface QueryViewHost extends PluginHost {
 	lightPaperIngestAvailable(): { ready: boolean; reason: string };
 	lightAgentMineruReady(): boolean;
@@ -202,7 +191,6 @@ export class QueryWikiView extends ItemView {
 	private inputSessionId: string;
 	private statusEl: HTMLSpanElement | null;
 	private pendingImages: VaultImageAttachment[];
-	private pendingCompletionHandler: QueryWikiCompletionHandler | null;
 	private readonly queryDrafts: Map<string, string>;
 	private navigatorFrame: number;
 	private executionOverridesByBackend: Record<CliBackendId, QueryExecutionOverrides>;
@@ -219,7 +207,6 @@ export class QueryWikiView extends ItemView {
 		this.inputSessionId = "";
 		this.statusEl = null;
 		this.pendingImages = [];
-		this.pendingCompletionHandler = null;
 		this.queryDrafts = new Map();
 		this.navigatorFrame = 0;
 		this.executionOverridesByBackend = {
@@ -265,9 +252,8 @@ export class QueryWikiView extends ItemView {
 		this.contentEl.empty();
 	}
 
-	setInitialQuestion(value: unknown, completionHandler?: QueryWikiCompletionHandler): void {
+	setInitialQuestion(value: unknown): void {
 		this.initialQuestion = String(value || "").trim();
-		this.pendingCompletionHandler = completionHandler || null;
 		if (this.initialQuestion) {
 			this.queryDrafts.set(this.session.id, this.initialQuestion);
 		}
@@ -1621,8 +1607,6 @@ export class QueryWikiView extends ItemView {
 				),
 			};
 		assistantMessage.model = executionConfig.model;
-		const completionHandler = this.pendingCompletionHandler;
-		this.pendingCompletionHandler = null;
 		const input = this.plugin.buildQueryActionInput(
 			question,
 			priorMessages,
@@ -1680,16 +1664,14 @@ export class QueryWikiView extends ItemView {
 					? "已停止本轮查询。"
 					: result.stderr.trim() || `查询进程退出码：${result.exitCode}`;
 			const traceEvent = [...(result.events || [])].reverse().find((event) => event.type === "retrieval-preflight");
-			const vaultSources = this.normalizeVaultSourceEntries(structuredResult?.vault_sources);
-			const webSources = normalizeQueryWebSources(structuredResult?.web_sources);
 			await this.plugin.updateQueryMessage(session.id, assistantMessage.id, {
 				status,
 				content: response || (status === "done" ? "本轮查询未返回文本。" : ""),
 				error,
 				progress: "",
 				retrievalTrace: traceEvent?.payload || assistantMessage.retrievalTrace || null,
-				vaultSources,
-				webSources,
+				vaultSources: this.normalizeVaultSourceEntries(structuredResult?.vault_sources),
+				webSources: normalizeQueryWebSources(structuredResult?.web_sources),
 				citationValidation: normalizeQueryCitationValidation(structuredResult?.citation_validation),
 				retrievalPath: normalizeQueryRetrievalPath(structuredResult?.retrieval_path),
 				retrievalMode: traceEvent?.mode === "vault"
@@ -1715,13 +1697,6 @@ export class QueryWikiView extends ItemView {
 				output,
 				error,
 			});
-			this.notifyCompletion(completionHandler, {
-				status,
-				answer: response,
-				error,
-				vaultSources,
-				webSources,
-			});
 			new Notice(status === "done" ? "知识库回答已完成" : stopped ? "知识库查询已停止" : "知识库查询失败");
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -1739,13 +1714,6 @@ export class QueryWikiView extends ItemView {
 					error: message,
 				});
 			}
-			this.notifyCompletion(completionHandler, {
-				status: interrupted ? "interrupted" : "failed",
-				answer: "",
-				error: interrupted ? "已停止本轮查询。" : message,
-				vaultSources: [],
-				webSources: [],
-			});
 			new Notice(interrupted ? "知识库查询已停止" : `知识库查询失败：${message}`);
 		} finally {
 			this.activeRunId = "";
@@ -1753,18 +1721,6 @@ export class QueryWikiView extends ItemView {
 			this.stopRequested = false;
 			await this.render({ scrollToBottom: true });
 			if (!completedRun) console.warn("Query run completed without a persisted task record");
-		}
-	}
-
-	private notifyCompletion(
-		handler: QueryWikiCompletionHandler | null,
-		payload: QueryWikiCompletionPayload,
-	): void {
-		if (!handler) return;
-		try {
-			handler(payload);
-		} catch (error) {
-			console.warn("Could not return the knowledge-base answer to the learning map", error);
 		}
 	}
 

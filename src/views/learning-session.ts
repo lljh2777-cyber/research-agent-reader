@@ -1,7 +1,6 @@
 import {
 	App,
 	ItemView,
-	MarkdownRenderer,
 	Notice,
 	TFile,
 	normalizePath,
@@ -13,14 +12,11 @@ import {
 import { LEARNING_SESSION_VIEW_TYPE } from "../config";
 import { ReaderDocumentLoader } from "../reader/document-loader";
 import type { MineruReaderPackage } from "../mineru/types";
-import type { QueryWikiCompletionHandler } from "./query-wiki";
 import {
 	LEARNING_MODULE_DEFINITIONS,
-	applyLearningBranchAnswer,
 	buildLearningModules,
 	buildLearningQuestionPrompt,
 	createLearningBranch,
-	createLearningFollowUpBranch,
 	createLearningSessionState,
 	nextLearningModuleId,
 	normalizeLearningSessionState,
@@ -33,10 +29,7 @@ import {
 interface LearningSessionHost {
 	app: App;
 	activateMineruReaderView(articlePath?: string): Promise<void>;
-	activateQueryWikiView(
-		initialQuestion?: string,
-		completionHandler?: QueryWikiCompletionHandler,
-	): Promise<void>;
+	activateQueryWikiView(initialQuestion?: string): Promise<void>;
 }
 
 function iconButton(
@@ -66,16 +59,6 @@ function evidenceIcon(kind: LearningEvidenceRef["kind"]): string {
 	if (kind === "figure") return "image";
 	if (kind === "source") return "file-text";
 	return "text-quote";
-}
-
-function compactNodeText(value: string, limit = 190): string {
-	const compact = value
-		.replace(/!\[[^\]]*\]\([^)]+\)/g, " ")
-		.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-		.replace(/[`*_~>#|]/g, " ")
-		.replace(/\s+/g, " ")
-		.trim();
-	return compact.length <= limit ? compact : `${compact.slice(0, limit - 1).trimEnd()}…`;
 }
 
 export class LearningSessionView extends ItemView {
@@ -257,12 +240,11 @@ export class LearningSessionView extends ItemView {
 		const mapHeader = mapPane.createDiv({ cls: "learning-session-pane-header" });
 		const heading = mapHeader.createDiv();
 		heading.createEl("strong", { text: "学习路径" });
-		heading.createEl("span", { text: "沿纵向主干推进，向右展开问题、回答与证据" });
+		heading.createEl("span", { text: "主线按文章论证推进，问题分支保留你的理解轨迹" });
 		const legend = mapHeader.createDiv({ cls: "learning-session-legend" });
 		for (const [label, className] of [
 			["主线", "is-main"],
 			["问题", "is-question"],
-			["AI 回答", "is-answer"],
 			["证据", "is-evidence"],
 		] as const) {
 			const item = legend.createSpan({ text: label });
@@ -271,52 +253,29 @@ export class LearningSessionView extends ItemView {
 
 		const scroller = mapPane.createDiv({ cls: "learning-session-map-scroll" });
 		const track = scroller.createDiv({ cls: "learning-session-map-track" });
-		const spine = track.createDiv({ cls: "learning-session-spine" });
 		for (const module of this.modules) {
-			this.renderSpineStage(spine, module);
+			this.renderStage(track, module);
 		}
-		this.renderMindMap(track, this.moduleForSelectedNode());
 		window.setTimeout(() => {
-			const target = track.querySelector<HTMLElement>(".learning-session-tree-node.is-selected")
+			const target = track.querySelector<HTMLElement>(".learning-session-question-node.is-selected")
 				|| track.querySelector<HTMLElement>(".learning-session-main-node.is-selected")
 				|| track.querySelector<HTMLElement>(".learning-session-main-node.is-current");
-			const stage = target?.closest<HTMLElement>(".learning-session-spine-stage")
-				|| track.querySelector<HTMLElement>(
-					`.learning-session-spine-stage[data-module-id="${this.moduleForSelectedNode().id}"]`,
-				);
+			const stage = target?.closest<HTMLElement>(".learning-session-stage");
 			if (!stage) return;
-			const targetTop = Math.max(
+			const targetLeft = Math.max(
 				0,
-				stage.offsetTop - (scroller.clientHeight - stage.clientHeight) / 2,
+				stage.offsetLeft - (scroller.clientWidth - stage.clientWidth) / 2,
 			);
-			scroller.scrollTop = scroller.scrollHeight > scroller.clientHeight
-				? targetTop
-				: 0;
-			if (target?.closest(".learning-session-mind-map")) {
-				const targetRect = target.getBoundingClientRect();
-				const scrollerRect = scroller.getBoundingClientRect();
-				const targetLeft = Math.max(
-					0,
-					scroller.scrollLeft + targetRect.left - scrollerRect.left - scroller.clientWidth * 0.58,
-				);
-				scroller.scrollLeft = targetLeft;
-			}
+			scroller.scrollLeft = targetLeft;
 		}, 60);
 	}
 
-	private moduleForSelectedNode(): LearningModule {
-		const branch = this.sessionState.branches.find((candidate) => (
-			candidate.id === this.sessionState.selectedNodeId
-		));
-		const selectedModuleId = branch?.parentId || this.sessionState.selectedNodeId;
-		return this.modules.find((module) => module.id === selectedModuleId)
-			|| this.modules.find((module) => module.id === this.sessionState.activeModuleId)
-			|| this.modules[0];
-	}
-
-	private renderSpineStage(spine: HTMLElement, module: LearningModule): void {
-		const stage = spine.createDiv({ cls: "learning-session-spine-stage" });
+	private renderStage(track: HTMLElement, module: LearningModule): void {
+		const stage = track.createDiv({ cls: "learning-session-stage" });
 		stage.dataset.moduleId = module.id;
+		const topLane = stage.createDiv({ cls: "learning-session-branch-lane is-above" });
+		this.renderBranchLane(topLane, module, "above");
+
 		const status = moduleStatus(module, this.sessionState);
 		const mainNode = stage.createEl("button", {
 			cls: `learning-session-main-node is-${status}`,
@@ -326,7 +285,7 @@ export class LearningSessionView extends ItemView {
 			},
 		});
 		mainNode.type = "button";
-		if (this.moduleForSelectedNode().id === module.id) mainNode.addClass("is-selected");
+		if (this.sessionState.selectedNodeId === module.id) mainNode.addClass("is-selected");
 		const step = mainNode.createSpan({ cls: "learning-session-node-step" });
 		if (status === "done") {
 			setIcon(step, "check");
@@ -342,159 +301,69 @@ export class LearningSessionView extends ItemView {
 			this.requestStateSave();
 			this.render();
 		});
+
+		const bottomLane = stage.createDiv({ cls: "learning-session-branch-lane is-below" });
+		this.renderBranchLane(bottomLane, module, "below");
+		const evidenceLane = stage.createDiv({ cls: "learning-session-evidence-lane" });
+		this.renderEvidenceNode(evidenceLane, module);
 	}
 
-	private renderMindMap(track: HTMLElement, module: LearningModule): void {
-		const map = track.createDiv({ cls: "learning-session-mind-map" });
-		map.dataset.moduleId = module.id;
-		const mapTop = Math.max(4, module.index * 94 - 300);
-		const branchDrop = Math.max(0, module.index * 94 + 42 - mapTop - 38);
-		map.style.setProperty("--learning-map-top", `${mapTop}px`);
-		map.style.setProperty("--learning-branch-drop", `${branchDrop}px`);
-		const roots = this.sessionState.branches.filter((branch) => (
-			branch.parentId === module.id && !branch.parentBranchId
+	private renderBranchLane(
+		lane: HTMLElement,
+		module: LearningModule,
+		side: LearningBranch["side"],
+	): void {
+		const branches = this.sessionState.branches.filter((branch) => (
+			branch.parentId === module.id && branch.side === side
 		));
-		const selectedBranch = this.sessionState.branches.find((branch) => (
-			branch.id === this.sessionState.selectedNodeId
-		));
-		const selectedRoot = selectedBranch ? this.rootBranch(selectedBranch) : null;
-		const orderedRoots = selectedRoot
-			? [selectedRoot, ...roots.filter((branch) => branch.id !== selectedRoot.id)]
-			: roots;
-		if (!orderedRoots.length) {
-			this.renderMindMapEmpty(map, module);
+		if (!branches.length) return;
+		const visible = branches.slice(-2);
+		for (const branch of visible) {
+			const button = lane.createEl("button", {
+				cls: "learning-session-question-node",
+				attr: { "aria-label": `用户问题：${branch.question}` },
+			});
+			button.type = "button";
+			if (this.sessionState.selectedNodeId === branch.id) button.addClass("is-selected");
+			const icon = button.createSpan({ cls: "learning-session-question-icon" });
+			setIcon(icon, branch.status === "sent" ? "message-circle-check" : "message-circle-question");
+			button.createSpan({ cls: "learning-session-question-copy", text: branch.question });
+			button.addEventListener("click", () => {
+				this.sessionState.selectedNodeId = branch.id;
+				this.selectedEvidenceId = "";
+				this.requestStateSave();
+				this.render();
+			});
+		}
+		if (branches.length > visible.length) {
+			lane.createSpan({
+				cls: "learning-session-more-branches",
+				text: `另有 ${branches.length - visible.length} 个问题`,
+			});
+		}
+	}
+
+	private renderEvidenceNode(lane: HTMLElement, module: LearningModule): void {
+		const evidence = module.evidence[0];
+		if (!evidence) {
+			lane.createSpan({ cls: "learning-session-evidence-empty", text: "待定位证据" });
 			return;
 		}
-		for (const branch of orderedRoots.slice(0, 3)) {
-			this.renderBranchTree(map, module, branch);
-		}
-		if (orderedRoots.length > 3) {
-			map.createDiv({
-				cls: "learning-session-tree-overflow",
-				text: `另有 ${orderedRoots.length - 3} 条问题分支，可在右侧选择查看。`,
-			});
-		}
-	}
-
-	private renderMindMapEmpty(map: HTMLElement, module: LearningModule): void {
-		const empty = map.createDiv({ cls: "learning-session-tree-empty" });
-		const icon = empty.createSpan();
-		setIcon(icon, "git-branch");
-		const copy = empty.createDiv();
-		copy.createEl("strong", { text: `展开“${module.label}”` });
-		copy.createEl("span", { text: "从右侧提出问题，AI 回答和可核对证据会在这里长成分支。" });
-		const evidence = module.evidence.slice(0, 3);
-		if (!evidence.length) return;
-		const evidenceRail = map.createDiv({ cls: "learning-session-module-evidence-rail" });
-		for (const item of evidence) this.renderTreeEvidence(evidenceRail, item, module.id);
-	}
-
-	private renderBranchTree(map: HTMLElement, module: LearningModule, branch: LearningBranch): void {
-		const row = map.createDiv({ cls: "learning-session-tree-row" });
-		const question = row.createEl("button", {
-			cls: "learning-session-tree-node is-question",
-			attr: { "aria-label": `你的问题：${branch.question}` },
-		});
-		question.type = "button";
-		if (this.sessionState.selectedNodeId === branch.id) question.addClass("is-selected");
-		const questionTitle = question.createSpan({ cls: "learning-session-tree-node-title" });
-		setIcon(questionTitle.createSpan(), "message-circle-question");
-		questionTitle.createSpan({ text: "你的问题" });
-		question.createSpan({ cls: "learning-session-tree-node-copy", text: branch.question });
-		question.addEventListener("click", () => this.selectBranch(branch));
-
-		const answer = row.createEl("button", {
-			cls: `learning-session-tree-node is-answer is-${branch.status}`,
-			attr: { "aria-label": `AI 回答：${branch.answer || "尚未生成"}` },
-		});
-		answer.type = "button";
-		if (this.sessionState.selectedNodeId === branch.id) answer.addClass("is-selected");
-		const answerTitle = answer.createSpan({ cls: "learning-session-tree-node-title" });
-		setIcon(answerTitle.createSpan(), branch.status === "answered" ? "sparkles" : "loader-circle");
-		answerTitle.createSpan({ text: "AI 回答" });
-		answer.createSpan({
-			cls: "learning-session-tree-node-copy",
-			text: branch.status === "answered"
-				? compactNodeText(branch.answer)
-				: branch.status === "sent"
-					? "已带入知识库对话，发送后答案会自动回到这里。"
-					: branch.status === "failed"
-						? "上次回答失败，可在右侧重新尝试。"
-						: "在右侧让 AI 基于原文和知识库回答。",
-		});
-		answer.addEventListener("click", () => this.selectBranch(branch));
-
-		const followUps = this.sessionState.branches.filter((candidate) => (
-			candidate.parentBranchId === branch.id
-		));
-		const followUpStack = row.createDiv({ cls: "learning-session-tree-followups" });
-		for (const followUp of followUps.slice(-2)) {
-			const node = followUpStack.createEl("button", {
-				cls: "learning-session-tree-node is-follow-up",
-				attr: { "aria-label": `继续追问：${followUp.question}` },
-			});
-			node.type = "button";
-			if (this.sessionState.selectedNodeId === followUp.id) node.addClass("is-selected");
-			const title = node.createSpan({ cls: "learning-session-tree-node-title" });
-			setIcon(title.createSpan(), "corner-down-right");
-			title.createSpan({ text: "继续追问" });
-			node.createSpan({ cls: "learning-session-tree-node-copy", text: followUp.question });
-			node.addEventListener("click", () => this.selectBranch(followUp));
-		}
-		if (!followUps.length) {
-			followUpStack.createSpan({ cls: "learning-session-tree-hint", text: "回答后可继续追问" });
-		}
-
-		const evidenceStack = row.createDiv({ cls: "learning-session-tree-evidence" });
-		const evidence = branch.answerEvidence.length
-			? branch.answerEvidence
-			: module.evidence.slice(0, 3);
-		for (const item of evidence.slice(0, 4)) this.renderTreeEvidence(evidenceStack, item, branch.id);
-	}
-
-	private renderTreeEvidence(
-		parent: HTMLElement,
-		evidence: LearningEvidenceRef,
-		selectedNodeId: string,
-	): void {
-		const evidenceLabel = evidence.kind === "source" ? "证据来源" : "原文证据";
-		const button = parent.createEl("button", {
-			cls: "learning-session-tree-node is-evidence",
-			attr: { "aria-label": `${evidenceLabel}：${evidence.label}` },
+		const button = lane.createEl("button", {
+			cls: "learning-session-evidence-node",
+			attr: { "aria-label": `证据：${evidence.label}` },
 		});
 		button.type = "button";
 		if (this.selectedEvidenceId === evidence.id) button.addClass("is-selected");
-		const title = button.createSpan({ cls: "learning-session-tree-node-title" });
-		setIcon(title.createSpan(), evidenceIcon(evidence.kind));
-		title.createSpan({ text: evidenceLabel });
-		button.createSpan({ cls: "learning-session-tree-node-copy", text: evidence.label });
+		const icon = button.createSpan();
+		setIcon(icon, evidenceIcon(evidence.kind));
+		button.createSpan({ text: evidence.label });
 		button.addEventListener("click", () => {
-			this.sessionState.selectedNodeId = selectedNodeId;
+			this.sessionState.selectedNodeId = module.id;
 			this.selectedEvidenceId = evidence.id;
 			this.requestStateSave();
 			this.render();
 		});
-	}
-
-	private selectBranch(branch: LearningBranch): void {
-		this.sessionState.selectedNodeId = branch.id;
-		this.selectedEvidenceId = "";
-		this.requestStateSave();
-		this.render();
-	}
-
-	private rootBranch(branch: LearningBranch): LearningBranch {
-		let current = branch;
-		const visited = new Set<string>();
-		while (current.parentBranchId && !visited.has(current.id)) {
-			visited.add(current.id);
-			const parent = this.sessionState.branches.find((candidate) => (
-				candidate.id === current.parentBranchId
-			));
-			if (!parent) break;
-			current = parent;
-		}
-		return current;
 	}
 
 	private renderInspector(workspace: HTMLElement): void {
@@ -595,15 +464,12 @@ export class LearningSessionView extends ItemView {
 	private renderBranchInspector(inspector: HTMLElement, branch: LearningBranch): void {
 		const module = this.modules.find((candidate) => candidate.id === branch.parentId) || this.modules[0];
 		const header = inspector.createDiv({ cls: "learning-session-inspector-header is-question" });
-		header.createDiv({
-			cls: "learning-session-inspector-kicker",
-			text: `${branch.parentBranchId ? "继续追问" : "问题分支"} · ${module.label}`,
-		});
+		header.createDiv({ cls: "learning-session-inspector-kicker", text: `问题分支 · ${module.label}` });
 		header.createEl("h2", { text: "你的问题" });
 		header.createEl("p", { cls: "learning-session-branch-question", text: branch.question });
 		const meta = inspector.createDiv({ cls: "learning-session-branch-meta" });
-		meta.createSpan({ text: branch.parentBranchId ? "追问节点" : "模块分支" });
-		meta.createSpan({ text: this.branchStatusLabel(branch) });
+		meta.createSpan({ text: branch.side === "above" ? "上方分支" : "下方分支" });
+		meta.createSpan({ text: branch.status === "sent" ? "已带入对话" : "等待回答" });
 
 		const context = inspector.createDiv({ cls: "learning-session-inspector-section" });
 		context.createEl("h3", { text: "回答上下文" });
@@ -614,54 +480,11 @@ export class LearningSessionView extends ItemView {
 				text: `优先核对：${module.sectionHeadings.join("、")}`,
 			});
 		}
-		if (module.id === "results") {
-			const sourceSection = inspector.createDiv({ cls: "learning-session-inspector-section" });
-			sourceSection.createEl("h3", { text: "来源定位" });
-			this.renderFigurePreview(sourceSection);
-		}
-		if (branch.answer) {
-			const answerSection = inspector.createDiv({ cls: "learning-session-inspector-section is-answer" });
-			answerSection.createEl("h3", { text: "AI 回答" });
-			const markdown = answerSection.createDiv({
-				cls: "learning-session-answer-markdown markdown-rendered",
-			});
-			void MarkdownRenderer.render(
-				this.app,
-				branch.answer,
-				markdown,
-				this.sessionState.articlePath,
-				this,
-			);
-		}
-		if (branch.answerEvidence.length) {
-			const evidenceSection = inspector.createDiv({ cls: "learning-session-inspector-section" });
-			evidenceSection.createEl("h3", { text: "回答证据" });
-			const list = evidenceSection.createDiv({ cls: "learning-session-evidence-list" });
-			for (const evidence of branch.answerEvidence) {
-				const item = list.createEl("button", { cls: "learning-session-evidence-detail" });
-				item.type = "button";
-				if (this.selectedEvidenceId === evidence.id) item.addClass("is-selected");
-				const icon = item.createSpan();
-				setIcon(icon, evidenceIcon(evidence.kind));
-				const copy = item.createSpan();
-				copy.createSpan({ cls: "learning-session-evidence-label", text: evidence.label });
-				copy.createSpan({ cls: "learning-session-evidence-copy", text: evidence.detail });
-				item.addEventListener("click", () => {
-					this.selectedEvidenceId = evidence.id;
-					this.render();
-				});
-			}
-		}
-		if (branch.status === "answered") this.renderFollowUpComposer(inspector, branch);
 
 		const actions = inspector.createDiv({ cls: "learning-session-inspector-actions" });
 		const ask = actions.createEl("button", {
 			cls: "mod-cta learning-session-primary-button",
-			text: branch.status === "answered"
-				? "重新生成回答"
-				: branch.status === "sent"
-					? "重新发送并回流"
-					: "让 AI 回答",
+			text: branch.status === "sent" ? "继续知识库对话" : "带入知识库对话",
 		});
 		ask.type = "button";
 		const askIcon = ask.createSpan({ cls: "learning-session-button-icon" });
@@ -674,54 +497,6 @@ export class LearningSessionView extends ItemView {
 			this.sessionState.selectedNodeId = module.id;
 			this.requestStateSave();
 			this.render();
-		});
-	}
-
-	private branchStatusLabel(branch: LearningBranch): string {
-		if (branch.status === "answered") return "已生成回答";
-		if (branch.status === "sent") return "等待知识库回答";
-		if (branch.status === "failed") return "回答失败";
-		return "等待回答";
-	}
-
-	private renderFollowUpComposer(inspector: HTMLElement, branch: LearningBranch): void {
-		const composer = inspector.createDiv({ cls: "learning-session-question-composer is-follow-up" });
-		const label = composer.createEl("label", { text: "继续追问" });
-		const input = composer.createEl("textarea", {
-			attr: {
-				rows: "2",
-				maxlength: "500",
-				placeholder: "基于这段回答继续追问…",
-				"aria-label": "基于当前回答继续追问",
-			},
-		});
-		label.htmlFor = input.id = `learning-follow-up-${branch.id}`;
-		const footer = composer.createDiv({ cls: "learning-session-composer-footer" });
-		footer.createSpan({ text: "追问会成为当前回答的下一层分支。" });
-		const add = footer.createEl("button", { text: "添加追问" });
-		add.type = "button";
-		add.addEventListener("click", () => {
-			const followUp = createLearningFollowUpBranch(
-				branch,
-				input.value,
-				this.sessionState.branches,
-				`question-${Date.now()}-${this.sessionState.branches.length + 1}`,
-			);
-			if (!followUp) {
-				new Notice("请先输入一个具体追问");
-				input.focus();
-				return;
-			}
-			this.sessionState.branches.push(followUp);
-			this.sessionState.selectedNodeId = followUp.id;
-			this.requestStateSave();
-			this.render();
-		});
-		input.addEventListener("keydown", (event) => {
-			if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
-				event.preventDefault();
-				add.click();
-			}
 		});
 	}
 
@@ -815,47 +590,12 @@ export class LearningSessionView extends ItemView {
 	private openBranchInQuery(branch: LearningBranch, module: LearningModule): void {
 		branch.status = "sent";
 		this.requestStateSave();
-		this.render();
-		const parentBranch = branch.parentBranchId
-			? this.sessionState.branches.find((candidate) => candidate.id === branch.parentBranchId)
-			: null;
 		const prompt = buildLearningQuestionPrompt(
 			this.sessionState.articlePath,
 			module,
 			branch.question,
-			parentBranch
-				? { question: parentBranch.question, answer: parentBranch.answer }
-				: undefined,
 		);
-		const completionHandler: QueryWikiCompletionHandler = (payload) => {
-			const target = this.sessionState.branches.find((candidate) => candidate.id === branch.id);
-			if (!target) return;
-			if (payload.status === "done") {
-				const evidence: LearningEvidenceRef[] = [
-					...payload.vaultSources.map((source, index) => ({
-						id: `${target.id}-vault-${index + 1}`,
-						label: source.title || source.path,
-						detail: source.path,
-						kind: "source" as const,
-					})),
-					...payload.webSources.map((source, index) => ({
-						id: `${target.id}-web-${index + 1}`,
-						label: source.title || source.domain,
-						detail: source.url,
-						kind: "source" as const,
-					})),
-				];
-				applyLearningBranchAnswer(target, payload.answer || "本轮查询未返回文本。", evidence);
-			} else {
-				target.status = "failed";
-				target.answer = payload.error;
-				target.answerEvidence = [];
-			}
-			this.sessionState.selectedNodeId = target.id;
-			this.requestStateSave();
-			if (this.opened) this.render();
-		};
-		void this.plugin.activateQueryWikiView(prompt, completionHandler);
+		void this.plugin.activateQueryWikiView(prompt);
 	}
 
 	private requestStateSave(): void {
