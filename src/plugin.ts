@@ -66,6 +66,11 @@ import { CodePracticeView } from "./views/code-practice";
 import { DashboardView } from "./views/dashboard";
 import { MineruReaderView } from "./views/mineru-reader";
 import { QueryWikiView } from "./views/query-wiki";
+import { ReadingWorkspaceView } from "./views/reading-workspace";
+import { ReadingWorkspaceService } from "./reading/workspace";
+import { READING_VIEW_TYPE } from "./reading/types";
+import { serializeActionRequest } from "./runtime/action-request";
+import type { DashboardActionOptions } from "./actions";
 import { AnnotationPopover } from "./annotations/annotation-popover";
 import { AnnotationService } from "./annotations/annotation-service";
 import type { AnnotationRecord, AnnotationSelection } from "./annotations/types";
@@ -240,6 +245,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	});
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;
+	private readingWorkspace?: ReadingWorkspaceService;
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private annotationPopover: AnnotationPopover | null = null;
 	private annotationChip: HTMLElement | null = null;
@@ -350,6 +356,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(VIEW_TYPE, (leaf) => new DashboardView(leaf, this));
 		this.registerView(CODE_PRACTICE_VIEW_TYPE, (leaf) => new CodePracticeView(leaf, this));
 		this.registerView(QUERY_WIKI_VIEW_TYPE, (leaf) => new QueryWikiView(leaf, this));
+		this.registerView(READING_VIEW_TYPE, (leaf) => new ReadingWorkspaceView(leaf, this));
+		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
 		this.registerView(MINERU_READER_VIEW_TYPE, (leaf) => new MineruReaderView(leaf, this));
 		this.app.workspace.onLayoutReady(() => {
 			this.consolidateMineruReaderLeaves();
@@ -461,6 +469,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		await this.readingWorkspace?.dispose();
 		this.annotationPopover?.close();
 		this.hideAnnotationChip();
 		await this.flushScheduledSettingsSave();
@@ -3118,6 +3127,28 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.app.workspace.revealLeaf(leaf);
 	}
 
+	getReadingWorkspace(): ReadingWorkspaceService {
+		if (!this.readingWorkspace) {
+			const adapter = this.app.vault.adapter;
+			if (!(adapter instanceof FileSystemAdapter)) throw new Error("交互深读需要桌面文件系统");
+			this.readingWorkspace = new ReadingWorkspaceService(this.app, adapter.getBasePath(), path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader"));
+		}
+		return this.readingWorkspace;
+	}
+	async activateReadingWorkspace(): Promise<void> {
+		const leaf = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0] || this.app.workspace.getLeaf("tab");
+		await leaf.setViewState({ type: READING_VIEW_TYPE, active: true }); await this.app.workspace.revealLeaf(leaf);
+	}
+	async runClassicReading(input: string, overrides: ExecutionOverrides, options: DashboardActionOptions): Promise<void> {
+		const action = ACTION_BY_ID.get("pdf-xray")!;
+		const execution = this.resolveCliActionExecutionConfig(action, "codex-cli", overrides);
+		const run = await this.startTaskRun(action, input.slice(0, 160), execution);
+		try {
+			const result = await this.runVaultAction(run.id, action, serializeActionRequest(action, input, options), execution);
+			await this.finishTaskRun(run.id, { status: result.exitCode === 0 ? "done" : "failed", output: result.stdout, error: result.stderr, exitCode: result.exitCode });
+			new Notice("一次性深读" + (result.exitCode === 0 ? "已完成，可在控制台查看" : "失败，请查看控制台任务"));
+		} catch (error) { await this.finishTaskRun(run.id, { status: "failed", error: String(error) }); throw error; }
+	}
 	async activateCodePracticeView(): Promise<void> {
 		const contextFile = this.app.workspace.getActiveFile() || this.lastContextFile;
 		const existing = this.app.workspace.getLeavesOfType(CODE_PRACTICE_VIEW_TYPE)[0];

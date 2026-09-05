@@ -63,6 +63,7 @@ export interface ReadingSession {
 	completed: boolean;
 	backend: string;
 	model: string;
+	demo?: boolean;
 	ui: {
 		mode: "split" | "map"; split: number; selectedId: string;
 		zoom: number; scrollX: number; scrollY: number;
