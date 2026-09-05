@@ -5,16 +5,19 @@ const path = require("path");
 
 const projectRoot = path.resolve(__dirname, "..");
 const commands = [
+	[process.execPath, ["tests/run_reading_tests.js"]],
 	[process.execPath, ["tests/test_release_metadata.js"]],
 	[process.execPath, ["tests/test_dashboard_providers.js"]],
 	[process.execPath, ["tests/test_dashboard_direct_api_boundary.js"]],
 	[process.execPath, ["tests/test_vault_context.js"]],
 	[process.execPath, ["tests/test_dashboard_query_view.js"]],
 	[process.execPath, ["tests/test_dashboard_annotations.js"]],
+	[process.execPath, ["tests/test_annotation_source_integrity.js"]],
 	[process.execPath, ["tests/test_dashboard_obsidian_cli.js"]],
 	[process.execPath, ["tests/test_dashboard_markdown_reader.js"]],
 	[process.execPath, ["tests/test_dashboard_paper_actions.js"]],
 	[process.execPath, ["tests/test_agent_loop.js"]],
+	[process.execPath, ["tests/test_agent_ingest_evidence.js"]],
 	[process.execPath, ["tests/test_safe_markdown.js"]],
 	[process.execPath, ["tests/test_mineru_atomic_publish.js"]],
 	[process.execPath, ["tests/test_mineru_process.js"]],

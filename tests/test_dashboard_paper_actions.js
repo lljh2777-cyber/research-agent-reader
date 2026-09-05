@@ -91,6 +91,9 @@ assert.match(modal, /原文层（papers \+ Clippings）和分析层（wiki\/sour
 assert.match(modal, /两层相互独立且均不覆盖已有内容/);
 assert.match(modal, /原文层 Markdown（papers \/ Clippings）/);
 assert.match(modal, /提取失败不会静默改用元数据/);
+assert.match(modal, /仅复用已有原文（papers \/ Clippings）/);
+assert.match(modal, /没有可用原文时，需先完成原文转换/);
+assert.doesNotMatch(modal, /元数据与用户说明（不读取 PDF）|内容来自元数据与用户说明/);
 assert.match(
 	mineruPublish,
 	/mineru-open-api-\$\{process\.platform\}-\$\{process\.arch\}/,

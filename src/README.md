@@ -46,9 +46,11 @@ orchestration, runtime process handles, and save queues are owned by focused
 services.
 
 Reading-view annotations are stored as ordinary Markdown under
-`wiki/annotations/`. Source text links to a stable annotation block ID, while
+`wiki/annotations/`. Authored Wiki source text links to a stable annotation block ID, while
 the plugin intercepts normal, Ctrl/Cmd, and Shift clicks for the popover,
 archived knowledge targets, and the underlying annotation document.
+`papers/` 与 `Clippings/` 使用独立批注及原文选区定位，不改写来源文件；重新划选
+同一文字会读取已有批注。来源路径保存为普通属性及行内代码，避免跨内容根链接。
 
 Validated MinerU packages can be opened in a dedicated main-area reader. Its
 left pane renders `article.md`; the right pane switches between the original

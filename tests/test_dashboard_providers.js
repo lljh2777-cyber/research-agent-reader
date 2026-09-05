@@ -5,6 +5,7 @@ const fs = require("fs");
 const http = require("http");
 const Module = require("module");
 const path = require("path");
+const { testProviderHttpLifecycle } = require("./test_provider_http_lifecycle");
 
 let requestHandler = async () => {
 	throw new Error("Unexpected HTTP request");
@@ -355,6 +356,7 @@ async function main() {
 	} finally {
 		await new Promise((resolve) => delayedServer.close(resolve));
 	}
+	await testProviderHttpLifecycle(transportPlugin);
 
 	const settingsTabSource = fs.readFileSync(
 		path.join(__dirname, "..", "src", "settings", "settings-tab.ts"),

@@ -63,6 +63,7 @@ interface DashboardHost extends PluginHost {
 	stopVaultAction(runId: string): boolean;
 	activateQueryWikiView(initialInput?: string): Promise<void>;
 	activateCodePracticeView(): Promise<void>;
+	activateReadingWorkspace(): Promise<void>;
 	supportsFast(model: string): boolean;
 	lightPaperIngestAvailable(): { ready: boolean; reason: string };
 	lightAgentMineruReady(): boolean;
@@ -581,6 +582,10 @@ export class DashboardView extends ItemView {
 		}
 		if (action.queryView) {
 			void this.plugin.activateQueryWikiView(options.initialInput || "");
+			return;
+		}
+		if (action.id === "pdf-xray") {
+			void this.plugin.activateReadingWorkspace();
 			return;
 		}
 		if (this.plugin.isActionRunning(action.id)) {

@@ -52,6 +52,7 @@ import {
 	type HumanIdentityConfirmationReceipt,
 } from "./paper-ingest-flow";
 import type { AgentLoopResult, AgentLoopStep } from "./types";
+import { MineruPackageLoader } from "../mineru/package-loader";
 import { readTrustedVaultFile, type VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
 
 export interface AgentLoopServiceDeps {
@@ -528,16 +529,19 @@ export class AgentLoopService {
 					state.errors.push(deriveStopError(state, draftLoop));
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}
+				state.draft = parseNoteDraft(draftLoop.final);
 				const draftReceiptProblems = validateDraftReceipts(
 					draftArticlePath,
 					identity.title,
 					draftLoop.toolCalls,
+					state.draft?.status,
 				);
 				if (draftReceiptProblems.length) {
-					state.errors.push(`阶段三未满足插件侧原文凭据要求：${draftReceiptProblems.join("；")}`);
+					const problems = state.draft?.status === "insufficient-evidence" ? state.conflicts : state.errors;
+					problems.push(`阶段三未满足插件侧原文凭据要求：${draftReceiptProblems.join("；")}`);
+					state.notes.push(...(state.draft?.notes || []));
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}
-				state.draft = parseNoteDraft(draftLoop.final);
 				if (!state.draft) {
 					state.errors.push("阶段三未返回可解析的笔记字段");
 				} else {
@@ -710,6 +714,12 @@ export class AgentLoopService {
 		const observedSource = observed.sourcePath && await adapter.exists(observed.sourcePath, true)
 			? observed.sourcePath
 			: "";
+		if (/^papers\/[^/]+\/article\.md$/i.test(observedSource)) {
+			// Existence and a matching title identify a candidate, but cannot prove
+			// that its manifest, extraction JSON and assets still form a valid package.
+			// Reuse the reader's validator before either no-op or draft decisions.
+			await new MineruPackageLoader(this.deps.app).load(observedSource);
+		}
 		const observedAnalysis = observed.analysisPath && await adapter.exists(observed.analysisPath, true)
 			? observed.analysisPath
 			: "";

@@ -15,7 +15,7 @@ function read(relativePath) {
 	return fs.readFileSync(path.join(pluginRoot, relativePath), "utf8");
 }
 
-function loadTsModule(relativePath) {
+function loadTsModule(relativePath, mocks = {}) {
 	const entry = path.join(pluginRoot, relativePath);
 	const result = esbuild.buildSync({
 		entryPoints: [entry],
@@ -25,11 +25,14 @@ function loadTsModule(relativePath) {
 		platform: "node",
 		target: "node18",
 		logLevel: "silent",
+		external: Object.keys(mocks),
 	});
 	const output = result.outputFiles[0].text;
 	const loaded = new Module(entry, module);
 	loaded.filename = entry;
 	loaded.paths = Module._nodeModulePaths(path.dirname(entry));
+	const originalRequire = loaded.require.bind(loaded);
+	loaded.require = (name) => Object.hasOwn(mocks, name) ? mocks[name] : originalRequire(name);
 	loaded._compile(output, entry);
 	return loaded.exports;
 }
@@ -38,6 +41,55 @@ const normalization = loadTsModule("src/mineru/normalization.ts");
 const markdown = loadTsModule("src/mineru/reader-markdown.ts");
 const visualCandidates = loadTsModule("src/mineru/visual-candidates.ts");
 const visualRepair = loadTsModule("src/mineru/visual-repair.ts");
+const { PdfPageWindow } = loadTsModule("src/mineru/pdf-page-window.ts");
+
+// Every page remains reachable through one continuous scroll space while the
+// mounted range covers the viewport plus one neighboring page on either side.
+const pdfWindow = new PdfPageWindow(120, 400);
+for (let page = 1; page <= 120; page += 1) {
+	const start = pdfWindow.offset(page);
+	assert.equal(pdfWindow.pageAt(start), page);
+	assert.equal(pdfWindow.pageAt(start + pdfWindow.height(page) - 1), page);
+	const range = pdfWindow.range(page);
+	assert.ok(range.last - range.first + 1 <= 3);
+	assert.ok(range.first <= page && range.last >= page);
+	let mountedHeight = 0;
+	for (let mountedPage = range.first; mountedPage <= range.last; mountedPage += 1) {
+		mountedHeight += pdfWindow.height(mountedPage) + (mountedPage < pdfWindow.pageCount ? pdfWindow.gap : 0);
+	}
+	assert.equal(range.before + mountedHeight + range.after, pdfWindow.offset(121));
+}
+const measuredAnchor = pdfWindow.offset(60);
+const anchoredScrollTop = measuredAnchor + 150;
+pdfWindow.setHeight(3, 730);
+pdfWindow.setHeight(59, 230);
+const correctedScrollTop = anchoredScrollTop + pdfWindow.offset(60) - measuredAnchor;
+assert.equal(correctedScrollTop - pdfWindow.offset(60), 150);
+assert.equal(pdfWindow.pageAt(correctedScrollTop), 60);
+assert.equal(pdfWindow.pageAt(Number.MAX_SAFE_INTEGER), 120);
+assert.equal(pdfWindow.pageAt(-100), 1);
+assert.deepEqual(new PdfPageWindow(1, 400).range(1), { first: 1, last: 1, before: 0, after: 0 });
+const zoomedOutWindow = new PdfPageWindow(120, 100);
+const zoomedOutRange = zoomedOutWindow.range(40, zoomedOutWindow.pageAt(zoomedOutWindow.offset(40) + 800));
+assert.equal(zoomedOutRange.first, 39);
+assert.ok(zoomedOutRange.last >= 47, "All pages in a zoomed-out viewport must be mounted");
+
+// Eviction returns pixel budget to the actual renderer without blanking a
+// retained page. Releasing a stale canvas twice must remain harmless.
+const { MineruPdfRenderer } = loadTsModule("src/mineru/pdf-renderer.ts", { obsidian: {} });
+const canvasBudgetRenderer = new MineruPdfRenderer();
+const evictedCanvas = { width: 0, height: 0 };
+const retainedCanvas = { width: 0, height: 0 };
+const incomingCanvas = { width: 0, height: 0 };
+canvasBudgetRenderer.allocateCanvas(evictedCanvas, 2_000, 4_000);
+canvasBudgetRenderer.allocateCanvas(retainedCanvas, 2_000, 4_000);
+assert.throws(() => canvasBudgetRenderer.allocateCanvas(incomingCanvas, 2_000, 4_000), /累计像素/);
+canvasBudgetRenderer.releaseCanvas(evictedCanvas);
+canvasBudgetRenderer.releaseCanvas(evictedCanvas);
+canvasBudgetRenderer.allocateCanvas(incomingCanvas, 2_000, 4_000);
+assert.deepEqual(evictedCanvas, { width: 0, height: 0 });
+assert.deepEqual(retainedCanvas, { width: 2_000, height: 4_000 });
+assert.throws(() => canvasBudgetRenderer.allocateCanvas(evictedCanvas, 1, 1), /累计像素/);
 
 assert.deepEqual(markdown.readerMarkdownRestoreTarget("visuals", "", 1), { kind: "top" });
 assert.deepEqual(markdown.readerMarkdownRestoreTarget("pdf", "", 1), { kind: "top" });
@@ -3138,7 +3190,7 @@ assert.match(view, /onReferenceEvent/);
 assert.match(view, /markdownComponent\?\.unload/);
 assert.match(view, /renderPdfOverlays/);
 assert.match(view, /data-page-number/);
-assert.match(view, /rootMargin:\s*"1400px 0px"/);
+assert.match(view, /const geometry = new PdfPageWindow/);
 assert.match(view, /updateVisiblePage/);
 assert.match(view, /scrollPdfToPage/);
 assert.match(view, /followPdfReading/);
@@ -3160,8 +3212,9 @@ assert.match(pdfRenderer, /document\.numPages > MINERU_RESOURCE_LIMITS\.pdfPages
 assert.match(pdfRenderer, /pageAspectRatio/);
 assert.match(pdfRenderer, /canvasDimension/);
 assert.match(pdfRenderer, /activeCanvasPixels/);
-assert.match(view, /const firstPage = Math\.max\(1, this\.readerState\.pdfPage - 1\)/);
-assert.match(view, /const lastPage = Math\.min\(this\.pdfRenderer\.numPages, this\.readerState\.pdfPage \+ 1\)/);
+assert.match(view, /mountWindow\(geometry\.pageAt\(top\), geometry\.pageAt\(top \+ scroll\.clientHeight\)\)/);
+assert.match(view, /this\.mountPdfPageWindow\?\.\(pageNumber\)/);
+assert.match(view, /this\.pdfRenderer\.releaseCanvas\(canvas\)/);
 assert.doesNotMatch(view, /pageNumber <= this\.pdfRenderer\.numPages/);
 assert.match(view, /verifiedResourceUrls/);
 assert.match(view, /URL\.revokeObjectURL/);
@@ -3253,4 +3306,159 @@ assert.match(styles, /\.agent-dashboard-mineru-article ::selection/);
 assert.match(styles, /@container \(max-width: 680px\)/);
 assert.match(styles, /grid-template-columns: minmax\(0, var\(--agent-dashboard-mineru-markdown-width/);
 
-console.log("DASHBOARD_MINERU_READER_TEST_OK");
+async function testContinuousPdfScrolling() {
+	// Exercise the actual view's scroll handler and page queue without requiring
+	// Obsidian or a graphics driver. This mock models layout height and scroll
+	// clamping, and keeps DOM identity so full-pane rebuilds cannot pass unnoticed.
+	class Element {
+		constructor(tag = "div", options = {}) {
+			this.tag = tag;
+			this.children = [];
+			this.parentElement = null;
+			this.classes = new Set((options.cls || "").split(" "));
+			this.style = {};
+			this.dataset = {};
+			this.attributes = {};
+			this.listeners = new Map();
+			this._scrollTop = 0;
+			this.scrollWrites = 0;
+			for (const [key, value] of Object.entries(options.attr || {})) this.setAttribute(key, value);
+		}
+		createEl(tag, options) { const element = new Element(tag, options); element.parentElement = this; this.children.push(element); return element; }
+		createDiv(options) { return this.createEl("div", options); }
+		createSpan(options) { return this.createEl("span", options); }
+		setAttribute(key, value) {
+			this.attributes[key] = value;
+			if (key.startsWith("data-")) this.dataset[key.slice(5).replace(/-([a-z])/g, (_, char) => char.toUpperCase())] = value;
+		}
+		getAttribute(key) { return this.attributes[key]; }
+		setText() {}
+		addClass(...values) { values.forEach((value) => this.classes.add(value)); }
+		removeClass(...values) { values.forEach((value) => this.classes.delete(value)); }
+		addEventListener(type, callback) { this.listeners.set(type, callback); }
+		emit(type) { this.listeners.get(type)?.({}); }
+		get isConnected() { return this.root || Boolean(this.parentElement?.isConnected); }
+		get clientWidth() { return 334; }
+		get clientHeight() { return this.classes.has("agent-dashboard-mineru-pdf-scroll") ? 600 : 0; }
+		get outerHeight() { return (Number.parseFloat(this.style.height) || 0) + (Number.parseFloat(this.style.marginBottom) || 0); }
+		get scrollHeight() { return this.children.reduce((height, child) => height + child.outerHeight, 36); }
+		get scrollTop() { return this._scrollTop; }
+		set scrollTop(value) { this.scrollWrites += 1; this._scrollTop = Math.max(0, Math.min(value, this.scrollHeight - this.clientHeight)); }
+		scrollTo({ top }) { this.scrollTop = top; this.emit("scroll"); }
+		matches(selector) {
+			const page = /^\[data-page-number="(\d+)"\]$/.exec(selector)?.[1];
+			return page ? this.dataset.pageNumber === page : selector.startsWith(".") ? this.classes.has(selector.slice(1)) : this.tag === selector;
+		}
+		querySelectorAll(selector) { return this.children.flatMap((child) => [...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)]); }
+		querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+		remove() {
+			const parent = this.parentElement;
+			if (!parent) return;
+			parent.children.splice(parent.children.indexOf(this), 1);
+			parent._scrollTop = Math.max(0, Math.min(parent._scrollTop, parent.scrollHeight - parent.clientHeight));
+			this.parentElement = null;
+		}
+		insertBefore(child, before) {
+			child.remove();
+			this.children.splice(this.children.indexOf(before), 0, child);
+			child.parentElement = this;
+		}
+		getBoundingClientRect() {
+			const parent = this.parentElement;
+			const top = parent?.classes.has("agent-dashboard-mineru-pdf-scroll")
+				? 18 + parent.children.slice(0, parent.children.indexOf(this)).reduce((height, child) => height + child.outerHeight, 0) - parent.scrollTop
+				: 0;
+			return { top, bottom: top + this.outerHeight, height: this.outerHeight, width: this.clientWidth };
+		}
+	}
+	const { MineruReaderView } = loadTsModule("src/views/mineru-reader.ts", {
+		obsidian: { ItemView: class {}, setIcon() {} },
+	});
+	const instance = Object.create(MineruReaderView.prototype);
+	const root = new Element();
+	root.root = true;
+	instance.referenceHost = root;
+	instance.referenceGeneration = 1;
+	instance.referenceAbortController = new AbortController();
+	instance.readerPackage = { pdfPath: "papers/example/_extraction/source.pdf" };
+	instance.readerState = { pdfPage: 1, pdfZoom: 1, showLayoutBoxes: false };
+	instance.requestStateSave = () => {};
+	instance.renderReferenceStatus = () => {};
+	instance.pageHasSuspiciousBlankVisual = () => false;
+	instance.paintPdfImageCompatibilityLayer = async () => 0;
+	instance.renderReference = () => { throw new Error("Scrolling must not rebuild the reference pane"); };
+	const activeCanvases = new Set();
+	const releasedCanvases = new Set();
+	const renderedPages = new Set();
+	instance.pdfRenderer = {
+		numPages: 12,
+		async renderPage(page, canvas) {
+			renderedPages.add(page);
+			activeCanvases.add(canvas);
+			return { width: 300, height: 400 };
+		},
+		releaseCanvas(canvas) { activeCanvases.delete(canvas); releasedCanvases.add(canvas); },
+	};
+	const savedWindow = global.window;
+	const frames = new Map();
+	let frameId = 0;
+	global.window = {
+		getComputedStyle: () => ({ paddingTop: "18px" }),
+		requestAnimationFrame(callback) { frames.set(++frameId, callback); return frameId; },
+		cancelAnimationFrame(id) { frames.delete(id); },
+	};
+	const settle = async () => {
+		for (let round = 0; round < 20; round += 1) {
+			await new Promise((resolve) => setImmediate(resolve));
+			const pending = [...frames.values()];
+			frames.clear();
+			pending.forEach((callback) => callback());
+		}
+	};
+	try {
+		await instance.renderPdfReference(root, 1);
+		await settle();
+		const scroll = root.querySelector(".agent-dashboard-mineru-pdf-scroll");
+		const pageTwo = scroll.querySelector('[data-page-number="2"]');
+		const initialCanvas = scroll.querySelector('[data-page-number="1"]').querySelector("canvas");
+		// Move within already measured pages. No redundant scrollTop assignment
+		// may cancel a browser-native smooth scroll that produced this event.
+		scroll.scrollTop = 30;
+		const writes = scroll.scrollWrites;
+		scroll.emit("scroll");
+		await settle();
+		assert.equal(scroll.scrollWrites, writes);
+		assert.equal(scroll.querySelector('[data-page-number="2"]'), pageTwo);
+		for (let step = 0; step < 30; step += 1) {
+			scroll.scrollTop += 220;
+			scroll.emit("scroll");
+			await settle();
+			assert.ok(scroll.querySelectorAll("canvas").length <= 5);
+			assert.ok(activeCanvases.size <= 5, "Evicted canvases must leave the active resource set");
+		}
+		assert.ok(renderedPages.has(12), "Wheel scrolling must reach the last PDF page");
+		assert.ok(releasedCanvases.has(initialCanvas));
+		assert.equal(root.querySelector(".agent-dashboard-mineru-pdf-scroll"), scroll);
+		for (let step = 0; step < 30; step += 1) {
+			scroll.scrollTop -= 220;
+			scroll.emit("scroll");
+			await settle();
+		}
+		assert.equal(scroll.scrollTop, 0);
+		assert.equal(instance.readerState.pdfPage, 1);
+		instance.scrollPdfToPage(10, "smooth");
+		await settle();
+		assert.ok(scroll.querySelector('[data-page-number="10"]'));
+		assert.equal(instance.readerState.pdfPage, 10);
+	} finally {
+		instance.referenceAbortController.abort();
+		global.window = savedWindow;
+	}
+}
+
+testContinuousPdfScrolling().then(() => {
+	console.log("DASHBOARD_MINERU_READER_TEST_OK");
+}).catch((error) => {
+	console.error(error);
+	process.exitCode = 1;
+});

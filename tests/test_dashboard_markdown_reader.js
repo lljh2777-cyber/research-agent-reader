@@ -101,6 +101,44 @@ assert.match(prepared, /Opening body remains visible/);
 assert.match(prepared, /Body between figures remains visible/);
 assert.match(prepared, /This heading is not a caption/);
 
+// Inline icons, including reuse of a figure's asset, must neither consume a
+// standalone figure ID nor become an anchor through asset-path fallback.
+const mixedSource = [
+	"# Mixed images",
+	"Inline ![icon](images/shared.png) stays in this paragraph.",
+	"",
+	"![Fig. 1](images/shared.png)",
+	"",
+	"Caption for the first standalone figure.",
+	"",
+	"Body <img src = 'images/icon.png' alt='icon'> remains inline.",
+	"",
+	"<img src = 'images/second.png' alt='Fig. 2'>",
+	"",
+	"Caption for the second standalone figure.",
+	"",
+	"Trailing ![icon](images/second.png) also stays inline.",
+].join("\n");
+const mixedPackage = clipping.buildMarkdownReaderPackage(mixedSource, "Clippings/Mixed.md");
+assert.equal(mixedPackage.visuals.length, 2);
+for (const padding of ["", "Long article body. ".repeat(60_000)]) {
+	const projected = readerMarkdown.prepareReaderMarkdown(
+		mixedPackage.articleMarkdown + padding,
+		mixedPackage.visuals,
+		mixedPackage.viewerIndex,
+		{ standaloneImagesOnly: true, maxProjectionWork: 1_000_000 },
+	);
+	assert.match(projected, /Inline !\[icon\]\(images\/shared\.png\) stays in this paragraph/);
+	assert.match(projected, /Body <img src = 'images\/icon\.png' alt='icon'> remains inline/);
+	assert.match(projected, /Trailing !\[icon\]\(images\/second\.png\) also stays inline/);
+	assert.equal((projected.match(/data-visual-id=/g) || []).length, 2);
+	assert.match(projected, /paragraph\.\n\n<span[^>]+data-visual-id="markdown-visual-0000"/);
+	assert.match(projected, /remains inline\.\n\n<span[^>]+data-visual-id="markdown-visual-0001"/);
+	if (!padding) {
+		assert.doesNotMatch(projected, /Caption for the (?:first|second) standalone figure/);
+	}
+}
+
 const plugin = read("src/plugin.ts");
 const view = read("src/views/mineru-reader.ts");
 const settings = read("src/runtime/settings.ts");

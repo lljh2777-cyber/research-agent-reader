@@ -11,6 +11,7 @@
 		"format:normalize": "node scripts/normalize-text.mjs",
 		"typecheck": "tsc --noEmit",
 		"test": "node tests/run_dashboard_tests.js",
+		"test:reading": "node tests/run_reading_tests.js",
 		"verify": "pnpm typecheck && pnpm build && pnpm test",
 		"release:check": "node scripts/release-audit.mjs",
 		"test-vault:prepare": "node scripts/prepare-test-vault.mjs",

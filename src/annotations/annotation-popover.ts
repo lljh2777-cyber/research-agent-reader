@@ -431,7 +431,7 @@ export class AnnotationPopover extends Component {
 		try {
 			const record = await this.service.createAnnotation(this.selection, draft);
 			this.record = record;
-			new Notice("批注已保留");
+			new Notice(record.sourceAnchor ? "批注已保留，重新划选同一文字可查看" : "批注已保留");
 			if (closeAfterSave) this.close();
 			return record;
 		} catch (error) {

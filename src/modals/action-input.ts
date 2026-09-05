@@ -360,9 +360,9 @@ export class ActionInputModal extends Modal {
 			const mineruWarning = !mineruAvailable || !lightMarkdownReady
 				? section.createEl("p", {
 					cls: "agent-dashboard-action-options-warning",
-					text: !mineruAvailable
-						? "未检测到 MinerU CLI。生成原文 Markdown 只需它：npm 全局安装 mineru-open-api 后，在设置 → 工具链与运行环境中配置（无需 Python 或工具包目录）。"
-						: "轻量 Agent 生成原文 Markdown 需要：已配置 MinerU CLI（npm 全局安装 mineru-open-api，无需 Python 或工具包目录）；当前未配置，本次仅可创建文章 Wiki（内容来自元数据与用户说明，不读取 PDF 正文）。",
+					text: this.runner === "light-agent"
+						? "当前无法运行 MinerU 提取，请检查 MinerU CLI 配置与本地知识库目录。创建文章 Wiki 可复用已有且验证通过的 papers 原文包或已确认的 Clippings 原文；没有可用原文时，需先完成原文转换。"
+						: "未检测到 MinerU CLI。生成原文 Markdown 只需它：npm 全局安装 mineru-open-api 后，在设置 → 工具链与运行环境中配置（无需 Python 或工具包目录）。",
 				})
 				: null;
 
@@ -541,14 +541,14 @@ export class ActionInputModal extends Modal {
 			sourceCopy.createEl("strong", { text: "文章 Wiki 内容来源" });
 			sourceCopy.createEl("span", {
 				text: this.runner === "light-agent"
-					? "轻量 Agent 固定读取查重确认的原文层 Markdown：已有 papers/Clippings 原文就复用，否则读取本次 MinerU article.md；提取失败不会静默改用元数据。"
+					? "轻量 Agent 读取查重确认的原文 Markdown：papers 包通过完整验证后复用，Clippings 原文确认身份后复用。未生成原文时仅尝试复用；没有可用原文需先完成转换，提取失败不会静默改用元数据。"
 					: "自动模式优先使用本次或已有的已验证 article.md，否则回退到原始 PDF。",
 			});
 			const sourceSelect = sourceField.createEl("select", {
 				attr: { "aria-label": "文章 Wiki 内容来源" },
 			});
 			if (this.runner === "light-agent") {
-				sourceSelect.createEl("option", { text: "元数据与用户说明（不读取 PDF）", attr: { value: "auto" } });
+				sourceSelect.createEl("option", { text: "仅复用已有原文（papers / Clippings）", attr: { value: "auto" } });
 				sourceSelect.createEl("option", { text: "原文层 Markdown（papers / Clippings）", attr: { value: "article" } });
 				sourceSelect.value = markdownOption.checked ? "article" : "auto";
 			} else {
@@ -580,7 +580,9 @@ export class ActionInputModal extends Modal {
 			const sync = () => {
 				const markdownEnabled = markdownOption.checked;
 				mineruPanel.hidden = !markdownEnabled;
-				if (mineruWarning) mineruWarning.hidden = !markdownEnabled;
+				if (mineruWarning) {
+					mineruWarning.hidden = !markdownEnabled && !(this.runner === "light-agent" && wikiOption.checked);
+				}
 				if (this.runner === "light-agent") {
 					sourceSelect.value = markdownEnabled ? "article" : "auto";
 					sourceSelect.disabled = true;
@@ -626,7 +628,7 @@ export class ActionInputModal extends Modal {
 						? "pdf"
 						: sourceSelect.value === "article"
 							? "article"
-							: this.plugin.settings.mineruDefaultArticleWikiSource,
+							: "auto",
 					mineruModel: model.select.value === "pipeline"
 						? "pipeline"
 						: model.select.value === "auto"

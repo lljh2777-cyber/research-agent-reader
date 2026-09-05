@@ -1,0 +1,25 @@
+const assert = require("node:assert/strict");
+const { loadReading, memoryStorage } = require("./reading-test-helpers");
+const { createReadingSession, addReadingNode, addReadingBranch, validateReadingSession } = loadReading("reading/session.ts");
+const { ReadingRepository } = loadReading("reading/store.ts");
+(async () => {
+	const storage = memoryStorage(); const repo = new ReadingRepository(storage);
+	const s = createReadingSession({ kind: "pdf", path: "paper.pdf", fingerprint: "a".repeat(64), title: "测试论文" });
+	await repo.add(s);
+	let parent;
+	await repo.transact(s.id, (draft) => { parent = addReadingNode(draft, null); parent.status = "done"; parent.content = "原始解释"; draft.mainSummary = "主线版本一"; });
+	let branch;
+	await repo.transact(s.id, (draft) => { branch = addReadingBranch(draft, parent.id); const n = addReadingNode(draft, branch.id, "为什么"); n.status = "done"; n.content = "小样本解释"; });
+	await repo.transact(s.id, (draft) => { draft.mainSummary = "主线版本二"; const b = addReadingBranch(draft, draft.branches[0].nodeIds[0]); assert.equal(b.mainSnapshot, "主线版本二"); assert.match(b.ancestorContext, /小样本解释/); addReadingNode(draft, b.id, "继续", { nodeId: parent.id, text: "原始", start: 0, end: 2 }); });
+	assert.equal(repo.get(s.id).branches[0].mainSnapshot, "主线版本一");
+	await Promise.all([repo.transact(s.id, (d) => { d.ui.drafts.a = "A"; }), repo.transact(s.id, (d) => { d.ui.drafts.b = "B"; })]);
+	assert.deepEqual(repo.get(s.id).ui.drafts, { a: "A", b: "B" });
+	storage.fail = true; await assert.rejects(repo.transact(s.id, (d) => { d.title = "不可保存"; }), /disk full/);
+	assert.equal(repo.get(s.id).title, "测试论文"); storage.fail = false;
+	const restored = new ReadingRepository(storage); await restored.load();
+	assert.equal(restored.get(s.id).nodes.at(-1).status, "interrupted");
+	const damaged = structuredClone(restored.get(s.id)); damaged.nodes[0].parentId = damaged.nodes.at(-1).id;
+	assert.throws(() => validateReadingSession(damaged), /关系/);
+	assert.throws(() => addReadingNode(restored.get(s.id), null, "", { nodeId: parent.id, text: "不存在", start: 0, end: 3 }), /失效/);
+	console.log("READING_SESSIONS_OK");
+})().catch((e) => { console.error(e); process.exitCode = 1; });

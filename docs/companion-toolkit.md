@@ -67,6 +67,11 @@ The light runner never updates `papers.csv`, `references.bib`, or index/log
 pages — those registry files remain the Codex CLI pipeline's job, which can
 later upgrade a lightweight product to a fully registered entry.
 
+创建文章 Wiki 前必须读取本篇原文。复用 `papers/` 中的既有包时，插件会重新执行
+阅读器的完整包校验；`Clippings/` 仍可作为普通 Markdown 原文使用。没有可用原文、
+没有成功的原文读取回执，或模型明确报告证据不足时，不创建摘要级 Wiki。
+仅选择 Wiki 且没有既有原文时，应先生成原文，或改用能够读取 PDF 正文的工作流。
+
 This is an integration contract, not an installation instruction. The public
 toolkit repository, version compatibility policy, installer, and upgrade path
 will be defined separately before advanced workflows are advertised as stable.
