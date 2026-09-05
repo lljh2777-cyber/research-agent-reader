@@ -33,6 +33,7 @@ export interface ReadingNode {
 	quote?: ReadingQuote;
 	provider?: string;
 	model?: string;
+	retrieval?: { query: string; paths: string[]; error?: string };
 }
 export interface ReadingBranch {
 	id: string;

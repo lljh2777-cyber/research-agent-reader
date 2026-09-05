@@ -10,9 +10,11 @@ const { ReadingEngine, validateReadingResult } = loadReading("reading/engine.ts"
 	const result = { title: "问题", content: "本文研究问题。[text-1-0]", evidenceIds: ["text-1-0"], outline: ["问题", "方法"], mainSummary: "已讲问题", completed: false };
 	const backend = { name: "mock", model: "test", images: false, complete: async (request) => { calls++; assert.ok(request.signal); return calls % 2 ? JSON.stringify({ ids: ["text-1-0"], query: "question", needsVisual: false }) : JSON.stringify(result); } };
 	const workspace = { repository: repo, document: async () => ({ evidence, catalog: "text-1-0 Page one", verify: async () => {}, image: async () => null }) };
-	const engine = new ReadingEngine(workspace, () => backend);
+	let searches = 0;
+	const engine = new ReadingEngine(workspace, () => backend, async () => { searches++; return []; });
 	await Promise.all([engine.generate(session.id, node.id), engine.generate(session.id, node.id)]);
 	assert.equal(calls, 2); assert.equal(repo.get(session.id).nodes[0].status, "done"); assert.equal(repo.get(session.id).mainSummary, "已讲问题");
+	assert.equal(searches, 0);
 	assert.throws(() => validateReadingResult(JSON.stringify({ ...result, evidenceIds: ["text-missing"] }), evidence, true), /未提供/);
 	const next = await repo.transact(session.id, (s) => addReadingNode(s, null));
 	backend.complete = async () => "malformed";
@@ -20,5 +22,8 @@ const { ReadingEngine, validateReadingResult } = loadReading("reading/engine.ts"
 	backend.complete = (request) => new Promise((resolve, reject) => { request.signal.addEventListener("abort", () => reject(new Error("aborted"))); });
 	const pending = engine.generate(session.id, next.id); await new Promise((resolve) => setTimeout(resolve, 10)); workspace.stopHandler(session.id, next.id);
 	await assert.rejects(pending); assert.equal(repo.get(session.id).nodes[1].status, "interrupted");
+	let retryCall = 0; backend.complete = async () => ++retryCall === 1 ? JSON.stringify({ ids: ["text-1-0"], query: "comparison", vaultQuery: "相关方法" }) : JSON.stringify(result);
+	await engine.generate(session.id, next.id); assert.equal(searches, 1); assert.equal(repo.get(session.id).nodes[1].retrieval.query, "相关方法");
+	assert.deepEqual(repo.get(session.id).nodes[1].retrieval.paths, []);
 	console.log("READING_ENGINE_OK");
 })().catch((e) => { console.error(e); process.exitCode = 1; });

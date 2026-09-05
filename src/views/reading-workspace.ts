@@ -6,6 +6,7 @@ import { READING_VIEW_TYPE, type ReadingNode, type ReadingQuote, type ReadingSes
 import { readingNode } from "../reading/session";
 import { layoutReading } from "../reading/layout";
 import { resolveReadingQuote } from "../reading/selection";
+import { exportReading, safeReadingMarkdown, type ReadingExportScope } from "../reading/export";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
 const element = <K extends keyof HTMLElementTagNameMap>(parent: HTMLElement, tag: K, className = "", text = ""): HTMLElementTagNameMap[K] => {
@@ -188,11 +189,18 @@ export class ReadingWorkspaceView extends ItemView {
 		element(article, "h3", "", node.title);
 		if (node.quote) element(article, "blockquote", "reading-quote", node.quote.text);
 		const content = element(article, "div", "reading-answer-content");
-		void MarkdownRenderer.render(this.app, node.content || this.plugin.getReadingEngine().streamed(this.sessionId, node.id) || "正在准备讲解…", content, "", this.renderer);
+		try { void MarkdownRenderer.render(this.app, safeReadingMarkdown(node.content || this.plugin.getReadingEngine().streamed(this.sessionId, node.id) || "正在准备讲解…"), content, "", this.renderer); }
+		catch { content.textContent = node.content; }
 		const selectionAction = button(article, "选中文字后追问", () => this.captureQuote(node, content));
 		selectionAction.disabled = node.status !== "done";
 		content.onmouseup = () => { const selected = window.getSelection(); if (node.status === "done" && selected?.toString().trim() && content.contains(selected.anchorNode) && content.contains(selected.focusNode)) { this.captureQuote(node, content); } };
 		for (const evidence of node.evidence) button(article, evidence.label + (evidence.visualInspected ? " · 已查看图像" : ""), () => this.showEvidence(node.id, evidence.id));
+		if (node.retrieval) {
+			const details = element(article, "details"); element(details, "summary", "", "知识库检索路径");
+			element(details, "p", "", "检索词：" + node.retrieval.query);
+			element(details, "p", "", node.retrieval.paths.join("\n") || "Vault 中未找到足够依据");
+			if (node.retrieval.error) element(details, "p", "reading-error", node.retrieval.error);
+		}
 		if (node.error) element(article, "p", "reading-error", node.error);
 		if (node.status === "failed" || node.status === "interrupted") button(article, "重试", () => this.handle(this.service.generate(this.sessionId, node.id)));
 		if (node.status === "running" || node.status === "pending") button(article, "停止", () => this.service.stop(this.sessionId, node.id));
@@ -257,6 +265,8 @@ export class ReadingWorkspaceView extends ItemView {
 		const item = readingNode(this.session!, nodeId).evidence.find((evidence) => evidence.id === evidenceId); if (!item) return;
 		const modal = new Modal(this.app); modal.titleEl.setText(item.label); element(modal.contentEl, "p", "", item.path + (item.page ? " · 第 " + item.page + " 页" : ""));
 		element(modal.contentEl, "pre", "reading-evidence-text", item.text);
+		if (item.kind === "vault") button(modal.contentEl, "打开来源笔记", () => { this.plugin.openVaultFile(item.path); modal.close(); });
+		if (item.kind === "paper" && this.session!.source.kind === "article") button(modal.contentEl, "在阅读器打开原文", () => this.handle(this.plugin.activateMineruReaderView(item.path)));
 		if (item.kind === "paper") this.handle(this.service.document(this.sessionId).then(async (document) => {
 			await document.verify(); const image = await document.image(item); if (image) { const img = element(modal.contentEl, "img"); img.src = image.dataUrl; img.style.maxWidth = "100%"; }
 		})); modal.open();
@@ -268,5 +278,15 @@ export class ReadingWorkspaceView extends ItemView {
 		const model = element(modal.contentEl, "input"); model.value = session.model; model.placeholder = "Codex 模型，留空使用设置";
 		button(modal.contentEl, "保存", () => this.handle(this.service.repository.transact(session.id, (draft) => { draft.backend = backend.value; draft.model = model.value.trim(); }).then(() => modal.close()))); modal.open();
 	}
-	private openExport(): void { new Notice("导出将在知识库检索阶段接入；当前会话已自动保存"); }
+	private openExport(): void {
+		const sessionId = this.sessionId; const nodeId = this.session!.ui.selectedId;
+		const modal = new Modal(this.app); modal.titleEl.setText("导出学习笔记"); const scope = element(modal.contentEl, "select");
+		[["node", "选中节点"], ["branch", "选中支线"], ["session", "完整会话"]].forEach(([value, title]) => { element(scope, "option", "", title).value = value; });
+		element(modal.contentEl, "p", "", "将已完成的回答保存为 wiki/qa/ 下的新笔记，并追加到日志。不会改变正式论文笔记的深读状态。");
+		const submit = button(modal.contentEl, "导出", () => { submit.disabled = true;
+			this.handle(exportReading(this.app, this.service.repository.get(sessionId), scope.value as ReadingExportScope, nodeId).then((result) => {
+				modal.close(); new Notice(result.warning || "已导出：" + result.path); this.plugin.openVaultFile(result.path);
+			}).finally(() => { submit.disabled = false; }));
+		}); modal.open();
+	}
 }

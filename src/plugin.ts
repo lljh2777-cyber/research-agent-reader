@@ -69,6 +69,7 @@ import { QueryWikiView } from "./views/query-wiki";
 import { ReadingWorkspaceView } from "./views/reading-workspace";
 import { ReadingWorkspaceService } from "./reading/workspace";
 import { ReadingEngine } from "./reading/engine";
+import { readingHash } from "./reading/document";
 import { DirectReadingBackend, CodexReadingBackend } from "./reading/backend";
 import { READING_VIEW_TYPE } from "./reading/types";
 import { serializeActionRequest } from "./runtime/action-request";
@@ -3141,6 +3142,11 @@ export default class AgentDashboardPlugin extends Plugin {
 				const profile = this.getProviderProfile(session.backend);
 				if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
 				return new DirectReadingBackend(this.createLLMProvider(profile), profile.name, profile.model, profile.lastTest.streamingVerified === true);
+			}, async (query) => {
+				const trace = await this.getLexicalRetriever().retrieve(query, [], { allowedPrefixes: ["wiki"] });
+				const evidence = await this.readVaultEvidencePacket(trace);
+				return evidence.slice(0, 4).map((item) => ({ id: "vault-" + readingHash(item.path).slice(0, 12), kind: "vault" as const,
+					path: item.path, label: item.path.split("/").slice(-1)[0], text: item.content.slice(0, 6000) }));
 			});
 		}
 		return this.readingWorkspace;
