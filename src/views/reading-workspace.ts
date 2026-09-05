@@ -17,6 +17,7 @@ export class ReadingWorkspaceView extends ItemView {
 	private service!: ReadingWorkspaceService;
 	private sessionId = "";
 	private unsubscribe?: () => void;
+	private unsubscribeStream?: () => void;
 	private signature = "";
 	private renderer = new Component();
 	private draftTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -37,11 +38,17 @@ export class ReadingWorkspaceView extends ItemView {
 		this.service = this.plugin.getReadingWorkspace(); await this.service.ready();
 		if (!this.service.repository.sessions.has(this.sessionId)) this.sessionId = [...this.service.repository.sessions.keys()].slice(-1)[0] || "";
 		this.renderer.load(); this.unsubscribe = this.service.repository.subscribe((id) => { if (id === this.sessionId) this.render(); });
+		this.unsubscribeStream = this.plugin.getReadingEngine().subscribe((id, nodeId, text) => {
+			if (id !== this.sessionId) return;
+			this.contentEl.querySelectorAll<HTMLElement>("[data-answer-id]").forEach((answer) => {
+				if (answer.dataset.answerId === nodeId) { const body = answer.querySelector(".reading-answer-content"); if (body) body.textContent = text; }
+			});
+		});
 		this.render(true);
 		if (this.service.repository.errors.length) new Notice("部分阅读会话无法加载，文件已保留：" + this.service.repository.errors.join("；"), 10000);
 	}
 	async onClose(): Promise<void> {
-		this.unsubscribe?.(); this.cleanupDrag?.(); this.renderer.unload();
+		this.unsubscribe?.(); this.unsubscribeStream?.(); this.cleanupDrag?.(); this.renderer.unload();
 		for (const timer of this.draftTimers.values()) clearTimeout(timer);
 		for (const [key, value] of this.localDrafts) { const separator = key.indexOf("|"); const id = key.slice(0, separator); const target = key.slice(separator + 1);
 			await this.service.repository.transact(id, (session) => { session.ui.drafts[target] = value; }).catch((error) => new Notice(String(error))); }
@@ -80,6 +87,7 @@ export class ReadingWorkspaceView extends ItemView {
 		button(toolbar, "−", () => this.updateUI((ui) => { ui.zoom = Math.max(0.4, ui.zoom - 0.1); }), "缩小导图");
 		button(toolbar, "+", () => this.updateUI((ui) => { ui.zoom = Math.min(1.8, ui.zoom + 0.1); }), "放大导图");
 		button(toolbar, "导出", () => this.openExport());
+		button(toolbar, "模型", () => this.openModel());
 		element(toolbar, "span", "reading-source-label", session.demo ? "示例内容 · 未调用模型" : session.source.kind === "pdf" ? "原始 PDF" : "已验证 MinerU 原文");
 		const body = element(this.contentEl, "div", "reading-body");
 		if (session.ui.mode === "split") {
@@ -179,7 +187,7 @@ export class ReadingWorkspaceView extends ItemView {
 		element(article, "h3", "", node.title);
 		if (node.quote) element(article, "blockquote", "reading-quote", node.quote.text);
 		const content = element(article, "div", "reading-answer-content");
-		void MarkdownRenderer.render(this.app, node.content || "正在准备讲解…", content, "", this.renderer);
+		void MarkdownRenderer.render(this.app, node.content || this.plugin.getReadingEngine().streamed(this.sessionId, node.id) || "正在准备讲解…", content, "", this.renderer);
 		const selectionAction = button(article, "选中文字后追问", () => this.captureQuote(node, content));
 		content.onmouseup = () => { const selected = window.getSelection(); if (selected?.toString().trim() && content.contains(selected.anchorNode) && content.contains(selected.focusNode)) { selectionAction.classList.add("is-ready"); } };
 		for (const evidence of node.evidence) button(article, evidence.label + (evidence.visualInspected ? " · 已查看图像" : ""), () => this.showEvidence(node.id, evidence.id));
@@ -247,6 +255,13 @@ export class ReadingWorkspaceView extends ItemView {
 		if (item.kind === "paper") this.handle(this.service.document(this.sessionId).then(async (document) => {
 			await document.verify(); const image = await document.image(item); if (image) { const img = element(modal.contentEl, "img"); img.src = image.dataUrl; img.style.maxWidth = "100%"; }
 		})); modal.open();
+	}
+	private openModel(): void {
+		const session = this.session!; const modal = new Modal(this.app); modal.titleEl.setText("阅读模型");
+		const backend = element(modal.contentEl, "select"); element(backend, "option", "", "Codex CLI").value = "codex-cli";
+		this.plugin.getVerifiedProviderProfiles().forEach((profile) => { element(backend, "option", "", profile.name + " · " + profile.model).value = profile.id; }); backend.value = session.backend;
+		const model = element(modal.contentEl, "input"); model.value = session.model; model.placeholder = "Codex 模型，留空使用设置";
+		button(modal.contentEl, "保存", () => this.handle(this.service.repository.transact(session.id, (draft) => { draft.backend = backend.value; draft.model = model.value.trim(); }).then(() => modal.close()))); modal.open();
 	}
 	private openExport(): void { new Notice("导出将在知识库检索阶段接入；当前会话已自动保存"); }
 }

@@ -68,6 +68,8 @@ import { MineruReaderView } from "./views/mineru-reader";
 import { QueryWikiView } from "./views/query-wiki";
 import { ReadingWorkspaceView } from "./views/reading-workspace";
 import { ReadingWorkspaceService } from "./reading/workspace";
+import { ReadingEngine } from "./reading/engine";
+import { DirectReadingBackend, CodexReadingBackend } from "./reading/backend";
 import { READING_VIEW_TYPE } from "./reading/types";
 import { serializeActionRequest } from "./runtime/action-request";
 import type { DashboardActionOptions } from "./actions";
@@ -246,6 +248,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;
 	private readingWorkspace?: ReadingWorkspaceService;
+	private readingEngine?: ReadingEngine;
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private annotationPopover: AnnotationPopover | null = null;
 	private annotationChip: HTMLElement | null = null;
@@ -3132,9 +3135,17 @@ export default class AgentDashboardPlugin extends Plugin {
 			const adapter = this.app.vault.adapter;
 			if (!(adapter instanceof FileSystemAdapter)) throw new Error("交互深读需要桌面文件系统");
 			this.readingWorkspace = new ReadingWorkspaceService(this.app, adapter.getBasePath(), path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader"));
+			this.readingEngine = new ReadingEngine(this.readingWorkspace, (session) => {
+				if (session.backend === "codex-cli") return new CodexReadingBackend(this.settings.codexExecutable, session.model || this.settings.codexModel,
+					path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader"));
+				const profile = this.getProviderProfile(session.backend);
+				if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
+				return new DirectReadingBackend(this.createLLMProvider(profile), profile.name, profile.model, profile.lastTest.streamingVerified === true);
+			});
 		}
 		return this.readingWorkspace;
 	}
+	getReadingEngine(): ReadingEngine { this.getReadingWorkspace(); return this.readingEngine!; }
 	async activateReadingWorkspace(): Promise<void> {
 		const leaf = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0] || this.app.workspace.getLeaf("tab");
 		await leaf.setViewState({ type: READING_VIEW_TYPE, active: true }); await this.app.workspace.revealLeaf(leaf);
