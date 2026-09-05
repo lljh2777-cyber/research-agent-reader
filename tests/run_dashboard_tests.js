@@ -10,7 +10,6 @@ const commands = [
 	[process.execPath, ["tests/test_dashboard_direct_api_boundary.js"]],
 	[process.execPath, ["tests/test_vault_context.js"]],
 	[process.execPath, ["tests/test_dashboard_query_view.js"]],
-	[process.execPath, ["tests/test_dashboard_learning_session.js"]],
 	[process.execPath, ["tests/test_dashboard_annotations.js"]],
 	[process.execPath, ["tests/test_dashboard_obsidian_cli.js"]],
 	[process.execPath, ["tests/test_dashboard_markdown_reader.js"]],

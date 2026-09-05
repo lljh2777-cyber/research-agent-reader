@@ -37,7 +37,6 @@ export interface DashboardAction {
 	reasoningEffort?: ReasoningEffort;
 	localView?: boolean;
 	queryView?: boolean;
-	learningView?: boolean;
 	showInRail?: boolean;
 }
 
@@ -66,17 +65,6 @@ export const ACTIONS: readonly DashboardAction[] = [
 		ai: true,
 		model: "gpt-5.6-sol",
 		reasoningEffort: "high",
-	},
-	{
-		id: "paper-learning",
-		label: "文献学习",
-		agent: "interactive-learning-session",
-		description: "把当前文献组织为横向学习主线；你的问题会作为上下分支保留，并可带着当前模块上下文进入知识库对话。",
-		placeholder: "",
-		requiresInput: false,
-		writes: false,
-		enabled: true,
-		learningView: true,
 	},
 	{
 		id: "code-analysis",
