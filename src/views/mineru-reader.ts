@@ -15,6 +15,7 @@ import type { DashboardSettings } from "../runtime/settings";
 import { bboxToPercent } from "../mineru/normalization";
 import { resolvePackageAssetPath } from "../mineru/package-loader";
 import { MineruPdfRenderer } from "../mineru/pdf-renderer";
+import { PdfPageWindow } from "../mineru/pdf-page-window";
 import { ReaderDocumentLoader } from "../reader/document-loader";
 import {
 	applyPdfCaptionContinuationRecovery,
@@ -150,6 +151,7 @@ export class MineruReaderView extends ItemView {
 	private opened = false;
 	private resizeTimer: number | null = null;
 	private pdfFollowInteractionSource: "markdown" | "pdf" = "markdown";
+	private mountPdfPageWindow: ((pageNumber: number) => void) | null = null;
 	private readonly verifiedResourceUrls = new Map<string, string>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: MineruReaderHost) {
@@ -431,7 +433,10 @@ export class MineruReaderView extends ItemView {
 			readerPackage.articleMarkdown,
 			readerPackage.visuals,
 			readerPackage.viewerIndex,
-			{ removeUnmappedImages: readerPackage.sourceKind === "mineru" },
+			{
+				removeUnmappedImages: readerPackage.sourceKind === "mineru",
+				standaloneImagesOnly: readerPackage.sourceKind === "markdown",
+			},
 		);
 		this.markdownComponent?.unload();
 		this.markdownComponent = new Component();
@@ -653,6 +658,7 @@ export class MineruReaderView extends ItemView {
 		const readerPackage = this.readerPackage;
 		if (!host || !readerPackage) return;
 		this.referenceAbortController?.abort();
+		this.mountPdfPageWindow = null;
 		this.referenceAbortController = new AbortController();
 		this.pdfRenderer.cancelPageRender();
 		this.pdfRenderer.cancelCropRender();
@@ -845,10 +851,22 @@ export class MineruReaderView extends ItemView {
 		this.onReferenceEvent(scroll, "focusin", () => this.pausePdfFollowingForReferenceInteraction());
 		const availableWidth = Math.max(260, scroll.clientWidth - 34);
 		const estimatedWidth = Math.floor(availableWidth * this.readerState.pdfZoom);
-		const pageWrappers: HTMLElement[] = [];
-		const firstPage = Math.max(1, this.readerState.pdfPage - 1);
-		const lastPage = Math.min(this.pdfRenderer.numPages, this.readerState.pdfPage + 1);
-		for (let pageNumber = firstPage; pageNumber <= lastPage; pageNumber += 1) {
+		const geometry = new PdfPageWindow(this.pdfRenderer.numPages, estimatedWidth / 0.7071);
+		const leadingInset = Number.parseFloat(window.getComputedStyle(scroll).paddingTop) || 0;
+		// We explicitly preserve the visible page when a measured height replaces
+		// its estimate; browser scroll anchoring must not apply a second correction.
+		scroll.style.overflowAnchor = "none";
+		const beforeSpacer = scroll.createDiv({ attr: { "aria-hidden": "true" } });
+		const afterSpacer = scroll.createDiv({ attr: { "aria-hidden": "true" } });
+		const pageWrappers = new Map<number, HTMLElement>();
+		let firstVisiblePage = this.readerState.pdfPage;
+		let lastVisiblePage = firstVisiblePage;
+		const updateSpacers = (): void => {
+			const range = geometry.range(firstVisiblePage, lastVisiblePage);
+			beforeSpacer.style.height = `${range.before}px`;
+			afterSpacer.style.height = `${range.after}px`;
+		};
+		const createPageWrapper = (pageNumber: number): HTMLElement => {
 			const pageWrapper = scroll.createDiv({
 				cls: "agent-dashboard-mineru-pdf-page is-loading",
 				attr: {
@@ -858,16 +876,19 @@ export class MineruReaderView extends ItemView {
 			});
 			pageWrapper.dataset.renderState = "idle";
 			pageWrapper.style.width = `${estimatedWidth}px`;
+			pageWrapper.style.height = `${geometry.height(pageNumber)}px`;
+			pageWrapper.style.marginBottom = pageNumber < geometry.pageCount ? `${geometry.gap}px` : "0";
 			pageWrapper.createDiv({
 				cls: "agent-dashboard-mineru-pdf-page-placeholder",
 				text: `正在载入第 ${pageNumber} 页…`,
 			});
 			const canvas = pageWrapper.createEl("canvas", { attr: { "aria-label": `PDF 第 ${pageNumber} 页内容` } });
 			canvas.hidden = true;
-			pageWrappers.push(pageWrapper);
-		}
+			return pageWrapper;
+		};
 
 		let renderQueue = Promise.resolve();
+		let scheduleVisiblePage = (): void => undefined;
 		const queuePageRender = (pageWrapper: HTMLElement): void => {
 			if (pageWrapper.dataset.renderState !== "idle") return;
 			pageWrapper.dataset.renderState = "queued";
@@ -884,6 +905,7 @@ export class MineruReaderView extends ItemView {
 						availableWidth,
 						this.readerState.pdfZoom,
 					);
+					if (generation !== this.referenceGeneration || !pageWrapper.isConnected) return;
 					if (this.pageHasSuspiciousBlankVisual(pageNumber, canvas)) {
 						pageWrapper.dataset.renderRetried = "true";
 						await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
@@ -895,8 +917,16 @@ export class MineruReaderView extends ItemView {
 						);
 					}
 					if (generation !== this.referenceGeneration || !pageWrapper.isConnected) return;
+					const anchorPage = geometry.pageAt(Math.max(0, scroll.scrollTop - leadingInset));
+					const anchorOffset = geometry.offset(anchorPage);
+					const previousScrollTop = scroll.scrollTop;
+					geometry.setHeight(pageNumber, size.height);
 					pageWrapper.style.width = `${Math.floor(size.width)}px`;
-					pageWrapper.style.height = `${Math.floor(size.height)}px`;
+					pageWrapper.style.height = `${geometry.height(pageNumber)}px`;
+					updateSpacers();
+					const anchorDelta = geometry.offset(anchorPage) - anchorOffset;
+					if (anchorDelta) scroll.scrollTop = previousScrollTop + anchorDelta;
+					scheduleVisiblePage();
 					const compatibilityImageCount = await this.paintPdfImageCompatibilityLayer(canvas, pageNumber);
 					if (generation !== this.referenceGeneration || !pageWrapper.isConnected) return;
 					if (compatibilityImageCount > 0) {
@@ -921,40 +951,56 @@ export class MineruReaderView extends ItemView {
 						".agent-dashboard-mineru-pdf-page-placeholder",
 					);
 					if (placeholder) placeholder.setText(`第 ${pageNumber} 页加载失败`);
+				} finally {
+					// A queued getPage/render can finish after its wrapper left the
+					// window. Release again so a late allocation cannot retain pixels.
+					if (generation !== this.referenceGeneration || !pageWrapper.isConnected) this.pdfRenderer.releaseCanvas(canvas);
 				}
 			}).catch(() => undefined);
 		};
 
-		const renderObserver = typeof IntersectionObserver !== "undefined"
-			? new IntersectionObserver((entries) => {
-				entries.forEach((entry) => {
-					if (entry.isIntersecting) queuePageRender(entry.target as HTMLElement);
-				});
-			}, { root: scroll, rootMargin: "1400px 0px", threshold: 0.01 })
-			: null;
-		if (renderObserver) {
-			pageWrappers.forEach((pageWrapper) => renderObserver.observe(pageWrapper));
-		} else {
+		const mountWindow = (first: number, last = first): void => {
+			const previousScrollTop = scroll.scrollTop;
+			firstVisiblePage = first;
+			lastVisiblePage = last;
+			const range = geometry.range(first, last);
+			for (const [pageNumber, pageWrapper] of pageWrappers) {
+				if (pageNumber >= range.first && pageNumber <= range.last) continue;
+				const canvas = pageWrapper.querySelector("canvas");
+				if (canvas) this.pdfRenderer.releaseCanvas(canvas);
+				pageWrapper.remove();
+				pageWrappers.delete(pageNumber);
+			}
+			for (let pageNumber = range.first; pageNumber <= range.last; pageNumber += 1) {
+				let pageWrapper = pageWrappers.get(pageNumber);
+				if (!pageWrapper) {
+					pageWrapper = createPageWrapper(pageNumber);
+					const nextPage = [...pageWrappers.keys()].filter((number) => number > pageNumber).sort((left, right) => left - right)[0];
+					scroll.insertBefore(pageWrapper, pageWrappers.get(nextPage) || afterSpacer);
+					pageWrappers.set(pageNumber, pageWrapper);
+				}
+			}
+			updateSpacers();
+			// DOM removal can temporarily clamp scrollTop before replacement
+			// spacers are sized. The full document geometry has not changed.
+			if (scroll.scrollTop !== previousScrollTop) scroll.scrollTop = previousScrollTop;
+			// Prioritize the visible page; overscan still uses the same serial
+			// queue and the renderer retains its cumulative canvas-pixel limit.
+			const focused = pageWrappers.get(this.readerState.pdfPage) || pageWrappers.get(first);
+			if (focused) queuePageRender(focused);
 			pageWrappers.forEach(queuePageRender);
-		}
-		this.referenceAbortController?.signal.addEventListener("abort", () => renderObserver?.disconnect(), { once: true });
+		};
+		this.mountPdfPageWindow = (pageNumber) => {
+			mountWindow(pageNumber, geometry.pageAt(geometry.offset(pageNumber) + scroll.clientHeight));
+		};
 
 		let scrollFrame = 0;
 		const updateVisiblePage = (): void => {
 			scrollFrame = 0;
 			if (generation !== this.referenceGeneration) return;
-			const probe = scroll.scrollTop + Math.min(scroll.clientHeight * 0.35, 260);
-			const scrollRect = scroll.getBoundingClientRect();
-			let currentPage = firstPage;
-			for (const pageWrapper of pageWrappers) {
-				const pageTop = readerElementOffset(
-					scroll.scrollTop,
-					pageWrapper.getBoundingClientRect().top,
-					scrollRect.top,
-				);
-				if (pageTop > probe) break;
-				currentPage = Number(pageWrapper.dataset.pageNumber || currentPage);
-			}
+			const top = Math.max(0, scroll.scrollTop - leadingInset);
+			const currentPage = geometry.pageAt(top + Math.min(scroll.clientHeight * 0.35, 260));
+			mountWindow(geometry.pageAt(top), geometry.pageAt(top + scroll.clientHeight));
 			pageInput.value = String(currentPage);
 			previous.disabled = currentPage <= 1;
 			next.disabled = currentPage >= this.pdfRenderer.numPages;
@@ -962,26 +1008,18 @@ export class MineruReaderView extends ItemView {
 			this.readerState.pdfPage = currentPage;
 			this.requestStateSave();
 		};
-		this.onReferenceEvent(scroll, "scroll", () => {
+		scheduleVisiblePage = () => {
 			if (scrollFrame) return;
 			scrollFrame = window.requestAnimationFrame(updateVisiblePage);
-		});
+		};
+		this.onReferenceEvent(scroll, "scroll", scheduleVisiblePage);
 		this.referenceAbortController?.signal.addEventListener("abort", () => {
 			if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
 		}, { once: true });
 
-		const initialPage = pageWrappers.find((page) => Number(page.dataset.pageNumber) === this.readerState.pdfPage);
-		if (initialPage) {
-			const leadingInset = Number.parseFloat(window.getComputedStyle(scroll).paddingTop) || 0;
-			scroll.scrollTop = alignedReaderScrollTop(
-				scroll.scrollTop,
-				initialPage.getBoundingClientRect().top,
-				scroll.getBoundingClientRect().top,
-				leadingInset,
-			);
-			queuePageRender(initialPage);
-			pageWrappers.filter((page) => page !== initialPage).forEach(queuePageRender);
-		}
+		this.mountPdfPageWindow(this.readerState.pdfPage);
+		scroll.scrollTop = geometry.offset(this.readerState.pdfPage);
+		scheduleVisiblePage();
 		this.renderReferenceStatus(parent);
 	}
 
@@ -1485,8 +1523,9 @@ export class MineruReaderView extends ItemView {
 
 	private scrollPdfToPage(pageNumber: number, behavior: ScrollBehavior): void {
 		const scroll = this.referenceHost?.querySelector<HTMLElement>(".agent-dashboard-mineru-pdf-scroll");
-		const page = scroll?.querySelector<HTMLElement>(`[data-page-number="${pageNumber}"]`);
 		if (!scroll) return;
+		this.mountPdfPageWindow?.(pageNumber);
+		const page = scroll.querySelector<HTMLElement>(`[data-page-number="${pageNumber}"]`);
 		if (!page) {
 			this.readerState.pdfPage = Math.max(1, Math.min(this.pdfRenderer.numPages, pageNumber));
 			void this.renderReference();
@@ -1583,6 +1622,7 @@ export class MineruReaderView extends ItemView {
 		this.pdfRenderer.cancelCropRender();
 		this.referenceAbortController?.abort();
 		this.referenceAbortController = null;
+		this.mountPdfPageWindow = null;
 		this.workspaceAbortController?.abort();
 		this.workspaceAbortController = null;
 		this.markdownComponent?.unload();

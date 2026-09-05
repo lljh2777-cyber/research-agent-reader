@@ -19,6 +19,8 @@ export interface AnnotationRecord {
 	sourcePath: string;
 	selectedText: string;
 	section: string;
+	/** Detached annotations retain their source position without editing the source. */
+	sourceAnchor?: { start: number; end: number; prefix: string; suffix: string };
 	manualText: string;
 	aiText: string;
 	aiProvider: string;

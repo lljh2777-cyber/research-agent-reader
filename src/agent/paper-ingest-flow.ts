@@ -329,16 +329,18 @@ export function buildDraftTools(deps: PaperIngestToolDeps, articleVaultPath = ""
 }
 
 /**
- * A draft sourced from MinerU is accepted only when the model actually read
- * the overview produced by the path-bound article tool. Model claims and a
- * generic vault_read receipt cannot satisfy this gate.
+ * A draft is accepted only when the model actually read the overview produced
+ * by the path-bound source tool and did not report insufficient evidence.
+ * Model claims and a generic vault_read receipt cannot satisfy this gate.
  */
 export function validateDraftReceipts(
 	articleVaultPath: string,
 	expectedTitle: string,
 	toolCalls: ReadonlyArray<AgentToolCallReceipt>,
+	draftStatus: PaperIngestNoteDraft["status"] = "completed",
 ): string[] {
-	if (!articleVaultPath) return [];
+	if (draftStatus === "insufficient-evidence") return ["模型明确报告证据不足，未创建文章 Wiki"];
+	if (!articleVaultPath) return ["没有已验证的原文 Markdown，未创建文章 Wiki"];
 	const expected = normalizeReceiptPath(articleVaultPath);
 	const normalizedTitle = normalizeBibliographicTitle(expectedTitle);
 	const observed = toolCalls.some((call) => (
@@ -1048,14 +1050,14 @@ export function evaluateDraftPhase(
 			downgradeNote: "",
 		};
 	}
-	const downgradeNote = articleVaultPath
-		? ""
-		: options.articleWikiSource === "pdf"
-			? "轻量方式不读取 PDF 正文：内容来源已降级为文献元数据与用户说明"
-			: options.articleWikiSource === "auto"
-				? "未找到已验证 article 包：内容来源回退为文献元数据与用户说明"
-				: "";
-	return { run: true, blocker: "", downgradeNote };
+	if (!articleVaultPath) {
+		return {
+			run: false,
+			blocker: "轻量方式尚无已验证的原文 Markdown，标题与书目元数据不足以创建 abstract-level 文章 Wiki；请先生成或提供原文，或使用支持 PDF 正文读取的工作流",
+			downgradeNote: "",
+		};
+	}
+	return { run: true, blocker: "", downgradeNote: "" };
 }
 
 /**

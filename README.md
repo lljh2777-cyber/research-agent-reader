@@ -78,6 +78,10 @@ The default reader folders are `papers` and `Clippings`. Change them under
 rewritten merely to support the two-pane reader; inferred figure labels exist
 only in the reading view.
 
+`papers/` 与 `Clippings/` 的批注独立保存在 `wiki/annotations/`，不改写原文。
+重新划选同一段文字并打开批注，可查看或编辑已保存的内容；批注文档中的来源以路径记录。
+Wiki 笔记继续使用原有的行内批注链接。
+
 `papers/`, `wiki/`, and `Clippings/` are isolated content roots. Do not create
 Obsidian wikilinks or Markdown links from one of these roots into another. The
 built-in vault health check audits `wiki/` plus top-level Markdown files;

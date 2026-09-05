@@ -478,9 +478,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!this.annotationService) return;
 		try {
 			const selection = await this.annotationService.captureSelection();
+			const record = await this.annotationService.findAnnotationForSelection(selection);
 			this.openAnnotationPopover({
 				anchorRect: selection.anchorRect,
-				selection,
+				...(record ? { record } : { selection }),
 			});
 		} catch (error) {
 			new Notice(error instanceof Error ? error.message : String(error));

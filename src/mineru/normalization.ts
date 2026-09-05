@@ -32,7 +32,7 @@ export interface RuntimeViewerIndexOptions {
 }
 
 const MARKDOWN_IMAGE_RE = /!\[[^\]]*\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)/g;
-const HTML_IMAGE_RE = /<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi;
+const HTML_IMAGE_RE = /<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi;
 const FIGURE_LABEL_RE = /^\s*(?:(Extended\s+Data)\s+Fig(?:ure)?\.?|(Supplementary)\s+Fig(?:ure)?\.?|(Supporting(?:\s+Information)?)\s+Fig(?:ure)?\.?|Fig(?:ure)?\.?|(图))\s*([A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*)/i;
 const FIGURE_LABEL_ANYWHERE_SOURCE = String.raw`(?:Extended\s+Data\s+Fig(?:ure)?\.?|Supplementary\s+Fig(?:ure)?\.?|Supporting(?:\s+Information)?\s+Fig(?:ure)?\.?|Fig(?:ure)?\.?|图)\s*[A-Za-z0-9]+(?:[._-][A-Za-z0-9]+)*`;
 const FIGURE_REFERENCE_VERB_RE = /^(?:shows?|illustrates?|depicts?|demonstrates?|presents?|reports?|displays?|compares?|lists?|summari[sz]es?|gives?|provides?|plots?|is|are|was|were)\b/i;

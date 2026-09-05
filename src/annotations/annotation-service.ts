@@ -37,6 +37,7 @@ interface AnnotationMeta {
 	sourcePath: string;
 	selectedText: string;
 	section: string;
+	sourceAnchor?: AnnotationRecord["sourceAnchor"];
 	aiProvider: string;
 	aiModel: string;
 	createdAt: string;
@@ -67,6 +68,26 @@ function yamlString(value: string): string {
 	return JSON.stringify(value);
 }
 
+export function usesDetachedAnnotations(sourcePath: string): boolean {
+	return /^(papers|Clippings)\//i.test(normalizePath(sourcePath));
+}
+
+function sourceReference(sourcePath: string): string {
+	if (!usesDetachedAnnotations(sourcePath)) return `[[${sourcePath.replace(/\.md$/i, "")}]]`;
+	const fence = "`".repeat(Math.max(0, ...(sourcePath.match(/`+/g) || []).map((run) => run.length)) + 1);
+	return `${fence} ${sourcePath} ${fence}`;
+}
+
+function parseSourceAnchor(value: unknown): AnnotationRecord["sourceAnchor"] {
+	if (!value || typeof value !== "object") return undefined;
+	const anchor = value as Record<string, unknown>;
+	if (!Number.isSafeInteger(anchor.start) || !Number.isSafeInteger(anchor.end)
+		|| Number(anchor.start) < 0 || Number(anchor.end) <= Number(anchor.start)
+		|| typeof anchor.prefix !== "string" || anchor.prefix.length > 80
+		|| typeof anchor.suffix !== "string" || anchor.suffix.length > 80) return undefined;
+	return { start: Number(anchor.start), end: Number(anchor.end), prefix: anchor.prefix, suffix: anchor.suffix };
+}
+
 function normalizeArchiveTarget(value: unknown): string {
 	return String(value || "")
 		.trim()
@@ -87,6 +108,15 @@ function countOccurrences(content: string, value: string): number[] {
 		cursor = index + Math.max(1, value.length);
 	}
 	return offsets;
+}
+
+function findSourceAnchorOffset(content: string, text: string, anchor: NonNullable<AnnotationRecord["sourceAnchor"]>): number | null {
+	const matches = (offset: number): boolean => content.slice(offset, offset + text.length) === text
+		&& content.slice(Math.max(0, offset - anchor.prefix.length), offset) === anchor.prefix
+		&& content.slice(offset + text.length, offset + text.length + anchor.suffix.length) === anchor.suffix;
+	if (anchor.end === anchor.start + text.length && matches(anchor.start)) return anchor.start;
+	const offsets = countOccurrences(content, text).filter(matches);
+	return offsets.length === 1 ? offsets[0] : null;
 }
 
 function commonSuffixLength(left: string, right: string): number {
@@ -163,6 +193,7 @@ function parseMeta(raw: string): AnnotationMeta | null {
 			sourcePath: String(value.sourcePath || ""),
 			selectedText: String(value.selectedText || ""),
 			section: String(value.section || ""),
+			sourceAnchor: parseSourceAnchor(value.sourceAnchor),
 			aiProvider: String(value.aiProvider || ""),
 			aiModel: String(value.aiModel || ""),
 			createdAt: String(value.createdAt || ""),
@@ -430,6 +461,9 @@ export class AnnotationService {
 	): Promise<AnnotationRecord> {
 		const sourceFile = this.app.vault.getAbstractFileByPath(selection.sourcePath);
 		if (!(sourceFile instanceof TFile)) throw new Error("原始 Markdown 文件不存在");
+		const detached = usesDetachedAnnotations(sourceFile.path);
+		const content = await this.app.vault.read(sourceFile);
+		const location = this.relocateSelection(content, selection);
 		await this.ensureFolder(ANNOTATION_FOLDER);
 		const annotationPath = await this.resolveAnnotationPath(sourceFile);
 		const now = new Date().toISOString();
@@ -439,6 +473,12 @@ export class AnnotationService {
 			sourcePath: selection.sourcePath,
 			selectedText: selection.selectedText,
 			section: selection.section,
+			...(detached ? { sourceAnchor: {
+				start: location.start,
+				end: location.end,
+				prefix: content.slice(Math.max(0, location.start - 80), location.start),
+				suffix: content.slice(location.end, location.end + 80),
+			} } : {}),
 			manualText: sanitizeEmbeddedText(draft.manualText),
 			aiText: sanitizeEmbeddedText(draft.aiText),
 			aiProvider: String(draft.aiProvider || ""),
@@ -451,6 +491,7 @@ export class AnnotationService {
 			archiveError: "",
 		};
 		await this.writeRecord(record);
+		if (detached) return record;
 		try {
 			await this.app.vault.process(sourceFile, (content) => {
 				const location = this.relocateSelection(content, selection);
@@ -465,6 +506,37 @@ export class AnnotationService {
 			throw error;
 		}
 		return record;
+	}
+
+	/** Re-selecting a source passage opens its detached annotation after restart. */
+	async findAnnotationForSelection(selection: AnnotationSelection): Promise<AnnotationRecord | null> {
+		if (!usesDetachedAnnotations(selection.sourcePath)) return null;
+		const sourceFile = this.app.vault.getAbstractFileByPath(selection.sourcePath);
+		if (!(sourceFile instanceof TFile)) return null;
+		const annotationPath = await this.resolveAnnotationPath(sourceFile);
+		const annotationFile = this.app.vault.getAbstractFileByPath(annotationPath);
+		if (!(annotationFile instanceof TFile)) return null;
+		const source = await this.app.vault.read(sourceFile);
+		const current = this.relocateSelection(source, selection);
+		const content = await this.app.vault.read(annotationFile);
+		const matches: AnnotationRecord[] = [];
+		for (const part of content.split(BLOCK_START).slice(1)) {
+			const raw = BLOCK_START + part;
+			const meta = parseMeta(raw);
+			if (!meta?.id || meta.sourcePath !== sourceFile.path || meta.selectedText !== selection.selectedText) continue;
+			if (meta.sourceAnchor) {
+				if (findSourceAnchorOffset(source, meta.selectedText, meta.sourceAnchor) !== current.start) continue;
+			} else if (countOccurrences(source, meta.selectedText).length !== 1 || meta.section !== selection.section) {
+				continue;
+			}
+			const block = this.findRecordBlock(raw, meta.id);
+			if (!block) continue;
+			matches.push({ ...meta, annotationPath,
+				manualText: readMarkedSection(block, MANUAL_START, MANUAL_END),
+				aiText: readMarkedSection(block, AI_START, AI_END),
+			});
+		}
+		return matches.length === 1 ? matches[0] : null;
 	}
 
 	async updateAnnotation(
@@ -670,8 +742,9 @@ export class AnnotationService {
 		let context = record.selectedText;
 		if (file instanceof TFile) {
 			const content = await this.app.vault.read(file);
-			const offsets = countOccurrences(content, record.selectedText);
-			const offset = offsets[0] ?? -1;
+			const offset = record.sourceAnchor
+				? findSourceAnchorOffset(content, record.selectedText, record.sourceAnchor) ?? -1
+				: countOccurrences(content, record.selectedText)[0] ?? -1;
 			if (offset >= 0) {
 				context = content.slice(
 					Math.max(0, offset - Math.floor(CONTEXT_LIMIT / 2)),
@@ -790,6 +863,7 @@ export class AnnotationService {
 			sourcePath: record.sourcePath,
 			selectedText: record.selectedText,
 			section: record.section,
+			sourceAnchor: record.sourceAnchor,
 			aiProvider: record.aiProvider,
 			aiModel: record.aiModel,
 			createdAt: record.createdAt,
@@ -800,7 +874,6 @@ export class AnnotationService {
 			archiveError: record.archiveError,
 		};
 		const title = record.selectedText.replace(/\s+/g, " ").slice(0, 90).replace(/[#\r\n]/g, "");
-		const sourceTarget = record.sourcePath.replace(/\.md$/i, "");
 		const targets = record.archiveTargets.length
 			? record.archiveTargets.map((target) => `[[${normalizeArchiveTarget(target)}]]`).join("、")
 			: "无";
@@ -810,13 +883,16 @@ export class AnnotationService {
 			completed: "已归档",
 			failed: "归档失败",
 		}[record.archiveStatus];
+		// Source context can contain HTML comments or annotation marker text.
+		// JSON escapes preserve the exact anchor without terminating this comment.
+		const serializedMeta = JSON.stringify(meta).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
 		return [
 			`${BLOCK_START}${record.id} -->`,
 			`## ${title || "批注"}`,
-			`${META_PREFIX}${JSON.stringify(meta)} -->`,
+			`${META_PREFIX}${serializedMeta} -->`,
 			"",
 			`- 原文：${record.selectedText}`,
-			`- 来源：[[${sourceTarget}]]`,
+			`- 来源：${sourceReference(record.sourcePath)}`,
 			record.section ? `- 章节：${record.section}` : "",
 			`- 创建：${record.createdAt}`,
 			`- 更新：${record.updatedAt}`,
@@ -855,7 +931,7 @@ export class AnnotationService {
 			"",
 			`# ${this.sourceTitle(record.sourcePath)}批注`,
 			"",
-			`来源：[[${sourceTarget}]]`,
+			`来源：${sourceReference(record.sourcePath)}`,
 			"",
 			this.renderRecord(record),
 			"",
