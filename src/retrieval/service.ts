@@ -11,6 +11,7 @@ export class KnowledgeRetrievalService {
 	private snapshot: VectorSnapshot | null = null; private loading: Promise<void> | null = null;
 	private controller: AbortController | null = null; private building: Promise<void> | null = null;
 	private listeners = new Set<() => void>();
+	private searches = new Set<AbortController>();
 	status: IndexStatus = { state: "idle", done: 0, total: 0, documents: 0, changed: 0, updated: "", message: "索引尚未建立" };
 	constructor(private readDocuments: (signal?: AbortSignal) => Promise<KnowledgeDocument[]>, private storage: VectorStorage, private models: RetrievalModels, private mode: () => RetrievalMode) {}
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
@@ -41,7 +42,7 @@ export class KnowledgeRetrievalService {
 		this.building = this.build(controller.signal).finally(() => { this.building = null; this.controller = null; this.emit(); }); return this.building;
 	}
 	stop(): void { this.controller?.abort(); }
-	dispose(): void { this.stop(); this.listeners.clear(); }
+	dispose(): void { this.stop(); this.searches.forEach((controller) => controller.abort()); this.listeners.clear(); }
 	private async build(signal: AbortSignal): Promise<void> {
 		await this.load();
 		this.status = { ...this.status, state: "building", message: "正在读取知识笔记…" }; this.emit();
@@ -65,6 +66,12 @@ export class KnowledgeRetrievalService {
 		finally { this.emit(); }
 	}
 	async search(rawQuery: string, options: SearchOptions = {}): Promise<KnowledgeResult> {
+		options.signal?.throwIfAborted(); const controller = new AbortController(); const abort = () => controller.abort();
+		options.signal?.addEventListener("abort", abort, { once: true }); this.searches.add(controller);
+		try { return await this.searchSnapshot(rawQuery, { ...options, signal: controller.signal }); }
+		finally { options.signal?.removeEventListener("abort", abort); this.searches.delete(controller); }
+	}
+	private async searchSnapshot(rawQuery: string, options: SearchOptions): Promise<KnowledgeResult> {
 		const query = rawQuery.trim().slice(0, 1000); const signal = options.signal; signal?.throwIfAborted(); await this.load();
 		const { docs, chunks: all } = await this.corpus(signal); const scope = paperScope(options.identityQuery || query, docs, options.paperPaths);
 		const chunks = scope ? all.filter((chunk) => scope.includes(chunk.path)) : all;

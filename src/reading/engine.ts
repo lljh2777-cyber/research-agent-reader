@@ -41,7 +41,7 @@ export class ReadingEngine {
 	private live = new Map<string, string>();
 	private listeners = new Set<(sessionId: string, nodeId: string, text: string) => void>();
 	constructor(private workspace: ReadingWorkspaceService, private backendFor: (session: ReadingSession) => ReadingBackend,
-		private vaultSearch?: (query: string) => Promise<ReadingEvidence[]>) {
+		private vaultSearch?: (query: string, context?: { question: string; source: ReadingSession["source"]; signal: AbortSignal }) => Promise<ReadingEvidence[] | { evidence: ReadingEvidence[]; label: string; warnings: string[] }>) {
 		workspace.generateHandler = (sessionId, nodeId) => this.generate(sessionId, nodeId);
 		workspace.stopHandler = (sessionId, nodeId) => this.active.get(sessionId + ":" + nodeId)?.abort();
 		workspace.disposeHandler = () => { this.active.forEach((controller) => controller.abort()); };
@@ -104,11 +104,12 @@ export class ReadingEngine {
 			if (!ids.length || ids.length > 8 || ids.some((id) => !document.evidence.some((item) => item.id === id))) throw new Error("模型未选择有效原文证据，请重试");
 			const evidence = selectReadingEvidence(document, String(selection.query || node.question), completedCount, ids);
 			if (ids.some((id) => !evidence.some((item) => item.id === id))) throw new Error("所选证据超过本轮上下文容量，请缩小问题范围后重试");
-			let retrieval: { query: string; paths: string[]; error?: string } | undefined;
+			let retrieval: { query: string; paths: string[]; error?: string; label?: string; warnings?: string[] } | undefined;
 			if (typeof selection.vaultQuery === "string" && selection.vaultQuery.trim() && this.vaultSearch) {
 				const query = selection.vaultQuery.trim().slice(0, 500); retrieval = { query, paths: [] };
-				try { const supplement = (await this.vaultSearch(query)).slice(0, 4); evidence.push(...supplement); retrieval.paths = supplement.map((item) => item.path); }
-				catch (error) { retrieval.error = "知识库检索失败：" + String(error); }
+				try { const found = await this.vaultSearch(query, { question: node.question, source: session.source, signal: controller.signal }); const supplement = (Array.isArray(found) ? found : found.evidence).slice(0, 4);
+					evidence.push(...supplement); retrieval.paths = supplement.map((item) => item.path); if (!Array.isArray(found)) { retrieval.label = found.label; retrieval.warnings = found.warnings; } }
+				catch (error) { controller.signal.throwIfAborted(); retrieval.error = "知识库检索失败：" + String(error); }
 			}
 			const images: ReadingImage[] = [];
 			const requiredVisuals = ids.filter((id) => document.evidence.find((item) => item.id === id)?.asset);
@@ -124,12 +125,12 @@ export class ReadingEngine {
 			const prompt = JSON.stringify({ action: node.branchId ? "回答支线追问" : completedCount ? "继续下一个主线单元" : "生成整体提纲并讲解第一单元",
 				question: node.question, quote: node.quote?.text, context, outline: session.outline, completedUnits: completedCount,
 				retrieval: retrieval ? { query: retrieval.query, found: retrieval.paths.length, error: retrieval.error, instruction: "若没有足够补充依据，明确写 Vault 中未找到足够依据" } : null,
-				evidence: evidence.map(({ id, kind, label, text, page, visualInspected }) => ({ id, kind, label, text, page, visualInspected })),
+				evidence: evidence.map(({ id, kind, label, text, page, visualInspected, role, origins, heading }) => ({ id, kind, label, text, page, visualInspected, role, origins, heading })),
 				images: images.map((image, index) => ({ index: index + 1, evidenceId: image.evidenceId })),
 				output: node.branchId ? { title: "短标题", content: "Markdown 正文，结论附 [证据ID]", evidenceIds: ["引用的ID"] }
 					: { title: "本单元短标题", content: "Markdown 正文，结论附 [证据ID]", evidenceIds: ["引用的ID"], outline: ["完整主线提纲"], mainSummary: "截至本单元的累计摘要及进度", completed: false } });
 			let streamed = "";
-			const raw = await backend.complete({ system: teachingSkill + "\n请仅返回符合 output 字段所示格式的 JSON 对象。", prompt, images, signal: controller.signal,
+			const raw = await backend.complete({ system: teachingSkill + "\n知识库补充应标明来源角色。导航、设想、来源说明不是本文实验事实；同一论文的多篇转述不是多份独立证据。高相关分不能补足缺失的表格和原始数据。\n请仅返回符合 output 字段所示格式的 JSON 对象。", prompt, images, signal: controller.signal,
 				onDelta: (delta) => { streamed += delta; const match = /"content"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(streamed); if (match) {
 					try { this.emit(sessionId, nodeId, JSON.parse('"' + match[1] + '"')); } catch { /* Incomplete escape; retain previous frame. */ }
 				} } });

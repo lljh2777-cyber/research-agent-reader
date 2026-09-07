@@ -380,12 +380,14 @@ export class ReadingWorkspaceView extends ItemView {
 			for (const [index, evidence] of node.evidence.entries()) {
 				const source = button(sources, "", () => this.showEvidence(node.id, evidence.id), evidence.label); source.className = "reading-source-row";
 				element(source, "span", "reading-source-index", String(index + 1)); const label = element(source, "span", "reading-source-title"); element(label, "span", "", evidence.label);
-				element(label, "small", "", (evidence.kind === "paper" ? "本文原文" : "知识库补充") + (evidence.page ? " · 第 " + evidence.page + " 页" : "") + (evidence.visualInspected ? " · 已查看图像" : "")); icon(source, "arrow-up-right");
+				element(label, "small", "", (evidence.kind === "paper" ? "本文原文" : "知识库补充") + (evidence.role ? " · " + evidence.role : "") + (evidence.page ? " · 第 " + evidence.page + " 页" : "") + (evidence.visualInspected ? " · 已查看图像" : "")); icon(source, "arrow-up-right");
 			}
 		}
 		if (node.retrieval) {
 			const details = element(article, "details", "reading-sources"); element(details, "summary", "", "知识库检索路径");
 			element(details, "p", "", "检索词：" + node.retrieval.query);
+			if (node.retrieval.label) element(details, "p", "", node.retrieval.label);
+			for (const warning of node.retrieval.warnings || []) element(details, "p", "reading-error", warning);
 			element(details, "p", "", node.retrieval.paths.join("\n") || "Vault 中未找到足够依据");
 			if (node.retrieval.error) element(details, "p", "reading-error", node.retrieval.error);
 		}
@@ -564,6 +566,8 @@ export class ReadingWorkspaceView extends ItemView {
 	private showEvidence(nodeId: string, evidenceId: string): void {
 		const item = readingNode(this.session!, nodeId).evidence.find((evidence) => evidence.id === evidenceId); if (!item) return;
 		const modal = this.modal(item.label); element(modal.contentEl, "p", "reading-evidence-location", item.path + (item.page ? " · 第 " + item.page + " 页" : ""));
+		if (item.heading || item.role) element(modal.contentEl, "p", "reading-evidence-location", [item.role, item.heading].filter(Boolean).join(" · "));
+		if (item.origins?.length) element(modal.contentEl, "p", "reading-evidence-location", "原始来源：" + item.origins.join("、"));
 		if (item.start !== undefined) element(modal.contentEl, "p", "", "阅读文本字符位置：" + item.start + "–" + item.end + (item.page ? "" : "；页码未唯一匹配，以本段原文为准"));
 		element(modal.contentEl, "pre", "reading-evidence-text", item.text);
 		if (item.kind === "vault") button(modal.contentEl, "打开来源笔记", () => { this.plugin.openVaultFile(item.path); modal.close(); });

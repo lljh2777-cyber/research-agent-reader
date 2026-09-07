@@ -17,6 +17,10 @@ export interface ReadingEvidence {
 	end?: number;
 	asset?: string;
 	visualInspected?: boolean;
+	role?: string;
+	heading?: string;
+	origins?: string[];
+	sourceHash?: string;
 }
 export interface ReadingQuote { nodeId: string; text: string; start: number; end: number }
 export interface ReadingNode {
@@ -33,7 +37,7 @@ export interface ReadingNode {
 	quote?: ReadingQuote;
 	provider?: string;
 	model?: string;
-	retrieval?: { query: string; paths: string[]; error?: string };
+	retrieval?: { query: string; paths: string[]; error?: string; label?: string; warnings?: string[] };
 }
 export interface ReadingBranch {
 	id: string;

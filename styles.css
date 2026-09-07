@@ -6318,3 +6318,11 @@ body.agent-dashboard-mineru-resizing {
 	.reading-highlight { animation:none; }
 	.reading-workspace * { transition:none !important; }
 }
+
+.knowledge-index-status { padding:16px 18px; margin:16px 0; border:1px solid var(--background-modifier-border); border-radius:12px; background:var(--background-secondary); }
+.knowledge-index-status progress { display:block; width:100%; height:6px; margin:14px 0 10px; accent-color:var(--interactive-accent); }
+.knowledge-index-status p { color:var(--text-muted); font-size:var(--font-ui-small); margin-bottom:0; }
+.knowledge-search-input { display:block; width:100%; min-height:72px; resize:vertical; margin-top:24px; }
+.knowledge-search-results details { border-top:1px solid var(--background-modifier-border); padding:12px 0; }
+.knowledge-search-results summary { cursor:pointer; font-weight:600; }
+.knowledge-search-results p { color:var(--text-muted); font-size:var(--font-ui-small); overflow-wrap:anywhere; }

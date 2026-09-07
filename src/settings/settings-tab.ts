@@ -1,5 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ROLE_LABELS, type RetrievalMode } from "../retrieval/types";
+import type { KnowledgeRetrievalService } from "../retrieval/service";
 
 import {
 	App,
@@ -58,6 +60,8 @@ import type {
 } from "../types/contracts";
 
 interface SettingsPluginHost extends PluginHost {
+	getKnowledgeService(): KnowledgeRetrievalService;
+	testKnowledgeModels(): Promise<void>;
 	providerRuntimeState: Map<string, ProviderRuntimeEntry>;
 	obsidianCliProbeState: ObsidianCliProbeState;
 	providerEditorProfileId: string;
@@ -80,6 +84,7 @@ interface SettingsPluginHost extends PluginHost {
 }
 
 type SettingsPage =
+	| "retrieval"
 	| "home"
 	| "runtime"
 	| "obsidian-cli"
@@ -96,6 +101,7 @@ type SettingsPage =
 export class AgentDashboardSettingTab extends PluginSettingTab {
 	declare plugin: Plugin & SettingsPluginHost;
 	private activePage: SettingsPage = "home";
+	private retrievalUnsubscribe?: () => void;
 
 	constructor(app: App, plugin: Plugin & SettingsPluginHost) {
 		super(app, plugin);
@@ -103,12 +109,14 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
+		this.retrievalUnsubscribe?.(); this.retrievalUnsubscribe = undefined;
 		const { containerEl } = this;
 		const previousPage = this.activePage;
 		const previousScrollTop = containerEl.scrollTop;
 		containerEl.empty();
 		containerEl.addClass("agent-dashboard-settings");
 		switch (this.activePage) {
+			case "retrieval": this.renderKnowledgeRetrieval(containerEl); break;
 			case "runtime":
 				this.renderRuntimeSettings(containerEl);
 				break;
@@ -154,6 +162,46 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		}
 	}
 
+
+	hide(): void { this.retrievalUnsubscribe?.(); this.retrievalUnsubscribe = undefined; }
+	private renderKnowledgeRetrieval(container: HTMLElement): void {
+		this.createSettingsPageHeader(container, "知识库检索", "让问题更容易找到对应段落。本文事实优先限定论文，跨论文比较再扩大范围。");
+		new Setting(container).setName("检索模式").setDesc("关键词保留现有流程；重排和混合检索供 Direct API 知识库对话、两种后端的 PDF 交互深读与导出关联共用。")
+			.addDropdown((select) => select.addOption("lexical", "关键词（兼容现有流程）").addOption("rerank", "关键词＋BGE 重排").addOption("hybrid", "混合检索＋BGE 重排")
+				.setValue(this.plugin.settings.knowledgeRetrievalMode).onChange(async (value) => { this.plugin.settings.knowledgeRetrievalMode = value as RetrievalMode; await this.plugin.saveSettings(); }));
+		const secret = new Setting(container).setName("硅基流动凭据").setDesc("选择钥匙串中的凭据。启用后会发送问题和选定的知识笔记片段；更新向量索引会发送索引范围内的正文。");
+		if (this.app.secretStorage && typeof SecretComponent === "function") secret.addComponent((element) => new SecretComponent(this.app, element)
+			.setValue(this.plugin.settings.knowledgeSecretId).onChange(async (value) => { this.plugin.settings.knowledgeSecretId = value.trim().slice(0, 200); await this.plugin.saveSettings(); }));
+		else secret.setDesc("当前版本不支持钥匙串，请升级 Obsidian。");
+		new Setting(container).setName("检索模型").setDesc("BAAI/bge-m3 · BAAI/bge-reranker-v2-m3；仅使用这两个模型。")
+			.addButton((button) => button.setButtonText("测试连接").onClick(async () => { button.setDisabled(true); try { await this.plugin.testKnowledgeModels(); new Notice("嵌入与重排连接均成功"); } catch (error) { new Notice(String(error)); } finally { button.setDisabled(false); } }));
+		const service = this.plugin.getKnowledgeService();
+		const status = container.createDiv({ cls: "knowledge-index-status" });
+		const summary = status.createEl("strong"); const progress = status.createEl("progress"); progress.max = 1;
+		const detail = status.createEl("p");
+		const renderStatus = () => { const value = service.status; summary.setText(value.message); progress.value = value.total ? value.done / value.total : 0; detail.setText(value.documents + " 篇笔记 · " + value.done + "/" + value.total + " 个片段 · " + value.changed + " 篇变化" + (value.updated ? " · 最近保存 " + new Date(value.updated).toLocaleString() : "")); };
+		this.retrievalUnsubscribe = service.subscribe(renderStatus); renderStatus();
+		new Setting(container).setName("本地向量索引").setDesc("仅处理新增与变化的片段，停止后可继续。原笔记不写回；改动后的正文不会套用旧向量。")
+			.addButton((button) => button.setButtonText("更新索引").setCta().onClick(async () => { button.setDisabled(true); try { await service.update(); } catch (error) { new Notice(String(error)); } finally { button.setDisabled(false); } }))
+			.addButton((button) => button.setButtonText("停止").onClick(() => service.stop()))
+			.addButton((button) => button.setButtonText("检查变化").onClick(() => { void service.inspect().catch((error) => new Notice(String(error))); }));
+		container.createEl("p", { cls: "setting-item-description", text: "索引范围：正式来源、概念、方法、数据、综合与代码知识等。排除 PDF 原文包、批注、学习 QA、日志和范围外导航；导航和研究设想不进入普通事实回答的候选。独立 CLI 知识库对话继续使用自身工具链。" });
+		const query = container.createEl("textarea", { cls: "knowledge-search-input", attr: { placeholder: "试问一个概念，或用作者＋年份限定论文…", "aria-label": "检索预览问题" } });
+		const output = container.createDiv({ cls: "knowledge-search-results" });
+		let controller: AbortController | null = null;
+		new Setting(container).setName("片段检索预览").setDesc("检查实际候选和证据角色，不调用回答模型。相关分不能判断是否可以入库。")
+			.addButton((button) => button.setButtonText("检索").onClick(async () => {
+				if (!query.value.trim()) return; controller?.abort(); const current = new AbortController(); controller = current; button.setDisabled(true); output.empty();
+				try { const result = await service.search(query.value, { signal: current.signal, limit: 5 }); if (controller !== current) return;
+					output.createEl("p", { text: result.scope ? "限定来源：" + (result.scope.join("、") || "未找到") : "范围：正式知识笔记" });
+					for (const warning of result.warnings) output.createEl("p", { cls: "reading-error", text: warning });
+					if (!result.hits.length) output.createEl("p", { text: "Vault 中未找到足够依据" });
+					for (const hit of result.hits) { const item = output.createEl("details"); item.createEl("summary", { text: hit.title + " · " + ROLE_LABELS[hit.role] }); item.createEl("p", { text: hit.path + " · " + hit.heading }); item.createEl("pre", { cls: "reading-evidence-text", text: hit.text }); }
+				} catch (error) { output.createEl("p", { text: current.signal.aborted ? "检索已停止" : String(error) }); } finally { if (controller === current) button.setDisabled(false); }
+			})).addButton((button) => button.setButtonText("停止检索").onClick(() => controller?.abort()));
+		const unsubscribe = this.retrievalUnsubscribe; this.retrievalUnsubscribe = () => { unsubscribe?.(); controller?.abort(); };
+		void service.inspect().catch((error) => { if (container.isConnected) detail.setText(String(error)); });
+	}
 	private renderSettingsHome(containerEl: HTMLElement): void {
 		this.createSettingsPageHeader(
 			containerEl,
@@ -180,6 +228,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		});
 
 		const aiNavigation = this.createSettingsHomeSection(containerEl, "AI 助手");
+		this.createSettingsNavigationItem(aiNavigation, { page: "retrieval", icon: "search", title: "知识库检索", description: "BGE 向量与重排、索引更新、来源范围与检索预览。", status: this.plugin.settings.knowledgeRetrievalMode === "hybrid" ? "混合检索" : this.plugin.settings.knowledgeRetrievalMode === "rerank" ? "关键词＋重排" : "关键词", badge: { text: "可选", tone: "ok" } });
 		const profiles = this.plugin.settings.providerProfiles;
 		const activeProfile = profiles.find(
 			(profile) => profile.id === this.plugin.settings.activeProviderId,

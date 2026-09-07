@@ -21,6 +21,7 @@ async function main() {
 	assert.deepEqual(paperScope("Gamma 2019 的数据", [paper, other]), []);
 	assert.deepEqual(paperScope("10.1234/example", [paper, other]), [paper.path]);
 	assert.equal(paperScope("什么是细胞", [paper, other]), null);
+	assert.equal(paperScope("papers published in 2020", [paper, other]), null);
 	assert(!inKnowledgeScope("wiki/qa/generated.md")); assert(!inKnowledgeScope("papers/key/article.md"));
 	assert(!retrievalTerms("Which assay measures the amount of RNA?").includes("the"));
 	const snapshot = { version: 1, model: EMBEDDING_MODEL, updated: "now", vectors: new Map([[parts[0].vectorKey, vector()]]), documentHashes: { [paper.path]: paper.hash } };

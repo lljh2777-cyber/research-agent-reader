@@ -132,6 +132,12 @@ import {
 	type WebSearchBackendResolution,
 } from "./query/direct-query-service";
 import { LexicalVaultRetriever } from "./query/lexical-retrieval";
+import { KnowledgeRetrievalService } from "./retrieval/service";
+import { BgeModels } from "./retrieval/models";
+import { FileVectorStorage } from "./retrieval/store";
+import { readKnowledgeDocuments } from "./retrieval/vault";
+import { knowledgeTrace } from "./retrieval/trace";
+import type { SearchOptions } from "./retrieval/types";
 import type {
 	CliModelDiscoveryResult,
 	CodePracticeRequest,
@@ -220,8 +226,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		getProviderProfile: (profileId) => this.getProviderProfile(profileId),
 		createProvider: (profile) => this.createLLMProvider(profile),
 		normalizeProviderError: (error) => this.normalizeProviderError(error),
-		runRetrievalPreflight: (runId, question, expandedTerms) => {
-			return this.runVaultRetrievalPreflight(runId, question, expandedTerms);
+		runRetrievalPreflight: (runId, question, expandedTerms, signal) => {
+			return this.runVaultRetrievalPreflight(runId, question, expandedTerms, signal);
 		},
 		readEvidencePacket: (trace) => this.readVaultEvidencePacket(trace),
 		readVaultImageData: (attachment) => this.readVaultImageData(attachment),
@@ -251,6 +257,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	private readingWorkspace?: ReadingWorkspaceService;
 	private readingEngine?: ReadingEngine;
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
+	private knowledgeService: KnowledgeRetrievalService | null = null;
+	private knowledgeModels: BgeModels | null = null;
 	private annotationPopover: AnnotationPopover | null = null;
 	private annotationChip: HTMLElement | null = null;
 	private persistence?: DashboardPersistence;
@@ -473,6 +481,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		this.knowledgeService?.dispose();
 		await this.readingWorkspace?.dispose();
 		this.annotationPopover?.close();
 		this.hideAnnotationChip();
@@ -925,6 +934,8 @@ export default class AgentDashboardPlugin extends Plugin {
 			asRecord(rawStoredSettings),
 		);
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings) as DashboardSettings;
+		this.settings.knowledgeRetrievalMode = storedSettings.knowledgeRetrievalMode === "hybrid" || storedSettings.knowledgeRetrievalMode === "rerank" ? storedSettings.knowledgeRetrievalMode : "lexical";
+		this.settings.knowledgeSecretId = String(storedSettings.knowledgeSecretId || "siliconflow").trim().slice(0, 200);
 		const normalizedProfiles = Array.isArray(storedSettings.providerProfiles)
 			? storedSettings.providerProfiles.slice(0, 20).map((profile) => normalizeProviderProfile(profile))
 			: [];
@@ -2396,7 +2407,9 @@ export default class AgentDashboardPlugin extends Plugin {
 		runId: string,
 		question: string,
 		expandedTerms: string[] = [],
+		signal?: AbortSignal,
 	): Promise<Record<string, unknown>> {
+		if (this.settings.knowledgeRetrievalMode !== "lexical") return knowledgeTrace(await this.searchKnowledge([question, ...expandedTerms].join(" "), { identityQuery: question, signal }));
 		const toolkit = this.resolveToolkitRetrieval();
 		if (toolkit.available) {
 			try {
@@ -2439,6 +2452,18 @@ export default class AgentDashboardPlugin extends Plugin {
 	private getLexicalRetriever(): LexicalVaultRetriever {
 		if (!this.lexicalRetriever) this.lexicalRetriever = new LexicalVaultRetriever(this.app);
 		return this.lexicalRetriever;
+	}
+	getKnowledgeService(): KnowledgeRetrievalService {
+		if (!this.knowledgeService) {
+			const adapter = this.app.vault.adapter; if (!(adapter instanceof FileSystemAdapter)) throw new Error("向量检索需要桌面文件系统");
+			this.knowledgeModels = new BgeModels(() => String(this.app.secretStorage?.getSecret(this.settings.knowledgeSecretId) || "").trim());
+			this.knowledgeService = new KnowledgeRetrievalService((signal) => readKnowledgeDocuments(this.app, signal), new FileVectorStorage(path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader")), this.knowledgeModels, () => this.settings.knowledgeRetrievalMode);
+		}
+		return this.knowledgeService;
+	}
+	searchKnowledge(query: string, options: SearchOptions = {}) { return this.getKnowledgeService().search(query, options); }
+	async testKnowledgeModels(): Promise<void> {
+		this.getKnowledgeService(); await this.knowledgeModels!.embed(["知识库连接测试"]); await this.knowledgeModels!.rerank("测试", ["知识库连接测试"]);
 	}
 
 	async readVaultEvidencePacket(trace: RetrievalTrace): Promise<VaultEvidencePacket[]> {
@@ -3142,12 +3167,20 @@ export default class AgentDashboardPlugin extends Plugin {
 				const profile = this.getProviderProfile(session.backend);
 				if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
 				return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, profile.lastTest.streamingVerified === true);
-			}, async (query) => {
+			}, async (query, context) => {
 				const prefixes = ["sources", "concepts", "methods", "datasets", "synthesis", "mocs", "projects", "entities", "code", "r", "linux"].map((folder) => "wiki/" + folder);
-				const trace = await this.getLexicalRetriever().retrieve(query, [], { allowedPrefixes: prefixes });
+				let paperPaths: string[] | undefined;
+				if (context && /本文|这篇|本研究|作者/.test(context.question) && !/比较|对比|跨论文|相比/.test(context.question)) {
+					const key = context.source.path.replace(/\\/g, "/").match(/papers\/([^/]+)\/article\.md$/)?.[1];
+					paperPaths = (await readKnowledgeDocuments(this.app, context.signal)).filter((doc) => doc.path.startsWith("wiki/sources/") &&
+						(key && doc.path === "wiki/sources/" + key + ".md" || doc.title.toLowerCase() === context.source.title.toLowerCase())).map((doc) => doc.path);
+				}
+				const trace = this.settings.knowledgeRetrievalMode === "lexical" ? await this.getLexicalRetriever().retrieve(query, [], { allowedPrefixes: prefixes })
+					: knowledgeTrace(await this.searchKnowledge(query, { identityQuery: context?.question || query, paperPaths, signal: context?.signal, limit: 4 }));
 				const evidence = await this.readVaultEvidencePacket(trace);
-				return evidence.filter((item) => prefixes.some((prefix) => item.path.startsWith(prefix + "/"))).slice(0, 4).map((item) => ({ id: "vault-" + readingHash(item.path).slice(0, 12), kind: "vault" as const,
-					path: item.path, label: item.path.split("/").slice(-1)[0], text: item.content.slice(0, 6000) }));
+				return { evidence: evidence.filter((item) => prefixes.some((prefix) => item.path.startsWith(prefix + "/"))).slice(0, 4).map((item) => ({ id: "vault-" + readingHash(item.path).slice(0, 12), kind: "vault" as const,
+					path: item.path, label: item.path.split("/").slice(-1)[0], text: item.content.slice(0, 6000), role: item.role, heading: item.heading, origins: item.origins, sourceHash: item.hash, start: item.start, end: item.end })),
+					label: String(trace.retrieval_label || "关键词检索"), warnings: (trace as RetrievalTrace).knowledge?.warnings || [] };
 			});
 		}
 		return this.readingWorkspace;

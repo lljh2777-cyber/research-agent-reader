@@ -135,6 +135,8 @@ const CLI_COMMAND_NAMES: Record<CliExecutableKind, string> = {
 };
 
 export interface DashboardSettings {
+	knowledgeRetrievalMode: "lexical" | "rerank" | "hybrid";
+	knowledgeSecretId: string;
 	toolkitRoot: string;
 	readerMarkdownFolders: string[];
 	obsidianCliExecutable: string;
@@ -615,6 +617,8 @@ export function migrateLegacySettingsKeys(
 }
 
 export const DEFAULT_SETTINGS: DashboardSettings = {
+	knowledgeRetrievalMode: "lexical",
+	knowledgeSecretId: "siliconflow",
 	toolkitRoot: "",
 	readerMarkdownFolders: ["papers", "Clippings"],
 	obsidianCliExecutable: findPreferredObsidianCliExecutable(),

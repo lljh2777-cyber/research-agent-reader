@@ -51,7 +51,7 @@ export function lexicalChunks(chunks: KnowledgeChunk[], query: string): Array<Kn
 export function paperScope(query: string, docs: KnowledgeDocument[], explicit?: string[]): string[] | null {
 	if (explicit) return [...new Set(explicit.filter((file) => docs.some((doc) => doc.path === file)))];
 	const lower = query.toLowerCase(); const sources = docs.filter((doc) => doc.path.startsWith("wiki/sources/"));
-	const years = [...lower.matchAll(/\b([a-z][a-z-]+)\s*(?:et\s+al\.?\s*)?[,， ]*\s*((?:19|20)\d{2})\b/g)];
+	const years = [...lower.matchAll(/\b([a-z][a-z-]+)\s*(?:et\s+al\.?\s*)?[,， ]*\s*((?:19|20)\d{2})\b/g)].filter(([, author]) => !STOP.has(author) && !["since", "before", "after", "year", "published"].includes(author));
 	const dois = lower.match(/10\.\d{4,9}\/[^\s\]）)]+/g) || [];
 	const matched = sources.filter((doc) => lower.includes(doc.path.split("/").slice(-1)[0].slice(0, -3).toLowerCase()) ||
 		(doc.title.length > 20 && lower.includes(doc.title.toLowerCase())) || dois.some((doi) => doi.replace(/[.,;]+$/, "") === doc.doi.toLowerCase()) ||
