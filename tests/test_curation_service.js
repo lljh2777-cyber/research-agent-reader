@@ -44,6 +44,9 @@ async function main() {
 	const pending = service.generate(cancelContext); await new Promise(resolve => setTimeout(resolve, 10)); service.stop(cancelContext.key); release(); await assert.rejects(pending, /abort/i); delayModel = null;
 	assert([...service.reviews.values()].some(r => r.state === "interrupted"));
 	assert.deepEqual(readingUsage({ prompt_tokens: 0, completion_tokens: 3 }), { input: 0, output: 3, cachedInput: undefined }); assert.equal(readingUsage({}), undefined);
+	const finalContext = await service.prepare(session.id, [node.id], file.path); const firstReview = await service.generate(finalContext); const beforeForced = calls;
+	const regenerated = await service.generate(finalContext, true); assert.equal(calls, beforeForced + 1); assert.notEqual(regenerated.id, firstReview.id); assert(service.reviews.has(firstReview.id), "explicit regeneration preserves previous decisions");
+	assert.equal((await service.generate(finalContext)).id, regenerated.id); assert.equal(calls, beforeForced + 1, "subsequent calls reuse latest cache");
 	await service.dispose(); await reloaded.dispose(); console.log("CURATION_SERVICE_OK");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

@@ -45,6 +45,7 @@ export class KnowledgeCurationModal extends Modal {
 	private status!: HTMLElement; private results!: HTMLElement; private evidence!: HTMLElement; private choices!: HTMLElement; private target!: HTMLSelectElement; private generateButton!: HTMLButtonElement; private previewButton!: HTMLButtonElement;
 	private cacheNotice = false; private operation = false;
 	private renderedState = "";
+	private regenerateButton!: HTMLButtonElement;
 	constructor(app: App, private plugin: AgentDashboardPlugin, private sessionId: string, private nodeId: string, private initialReview?: CurationReview) { super(app); }
 	private get service() { return this.plugin.getCurationService(); }
 	private get session() { return this.plugin.getReadingWorkspace().repository.get(this.sessionId); }
@@ -75,13 +76,14 @@ export class KnowledgeCurationModal extends Modal {
 		this.results = paper.createDiv("curation-results");
 		const footer = this.contentEl.createDiv("curation-footer"); const controls = footer.createDiv("curation-actions");
 		this.generateButton = action(controls, "生成整理建议", () => this.generate(), true); action(controls, "停止生成", () => { if (this.context) this.service.stop(this.context.key); });
+		this.regenerateButton = action(controls, "重新生成（新请求）", () => this.generate(true)); this.regenerateButton.title = "新建一批建议，保留已有记录；会再次消耗模型用量";
 		this.previewButton = action(footer, "预览选中修改", async () => { const revision = await this.plugin.getCurationWriter().preview(this.reviewId, [...this.selected]); this.plugin.showCurationModal(new RevisionPreviewModal(this.app, revision, () => this.plugin.getCurationWriter().apply(revision), () => { this.selected.clear(); this.renderReview(); })); }, true);
 		action(footer, "维护记录", () => { this.close(); this.plugin.openKnowledgeMaintenance(); });
 		this.unsubscribe = this.service.subscribe(() => { if (this.closed || this.operation) return; const record = this.service.reviews.get(this.reviewId); if (record && this.renderedState !== record.state) this.renderReview(); });
 		if (this.initialReview) { this.context = this.initialReview.context; this.reviewId = this.initialReview.id; this.cacheNotice = true; this.renderEvidence(); this.renderReview(); } else this.reset();
 	}
 	onClose(): void { this.closed = true; this.sequence++; this.controller?.abort(); this.unsubscribe?.(); this.contentEl.empty(); }
-	private reset(): void { this.sequence++; this.controller?.abort(); this.context = undefined; this.reviewId = ""; this.selected.clear(); this.evidence.empty(); this.results.empty(); this.status.setText("选择目标笔记后先读取依据。此步骤不调用回答模型。"); this.generateButton.disabled = true; this.previewButton.disabled = true; }
+	private reset(): void { this.sequence++; this.controller?.abort(); this.context = undefined; this.reviewId = ""; this.selected.clear(); this.evidence.empty(); this.results.empty(); this.status.setText("选择目标笔记后先读取依据。此步骤不调用回答模型。"); this.generateButton.disabled = true; this.regenerateButton.disabled = true; this.previewButton.disabled = true; }
 	private async prepare(): Promise<void> {
 		const token = ++this.sequence; this.controller?.abort(); const controller = new AbortController(); this.controller = controller; this.status.setText("正在读取原文和目标段落…");
 		const context = await this.service.prepare(this.sessionId, [...this.nodeIds], this.target.value, controller.signal); if (this.closed || token !== this.sequence) return;
@@ -95,14 +97,14 @@ export class KnowledgeCurationModal extends Modal {
 		for (const warning of context.warnings) this.evidence.createEl("p", { cls: "reading-error", text: warning });
 		for (const evidence of context.evidence) { const box = detail(this.evidence, evidence.id + " · " + evidence.role + (evidence.visual ? " · 附带图像" : ""), evidence.text); box.createEl("small", { text: evidence.path + (evidence.page ? " · 第 " + evidence.page + " 页" : "") + " · " + evidence.depth }); }
 	}
-	private async generate(): Promise<void> {
+	private async generate(force = false): Promise<void> {
 		if (!this.context || !this.context.sourceCompatible || this.operation) return; const context = this.context; const token = this.sequence; this.operation = true; this.status.setText("正在核对证据并生成整理建议…");
-		try { const cached = this.service.cached(context); const review = await this.service.generate(context); if (this.closed || token !== this.sequence) return; this.reviewId = review.id; this.cacheNotice = !!cached; this.renderReview(); }
+		try { const cached = !force && this.service.cached(context); const review = await this.service.generate(context, force); if (this.closed || token !== this.sequence) return; this.reviewId = review.id; this.cacheNotice = !!cached; this.selected.clear(); this.renderReview(); }
 		catch (error) { if (!this.closed && token === this.sequence) this.status.setText(String(error) + "；可重新读取依据后重试。"); throw error; }
 		finally { this.operation = false; }
 	}
 	private renderReview(): void {
-		if (this.closed) return; this.results.empty(); const review = this.service.reviews.get(this.reviewId); this.renderedState = review?.state || ""; this.generateButton.disabled = !this.context?.sourceCompatible || review?.state === "generating"; this.previewButton.disabled = true;
+		if (this.closed) return; this.results.empty(); const review = this.service.reviews.get(this.reviewId); this.renderedState = review?.state || ""; this.generateButton.disabled = !this.context?.sourceCompatible || review?.state === "generating"; this.regenerateButton.disabled = review?.state !== "ready"; this.previewButton.disabled = true;
 		if (!review) { this.status.setText("依据已准备好。点击生成建议后才会调用回答模型。"); return; }
 		const usage = review.usage; this.status.setText((this.cacheNotice ? "已恢复保存的结果，本次查看未调用模型。 " : "") + (review.error || (review.state === "generating" ? "正在生成…" : "逐条核对内容，选择希望采用的修改。")));
 		this.results.createEl("p", { cls: "curation-usage", text: `本记录：${usage.kind === "reported" ? "接口报告" : "估算"}输入 ${usage.input ?? "未知"} / 输出 ${usage.output ?? "未知"} token · ${usage.calls} 次调用` });

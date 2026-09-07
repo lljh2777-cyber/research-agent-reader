@@ -8,7 +8,7 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.32.0`; the beta
+The `codex/research-learning-map` development branch is at `0.33.0`; the beta
 release link above remains the published release.
 
 ## Features
@@ -27,6 +27,9 @@ release link above remains the published release.
   incremental local vector storage, evidence previews, and paper scope constraints.
   Learning-note exports support reviewed associations, duplicate reuse, and preserved
   revisions. See [知识库检索与索引](docs/semantic-retrieval.md).
+- 新增学习内容整理工作台：独立检索相似学习记录，核对原文证据，小批量生成建议，
+  预览选中段落的修改，并保留可恢复的修订记录。维护面板集中显示待审阅内容、
+  需复查依据及两类索引。详见[学习内容整理与正式知识修订](docs/knowledge-curation.md)。
 - Runs paper intake through an in-plugin bounded agent loop on a Direct API
   profile (phase-gated: local PDF metadata/first-page identity preflight,
   exact DOI verification before any fuzzy lookup, and independent dedup for the source
