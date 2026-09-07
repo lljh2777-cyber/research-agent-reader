@@ -2,6 +2,7 @@ import {
 	FileSystemAdapter,
 	MarkdownView,
 	Menu,
+	Modal,
 	Notice,
 	Plugin,
 	TFile,
@@ -76,7 +77,7 @@ import { LearningLibrary } from "./curation/learning";
 import { CurationService } from "./curation/service";
 import { CurationWriter } from "./curation/writer";
 import { FileCurationStore } from "./curation/store";
-import type { CurationReview } from "./curation/types";
+import type { CurationContext, CurationReview } from "./curation/types";
 import { KnowledgeCurationModal, KnowledgeMaintenanceModal } from "./views/knowledge-curation";
 import { serializeActionRequest } from "./runtime/action-request";
 import type { DashboardActionOptions } from "./actions";
@@ -268,6 +269,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private learningLibrary?: LearningLibrary;
 	private curationService?: CurationService;
 	private curationWriter?: CurationWriter;
+	private curationModals = new Set<Modal>();
 	private annotationPopover: AnnotationPopover | null = null;
 	private annotationChip: HTMLElement | null = null;
 	private persistence?: DashboardPersistence;
@@ -494,6 +496,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		for (const modal of [...this.curationModals]) modal.close();
 		await this.curationService?.dispose();
 		this.learningLibrary?.dispose();
 		this.knowledgeService?.dispose();
@@ -2490,17 +2493,29 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.curationService;
 	}
 	getCurationWriter(): CurationWriter { return this.curationWriter ||= new CurationWriter(this.getCurationService()); }
-	openKnowledgeMaintenance(): void { new KnowledgeMaintenanceModal(this.app, this).open(); }
+	showCurationModal<T extends Modal>(modal: T): T {
+		this.curationModals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.curationModals.delete(modal); }; modal.open(); return modal;
+	}
+	openKnowledgeMaintenance(): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this)); }
 	openKnowledgeCuration(sessionId: string, nodeId: string, review?: CurationReview): void {
-		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review).open(); }
+		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review)); }
 		catch (error) { new Notice(String(error)); }
 	}
 	async openLearningRecord(sessionId: string, nodeId: string): Promise<void> {
 		await this.activateReadingWorkspace(); const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0]?.view;
 		if (view instanceof ReadingWorkspaceView) { await view.setState({ sessionId }); view.revealLearningNode(nodeId); }
 	}
-	async openCurationSource(sessionId: string, nodeId: string): Promise<void> {
-		await this.openLearningRecord(sessionId, nodeId); const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0]?.view; if (view instanceof ReadingWorkspaceView) view.revealLearningEvidence(nodeId);
+	async openCurationEvidence(context: CurationContext, evidenceId: string): Promise<void> {
+		const evidence = context.evidence.find(item => item.id === evidenceId); if (!evidence || evidence.kind !== "paper") throw new Error("本文依据不存在");
+		const source = await this.getReadingWorkspace().document(context.sessionId); await source.verify(); if (source.source.fingerprint !== context.source.fingerprint) throw new Error("原文已变化，请重新读取依据");
+		const original = source.evidence.find(item => evidence.visual ? "V:" + item.id === evidence.id : !item.asset && item.start === evidence.start && item.page === evidence.page && item.text.startsWith(evidence.text));
+		if (!original) throw new Error("原文中的引用位置已无法匹配");
+		const modal = new Modal(this.app); modal.titleEl.setText(evidence.label); modal.modalEl.addClass("reading-modal"); modal.contentEl.createEl("p", { text: evidence.path + (evidence.page ? " · 第 " + evidence.page + " 页" : "") });
+		modal.contentEl.createEl("pre", { text: evidence.text, cls: "reading-evidence-text" });
+		if (source.source.kind === "article") { const open = modal.contentEl.createEl("button", { text: "在阅读器打开原文" }); open.onclick = () => { void this.openReadingEvidence(evidence.path, evidence.page).catch(error => new Notice(String(error))); }; }
+		this.showCurationModal(modal);
+		const image = await source.image(source.source.kind === "pdf" && original.page ? { ...original, asset: "pdf-page" } : original);
+		if (image && modal.modalEl.isConnected) { const img = modal.contentEl.createEl("img", { attr: { alt: evidence.label } }); img.src = image.dataUrl; img.style.maxWidth = "100%"; }
 	}
 	async testKnowledgeModels(): Promise<void> {
 		this.getKnowledgeService(); await this.knowledgeModels!.embed(["知识库连接测试"]); await this.knowledgeModels!.rerank("测试", ["知识库连接测试"]);

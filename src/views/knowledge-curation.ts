@@ -75,7 +75,7 @@ export class KnowledgeCurationModal extends Modal {
 		this.results = paper.createDiv("curation-results");
 		const footer = this.contentEl.createDiv("curation-footer"); const controls = footer.createDiv("curation-actions");
 		this.generateButton = action(controls, "生成整理建议", () => this.generate(), true); action(controls, "停止生成", () => { if (this.context) this.service.stop(this.context.key); });
-		this.previewButton = action(footer, "预览选中修改", async () => { const revision = await this.plugin.getCurationWriter().preview(this.reviewId, [...this.selected]); new RevisionPreviewModal(this.app, revision, () => this.plugin.getCurationWriter().apply(revision), () => { this.selected.clear(); this.renderReview(); }).open(); }, true);
+		this.previewButton = action(footer, "预览选中修改", async () => { const revision = await this.plugin.getCurationWriter().preview(this.reviewId, [...this.selected]); this.plugin.showCurationModal(new RevisionPreviewModal(this.app, revision, () => this.plugin.getCurationWriter().apply(revision), () => { this.selected.clear(); this.renderReview(); })); }, true);
 		action(footer, "维护记录", () => { this.close(); this.plugin.openKnowledgeMaintenance(); });
 		this.unsubscribe = this.service.subscribe(() => { if (this.closed || this.operation) return; const record = this.service.reviews.get(this.reviewId); if (record && this.renderedState !== record.state) this.renderReview(); });
 		if (this.initialReview) { this.context = this.initialReview.context; this.reviewId = this.initialReview.id; this.cacheNotice = true; this.renderEvidence(); this.renderReview(); } else this.reset();
@@ -115,7 +115,7 @@ export class KnowledgeCurationModal extends Modal {
 			card.createEl("p", { text: suggestion.reason }); if (suggestion.text) card.createEl("div", { cls: "curation-proposed", text: suggestion.text });
 			if (suggestion.decision !== "pending") card.createEl("small", { text: suggestion.decision === "applied" ? "已应用 · 从修订记录查看或撤销" : "已忽略" });
 			const paragraph = review.context.target.paragraphs.find(p => p.id === suggestion.paragraphId); if (paragraph) detail(card, "目标位置 · " + paragraph.heading, paragraph.text);
-			for (const citation of suggestion.citations) { const evidence = review.context.evidence.find(e => e.id === citation.id); const box = detail(card, "核对引用 · " + citation.id, citation.quote); if (evidence) { box.createEl("small", { text: evidence.path + " · " + evidence.origins.join("、") }); if (evidence.kind === "vault") action(box, "打开依据笔记", () => this.plugin.openVaultFile(evidence.path)); else action(box, "返回原文依据", () => this.plugin.openCurationSource(this.sessionId, this.nodeId)); } }
+			for (const citation of suggestion.citations) { const evidence = review.context.evidence.find(e => e.id === citation.id); const box = detail(card, "核对引用 · " + citation.id, citation.quote); if (evidence) { box.createEl("small", { text: evidence.path + " · " + evidence.origins.join("、") }); if (evidence.kind === "vault") action(box, "打开依据笔记", () => this.plugin.openVaultFile(evidence.path)); else action(box, "返回原文依据", () => this.plugin.openCurationEvidence(review.context, citation.id)); } }
 			for (const warning of suggestion.warnings) card.createEl("p", { cls: "reading-error", text: warning });
 			if (review.state === "ready" && suggestion.decision !== "applied") {
 				const row = card.createDiv("curation-actions"); action(row, suggestion.decision === "ignored" ? "恢复待审阅" : "忽略", async () => { await this.service.decide(review.id, suggestion.id, suggestion.decision === "ignored" ? "pending" : "ignored"); this.selected.delete(suggestion.id); this.renderReview(); });
@@ -173,9 +173,9 @@ export class KnowledgeMaintenanceModal extends Modal {
 			const revisions = [...service.revisions.values()].filter(r => this.tab === "history" || r.needsReview || r.state !== "applied").sort((a, b) => b.created.localeCompare(a.created));
 			for (const revision of revisions) { const row = this.body.createEl("article", { cls: "curation-record" }); row.createEl("strong", { text: revision.writes.find(w => w.role === "target")?.path || "修订" }); row.createEl("p", { text: new Date(revision.created).toLocaleString() + " · " + (revision.state === "applied" ? revision.undoOf ? "已撤销" : "已应用" : "等待恢复") });
 				if (revision.error || revision.needsReview) row.createEl("p", { cls: "reading-error", text: revision.error || revision.needsReview });
-				action(row, "查看修改", () => new RevisionPreviewModal(this.app, revision).open());
-				if (revision.state !== "applied") action(row, "预览并恢复", () => new RevisionPreviewModal(this.app, revision, () => this.plugin.getCurationWriter().resume(revision.id), () => this.render()).open());
-				else if (!revision.undoOf) action(row, "预览撤销", async () => { const undo = await this.plugin.getCurationWriter().previewUndo(revision.id); new RevisionPreviewModal(this.app, undo, () => this.plugin.getCurationWriter().applyUndo(undo), () => this.render()).open(); });
+				action(row, "查看修改", () => this.plugin.showCurationModal(new RevisionPreviewModal(this.app, revision)));
+				if (revision.state !== "applied") action(row, "预览并恢复", () => this.plugin.showCurationModal(new RevisionPreviewModal(this.app, revision, () => this.plugin.getCurationWriter().resume(revision.id), () => this.render())));
+				else if (!revision.undoOf) action(row, "预览撤销", async () => { const undo = await this.plugin.getCurationWriter().previewUndo(revision.id); this.plugin.showCurationModal(new RevisionPreviewModal(this.app, undo, () => this.plugin.getCurationWriter().applyUndo(undo), () => this.render())); });
 			}
 			if (this.tab === "history" && !revisions.length) this.body.createEl("p", { cls: "curation-empty", text: "采用整理建议后，会在这里保留修改前后的完整内容。" });
 		}

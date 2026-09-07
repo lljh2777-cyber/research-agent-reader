@@ -593,5 +593,4 @@ export class ReadingWorkspaceView extends ItemView {
 		this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open();
 	}
 	revealLearningNode(nodeId: string): void { if (this.session?.nodes.some(node => node.id === nodeId)) this.selectNode(nodeId, true); }
-	revealLearningEvidence(nodeId: string): void { const evidence = this.session?.nodes.find(node => node.id === nodeId)?.evidence.find(item => item.kind === "paper"); if (evidence) this.showEvidence(nodeId, evidence.id); }
 }
