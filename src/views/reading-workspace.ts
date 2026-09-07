@@ -12,6 +12,7 @@ import { resolveReadingQuote } from "../reading/selection";
 import { readingCitations, readingSelectionText } from "../reading/presentation";
 import { safeReadingMarkdown } from "../reading/export";
 import { ReadingExportModal } from "./reading-export";
+import { ReadingModeMotion } from "./reading-mode-motion";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
 const element = <K extends keyof HTMLElementTagNameMap>(parent: HTMLElement, tag: K, className = "", text = ""): HTMLElementTagNameMap[K] => {
@@ -31,6 +32,9 @@ export class ReadingWorkspaceView extends ItemView {
 	private unsubscribe?: () => void;
 	private unsubscribeStream?: () => void;
 	private signature = "";
+	private contentSignature = "";
+	private modeMotion = new ReadingModeMotion(this.contentEl);
+	private modeMainScroll = 0;
 	private renderer = new Component();
 	private draftTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private scrollTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -72,6 +76,7 @@ export class ReadingWorkspaceView extends ItemView {
 		if (this.service.repository.errors.length) new Notice("部分阅读会话无法加载，文件已保留：" + this.service.repository.errors.join("；"), 10000);
 	}
 	async onClose(): Promise<void> {
+		this.modeMotion.stop();
 		this.unsubscribe?.(); this.unsubscribeStream?.(); this.cleanupDrag?.(); this.selectionCleanup?.(); this.hideSelectionActions(); this.renderer.unload();
 		for (const modal of this.modals) modal.close();
 		for (const timer of this.draftTimers.values()) clearTimeout(timer);
@@ -85,7 +90,7 @@ export class ReadingWorkspaceView extends ItemView {
 	private updateUI(edit: (ui: ReadingSession["ui"]) => void): void {
 		const id = this.sessionId; this.handle(this.service.repository.transact(id, (session) => edit(session.ui)));
 	}
-	private selectSession(id: string): void { this.sessionId = id; this.quote = id ? this.service.repository.get(id).ui.pendingQuote : undefined; this.signature = ""; this.contentEl.replaceChildren(); this.render(true); this.app.workspace.requestSaveLayout();
+	private selectSession(id: string): void { this.modeMotion.stop(); this.sessionId = id; this.quote = id ? this.service.repository.get(id).ui.pendingQuote : undefined; this.signature = ""; this.contentEl.replaceChildren(); this.render(true); this.app.workspace.requestSaveLayout();
 		if (id) this.handle(this.service.repository.transact(id, (s) => { s.lastOpenedAt = new Date().toISOString(); }));
 	}
 	private rememberScroll(key: string, edit: (ui: ReadingSession["ui"]) => void): void {
@@ -104,8 +109,9 @@ export class ReadingWorkspaceView extends ItemView {
 		const actions = element(header, "div", "reading-header-actions");
 		if (session) {
 			const modes = element(actions, "div", "reading-mode-switch"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "阅读模式");
+			element(modes, "span", "reading-mode-indicator").setAttribute("aria-hidden", "true");
 			for (const [mode, name, label] of [["split", "panels-left-bottom", "导图＋对话"], ["map", "git-branch", "仅思维导图"]] as const) {
-				const control = actionButton(modes, name, label, () => this.updateUI((ui) => { ui.mode = mode; })); control.setAttribute("aria-pressed", String(session.ui.mode === mode));
+				const control = actionButton(modes, name, label, () => this.updateUI((ui) => { ui.mode = mode; })); control.dataset.readingMode = mode; control.setAttribute("aria-pressed", String(session.ui.mode === mode));
 			}
 			actionButton(actions, "download", "导出学习笔记", () => this.openExport(), true);
 			if (!session.demo) actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, session.ui.selectedId), true);
@@ -130,13 +136,19 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	private render(force = false): void {
 		const session = this.session;
-		const signature = JSON.stringify(session ? [session.id, session.title, session.archived, session.pinned, session.nodes, session.outline, session.completed, session.backend, session.model,
-			session.ui.mode, session.ui.split, session.ui.selectedId, session.ui.mainFocusId, session.ui.pendingQuote, session.ui.mainComposerExpanded, session.ui.zoom,
+		const contentSignature = JSON.stringify(session ? [session.id, session.title, session.archived, session.pinned, session.nodes, session.outline, session.completed, session.backend, session.model,
+			session.ui.split, session.ui.selectedId, session.ui.mainFocusId, session.ui.pendingQuote, session.ui.mainComposerExpanded, session.ui.zoom,
 			session.ui.windows.map(({ scrollTop: _scroll, ...geometry }) => geometry), session.ui.collapsed] : null);
+		const signature = contentSignature + session?.ui.mode;
 		if (!force && this.signature === signature) return; this.signature = signature;
+		if (!force && session && this.contentSignature === contentSignature && this.contentEl.querySelector(".reading-body")) {
+			this.cleanupDrag?.(); this.hideSelectionActions(); this.renderMode(session, true); return;
+		}
+		this.contentSignature = contentSignature; this.modeMotion.stop();
 		this.cleanupDrag?.(); this.hideSelectionActions();
 		const oldScroll = new Map<string, [number, number]>();
 		this.contentEl.querySelectorAll<HTMLElement>("[data-scroll-key]").forEach((node) => oldScroll.set(node.dataset.scrollKey!, [node.scrollLeft, node.scrollTop]));
+		if (this.contentEl.dataset.mode === "map" && oldScroll.has("main")) oldScroll.set("main", [0, this.modeMainScroll]);
 		const focused = this.contentEl.contains(document.activeElement) ? document.activeElement as HTMLTextAreaElement : null;
 		const focusKey = focused?.dataset.composer; const cursor = focused?.selectionStart; const focusDivider = focused?.classList.contains("reading-divider");
 		const focusResize = focused?.classList.contains("reading-resize") ? focused.closest<HTMLElement>(".reading-float")?.dataset.windowKey : undefined;
@@ -146,13 +158,15 @@ export class ReadingWorkspaceView extends ItemView {
 		this.renderHeader(session);
 		if (!session) { this.renderEmpty(); return; }
 		const body = element(this.contentEl, "div", "reading-body");
-		if (session.ui.mode === "split") {
-			const chat = element(body, "div", "reading-main-chat"); chat.style.flexBasis = (session.ui.split * 100) + "%";
+		body.style.setProperty("--reading-split", String(session.ui.split));
+		{
+			const panel = element(body, "div", "reading-main-chat"); panel.style.flexBasis = (session.ui.split * 100) + "%";
+			const chat = element(panel, "div", "reading-main-chat-inner");
 			const heading = element(chat, "div", "reading-panel-heading"); icon(heading, "align-left"); element(heading, "h2", "", "主线讲解");
 			const completed = session.mainIds.filter((id) => readingNode(session, id).status === "done").length;
 			element(heading, "span", "reading-panel-meta", session.outline.length ? completed + " / " + session.outline.length + " 节" : completed + " 个单元");
 			const messages = element(chat, "div", "reading-messages"); messages.dataset.scrollKey = "main";
-			messages.onscroll = () => { const top = messages.scrollTop; this.rememberScroll("main", (ui) => { ui.mainScroll = top; }); };
+			messages.onscroll = () => { if (this.session?.ui.mode !== "split") return; const top = messages.scrollTop; this.rememberScroll("main", (ui) => { ui.mainScroll = top; }); };
 			if (session.outline.length) {
 				const details = element(messages, "details", "reading-outline"); const summary = element(details, "summary"); icon(summary, "list-tree"); element(summary, "span", "", "阅读路线");
 				element(summary, "span", "reading-outline-count", session.outline.length + " 个单元"); icon(summary, "chevron-down");
@@ -161,11 +175,10 @@ export class ReadingWorkspaceView extends ItemView {
 			}
 			for (const id of session.mainIds) this.renderAnswer(messages, readingNode(session, id));
 			if (!session.mainIds.length) button(messages, "开始讲解 →", () => this.handle(this.service.advance(session.id)));
-			this.renderComposer(chat, "main");
 			const divider = element(body, "div", "reading-divider"); divider.setAttribute("role", "separator"); divider.setAttribute("aria-label", "调整对话与导图宽度");
 			divider.tabIndex = 0; divider.setAttribute("aria-orientation", "vertical"); divider.setAttribute("aria-valuemin", "25"); divider.setAttribute("aria-valuemax", "75"); divider.setAttribute("aria-valuenow", String(Math.round(session.ui.split * 100)));
 			divider.onkeydown = (event) => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); this.updateUI((ui) => { ui.split = Math.max(0.25, Math.min(0.75, ui.split + (event.key === "ArrowLeft" ? -0.05 : 0.05))); }); } };
-			this.drag(divider, (event) => { const box = body.getBoundingClientRect(); const split = Math.max(0.25, Math.min(0.75, (event.clientX - box.left) / box.width)); chat.style.flexBasis = split * 100 + "%"; return () => this.updateUI((ui) => { ui.split = split; }); });
+			this.drag(divider, (event) => { const box = body.getBoundingClientRect(); const split = Math.max(0.25, Math.min(0.75, (event.clientX - box.left) / box.width)); panel.style.flexBasis = split * 100 + "%"; return () => this.updateUI((ui) => { ui.split = split; }); });
 		}
 		const mapArea = element(body, "div", "reading-map-area");
 		const mapHeading = element(mapArea, "div", "reading-panel-heading"); icon(mapHeading, "git-branch"); element(mapHeading, "h2", "", "学习导图");
@@ -190,24 +203,48 @@ export class ReadingWorkspaceView extends ItemView {
 		actionButton(controls, "plus", "放大导图", () => this.updateUI((ui) => { ui.zoom = Math.min(1.8, ui.zoom + 0.1); }), true);
 		actionButton(controls, "scan", "适应视野", () => this.fitMap(), true);
 		const focus = actionButton(controls, "focus", "定位选中节点", () => this.revealMapNode(session.ui.selectedId), true); focus.disabled = !session.ui.selectedId;
-		if (session.ui.mode === "map") {
-			if (session.ui.windows.some((w) => !w.minimized) && !session.ui.mainComposerExpanded) {
-				const collapsed = element(mapArea, "div", "reading-composer-collapsed");
-				actionButton(collapsed, "message-square-plus", "从主线新建支线", () => this.updateUI((ui) => { ui.mainComposerExpanded = true; }));
-			} else this.renderComposer(mapArea, "main");
-		}
+		element(mapArea, "div", "reading-map-composer");
+		this.renderMode(session, false);
 		if (!session.mainIds.length) button(mapArea, "开始讲解 →", () => this.handle(this.service.advance(session.id)));
 		const windows = element(this.contentEl, "div", "reading-windows");
 		for (const floating of session.ui.windows) this.renderWindow(windows, floating);
 		this.contentEl.querySelectorAll<HTMLElement>("[data-scroll-key]").forEach((node) => {
 			const key = node.dataset.scrollKey!;
 			const saved = oldScroll.get(key) || (key === "main" ? [0, session.ui.mainScroll || 0] : key === "map" ? [session.ui.scrollX, session.ui.scrollY] : [0, session.ui.windows.find((w) => w.key === key)?.scrollTop || 0]);
+			if (key === "main") this.modeMainScroll = saved[1];
 			node.style.scrollBehavior = "auto"; node.scrollLeft = saved[0]; node.scrollTop = saved[1]; node.style.scrollBehavior = "";
 		});
 		if (focusKey) { const input = [...this.contentEl.querySelectorAll<HTMLTextAreaElement>("textarea[data-composer]")].find((item) => item.dataset.composer === focusKey);
 			input?.focus({ preventScroll: true }); if (input && cursor != null) input.setSelectionRange(cursor, cursor); }
 		else if (focusDivider) this.contentEl.querySelector<HTMLElement>(".reading-divider")?.focus({ preventScroll: true });
 		else if (focusResize) [...this.contentEl.querySelectorAll<HTMLElement>(".reading-float")].find((w) => w.dataset.windowKey === focusResize)?.querySelector<HTMLElement>(".reading-resize")?.focus({ preventScroll: true });
+	}
+	private renderMode(session: ReadingSession, animate: boolean): void {
+		const messages = this.contentEl.querySelector<HTMLElement>(".reading-main-chat .reading-messages")!;
+		if (animate && this.contentEl.dataset.mode === "split") this.modeMainScroll = messages.scrollTop;
+		const focused = this.contentEl.ownerDocument.activeElement as HTMLTextAreaElement | null;
+		const focusMain = focused?.dataset.composer?.startsWith("main:") && this.contentEl.contains(focused);
+		const start = focused?.selectionStart; const end = focused?.selectionEnd;
+		this.modeMotion.change(session.ui.mode, () => {
+			const chat = this.contentEl.querySelector<HTMLElement>(".reading-main-chat")!;
+			chat.style.flexBasis = session.ui.mode === "split" ? session.ui.split * 100 + "%" : "0px";
+			const inner = chat.querySelector<HTMLElement>(".reading-main-chat-inner")!;
+			inner.querySelector(".reading-composer")?.remove();
+			const composer = this.contentEl.querySelector<HTMLElement>(".reading-map-composer")!; composer.replaceChildren();
+			if (session.ui.mode === "split") this.renderComposer(inner, "main");
+			else if (session.ui.windows.some(w => !w.minimized) && !session.ui.mainComposerExpanded) {
+				const collapsed = element(composer, "div", "reading-composer-collapsed");
+				actionButton(collapsed, "message-square-plus", "从主线新建支线", () => this.updateUI(ui => { ui.mainComposerExpanded = true; }));
+			} else this.renderComposer(composer, "main");
+		}, animate);
+		if (animate && session.ui.mode === "split") {
+			messages.style.scrollBehavior = "auto"; messages.scrollTop = this.modeMainScroll; messages.style.scrollBehavior = "";
+		}
+		if (focusMain) {
+			const input = this.contentEl.querySelector<HTMLTextAreaElement>("textarea[data-composer^='main:']");
+			input?.focus({ preventScroll: true }); if (start != null && end != null) input?.setSelectionRange(start, end);
+			if (!input) this.contentEl.querySelector<HTMLButtonElement>("[data-reading-mode][aria-pressed='true']")?.focus({ preventScroll: true });
+		}
 	}
 	private renderMap(parent: HTMLElement, session: ReadingSession): void {
 		const layout = layoutReading(session); const outer = element(parent, "div", "reading-map-extent");
@@ -474,7 +511,7 @@ export class ReadingWorkspaceView extends ItemView {
 	private drag(handle: HTMLElement, move: (event: PointerEvent, first: boolean) => () => void, shouldStart: (event: PointerEvent) => boolean = () => true): void {
 		handle.onpointerdown = (event) => {
 			if (event.button !== 0 || (event.target as HTMLElement).closest("button") || !shouldStart(event)) return;
-			event.preventDefault(); this.cleanupDrag?.(); let commit = move(event, true);
+			event.preventDefault(); this.modeMotion.stop(); this.cleanupDrag?.(); let commit = move(event, true);
 			const onMove = (next: PointerEvent): void => { commit = move(next, false); };
 			const cleanup = (): void => { handle.classList.remove("is-panning"); document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", stop); document.removeEventListener("pointercancel", stop); };
 			const stop = (): void => { cleanup(); this.cleanupDrag = undefined; commit(); };

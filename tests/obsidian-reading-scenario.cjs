@@ -25,7 +25,7 @@ module.exports = async function readingUiScenario(app) {
 	type(floating.querySelector("textarea"), "继续这条示例支线"); click(floating, "发送"); click(floating, "发送"); await settle();
 	check(session().branches.find((b) => b.id === branchId).nodeIds.length === 2, "continue branch and deduplicate send");
 	floating = root.querySelector(".reading-float"); click(floating, "固定"); await settle();
-	click(root, "仅思维导图"); await settle(); check(!root.querySelector(".reading-main-chat"), "map only");
+	click(root, "仅思维导图"); await settle(); check(root.querySelector(".reading-main-chat").inert, "map only: transcript retained but inaccessible");
 	view.selectNode(first); await settle(); check(root.querySelectorAll(".reading-float").length === 2, "pinned window survives navigation");
 	floating = [...root.querySelectorAll(".reading-float")].find((w) => w.dataset.windowKey === first);
 	const header = floating.querySelector(".reading-float-header"); const bounds = header.getBoundingClientRect();

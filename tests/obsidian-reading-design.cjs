@@ -38,7 +38,7 @@ module.exports = async function readingDesignScenario(app) {
 	check(workspace.repository.get(id).ui.split > split, "keyboard split resize");
 	click(root, "仅思维导图"); await pause();
 	check(root.querySelector(".reading-mode-switch [aria-pressed='true']")?.getAttribute("aria-label") === "仅思维导图", "mode state accessible");
-	check(root.querySelector(".reading-composer-collapsed") && !root.querySelector(".reading-map-area > .reading-composer"), "global composer collapsed beside active popup");
+	check(root.querySelector(".reading-composer-collapsed") && !root.querySelector(".reading-map-composer > .reading-composer"), "global composer collapsed beside active popup");
 	click(root, "从主线新建支线"); await pause();
 	let mainInput = root.querySelector("textarea[data-composer^='main:']"); check(mainInput, "global composer expanded");
 	mainInput.value = "收起后保留的主线草稿"; mainInput.dispatchEvent(new Event("input", { bubbles: true }));
