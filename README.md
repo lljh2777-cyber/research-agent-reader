@@ -20,6 +20,10 @@ connecting optional local AI-agent workflows.
   question branches, a mind map, and optional conversation panes. It reads original
   PDFs or validated MinerU packages through Direct API or an independent Codex CLI
   adapter. See the [交互深读使用说明](docs/interactive-reading.md).
+- Offers optional BGE hybrid retrieval and reranking through SiliconFlow, with
+  incremental local vector storage, evidence previews, and paper scope constraints.
+  Learning-note exports support reviewed associations, duplicate reuse, and preserved
+  revisions. See [知识库检索与索引](docs/semantic-retrieval.md).
 - Runs paper intake through an in-plugin bounded agent loop on a Direct API
   profile (phase-gated: local PDF metadata/first-page identity preflight,
   exact DOI verification before any fuzzy lookup, and independent dedup for the source

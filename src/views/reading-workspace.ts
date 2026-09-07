@@ -10,7 +10,8 @@ import { layoutReading, READING_MAP } from "../reading/layout";
 import { fitReadingZoom, readingTrail, revealReadingPath, searchReadingNodes } from "../reading/navigation";
 import { resolveReadingQuote } from "../reading/selection";
 import { readingCitations, readingSelectionText } from "../reading/presentation";
-import { exportReading, safeReadingMarkdown, type ReadingExportScope } from "../reading/export";
+import { safeReadingMarkdown } from "../reading/export";
+import { ReadingExportModal } from "./reading-export";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
 const element = <K extends keyof HTMLElementTagNameMap>(parent: HTMLElement, tag: K, className = "", text = ""): HTMLElementTagNameMap[K] => {
@@ -586,13 +587,7 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	private openExport(): void {
 		const sessionId = this.sessionId; const nodeId = this.session!.ui.selectedId;
-		const modal = this.modal("导出学习笔记"); const scope = element(element(modal.contentEl, "label", "reading-field", "导出范围"), "select");
-		[["node", "选中节点"], ["branch", "选中支线"], ["session", "完整会话"]].forEach(([value, title]) => { element(scope, "option", "", title).value = value; });
-		element(modal.contentEl, "p", "", "将已完成的回答保存为 wiki/qa/ 下的新笔记，并追加到日志。不会改变正式论文笔记的深读状态。");
-		const submit = button(modal.contentEl, "导出", () => { submit.disabled = true;
-			this.handle(exportReading(this.app, this.service.repository.get(sessionId), scope.value as ReadingExportScope, nodeId).then((result) => {
-				modal.close(); new Notice(result.warning || "已导出：" + result.path); this.plugin.openVaultFile(result.path);
-			}).finally(() => { submit.disabled = false; }));
-		}); submit.classList.add("mod-cta"); modal.open();
+		const modal = new ReadingExportModal(this.app, () => this.service.repository.get(sessionId), nodeId, (query, options) => this.plugin.searchKnowledge(query, options), path => this.plugin.openVaultFile(path));
+		this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open();
 	}
 }
