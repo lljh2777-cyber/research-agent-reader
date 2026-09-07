@@ -126,6 +126,7 @@ export class ReadingWorkspaceView extends ItemView {
 		this.contentEl.querySelectorAll<HTMLElement>("[data-scroll-key]").forEach((node) => oldScroll.set(node.dataset.scrollKey!, [node.scrollLeft, node.scrollTop]));
 		const focused = this.contentEl.contains(document.activeElement) ? document.activeElement as HTMLTextAreaElement : null;
 		const focusKey = focused?.dataset.composer; const cursor = focused?.selectionStart; const focusDivider = focused?.classList.contains("reading-divider");
+		const focusResize = focused?.classList.contains("reading-resize") ? focused.closest<HTMLElement>(".reading-float")?.dataset.windowKey : undefined;
 		this.renderer.unload(); this.renderer = new Component(); this.renderer.load();
 		this.contentEl.replaceChildren(); this.contentEl.classList.add("reading-workspace");
 		this.contentEl.dataset.mode = session?.ui.mode || "empty";
@@ -178,6 +179,7 @@ export class ReadingWorkspaceView extends ItemView {
 		if (focusKey) { const input = [...this.contentEl.querySelectorAll<HTMLTextAreaElement>("textarea[data-composer]")].find((item) => item.dataset.composer === focusKey);
 			input?.focus({ preventScroll: true }); if (input && cursor != null) input.setSelectionRange(cursor, cursor); }
 		else if (focusDivider) this.contentEl.querySelector<HTMLElement>(".reading-divider")?.focus({ preventScroll: true });
+		else if (focusResize) [...this.contentEl.querySelectorAll<HTMLElement>(".reading-float")].find((w) => w.dataset.windowKey === focusResize)?.querySelector<HTMLElement>(".reading-resize")?.focus({ preventScroll: true });
 	}
 	private renderMap(parent: HTMLElement, session: ReadingSession): void {
 		const layout = layoutReading(session); const outer = element(parent, "div", "reading-map-extent");
@@ -236,13 +238,13 @@ export class ReadingWorkspaceView extends ItemView {
 		const session = this.session!; const node = session.nodes.find((item) => item.id === state.nodeId); if (!node) return;
 		const floating = element(parent, "section", "reading-float" + (state.minimized ? " is-minimized" : "") + (node.branchId ? " is-branch" : "") + (state.pinned ? " is-pinned" : "")); floating.setAttribute("role", "dialog"); floating.setAttribute("aria-label", node.title);
 		const width = Math.min(state.minimized ? 320 : state.width, Math.max(280, this.contentEl.clientWidth - 24));
-		const height = Math.min(state.height, Math.max(220, this.contentEl.clientHeight - 140));
+		const height = Math.min(state.height, Math.max(220, this.contentEl.clientHeight - 52));
 		floating.dataset.windowKey = state.key; floating.style.left = Math.max(0, Math.min(state.x, this.contentEl.clientWidth - width - 12)) + "px";
 		floating.style.top = Math.max(40, Math.min(state.y, this.contentEl.clientHeight - (state.minimized ? 72 : height) - 12)) + "px";
 		floating.style.width = width + "px"; floating.style.height = state.minimized ? "auto" : height + "px";
 		floating.onpointerdown = () => { this.contentEl.querySelectorAll<HTMLElement>(".reading-float").forEach((item) => { item.style.zIndex = item === floating ? "12" : "10"; }); };
 		const header = element(floating, "div", "reading-float-header"); icon(header, node.branchId ? "messages-square" : "book-open");
-		const heading = element(header, "div", "reading-float-heading"); element(heading, "span", "reading-eyebrow", node.branchId ? "支线对话" : "主线讲解");
+		const heading = element(header, "div", "reading-float-heading"); element(heading, "span", "reading-sr-only", node.branchId ? "支线对话" : "主线讲解");
 		element(heading, "strong", "", node.branchId ? readingNode(session, session.branches.find((b) => b.id === node.branchId)!.nodeIds[0]).question : node.title);
 		const pin = actionButton(header, state.pinned ? "pin-off" : "pin", state.pinned ? "取消固定" : "固定", () => this.updateUI((ui) => { ui.windows.find((w) => w.key === state.key)!.pinned = !state.pinned; }), true); pin.setAttribute("aria-pressed", String(state.pinned));
 		actionButton(header, state.minimized ? "chevron-down" : "minus", state.minimized ? "展开" : "收起", () => this.updateUI((ui) => { ui.windows.find((w) => w.key === state.key)!.minimized = !state.minimized; }), true);
@@ -260,9 +262,35 @@ export class ReadingWorkspaceView extends ItemView {
 		const ids = node.branchId ? session.branches.find((branch) => branch.id === node.branchId)!.nodeIds : [node.id];
 		ids.forEach((id) => this.renderAnswer(messages, readingNode(session, id)));
 		this.renderComposer(floating, state.key, node.branchId || undefined, node.id);
-		const resize = element(floating, "div", "reading-resize"); resize.title = "调整窗口大小"; icon(resize, "grip");
-		this.drag(resize, (event) => { const box = floating.getBoundingClientRect(); const outer = this.contentEl.getBoundingClientRect(); const width = Math.max(300, Math.min(outer.right - box.left - 12, event.clientX - box.left)); const height = Math.max(220, Math.min(outer.bottom - box.top - 12, event.clientY - box.top)); floating.style.width = width + "px"; floating.style.height = height + "px";
-			return () => this.updateUI((ui) => { const saved = ui.windows.find((w) => w.key === state.key); if (saved) { saved.width = width; saved.height = height; } }); });
+		this.renderWindowResize(floating, state.key);
+	}
+	private renderWindowResize(floating: HTMLElement, key: string): void {
+		const apply = (initial: DOMRect, edge: string, dx: number, dy: number): (() => void) => {
+			const outer = this.contentEl.getBoundingClientRect();
+			let left = initial.left - outer.left; let top = initial.top - outer.top;
+			let right = left + initial.width; let bottom = top + initial.height;
+			if (edge.includes("w")) left = Math.max(8, Math.min(right - 280, left + dx));
+			if (edge.includes("e")) right = Math.min(outer.width - 12, Math.max(left + 280, right + dx));
+			if (edge.includes("n")) top = Math.max(40, Math.min(bottom - 220, top + dy));
+			if (edge.includes("s")) bottom = Math.min(outer.height - 12, Math.max(top + 220, bottom + dy));
+			floating.style.left = left + "px"; floating.style.top = top + "px";
+			floating.style.width = (right - left) + "px"; floating.style.height = (bottom - top) + "px";
+			return () => this.updateUI((ui) => { const saved = ui.windows.find((w) => w.key === key); if (saved) { saved.x = left; saved.y = top; saved.width = right - left; saved.height = bottom - top; } });
+		};
+		for (const edge of ["se", "e", "s", "w", "n", "ne", "nw", "sw"]) {
+			const handle = element(floating, "div", "reading-resize-handle reading-resize-" + edge + (edge === "se" ? " reading-resize" : "")); handle.dataset.resizeEdge = edge;
+			handle.title = "拖动边缘调整窗口大小";
+			if (edge === "se") { icon(handle, "move-diagonal-2"); handle.tabIndex = 0; handle.setAttribute("aria-label", "调整窗口大小；方向键调整，Shift 加方向键微调");
+				handle.onkeydown = (event) => { if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+					event.preventDefault(); const step = event.shiftKey ? 4 : 24;
+					apply(floating.getBoundingClientRect(), "se", event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0, event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0)();
+				};
+			} else handle.setAttribute("aria-hidden", "true");
+			let initial: DOMRect; let startX = 0; let startY = 0;
+			this.drag(handle, (event, first) => { if (first) { initial = floating.getBoundingClientRect(); startX = event.clientX; startY = event.clientY; }
+				return apply(initial, edge, event.clientX - startX, event.clientY - startY);
+			});
+		}
 	}
 	private renderAnswer(parent: HTMLElement, node: ReadingNode): void {
 		const article = element(parent, "article", "reading-answer"); article.dataset.answerId = node.id;
@@ -333,14 +361,17 @@ export class ReadingWorkspaceView extends ItemView {
 		const session = this.session!; const sessionId = session.id;
 		const target = nodeId || session.ui.mainFocusId || session.mainIds[session.mainIds.length - 1];
 		key = key === "main" ? "main:" + (target || "") : key;
+		const compact = parent.classList.contains("reading-float");
 		const box = element(parent, "div", "reading-composer"); const localKey = sessionId + "|" + key;
 		const quoted = this.quote && this.quote.nodeId === target ? this.quote : undefined;
 		const targetLabel = quoted ? "引用追问：" + quoted.text.slice(0, 80) : branchId ? "继续这条支线" : "基于：" + (target ? readingNode(session, target).title : "请先开始主线");
 		const context = element(box, "div", "reading-composer-context"); icon(context, quoted ? "quote" : "corner-down-right"); element(context, "small", "", targetLabel).title = targetLabel;
 		if (quoted) actionButton(context, "x", "取消引用", () => { this.quote = undefined; this.updateUI((ui) => { ui.pendingQuote = undefined; }); this.render(true); }, true);
-		const input = element(box, "textarea"); input.rows = 2; input.placeholder = branchId ? "继续聊聊这个问题…" : "哪里还不理解？从这里展开追问…"; input.dataset.composer = key; input.setAttribute("aria-label", targetLabel);
+		const input = element(box, "textarea"); input.rows = compact ? 1 : 2; input.placeholder = branchId ? "继续聊聊这个问题…" : "哪里还不理解？从这里展开追问…"; input.dataset.composer = key; input.setAttribute("aria-label", targetLabel);
+		input.title = "Enter 发送 · Shift + Enter 换行";
 		input.value = this.localDrafts.get(localKey) ?? session.ui.drafts[key] ?? "";
-		input.oninput = () => { const value = input.value; sendButton.disabled = !target || !value.trim(); this.localDrafts.set(localKey, value); clearTimeout(this.draftTimers.get(localKey));
+		const fitInput = (): void => { if (compact) { input.style.height = "0px"; input.style.height = Math.max(28, Math.min(96, parent.clientHeight * 0.2, input.scrollHeight)) + "px"; } };
+		input.oninput = () => { fitInput(); const value = input.value; sendButton.disabled = !target || !value.trim(); this.localDrafts.set(localKey, value); clearTimeout(this.draftTimers.get(localKey));
 			this.draftTimers.set(localKey, setTimeout(() => { this.handle(this.service.repository.transact(sessionId, (draft) => { draft.ui.drafts[key] = value; })); }, 400)); };
 		let sending = false;
 		const send = async (): Promise<void> => {
@@ -354,15 +385,17 @@ export class ReadingWorkspaceView extends ItemView {
 		const footer = element(box, "div", "reading-composer-footer"); element(footer, "small", "", "Enter 发送 · Shift + Enter 换行");
 		const sendButton = actionButton(footer, "arrow-up", "发送", () => this.handle(send()), true); sendButton.classList.add("reading-send"); sendButton.disabled = !target || !input.value.trim();
 		input.onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); this.handle(send()); } };
+		fitInput();
 	}
 	private drag(handle: HTMLElement, move: (event: PointerEvent, first: boolean) => () => void): void {
 		handle.onpointerdown = (event) => {
-			if ((event.target as HTMLElement).closest("button")) return;
+			if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
 			event.preventDefault(); this.cleanupDrag?.(); let commit = move(event, true);
 			const onMove = (next: PointerEvent): void => { commit = move(next, false); };
-			const stop = (): void => { document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", stop); this.cleanupDrag = undefined; commit(); };
-			document.addEventListener("pointermove", onMove); document.addEventListener("pointerup", stop, { once: true });
-			this.cleanupDrag = () => { document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", stop); };
+			const cleanup = (): void => { document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", stop); document.removeEventListener("pointercancel", stop); };
+			const stop = (): void => { cleanup(); this.cleanupDrag = undefined; commit(); };
+			document.addEventListener("pointermove", onMove); document.addEventListener("pointerup", stop, { once: true }); document.addEventListener("pointercancel", stop, { once: true });
+			this.cleanupDrag = cleanup;
 		};
 	}
 	private modal(title: string): Modal {
