@@ -22,7 +22,8 @@ export async function selectCurationParagraphs(text: string, path: string, query
 /** Exact source spans, so a model may cite an ID without retyping the quotation. */
 export function curationQuotes(evidence: CurationEvidence): NonNullable<CurationEvidence["quotes"]> {
 	const quotes: NonNullable<CurationEvidence["quotes"]> = [];
-	for (const match of evidence.text.matchAll(/[^\n。！？]+[。！？]?/g)) {
+	// PDF extraction wraps sentences at visual line breaks; keep those source spans intact.
+	for (const match of evidence.text.matchAll(/[\s\S]+?(?:[。！？]|\.(?=\s+[\p{Lu}\p{Script=Han}]|\s*$)|\n[ \t]*\n|$)/gu)) {
 		const raw = match[0]; const trimmed = raw.trim(); if (!trimmed) continue; const offset = match.index + raw.indexOf(trimmed);
 		for (let start = 0; start < trimmed.length; start += 1000) { const text = trimmed.slice(start, start + 1000); quotes.push({ id: evidence.id + ":q" + (quotes.length + 1), start: offset + start, end: offset + start + text.length, text }); }
 	}

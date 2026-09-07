@@ -25,7 +25,8 @@ const compact = (text: string): string => text.replace(/[\s，。,.!！?？*`]/g
 export function validateSuggestion(raw: unknown, context: CurationContext, index: number): CurationSuggestion {
 	if (!raw || typeof raw !== "object") throw new Error("整理建议结构无效");
 	const value = raw as Record<string, unknown>; const kinds: SuggestionKind[] = ["add", "replace", "covered", "condition", "conflict", "insufficient"];
-	if (!kinds.includes(value.kind as SuggestionKind) || typeof value.claim !== "string" || typeof value.text !== "string" || typeof value.reason !== "string" || typeof value.paragraphId !== "string" || !Array.isArray(value.citations) || value.citations.length > 8) throw new Error("整理建议缺少必要字段");
+	if (!kinds.includes(value.kind as SuggestionKind) || typeof value.claim !== "string" || typeof value.text !== "string" || typeof value.reason !== "string" || typeof value.paragraphId !== "string" || !Array.isArray(value.citations)) throw new Error("整理建议缺少必要字段");
+	if (value.citations.length > 8) throw new Error("单条建议超过 8 处引用，请拆分为更聚焦的观点后重试");
 	if (value.claim.length > 500 || value.text.length > 4000 || value.reason.length > 1600) throw new Error("单条整理建议过长，请缩小范围");
 	const warnings: string[] = []; const paragraph = context.target.paragraphs.find(item => item.id === value.paragraphId); const citations: CurationSuggestion["citations"] = [];
 	for (const item of value.citations) {

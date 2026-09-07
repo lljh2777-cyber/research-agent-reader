@@ -19,6 +19,6 @@ description: Compare selected learning content with an existing knowledge note u
 
 paragraphId 必须来自给定目标段落。add/condition 表示在该段落后新增一个有依据的段落；replace 表示替换该段落，必须保留原有仍成立的信息。无法保留或核验原段落事实时选择 add 或 insufficient。covered/conflict/insufficient 不产生写入动作。claim 用一句话概括待整理信息；reason 解释证据、差异与适用条件。
 
-只返回 JSON，不附前后说明：
+每条建议聚焦一个观点，最多 8 处引用；需更多引用时拆为不同建议或减少本批观点，不省略支持事实所需的原句。所有建议都必须包含下面列出的字段，无需写入时 text 返回空字符串。claim 不超过 500 字符，text 不超过 4000 字符，reason 不超过 1600 字符。只返回 JSON，不附前后说明：
 
-{"suggestions":[{"kind":"add|replace|covered|condition|conflict|insufficient","paragraphId":"输入中的段落ID","claim":"简短观点","text":"拟写入的正文；无需写入时为空","reason":"判断理由","citations":[{"id":"本轮证据ID","quote":"该证据中的逐字原句"}]}]}
+{"suggestions":[{"kind":"add|replace|covered|condition|conflict|insufficient","paragraphId":"输入中的段落ID","claim":"简短观点","text":"拟写入的正文；无需写入时为空字符串","reason":"判断理由","citations":[{"id":"本轮证据ID","quoteId":"该证据中给定的原句ID"}]}]}

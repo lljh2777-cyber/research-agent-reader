@@ -22,8 +22,10 @@ export function validateReadingResult(text: string, evidence: ReadingEvidence[],
 		|| !Array.isArray(raw.evidenceIds) || !raw.evidenceIds.length) throw new Error("模型回答缺少标题、正文或证据引用，请重试");
 	const known = new Set(evidence.map((item) => item.id));
 	if (raw.evidenceIds.some((id) => typeof id !== "string" || !known.has(id))) throw new Error("模型引用了本轮未提供的证据");
-	for (const match of raw.content.matchAll(/\[((?:text-|page-|figure-|vault-)[a-zA-Z0-9_-]+)\]/g)) {
-		if (!known.has(match[1]) || !raw.evidenceIds.includes(match[1])) throw new Error("正文引用与证据列表不一致");
+	const cited = new Set(raw.evidenceIds);
+	for (const match of raw.content.matchAll(/\[(?:证据\s*ID\s*[:：]\s*)?([^\[\]\n]+)\]/gi)) {
+		const ids = match[1].split(/[,，、]\s*/).map(id => id.trim());
+		if (ids.some(id => /^(?:text-|page-|figure-|vault-)/.test(id)) && ids.some(id => !known.has(id) || !cited.has(id))) throw new Error("正文引用与证据列表不一致");
 	}
 	if (main && (typeof raw.mainSummary !== "string" || !raw.mainSummary.trim() || raw.mainSummary.length > 12_000
 		|| !Array.isArray(raw.outline) || !raw.outline.length || raw.outline.length > 40 || raw.outline.some((item) => typeof item !== "string" || !item.trim() || item.length > 200)

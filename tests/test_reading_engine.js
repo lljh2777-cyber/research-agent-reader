@@ -16,6 +16,8 @@ const { ReadingEngine, validateReadingResult } = loadReading("reading/engine.ts"
 	assert.equal(calls, 2); assert.equal(repo.get(session.id).nodes[0].status, "done"); assert.equal(repo.get(session.id).mainSummary, "已讲问题");
 	assert.equal(searches, 0);
 	assert.throws(() => validateReadingResult(JSON.stringify({ ...result, evidenceIds: ["text-missing"] }), evidence, true), /未提供/);
+	for (const content of ["[证据ID: text-missing]", "[text-1-0, text-missing]", "[证据 ID：text-1-0、forged]"]) assert.throws(() => validateReadingResult(JSON.stringify({ ...result, content }), evidence, true), /不一致/);
+	assert.equal(validateReadingResult(JSON.stringify({ ...result, content: "[证据ID: text-1-0]" }), evidence, true).evidenceIds[0], "text-1-0");
 	const next = await repo.transact(session.id, (s) => addReadingNode(s, null));
 	backend.complete = async () => "malformed";
 	await assert.rejects(engine.generate(session.id, next.id)); assert.equal(repo.get(session.id).nodes[1].status, "failed"); assert.equal(repo.get(session.id).mainSummary, "已讲问题");
