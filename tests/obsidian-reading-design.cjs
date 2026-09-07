@@ -3,7 +3,7 @@ module.exports = async function readingDesignScenario(app) {
 	const check = (ok, label) => { if (!ok) throw new Error(label); };
 	const pause = () => new Promise((resolve) => require("node:timers").setTimeout(resolve, 180));
 	const plugin = app.plugins.plugins["research-agent-reader"]; const workspace = plugin.getReadingWorkspace();
-	const id = await workspace.demo(); const title = "界面验收 · 引用与排版（示例）";
+	const id = await workspace.demo("test"); const title = "界面验收 · 引用与排版（示例）";
 	const body = "### " + title + "\n\n前置说明，这是示例内容 `[证据ID: fixture-a, fixture-b]`，用于检查划选定位。\n\n未知依据 [unknown] 保持可见。";
 	await workspace.repository.transact(id, (s) => {
 		s.title = title; s.outline = [title, "第二个单元", "第三个单元"];

@@ -3,7 +3,7 @@ module.exports = async function readingLongScenario(app) {
 	const check = (ok, message) => { if (!ok) throw new Error(message); };
 	const pause = (ms) => new Promise((resolve) => require("node:timers").setTimeout(resolve, ms));
 	const plugin = app.plugins.plugins["research-agent-reader"]; const workspace = plugin.getReadingWorkspace();
-	const id = await workspace.demo(); const uuid = () => "r-" + require("node:crypto").randomUUID();
+	const id = await workspace.demo("test"); const uuid = () => "r-" + require("node:crypto").randomUUID();
 	await workspace.repository.transact(id, (s) => {
 		s.title = "长会话验收 · 300 节点（合成示例）"; s.nodes = []; s.branches = []; s.mainIds = [];
 		s.ui.windows = []; s.ui.pendingQuote = undefined;

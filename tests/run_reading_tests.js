@@ -2,7 +2,7 @@
 const { spawnSync } = require("node:child_process");
 const path = require("node:path");
 // All tests in this runner use in-memory fixtures. No filesystem cleanup.
-for (const name of ["sessions", "documents", "layout", "presentation", "engine", "backends", "branches", "export", "integration"]) {
+for (const name of ["sessions", "catalog", "documents", "layout", "presentation", "engine", "backends", "branches", "export", "integration"]) {
 	const result = spawnSync(process.execPath, ["tests/test_reading_" + name + ".js"], {
 		cwd: path.resolve(__dirname, ".."), stdio: "inherit", windowsHide: true,
 	});

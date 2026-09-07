@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { readingCategory } from "./catalog";
 import type { ReadingBranch, ReadingNode, ReadingQuote, ReadingSession, ReadingSource } from "./types";
 
 export const newReadingId = (): string => "r-" + randomUUID();
 export function createReadingSession(source: ReadingSource, backend = "codex-cli", model = ""): ReadingSession {
 	const now = new Date().toISOString();
-	return { version: 1, id: newReadingId(), title: source.title, source, createdAt: now, updatedAt: now,
+	return { version: 1, id: newReadingId(), title: source.title, source, createdAt: now, updatedAt: now, purpose: "reading", lastOpenedAt: now,
 		nodes: [], branches: [], mainIds: [], outline: [], mainSummary: "", completed: false, backend, model,
 		ui: { mode: "split", split: 0.5, selectedId: "", zoom: 1, scrollX: 0, scrollY: 0, collapsed: [], drafts: {}, windows: [] } };
 }
@@ -98,6 +99,12 @@ export function validateReadingSession(value: unknown): ReadingSession {
 		if (typeof branch.summary !== "string" || !Number.isInteger(branch.summarizedCount) || branch.summarizedCount < 0 || branch.summarizedCount > branch.nodeIds.length) throw new Error("支线记忆位置无效");
 	}
 	const clamp = (value: number, fallback: number, min: number, max: number): number => Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
+	if (session.purpose !== undefined && !["reading", "demo", "test"].includes(session.purpose)) throw new Error("阅读会话用途无效");
+	// Demo execution remains blocked from real models, including old fixtures made by external scripts.
+	if (session.demo && session.purpose === "reading") session.purpose = undefined;
+	session.purpose = readingCategory(session);
+	session.archived = session.archived === true; session.pinned = session.pinned === true;
+	if (session.lastOpenedAt && !Number.isFinite(Date.parse(session.lastOpenedAt))) session.lastOpenedAt = undefined;
 	session.ui.mode = session.ui.mode === "map" ? "map" : "split";
 	session.ui.split = clamp(session.ui.split, 0.5, 0.25, 0.75); session.ui.zoom = clamp(session.ui.zoom, 1, 0.4, 1.8);
 	session.ui.scrollX = clamp(session.ui.scrollX, 0, 0, 1_000_000); session.ui.scrollY = clamp(session.ui.scrollY, 0, 0, 1_000_000);

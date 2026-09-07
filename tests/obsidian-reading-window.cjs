@@ -4,7 +4,7 @@ module.exports = async function readingWindowScenario(app) {
 	const pause = () => new Promise((resolve) => require("node:timers").setTimeout(resolve, 180));
 	const plugin = app.plugins.plugins["research-agent-reader"]; const service = plugin.getReadingWorkspace();
 	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view;
-	const id = await service.demo(); await view.setState({ sessionId: id });
+	const id = await service.demo("test"); await view.setState({ sessionId: id });
 	await service.repository.transact(id, (s) => { s.title = "小窗验收 · 缩放与正文（示例）"; s.ui.mode = "map"; });
 	view.selectNode(service.repository.get(id).mainIds[0]); await pause();
 	const root = view.contentEl; check(root.clientWidth >= 800 && root.clientHeight >= 650, "use a desktop-size reading pane");

@@ -67,6 +67,10 @@ export interface ReadingSession {
 	backend: string;
 	model: string;
 	demo?: boolean;
+	purpose?: "reading" | "demo" | "test";
+	archived?: boolean;
+	pinned?: boolean;
+	lastOpenedAt?: string;
 	ui: {
 		mode: "split" | "map"; split: number; selectedId: string;
 		mainFocusId?: string; mainScroll?: number; pendingQuote?: ReadingQuote;

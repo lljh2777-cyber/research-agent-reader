@@ -1,6 +1,7 @@
 import type { App } from "obsidian";
 import { ReadingDocumentLoader, type ReadingDocument } from "./document";
-import { FileReadingStorage, ReadingRepository } from "./store";
+import { FileReadingStorage, ReadingRepository, RoutedReadingStorage } from "./store";
+import { matchingReading } from "./catalog";
 import { addReadingBranch, addReadingNode, createReadingSession, readingNode } from "./session";
 import type { ReadingNode, ReadingQuote, ReadingSession, ReadingSource } from "./types";
 
@@ -10,11 +11,12 @@ export class ReadingWorkspaceService {
 	private documents = new Map<string, ReadingDocument>();
 	private initialization: Promise<void> | null = null;
 	private tasks = new Set<Promise<void>>();
+	private openings: Promise<unknown> = Promise.resolve();
 	generateHandler?: (sessionId: string, nodeId: string) => Promise<void>;
 	stopHandler?: (sessionId: string, nodeId: string) => void;
 	disposeHandler?: () => void;
 	constructor(app: App, vaultRoot: string, pluginDirectory: string) {
-		this.repository = new ReadingRepository(new FileReadingStorage(pluginDirectory));
+		this.repository = new ReadingRepository(new RoutedReadingStorage(new FileReadingStorage(pluginDirectory), new FileReadingStorage(pluginDirectory, "reading-test-sessions")));
 		this.loader = new ReadingDocumentLoader(app, vaultRoot);
 	}
 	async ready(): Promise<void> { if (!this.initialization) this.initialization = this.repository.load(); return this.initialization; }
@@ -23,6 +25,16 @@ export class ReadingWorkspaceService {
 		const session = createReadingSession(document.source, backend, model);
 		try { await this.repository.add(session); this.documents.set(session.id, document); return session.id; }
 		catch (error) { await document.destroy(); throw error; }
+	}
+	open(kind: ReadingSource["kind"], filename: string, backend: string, model: string, forceNew = false): Promise<{ id: string; created: boolean }> {
+		const operation = this.openings.then(async () => {
+			await this.ready(); const document = await this.loader.open(kind, filename);
+			const existing = !forceNew && matchingReading(this.repository.sessions.values(), document.source);
+			if (existing) { await document.destroy(); return { id: existing.id, created: false }; }
+			const session = createReadingSession(document.source, backend, model);
+			try { await this.repository.add(session); this.documents.set(session.id, document); return { id: session.id, created: true }; }
+			catch (error) { await document.destroy(); throw error; }
+		}); this.openings = operation.catch(() => undefined); return operation;
 	}
 	async document(sessionId: string): Promise<ReadingDocument> {
 		const session = this.repository.get(sessionId);
@@ -35,9 +47,9 @@ export class ReadingWorkspaceService {
 		}
 		return loaded;
 	}
-	async demo(): Promise<string> {
+	async demo(purpose: "demo" | "test" = "demo"): Promise<string> {
 		await this.ready();
-		const session = createReadingSession({ kind: "pdf", path: "demo://reading", fingerprint: "0".repeat(64), title: "交互演示（示例内容）" }); session.demo = true;
+		const session = createReadingSession({ kind: "pdf", path: "demo://reading", fingerprint: "0".repeat(64), title: "交互演示（示例内容）" }); session.demo = true; session.purpose = purpose;
 		const titles = ["研究问题是什么", "为什么这样设计实验", "图表如何支持结论"];
 		for (const title of titles) {
 			const node = addReadingNode(session, null); node.title = title; node.content = "这是用于验证阅读界面的示例内容，不代表任何论文结论。\n\n可以选择这段文字建立追问，或点击右侧节点查看对应的回答。"; node.status = "done";

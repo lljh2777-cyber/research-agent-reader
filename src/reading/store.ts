@@ -12,7 +12,7 @@ const ID = /^r-[a-f0-9-]{36}$/;
 /** No retention or cleanup: interrupted pending files and all histories stay on disk. */
 export class FileReadingStorage implements ReadingStorage {
 	private readonly root: string;
-	constructor(pluginDirectory: string) { this.root = path.resolve(pluginDirectory, "reading-sessions"); }
+	constructor(pluginDirectory: string, directory: "reading-sessions" | "reading-test-sessions" = "reading-sessions") { this.root = path.resolve(pluginDirectory, directory); }
 	private async prepare(): Promise<void> {
 		await fs.mkdir(this.root, { recursive: true });
 		if ((await fs.lstat(this.root)).isSymbolicLink()) throw new Error("阅读存储目录不能是符号链接");
@@ -44,6 +44,20 @@ export class FileReadingStorage implements ReadingStorage {
 		const handle = await fs.open(pending, "w", 0o600);
 		try { await handle.writeFile(text, "utf8"); await handle.sync(); } finally { await handle.close(); }
 		await fs.rename(pending, filename);
+	}
+}
+/** Keep legacy files in place; new explicit test sessions have their own storage root. */
+export class RoutedReadingStorage implements ReadingStorage {
+	private locations = new Map<string, ReadingStorage>();
+	constructor(private readonly regular: ReadingStorage, private readonly tests: ReadingStorage) {}
+	async list(): Promise<string[]> {
+		for (const storage of [this.regular, this.tests]) for (const id of await storage.list()) if (!this.locations.has(id)) this.locations.set(id, storage);
+		return [...this.locations.keys()];
+	}
+	read(id: string): Promise<string> { return (this.locations.get(id) || this.regular).read(id); }
+	async write(id: string, text: string): Promise<void> {
+		const storage = this.locations.get(id) || (JSON.parse(text).purpose === "test" ? this.tests : this.regular);
+		await storage.write(id, text); this.locations.set(id, storage);
 	}
 }
 export class ReadingRepository {

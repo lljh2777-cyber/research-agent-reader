@@ -5,6 +5,7 @@ import { ActionInputModal } from "../modals/action-input";
 import { ACTION_BY_ID } from "../actions";
 import { READING_VIEW_TYPE, type ReadingNode, type ReadingQuote, type ReadingSession, type ReadingWindow } from "../reading/types";
 import { readingNode } from "../reading/session";
+import { readingCategory, readingSourceKey, readingTitle, recentReading, type ReadingCategory } from "../reading/catalog";
 import { layoutReading, READING_MAP } from "../reading/layout";
 import { resolveReadingQuote } from "../reading/selection";
 import { readingCitations, readingSelectionText } from "../reading/presentation";
@@ -47,7 +48,8 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	async onOpen(): Promise<void> {
 		this.service = this.plugin.getReadingWorkspace(); await this.service.ready();
-		if (!this.service.repository.sessions.has(this.sessionId)) this.sessionId = [...this.service.repository.sessions.keys()].slice(-1)[0] || "";
+		const restored = this.service.repository.sessions.get(this.sessionId);
+		if (!restored || restored.archived || readingCategory(restored) !== "reading") this.sessionId = recentReading(this.service.repository.sessions.values())[0]?.id || "";
 		this.renderer.load(); this.unsubscribe = this.service.repository.subscribe((id) => { if (id === this.sessionId) this.render(); });
 		this.unsubscribeStream = this.plugin.getReadingEngine().subscribe((id, nodeId, text) => {
 			if (id !== this.sessionId) return;
@@ -73,7 +75,9 @@ export class ReadingWorkspaceView extends ItemView {
 	private updateUI(edit: (ui: ReadingSession["ui"]) => void): void {
 		const id = this.sessionId; this.handle(this.service.repository.transact(id, (session) => edit(session.ui)));
 	}
-	private selectSession(id: string): void { this.sessionId = id; this.quote = this.service.repository.get(id).ui.pendingQuote; this.signature = ""; this.contentEl.replaceChildren(); this.render(true); this.app.workspace.requestSaveLayout(); }
+	private selectSession(id: string): void { this.sessionId = id; this.quote = id ? this.service.repository.get(id).ui.pendingQuote : undefined; this.signature = ""; this.contentEl.replaceChildren(); this.render(true); this.app.workspace.requestSaveLayout();
+		if (id) this.handle(this.service.repository.transact(id, (s) => { s.lastOpenedAt = new Date().toISOString(); }));
+	}
 	private rememberScroll(key: string, edit: (ui: ReadingSession["ui"]) => void): void {
 		const sessionId = this.sessionId; const fullKey = sessionId + ":" + key;
 		this.scrollEdits.set(fullKey, { sessionId, edit }); clearTimeout(this.scrollTimers.get(fullKey));
@@ -85,10 +89,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const names = element(identity, "div", "reading-identity-text");
 		const eyebrow = element(names, "div", "reading-eyebrow"); element(eyebrow, "span", "", "交互深读");
 		if (session) element(eyebrow, "span", "reading-source-badge", session.demo ? "交互演示" : session.source.kind === "pdf" ? "PDF 原文" : "MinerU 原文");
-		const select = element(names, "select", "reading-session-select"); select.setAttribute("aria-label", "选择阅读会话"); select.title = session?.title || "选择阅读会话";
-		if (!session) element(select, "option", "", "你的论文阅读空间");
-		for (const item of this.service.repository.sessions.values()) { const option = element(select, "option", "", item.title); option.value = item.id; option.selected = item.id === this.sessionId; }
-		select.onchange = () => this.selectSession(select.value);
+		const select = button(names, session ? readingTitle(session) : "选择或管理阅读会话", () => this.openSessionLibrary(), "选择阅读会话"); select.className = "reading-session-select";
 		icon(names, "chevron-down").classList.add("reading-session-chevron");
 		const actions = element(header, "div", "reading-header-actions");
 		if (session) {
@@ -117,7 +118,7 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	private render(force = false): void {
 		const session = this.session;
-		const signature = JSON.stringify(session ? [session.id, session.nodes, session.outline, session.completed, session.backend, session.model,
+		const signature = JSON.stringify(session ? [session.id, session.title, session.archived, session.pinned, session.nodes, session.outline, session.completed, session.backend, session.model,
 			session.ui.mode, session.ui.split, session.ui.selectedId, session.ui.mainFocusId, session.ui.pendingQuote, session.ui.zoom,
 			session.ui.windows.map(({ scrollTop: _scroll, ...geometry }) => geometry), session.ui.collapsed] : null);
 		if (!force && this.signature === signature) return; this.signature = signature;
@@ -402,6 +403,49 @@ export class ReadingWorkspaceView extends ItemView {
 		const modal = new Modal(this.app); modal.titleEl.setText(title); modal.modalEl.classList.add("reading-modal"); this.modals.add(modal);
 		const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; return modal;
 	}
+	private openSessionLibrary(): void {
+		const modal = this.modal("阅读会话"); modal.modalEl.classList.add("reading-library-modal");
+		const search = element(modal.contentEl, "input", "reading-library-search"); search.type = "search"; search.placeholder = "搜索论文标题或来源路径"; search.setAttribute("aria-label", "搜索阅读会话");
+		const tabs = element(modal.contentEl, "div", "reading-library-tabs"); const list = element(modal.contentEl, "div", "reading-library-list");
+		let scope: ReadingCategory | "archived" = "reading";
+		const render = (): void => {
+			tabs.replaceChildren(); list.replaceChildren();
+			for (const [value, label] of [["reading", "正在阅读"], ["archived", "已归档"], ["demo", "演示"], ["test", "开发测试"]] as const) {
+				const tab = button(tabs, label, () => { scope = value; render(); }); tab.setAttribute("aria-pressed", String(scope === value));
+			}
+			const query = search.value.trim().toLocaleLowerCase();
+			const sessions = recentReading(this.service.repository.sessions.values(), scope === "archived" ? "reading" : scope, scope === "archived")
+				.filter((s) => (readingTitle(s) + " " + s.source.path).toLocaleLowerCase().includes(query));
+			const groups = new Map<string, ReadingSession[]>();
+			for (const session of sessions) { const key = readingSourceKey(session.source); const group = groups.get(key) || []; group.push(session); groups.set(key, group); }
+			if (!sessions.length) element(list, "p", "reading-library-empty", query ? "没有找到匹配的会话" : "这里还没有会话");
+			for (const group of groups.values()) {
+				const section = element(list, "section", "reading-library-group");
+				if (group.length > 1) element(section, "p", "reading-library-group-label", (group[0].source.kind === "pdf" ? "PDF" : "MinerU") + " · 同一来源的 " + group.length + " 个会话");
+				for (const session of group) {
+					const row = element(section, "div", "reading-library-row" + (session.id === this.sessionId ? " is-current" : "")); row.dataset.sessionId = session.id;
+					const open = button(row, "", () => { modal.close(); this.selectSession(session.id); }, "打开会话：" + readingTitle(session)); open.className = "reading-library-open";
+					element(open, "strong", "", (session.pinned ? "置顶 · " : "") + readingTitle(session));
+					const completed = session.mainIds.filter((id) => readingNode(session, id).status === "done").length;
+					const timestamp = session.lastOpenedAt || session.updatedAt; const date = Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toLocaleString() : "时间未记录";
+					element(open, "small", "", (session.source.kind === "pdf" ? "PDF" : "MinerU") + " · " + completed + " 个主线单元 · " + date);
+					element(open, "small", "reading-library-path", session.source.path).title = session.source.path;
+					const actions = element(row, "div", "reading-library-actions");
+					actionButton(actions, session.pinned ? "pin-off" : "pin", session.pinned ? "取消置顶" : "置顶", () => this.handle(this.service.repository.transact(session.id, (s) => { s.pinned = !s.pinned; })), true);
+					actionButton(actions, "pencil", "重命名", () => {
+						const rename = this.modal("重命名阅读会话"); const input = element(element(rename.contentEl, "label", "reading-field", "会话名称"), "input"); input.value = readingTitle(session); input.maxLength = 200;
+						const submit = button(rename.contentEl, "保存名称", () => { const title = input.value.trim(); if (!title) { new Notice("请输入会话名称"); return; } this.handle(this.service.repository.transact(session.id, (s) => { s.title = title; }).then(() => rename.close())); });
+						submit.classList.add("mod-cta"); rename.open(); input.focus(); input.select();
+					}, true);
+					if (readingCategory(session) === "reading") actionButton(actions, session.archived ? "archive-restore" : "archive", session.archived ? "恢复会话" : "归档", () => this.handle(this.service.repository.transact(session.id, (s) => { s.archived = !s.archived; }).then(() => {
+						if (session.id === this.sessionId && this.service.repository.get(session.id).archived) this.selectSession(recentReading(this.service.repository.sessions.values())[0]?.id || "");
+					})), true);
+				}
+			}
+		};
+		search.oninput = render; const unsubscribe = this.service.repository.subscribe(render); const close = modal.onClose.bind(modal); modal.onClose = () => { unsubscribe(); close(); };
+		render(); modal.open(); search.focus();
+	}
 	private openSource(): void {
 		const modal = this.modal("开始交互阅读");
 		element(modal.contentEl, "p", "reading-modal-intro", "选择一篇论文，建立可以随时继续的阅读会话。");
@@ -411,11 +455,13 @@ export class ReadingWorkspaceView extends ItemView {
 		this.plugin.getVerifiedProviderProfiles().forEach((profile) => { element(backend, "option", "", profile.name + " · " + profile.model).value = profile.id; });
 		const model = element(element(modal.contentEl, "label", "reading-field", "Codex 模型（可选）"), "input"); model.placeholder = "留空使用配置中的模型";
 		backend.onchange = () => { model.parentElement!.hidden = backend.value !== "codex-cli"; };
+		const startNew = element(modal.contentEl, "label", "reading-new-session-option"); const forceNew = element(startNew, "input"); forceNew.type = "checkbox"; element(startNew, "span", "", "为同一原文重新建立会话");
+		element(modal.contentEl, "p", "reading-modal-intro", "默认继续相同原文的已有会话，并沿用该会话的模型。原文变化时会创建新会话。");
 		element(modal.contentEl, "p", "reading-modal-intro", "所选内容和相关图像将交给所选模型分析。阅读过程自动保存。");
-		const submit = button(modal.contentEl, "打开并开始讲解", () => {
+		const submit = button(modal.contentEl, "打开并继续阅读", () => {
 			submit.disabled = true;
-			this.handle(this.service.create(kind.value as "pdf" | "article", path.value.trim().replace(/^"|"$/g, ""), backend.value, model.value.trim())
-				.then((id) => { modal.close(); this.selectSession(id); return this.service.advance(id); }).finally(() => { submit.disabled = false; }));
+			this.handle(this.service.open(kind.value as "pdf" | "article", path.value.trim().replace(/^"|"$/g, ""), backend.value, model.value.trim(), forceNew.checked)
+				.then(({ id, created }) => { modal.close(); this.selectSession(id); if (created) return this.service.advance(id); }).finally(() => { submit.disabled = false; }));
 		}); submit.classList.add("mod-cta"); modal.open();
 	}
 	private showEvidence(nodeId: string, evidenceId: string): void {
