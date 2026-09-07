@@ -50,7 +50,7 @@ const sourceFiles = execFileSync("git", [
 	encoding: "utf8",
 }).split(/\r?\n/).filter(Boolean);
 const publicTextExtensions = new Set([
-	".css", ".js", ".json", ".md", ".mjs", ".ts", ".yaml", ".yml",
+	".css", ".js", ".cjs", ".json", ".md", ".mjs", ".ts", ".yaml", ".yml",
 ]);
 const publicTextNames = new Set([
 	".editorconfig", ".gitattributes", ".gitignore", "LICENSE",

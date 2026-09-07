@@ -200,6 +200,11 @@ Obsidian; it prints the generated Vault path and a manual smoke-test checklist.
 See [Public release checklist](docs/release-checklist.md) for the remaining
 desktop QA and screenshot requirements.
 
+For a private comparison of lexical, reranked, and hybrid retrieval, see
+[Retrieval benchmark](docs/retrieval-benchmark.md). Its synthetic tests run with
+`pnpm test:retrieval-benchmark`; real corpus snapshots and results stay outside
+the repository and Vault.
+
 ## License
 
 MIT. See [LICENSE](LICENSE). Third-party integrations and development tools are
