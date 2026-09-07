@@ -92,6 +92,8 @@ export function validateReadingSession(value: unknown): ReadingSession {
 		|| !session.ui.drafts || typeof session.ui.drafts !== "object" || Array.isArray(session.ui.drafts)
 		|| Object.values(session.ui.drafts).some((value) => typeof value !== "string")) throw new Error("阅读会话界面或记忆格式无效");
 	for (const node of session.nodes) {
+		if (node.learningState !== undefined && !["unmarked", "understood", "revisit", "question"].includes(node.learningState)) throw new Error("学习标记无效");
+		if (node.reviewedEvidence !== undefined && (!Array.isArray(node.reviewedEvidence) || node.reviewedEvidence.some(id => !node.evidence.some(e => e.id === id)))) throw new Error("原文核对标记无效");
 		if (typeof node.title !== "string" || typeof node.error !== "string" || node.evidence.some((item) => !item || typeof item.id !== "string"
 			|| typeof item.text !== "string" || typeof item.path !== "string" || typeof item.label !== "string" || !["paper", "vault"].includes(item.kind))) throw new Error("阅读证据格式无效");
 	}
@@ -106,6 +108,12 @@ export function validateReadingSession(value: unknown): ReadingSession {
 	session.archived = session.archived === true; session.pinned = session.pinned === true;
 	if (session.lastOpenedAt && !Number.isFinite(Date.parse(session.lastOpenedAt))) session.lastOpenedAt = undefined;
 	session.ui.mode = session.ui.mode === "map" ? "map" : "split";
+	if (!["all", "unmarked", "understood", "revisit", "question"].includes(session.ui.learningFilter || "all")) session.ui.learningFilter = "all";
+	const pane = session.ui.evidenceView;
+	if (pane) {
+		if (!Array.isArray(pane.history) || !pane.history.length || !Number.isInteger(pane.cursor) || pane.cursor < 0 || pane.cursor >= pane.history.length || pane.history.some(ref => !nodes.get(ref.nodeId)?.evidence.some(e => e.id === ref.evidenceId))) session.ui.evidenceView = undefined;
+		else { pane.x = clamp(pane.x, 24, 0, 10000); pane.y = clamp(pane.y, 110, 0, 10000); pane.width = clamp(pane.width, 520, 300, 4000); pane.height = clamp(pane.height, 540, 220, 4000); }
+	}
 	session.ui.split = clamp(session.ui.split, 0.5, 0.25, 0.75); session.ui.zoom = clamp(session.ui.zoom, 1, 0.4, 1.8);
 	session.ui.scrollX = clamp(session.ui.scrollX, 0, 0, 1_000_000); session.ui.scrollY = clamp(session.ui.scrollY, 0, 0, 1_000_000);
 	session.ui.mainScroll = clamp(session.ui.mainScroll || 0, 0, 0, 1_000_000);

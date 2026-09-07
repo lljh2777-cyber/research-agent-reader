@@ -1,5 +1,10 @@
 export const READING_VIEW_TYPE = "research-interactive-reading";
 export type ReadingStatus = "pending" | "running" | "done" | "failed" | "interrupted";
+export type ReadingLearningState = "unmarked" | "understood" | "revisit" | "question";
+export interface ReadingEvidenceView {
+	history: { nodeId: string; evidenceId: string }[]; cursor: number;
+	x: number; y: number; width: number; height: number;
+}
 export interface ReadingSource {
 	kind: "pdf" | "article";
 	path: string;
@@ -24,6 +29,8 @@ export interface ReadingEvidence {
 }
 export interface ReadingQuote { nodeId: string; text: string; start: number; end: number }
 export interface ReadingNode {
+	learningState?: ReadingLearningState;
+	reviewedEvidence?: string[];
 	id: string;
 	parentId: string | null;
 	branchId: string | null;
@@ -81,6 +88,8 @@ export interface ReadingSession {
 		mainComposerExpanded?: boolean;
 		zoom: number; scrollX: number; scrollY: number;
 		collapsed: string[]; drafts: Record<string, string>; windows: ReadingWindow[];
+		learningFilter?: ReadingLearningState | "all";
+		evidenceView?: ReadingEvidenceView;
 	};
 }
 export interface ReadingResult {

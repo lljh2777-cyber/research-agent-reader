@@ -13,6 +13,9 @@ import { readingCitations, readingSelectionText } from "../reading/presentation"
 import { safeReadingMarkdown } from "../reading/export";
 import { ReadingExportModal } from "./reading-export";
 import { ReadingModeMotion } from "./reading-mode-motion";
+import { ReadingEvidencePanel } from "./reading-evidence-panel";
+import { LEARNING_LABELS, markReading, visitReadingEvidence } from "../reading/progress";
+import type { ReadingLearningState } from "../reading/types";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
 const element = <K extends keyof HTMLElementTagNameMap>(parent: HTMLElement, tag: K, className = "", text = ""): HTMLElementTagNameMap[K] => {
@@ -35,6 +38,7 @@ export class ReadingWorkspaceView extends ItemView {
 	private contentSignature = "";
 	private modeMotion = new ReadingModeMotion(this.contentEl);
 	private modeMainScroll = 0;
+	private evidencePanel?: ReadingEvidencePanel;
 	private renderer = new Component();
 	private draftTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private scrollTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -56,9 +60,10 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	async onOpen(): Promise<void> {
 		this.service = this.plugin.getReadingWorkspace(); await this.service.ready();
+		this.evidencePanel = new ReadingEvidencePanel(this.app, this.service, this.plugin);
 		const restored = this.service.repository.sessions.get(this.sessionId);
 		if (!restored || restored.archived || readingCategory(restored) !== "reading") this.sessionId = recentReading(this.service.repository.sessions.values())[0]?.id || "";
-		this.renderer.load(); this.unsubscribe = this.service.repository.subscribe((id) => { if (id === this.sessionId) this.render(); });
+		this.renderer.load(); this.unsubscribe = this.service.repository.subscribe((id) => { if (id === this.sessionId) { this.render(); this.evidencePanel?.sync(this.session, this.contentEl); } });
 		this.unsubscribeStream = this.plugin.getReadingEngine().subscribe((id, nodeId, text) => {
 			if (id !== this.sessionId) return;
 			this.contentEl.querySelectorAll<HTMLElement>("[data-answer-id]").forEach((answer) => {
@@ -76,6 +81,7 @@ export class ReadingWorkspaceView extends ItemView {
 		if (this.service.repository.errors.length) new Notice("部分阅读会话无法加载，文件已保留：" + this.service.repository.errors.join("；"), 10000);
 	}
 	async onClose(): Promise<void> {
+		this.evidencePanel?.dispose();
 		this.modeMotion.stop();
 		this.unsubscribe?.(); this.unsubscribeStream?.(); this.cleanupDrag?.(); this.selectionCleanup?.(); this.hideSelectionActions(); this.renderer.unload();
 		for (const modal of this.modals) modal.close();
@@ -138,6 +144,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const session = this.session;
 		const contentSignature = JSON.stringify(session ? [session.id, session.title, session.archived, session.pinned, session.nodes, session.outline, session.completed, session.backend, session.model,
 			session.ui.split, session.ui.selectedId, session.ui.mainFocusId, session.ui.pendingQuote, session.ui.mainComposerExpanded, session.ui.zoom,
+			session.ui.learningFilter,
 			session.ui.windows.map(({ scrollTop: _scroll, ...geometry }) => geometry), session.ui.collapsed] : null);
 		const signature = contentSignature + session?.ui.mode;
 		if (!force && this.signature === signature) return; this.signature = signature;
@@ -197,6 +204,9 @@ export class ReadingWorkspaceView extends ItemView {
 		this.renderMap(map, session);
 		const mapFooter = element(mapArea, "div", "reading-map-footer");
 		element(mapFooter, "span", "reading-map-hint", session.nodes.length + " 个节点 · 拖动空白处平移");
+		const filter = element(mapFooter, "select", "reading-learning-filter"); filter.setAttribute("aria-label", "筛选学习状态");
+		for (const [value, label] of [["all", "全部学习状态"], ...Object.entries(LEARNING_LABELS)]) element(filter, "option", "", label).value = value;
+		filter.value = session.ui.learningFilter || "all"; filter.onchange = () => this.updateUI(ui => { ui.learningFilter = filter.value as ReadingLearningState | "all"; });
 		const controls = element(mapFooter, "div", "reading-map-controls");
 		actionButton(controls, "minus", "缩小导图", () => this.updateUI((ui) => { ui.zoom = Math.max(0.4, ui.zoom - 0.1); }), true);
 		const zoom = button(controls, Math.round(session.ui.zoom * 100) + "%", () => this.updateUI((ui) => { ui.zoom = 1; }), "恢复原始缩放"); zoom.className = "reading-zoom-value";
@@ -218,6 +228,7 @@ export class ReadingWorkspaceView extends ItemView {
 			input?.focus({ preventScroll: true }); if (input && cursor != null) input.setSelectionRange(cursor, cursor); }
 		else if (focusDivider) this.contentEl.querySelector<HTMLElement>(".reading-divider")?.focus({ preventScroll: true });
 		else if (focusResize) [...this.contentEl.querySelectorAll<HTMLElement>(".reading-float")].find((w) => w.dataset.windowKey === focusResize)?.querySelector<HTMLElement>(".reading-resize")?.focus({ preventScroll: true });
+		this.evidencePanel?.sync(session, this.contentEl);
 	}
 	private renderMode(session: ReadingSession, animate: boolean): void {
 		const messages = this.contentEl.querySelector<HTMLElement>(".reading-main-chat .reading-messages")!;
@@ -260,6 +271,8 @@ export class ReadingWorkspaceView extends ItemView {
 				line.setAttribute("class", node.branchId ? "is-branch" : "is-main");
 				line.setAttribute("d", `M ${x1} ${y1} C ${vertical ? x1 : x1 + 36} ${vertical ? y1 + 28 : y1}, ${vertical ? x2 : x2 - 36} ${vertical ? y2 - 28 : y2}, ${x2} ${y2}`); svg.appendChild(line); }
 			const card = element(canvas, "div", "reading-map-node " + (node.branchId ? "is-branch" : "is-main") + (session.ui.selectedId === node.id ? " is-selected" : ""));
+			const learning = node.learningState || "unmarked"; card.dataset.learningState = learning;
+			if (session.ui.learningFilter && session.ui.learningFilter !== "all" && session.ui.learningFilter !== learning) card.classList.add("is-learning-muted");
 			card.style.left = point.x + "px"; card.style.top = point.y + "px"; card.dataset.nodeId = node.id;
 			card.style.width = READING_MAP.width + "px"; card.style.height = READING_MAP.height + "px"; card.dataset.status = node.status;
 			const open = button(card, "", () => this.selectNode(node.id), node.title || "正在准备"); open.className = "reading-node-open"; open.setAttribute("aria-current", String(session.ui.selectedId === node.id));
@@ -411,6 +424,12 @@ export class ReadingWorkspaceView extends ItemView {
 		}).catch(() => { content.textContent = node.content; }); }
 		catch { content.textContent = node.content; }
 		const tools = element(article, "div", "reading-answer-tools");
+		if (node.status === "done") {
+			const learning = element(tools, "select", "reading-learning-filter"); learning.setAttribute("aria-label", "我的理解状态：" + node.title);
+			for (const [value, label] of Object.entries(LEARNING_LABELS)) element(learning, "option", "", label).value = value;
+			learning.value = node.learningState || "unmarked";
+			learning.onchange = () => this.handle(this.service.repository.transact(this.sessionId, s => markReading(s, node.id, learning.value as ReadingLearningState)));
+		}
 		const selectionAction = actionButton(tools, "text-cursor-input", "选中文字后追问", () => this.captureQuote(node, content));
 		selectionAction.disabled = node.status !== "done";
 		content.onmouseup = () => this.showSelectionActions(node, content);
@@ -420,7 +439,7 @@ export class ReadingWorkspaceView extends ItemView {
 			for (const [index, evidence] of node.evidence.entries()) {
 				const source = button(sources, "", () => this.showEvidence(node.id, evidence.id), evidence.label); source.className = "reading-source-row";
 				element(source, "span", "reading-source-index", String(index + 1)); const label = element(source, "span", "reading-source-title"); element(label, "span", "", evidence.label);
-				element(label, "small", "", (evidence.kind === "paper" ? "本文原文" : "知识库补充") + (evidence.role ? " · " + evidence.role : "") + (evidence.page ? " · 第 " + evidence.page + " 页" : "") + (evidence.visualInspected ? " · 已查看图像" : "")); icon(source, "arrow-up-right");
+				element(label, "small", "", (evidence.kind === "paper" ? "本文原文" : "知识库补充") + (evidence.role ? " · " + evidence.role : "") + (evidence.page ? " · 第 " + evidence.page + " 页" : "") + (evidence.visualInspected ? " · 图像已提供给模型" : "") + (node.reviewedEvidence?.includes(evidence.id) ? " · 我已核对" : "")); icon(source, "arrow-up-right");
 			}
 		}
 		if (node.retrieval) {
@@ -604,8 +623,12 @@ export class ReadingWorkspaceView extends ItemView {
 		}); submit.classList.add("mod-cta"); modal.open();
 	}
 	private showEvidence(nodeId: string, evidenceId: string): void {
+		const sessionId = this.sessionId;
+		const pin = () => this.handle(this.service.repository.transact(sessionId, s => visitReadingEvidence(s, nodeId, evidenceId)));
+		if (this.session?.ui.evidenceView) { pin(); return; }
 		const item = readingNode(this.session!, nodeId).evidence.find((evidence) => evidence.id === evidenceId); if (!item) return;
 		const modal = this.modal(item.label); element(modal.contentEl, "p", "reading-evidence-location", item.path + (item.page ? " · 第 " + item.page + " 页" : ""));
+		button(modal.contentEl, "固定原文对照", () => { modal.close(); pin(); });
 		if (item.heading || item.role) element(modal.contentEl, "p", "reading-evidence-location", [item.role, item.heading].filter(Boolean).join(" · "));
 		if (item.origins?.length) element(modal.contentEl, "p", "reading-evidence-location", "原始来源：" + item.origins.join("、"));
 		if (item.start !== undefined) element(modal.contentEl, "p", "", "阅读文本字符位置：" + item.start + "–" + item.end + (item.page ? "" : "；页码未唯一匹配，以本段原文为准"));
