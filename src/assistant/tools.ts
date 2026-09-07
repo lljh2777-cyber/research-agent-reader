@@ -7,6 +7,11 @@ import { curationTarget } from "../curation/policy";
 import type { AssistantDependencies, AssistantRun, AssistantSource } from "./types";
 import type { AssistantToolName } from "./capabilities";
 
+function boundedBackground(text: string, limit: number): string {
+	if (text.length <= limit) return text;
+	const head = Math.floor((limit - 20) / 2); return text.slice(0, head) + "\n[背景节选，完整记录保留本地]\n" + text.slice(-(limit - head - 20));
+}
+
 export function assistantContextHash(session: ReadingSession, ids: string[], scope = "node"): string {
 	const first = session.nodes.find(n => n.id === ids[0]);
 	const nodes = session.nodes.filter(n => scope === "session" || (scope === "branch" ? n.branchId === first?.branchId : ids.includes(n.id)));
@@ -14,8 +19,12 @@ export function assistantContextHash(session: ReadingSession, ids: string[], sco
 }
 export function assistantContext(session: ReadingSession, nodeId: string) {
 	const node = session.nodes.find(n => n.id === nodeId); if (!node || node.status !== "done") throw new Error("请选择一个已完成的阅读节点");
+	const branch = session.branches.find(b => b.id === node.branchId);
+	const background = branch ? ["创建时主线背景：", boundedBackground(branch.mainSnapshot, 3000), "支线起点：", boundedBackground(session.nodes.find(n => n.id === branch.parentNodeId)?.content || "", 600),
+		"相关祖先：", boundedBackground(branch.ancestorSummary || branch.ancestorContext, 900), "支线摘要：", boundedBackground(branch.summary, 700), "近期支线对话：",
+		boundedBackground(branch.nodeIds.filter(id => id !== nodeId).map(id => session.nodes.find(n => n.id === id)).filter(n => n?.status === "done").slice(-2).map(n => n!.question + "\n" + n!.content).join("\n\n"), 1200)].join("\n\n") : boundedBackground(readingContext(session, nodeId), 6500);
 	return { sessionId: session.id, title: session.title, source: session.source.kind, selected: { id: node.id, title: node.title, question: node.question, branchId: node.branchId, learningState: node.learningState || "unmarked" },
-		background: readingContext(session, nodeId).slice(-6500), progress: { done: session.mainIds.filter(id => session.nodes.find(n => n.id === id)?.status === "done").length, planned: session.outline.length },
+		background, progress: { done: session.mainIds.filter(id => session.nodes.find(n => n.id === id)?.status === "done").length, planned: session.outline.length },
 		counts: Object.fromEntries(["understood", "revisit", "question", "unmarked"].map(state => [state, session.nodes.filter(n => n.status === "done" && (n.learningState || "unmarked") === state).length])) };
 }
 export class AssistantTools {

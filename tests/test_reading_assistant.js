@@ -36,6 +36,7 @@ async function toolsFor(f) {
 	f.s.mainSummary = "frozen background"; const branch = addReadingBranch(f.s, f.n.id); const bn = addReadingNode(f.s, branch.id, "branch question"); bn.status = "done";
 	f.s.mainSummary = "new unrelated background"; const sibling = addReadingBranch(f.s, f.n.id); const sn = addReadingNode(f.s, sibling.id); sn.status = "done"; sn.content = "sibling private conversation";
 	const context = assistantContext(f.s, bn.id); assert.match(context.background, /frozen background/); assert.doesNotMatch(JSON.stringify(context), /new unrelated|sibling private/);
+	branch.summary = "long dialogue".repeat(3000); const longContext = assistantContext(f.s, bn.id); assert.match(longContext.background, /frozen background/); assert.ok(longContext.background.length < 7000); branch.summary = "";
 	const { run, tools } = await toolsFor(f);
 	assert.equal(run.calls[0].input, 200); assert.ok(run.calls[0].estimatedInput > 0); assert.equal(run.state, "done");
 	assert.equal(validateAssistantRun(JSON.parse(f.storage.files.get(run.id))).id, run.id);
