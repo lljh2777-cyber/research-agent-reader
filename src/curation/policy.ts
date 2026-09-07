@@ -62,7 +62,9 @@ export function validateSuggestion(raw: unknown, context: CurationContext, index
 		citations, warnings: [...new Set(warnings)], applicable: ["add", "replace", "condition"].includes(kind) && warnings.length === 0, decision: "pending" };
 }
 export function parseCurationResult(text: string, context: CurationContext): CurationSuggestion[] {
-	const raw = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
+	let raw;
+	try { raw = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); }
+	catch { throw new Error("模型返回的整理内容不是有效 JSON；未改写笔记，请重试"); }
 	if (!raw || !Array.isArray(raw.suggestions) || raw.suggestions.length > 5 || !raw.suggestions.length) throw new Error("模型须返回一至五条结构化建议");
 	return raw.suggestions.map((value: unknown, index: number) => validateSuggestion(value, context, index));
 }

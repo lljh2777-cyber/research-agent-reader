@@ -55,7 +55,7 @@ export async function prepareCuration(app: App, workspace: ReadingWorkspaceServi
 		target: { title, category: targetPath.split("/")[1], depth: metadata.reading_depth || metadata.status || "未标注", paragraphs }, evidence: evidence.map(({ text: _text, quotes, ...item }) => ({ ...item, quotes })), sourceCompatible });
 	let prompt = buildPrompt(); let estimate = estimatedTokens(curationSkill + prompt); const selectedCount = paragraphs.length;
 	while (estimate > 18000 && paragraphs.length > 1) { paragraphs.pop(); prompt = buildPrompt(); estimate = estimatedTokens(curationSkill + prompt); }
-	if (paragraphs.length !== selectedCount) { selection.selected = paragraphs.length; warnings.push("为控制输入预算，目标段落由 " + selectedCount + " 段缩减为 " + paragraphs.length + " 段；本批未覆盖其余段落，原文证据保持完整"); }
+	if (paragraphs.length !== selectedCount) { selection.selected = paragraphs.length; warnings.push("为控制输入预算，目标段落由 " + selectedCount + " 段缩减为 " + paragraphs.length + " 段；本批未覆盖其余段落，保留本轮已选原文证据"); }
 	if (estimate > 18000) throw new Error("本批预计输入超过 18,000 token，请减少节点或选择更聚焦的目标笔记");
 	const learningHash = curationLearningHash(session, nodeIds);
 	const context: CurationContext = { ruleVersion: CURATION_RULE_VERSION, selection, key: "", sessionId, nodeIds, learningHash, title: readingTitle(session), source: session.source, target: { path: targetPath, title, text, hash: contentHash(text), paragraphs },

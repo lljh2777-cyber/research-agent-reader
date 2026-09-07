@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const { loadReading } = require("./reading-test-helpers");
 const { selectCurationParagraphs, curationQuotes } = loadReading("curation/selection.ts");
-const { curationParagraphs, validateSuggestion } = loadReading("curation/policy.ts");
+const { curationParagraphs, validateSuggestion, parseCurationResult } = loadReading("curation/policy.ts");
 const { contentHash } = loadReading("retrieval/chunks.ts");
 (async () => {
 	const text = "# Method\n\n" + Array.from({ length: 15 }, (_, i) => `Paragraph ${i}: ${i === 14 ? "Unpaired samples were not evaluated." : "General background."}`).join("\n\n");
@@ -21,6 +21,7 @@ const { contentHash } = loadReading("retrieval/chunks.ts");
 	const spans = curationQuotes(wrapped); assert.equal(spans.length, 3); assert(spans[0].text.includes("on\nlocal")); assert(spans[1].text.includes("tested\non mice"));
 	for (const span of spans) assert.equal(wrapped.text.slice(span.start, span.end), span.text);
 	const context = { ruleVersion: "curation-v2", target: { paragraphs }, evidence: [evidence], sourceCompatible: true };
+	assert.throws(() => parseCurationResult('{"suggestions":[{"claim":"unescaped "quote""}]}', context), /不是有效 JSON.*未改写笔记/);
 	const value = { kind: "add", paragraphId: paragraphs[0].id, claim: "人类样本", text: "样本使用 7.5 mg。", reason: "已报告", citations: [{ id: "P1", quoteId: evidence.quotes[0].id }] };
 	const parsed = validateSuggestion(value, context, 0); assert(parsed.applicable); assert.equal(parsed.citations[0].quote, evidence.quotes[0].text);
 	assert.throws(() => validateSuggestion({ ...value, citations: Array(9).fill(value.citations[0]) }, context, 0), /超过 8 处引用/);
