@@ -1,0 +1,52 @@
+/* Native navigation checks. Synthetic data only, no model calls or deletion. */
+module.exports = async function readingNavigationScenario(app) {
+	const check = (ok, label) => { if (!ok) throw new Error(label); };
+	const pause = (ms = 350) => new Promise((resolve) => require("node:timers").setTimeout(resolve, ms));
+	const plugin = app.plugins.plugins["research-agent-reader"]; const workspace = plugin.getReadingWorkspace();
+	const original = app.workspace.getLeavesOfType("research-interactive-reading")[0]?.view.sessionId;
+	let view;
+	try {
+		const baseline = await require("./obsidian-reading-long.cjs")(app);
+		view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view;
+		const id = baseline.sessionId; const session = () => workspace.repository.get(id); const root = view.contentEl;
+		const click = (parent, label) => { const b = [...parent.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === label); check(b, "button " + label); b.click(); };
+		const hidden = session().branches[0].nodeIds.at(-1); const main = session().mainIds[0];
+		check(!root.querySelector('[data-node-id="' + hidden + '"]'), "target initially hidden");
+		click(root, "搜索导图节点"); await pause();
+		const modal = document.querySelector(".reading-node-search-modal"); const input = modal.querySelector("input");
+		check(modal.querySelectorAll(".reading-search-result").length === 100, "bounded result rendering");
+		input.value = "no-matching-fixture-node"; input.dispatchEvent(new Event("input", { bubbles: true }));
+		check(modal.querySelectorAll(".reading-search-result").length === 0, "empty search results");
+		input.value = "支线 1 第 10 轮"; input.dispatchEvent(new Event("input", { bubbles: true }));
+		const result = modal.querySelector('[data-result-id="' + hidden + '"]'); check(result, "search includes hidden node"); result.click(); await pause();
+		check(session().ui.selectedId === hidden && !session().ui.collapsed.includes(session().branches[0].id), "search reveals branch and selects target");
+		let map = root.querySelector(".reading-map-scroll"); let card = root.querySelector('[data-node-id="' + hidden + '"]');
+		const box = map.getBoundingClientRect(); const target = card.getBoundingClientRect();
+		check(target.top < box.bottom && target.bottom > box.top && target.left < box.right && target.right > box.left, "target in viewport");
+		let floating = root.querySelector(".reading-float"); check(floating.querySelector('[data-origin-id="' + main + '"]'), "breadcrumb identifies main origin");
+		click(floating, "返回问题起点"); await pause(); check(session().ui.selectedId === main, "return origin selects main");
+		click(root, "返回最新主线"); await pause(); check(session().ui.selectedId === session().mainIds.at(-1), "return latest main");
+		map = root.querySelector(".reading-map-scroll"); map.scrollLeft = 200; map.scrollTop = 400; await pause();
+		const canvas = map.querySelector(".reading-map-extent");
+		canvas.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: 200, clientY: 200, button: 0 }));
+		document.dispatchEvent(new PointerEvent("pointermove", { clientX: 140, clientY: 130 }));
+		document.dispatchEvent(new PointerEvent("pointercancel")); await pause();
+		check(Math.abs(map.scrollLeft - 260) < 2 && Math.abs(map.scrollTop - 470) < 2, "blank canvas pans both axes");
+		check(!map.classList.contains("is-panning"), "pointer cancel clears pan state");
+		document.dispatchEvent(new PointerEvent("pointermove", { clientX: 50, clientY: 50 })); check(Math.abs(map.scrollTop - 470) < 2, "no dangling pointer move");
+		const preserved = [map.scrollLeft, map.scrollTop];
+		await workspace.repository.transact(id, (s) => { s.nodes[0].title += " · 已回看"; }); await pause();
+		map = root.querySelector(".reading-map-scroll"); check(Math.abs(map.scrollLeft - preserved[0]) < 2 && Math.abs(map.scrollTop - preserved[1]) < 2, "answer update preserves viewport");
+		view.selectNode(hidden); await pause(); floating = root.querySelector(".reading-float"); click(floating, "固定"); await pause();
+		const pinned = session().ui.windows.find((w) => w.pinned); const geometry = [pinned.x, pinned.y, pinned.width, pinned.height];
+		click(root, "适应视野"); await pause();
+		check(session().ui.zoom === 0.4, "long map respects readable zoom floor");
+		check(JSON.stringify(geometry) === JSON.stringify(session().ui.windows.filter((w) => w.key === pinned.key).flatMap((w) => [w.x, w.y, w.width, w.height])), "fit preserves pinned window");
+		click(root, "定位选中节点"); await pause();
+		map = root.querySelector(".reading-map-scroll"); card = root.querySelector('[data-node-id="' + hidden + '"]');
+		check(card.getBoundingClientRect().bottom > map.getBoundingClientRect().top, "focus at new zoom");
+		await pause(500); await workspace.repository.flush(); const saved = JSON.parse(await workspace.repository.storage.read(id));
+		check(saved.ui.zoom === 0.4 && saved.ui.windows.some((w) => w.pinned), "navigation persisted");
+		return { status: "passed", sessionId: id, nodes: 300, renderMs: baseline.renderMs, checks: ["300-node recovery", "search limit and empty state", "collapsed search", "breadcrumb", "origin/latest", "pan", "pointer cancel", "stable viewport", "fit zoom", "pinned geometry", "persistence"] };
+	} finally { if (original && view) await view.setState({ sessionId: original }); }
+};

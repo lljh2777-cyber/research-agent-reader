@@ -7,6 +7,7 @@ import { READING_VIEW_TYPE, type ReadingNode, type ReadingQuote, type ReadingSes
 import { readingNode } from "../reading/session";
 import { readingCategory, readingSourceKey, readingTitle, recentReading, type ReadingCategory } from "../reading/catalog";
 import { layoutReading, READING_MAP } from "../reading/layout";
+import { fitReadingZoom, readingTrail, revealReadingPath, searchReadingNodes } from "../reading/navigation";
 import { resolveReadingQuote } from "../reading/selection";
 import { readingCitations, readingSelectionText } from "../reading/presentation";
 import { exportReading, safeReadingMarkdown, type ReadingExportScope } from "../reading/export";
@@ -166,16 +167,26 @@ export class ReadingWorkspaceView extends ItemView {
 		const mapArea = element(body, "div", "reading-map-area");
 		const mapHeading = element(mapArea, "div", "reading-panel-heading"); icon(mapHeading, "git-branch"); element(mapHeading, "h2", "", "学习导图");
 		const legend = element(mapHeading, "div", "reading-map-legend"); element(legend, "span", "is-main", "主线"); element(legend, "span", "is-branch", "追问");
+		actionButton(mapHeading, "search", "搜索导图节点", () => this.openNodeSearch(), true);
+		const latest = actionButton(mapHeading, "list-end", "返回最新主线", () => this.selectNode(session.mainIds[session.mainIds.length - 1], true), true); latest.disabled = !session.mainIds.length;
 		const map = element(mapArea, "div", "reading-map-scroll"); map.dataset.scrollKey = "map";
+		map.tabIndex = 0; map.setAttribute("aria-label", "学习导图；拖动空白处平移");
 		map.onscroll = () => { const x = map.scrollLeft; const y = map.scrollTop; this.rememberScroll("map", (ui) => { ui.scrollX = x; ui.scrollY = y; }); };
+		let panX = 0; let panY = 0; let scrollX = 0; let scrollY = 0;
+		this.drag(map, (event, first) => {
+			if (first) { panX = event.clientX; panY = event.clientY; scrollX = map.scrollLeft; scrollY = map.scrollTop; map.classList.add("is-panning"); }
+			map.scrollLeft = scrollX + panX - event.clientX; map.scrollTop = scrollY + panY - event.clientY;
+			return () => { const x = map.scrollLeft; const y = map.scrollTop; this.rememberScroll("map", (ui) => { ui.scrollX = x; ui.scrollY = y; }); };
+		}, (event) => !(event.target as HTMLElement).closest(".reading-map-node"));
 		this.renderMap(map, session);
 		const mapFooter = element(mapArea, "div", "reading-map-footer");
-		element(mapFooter, "span", "reading-map-hint", session.nodes.length + " 个节点 · 点击展开，沿主线阅读");
+		element(mapFooter, "span", "reading-map-hint", session.nodes.length + " 个节点 · 拖动空白处平移");
 		const controls = element(mapFooter, "div", "reading-map-controls");
 		actionButton(controls, "minus", "缩小导图", () => this.updateUI((ui) => { ui.zoom = Math.max(0.4, ui.zoom - 0.1); }), true);
 		const zoom = button(controls, Math.round(session.ui.zoom * 100) + "%", () => this.updateUI((ui) => { ui.zoom = 1; }), "恢复原始缩放"); zoom.className = "reading-zoom-value";
 		actionButton(controls, "plus", "放大导图", () => this.updateUI((ui) => { ui.zoom = Math.min(1.8, ui.zoom + 0.1); }), true);
-		actionButton(controls, "focus", "定位选中节点", () => { const card = [...map.querySelectorAll<HTMLElement>("[data-node-id]")].find((item) => item.dataset.nodeId === session.ui.selectedId); card?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" }); }, true);
+		actionButton(controls, "scan", "适应视野", () => this.fitMap(), true);
+		const focus = actionButton(controls, "focus", "定位选中节点", () => this.revealMapNode(session.ui.selectedId), true); focus.disabled = !session.ui.selectedId;
 		if (session.ui.mode === "map") {
 			if (session.ui.windows.some((w) => !w.minimized) && !session.ui.mainComposerExpanded) {
 				const collapsed = element(mapArea, "div", "reading-composer-collapsed");
@@ -227,18 +238,44 @@ export class ReadingWorkspaceView extends ItemView {
 			}
 		}
 	}
-	private selectNode(id: string): void {
+	private focusMapNode(id: string): void {
+		const map = this.contentEl.querySelector<HTMLElement>(".reading-map-scroll");
+		const card = [...this.contentEl.querySelectorAll<HTMLElement>("[data-node-id]")].find((item) => item.dataset.nodeId === id);
+		if (!map || !card) return;
+		const bounds = map.getBoundingClientRect(); const box = card.getBoundingClientRect();
+		map.scrollTo({ left: map.scrollLeft + box.left - bounds.left - (map.clientWidth - box.width) / 2, top: map.scrollTop + box.top - bounds.top - (map.clientHeight - box.height) / 2 });
+		card.classList.add("reading-highlight");
+	}
+	private revealMapNode(id: string): void {
+		const sessionId = this.sessionId;
+		this.handle(this.service.repository.transact(sessionId, (session) => revealReadingPath(session, id)).then(() => { if (this.sessionId === sessionId) this.focusMapNode(id); }));
+	}
+	private fitMap(): void {
+		const session = this.session!; const map = this.contentEl.querySelector<HTMLElement>(".reading-map-scroll"); if (!map) return;
+		const layout = layoutReading(session); const extent = map.querySelector<HTMLElement>(".reading-map-extent")!;
+		const margin = parseFloat(getComputedStyle(extent).marginLeft) || 0;
+		const fitted = fitReadingZoom(layout.width, layout.height, map.clientWidth - margin, map.clientHeight);
+		this.handle(this.service.repository.transact(session.id, (draft) => { draft.ui.zoom = fitted.zoom; }).then(() => {
+			if (session.id !== this.sessionId) return;
+			this.contentEl.querySelector<HTMLElement>(".reading-map-scroll")?.scrollTo(0, 0);
+			if (fitted.limited) new Notice("已缩小至 40%；长导图可折叠支线，或搜索并定位节点");
+		}));
+	}
+	private selectNode(id: string, reveal = false): void {
 		const session = this.session!; const node = readingNode(session, id);
 		this.quote = undefined;
 		this.handle(this.service.repository.transact(session.id, (draft) => {
 			draft.ui.selectedId = id;
 			draft.ui.pendingQuote = undefined;
+			revealReadingPath(draft, id);
 			if (!node.branchId) draft.ui.mainFocusId = id;
 			if (draft.ui.mode === "map" || node.branchId) this.ensureWindow(draft, id);
 		}).then(() => {
+			if (session.id !== this.sessionId) return;
 			const selector = node.branchId || session.ui.mode === "map" ? ".reading-float [data-answer-id]" : ".reading-main-chat [data-answer-id]";
 			const answer = [...this.contentEl.querySelectorAll<HTMLElement>(selector)].find((item) => item.dataset.answerId === id);
 			answer?.scrollIntoView({ block: "nearest", behavior: "smooth" }); answer?.classList.add("reading-highlight");
+			if (reveal) this.focusMapNode(id);
 		}));
 	}
 	private ensureWindow(session: ReadingSession, id: string): void {
@@ -271,6 +308,17 @@ export class ReadingWorkspaceView extends ItemView {
 			return () => this.updateUI((ui) => { const saved = ui.windows.find((w) => w.key === state.key); if (saved) { saved.x = x; saved.y = y; } });
 		});
 		if (state.minimized) return;
+		if (node.branchId) {
+			const trail = readingTrail(session, node.id); const path = element(floating, "nav", "reading-breadcrumb"); path.setAttribute("aria-label", "问题来源");
+			const origin = trail[trail.length - 2];
+			if (origin) actionButton(path, "corner-up-left", "返回问题起点", () => this.selectNode(origin.id, true), true);
+			const crumbs = element(path, "div", "reading-breadcrumb-path"); crumbs.title = trail.map((item) => item.title).join(" → ");
+			if (trail.length > 3) element(crumbs, "span", "", "…");
+			for (const ancestor of trail.slice(-3)) {
+				if (ancestor.id === node.id) element(crumbs, "span", "reading-breadcrumb-current", "当前追问");
+				else { const jump = button(crumbs, ancestor.title, () => this.selectNode(ancestor.id, true)); jump.dataset.originId = ancestor.id; icon(crumbs, "chevron-right"); }
+			}
+		}
 		const messages = element(floating, "div", "reading-messages"); messages.dataset.scrollKey = state.key;
 		messages.onscroll = () => { const top = messages.scrollTop; this.rememberScroll(state.key, (ui) => { const saved = ui.windows.find((w) => w.key === state.key); if (saved) saved.scrollTop = top; }); };
 		const ids = node.branchId ? session.branches.find((branch) => branch.id === node.branchId)!.nodeIds : [node.id];
@@ -418,12 +466,12 @@ export class ReadingWorkspaceView extends ItemView {
 		input.onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey && !event.isComposing) { event.preventDefault(); this.handle(send()); } };
 		fitInput();
 	}
-	private drag(handle: HTMLElement, move: (event: PointerEvent, first: boolean) => () => void): void {
+	private drag(handle: HTMLElement, move: (event: PointerEvent, first: boolean) => () => void, shouldStart: (event: PointerEvent) => boolean = () => true): void {
 		handle.onpointerdown = (event) => {
-			if (event.button !== 0 || (event.target as HTMLElement).closest("button")) return;
+			if (event.button !== 0 || (event.target as HTMLElement).closest("button") || !shouldStart(event)) return;
 			event.preventDefault(); this.cleanupDrag?.(); let commit = move(event, true);
 			const onMove = (next: PointerEvent): void => { commit = move(next, false); };
-			const cleanup = (): void => { document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", stop); document.removeEventListener("pointercancel", stop); };
+			const cleanup = (): void => { handle.classList.remove("is-panning"); document.removeEventListener("pointermove", onMove); document.removeEventListener("pointerup", stop); document.removeEventListener("pointercancel", stop); };
 			const stop = (): void => { cleanup(); this.cleanupDrag = undefined; commit(); };
 			document.addEventListener("pointermove", onMove); document.addEventListener("pointerup", stop, { once: true }); document.addEventListener("pointercancel", stop, { once: true });
 			this.cleanupDrag = cleanup;
@@ -432,6 +480,25 @@ export class ReadingWorkspaceView extends ItemView {
 	private modal(title: string): Modal {
 		const modal = new Modal(this.app); modal.titleEl.setText(title); modal.modalEl.classList.add("reading-modal"); this.modals.add(modal);
 		const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; return modal;
+	}
+	private openNodeSearch(): void {
+		const sessionId = this.sessionId; const modal = this.modal("搜索导图节点"); modal.modalEl.classList.add("reading-node-search-modal");
+		const search = element(modal.contentEl, "input", "reading-library-search"); search.type = "search"; search.placeholder = "搜索标题、问题或回答，包含已折叠节点"; search.setAttribute("aria-label", "搜索导图内容");
+		const count = element(modal.contentEl, "p", "reading-search-count"); count.setAttribute("role", "status");
+		const list = element(modal.contentEl, "div", "reading-search-results");
+		const render = (): void => {
+			list.replaceChildren(); const session = this.service.repository.get(sessionId); const results = searchReadingNodes(session, search.value);
+			count.textContent = results.length > 100 ? "找到 " + results.length + " 个节点，显示前 100 个；可增加关键词缩小范围" : results.length ? results.length + " 个节点 · 点击跳转并展开所在支线" : "没有匹配的节点，试试更短的关键词";
+			for (const node of results.slice(0, 100)) {
+				const result = button(list, "", () => { modal.close(); if (this.sessionId === sessionId) this.selectNode(node.id, true); }, node.title); result.className = "reading-search-result"; result.dataset.resultId = node.id;
+				element(result, "small", "", node.branchId ? "追问 · " + readingTrail(session, node.id)[0].title : "主线 " + String(session.mainIds.indexOf(node.id) + 1).padStart(2, "0"));
+				element(result, "strong", "", node.title || "正在准备讲解");
+				element(result, "span", "", (node.question || node.content).replace(/\s+/g, " ").slice(0, 140));
+			}
+		};
+		search.oninput = render; search.onkeydown = (event) => { if (event.key === "Enter") { event.preventDefault(); list.querySelector<HTMLButtonElement>("button")?.click(); } else if (event.key === "ArrowDown") { event.preventDefault(); list.querySelector<HTMLButtonElement>("button")?.focus(); } };
+		const unsubscribe = this.service.repository.subscribe((id) => { if (id === sessionId) render(); }); const close = modal.onClose.bind(modal); modal.onClose = () => { unsubscribe(); close(); };
+		render(); modal.open(); search.focus();
 	}
 	private openSessionLibrary(): void {
 		const modal = this.modal("阅读会话"); modal.modalEl.classList.add("reading-library-modal");
