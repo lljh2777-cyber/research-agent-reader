@@ -11,14 +11,14 @@ export function readingUsage(raw: unknown): { input?: number; output?: number; c
 	if (!raw || typeof raw !== "object") return undefined; const usage = raw as Record<string, unknown>;
 	const number = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 	const input = number(usage.input_tokens ?? usage.prompt_tokens); const output = number(usage.output_tokens ?? usage.completion_tokens);
-	const details = usage.prompt_tokens_details as Record<string, unknown> | undefined;
+	const details = (usage.input_tokens_details ?? usage.prompt_tokens_details) as Record<string, unknown> | undefined;
 	const cachedInput = number(usage.cached_input_tokens ?? details?.cached_tokens);
 	return input === undefined && output === undefined ? undefined : { input, output, cachedInput };
 }
 
 export class DirectReadingBackend implements ReadingBackend {
 	readonly images: boolean;
-	constructor(private provider: LLMProvider, readonly name: string, readonly model: string, private streaming: boolean) { this.images = provider.capabilities.vision; }
+	constructor(private provider: LLMProvider, readonly name: string, readonly model: string, private streaming: boolean, private structuredOutput = false) { this.images = provider.capabilities.vision; }
 	async complete(request: ReadingBackendRequest): Promise<string> {
 		request.signal.throwIfAborted();
 		if (request.images.length && !this.images) throw new Error("当前模型未启用图像能力");
@@ -29,7 +29,7 @@ export class DirectReadingBackend implements ReadingBackend {
 		const abort = (): void => cancel?.(); request.signal.addEventListener("abort", abort, { once: true });
 		try {
 			const options = { timeoutMs: 120_000, registerCancel: (callback: () => void) => { cancel = callback; if (request.signal.aborted) callback(); } };
-			const payload = { model: this.model, messages, maxTokens: request.maxTokens ?? 6000 };
+			const payload = { model: this.model, messages, maxTokens: request.maxTokens ?? 6000, ...(this.structuredOutput && request.schema ? { responseSchema: { name: "reading_result", schema: request.schema } } : {}) };
 			const result = this.streaming ? await this.provider.stream(payload, (delta) => request.onDelta?.(delta), options) : await this.provider.complete(payload, options);
 			request.signal.throwIfAborted();
 			const usage = readingUsage(result.raw?.usage); if (usage) request.onUsage?.(usage);

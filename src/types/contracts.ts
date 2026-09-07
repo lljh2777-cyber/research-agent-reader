@@ -250,6 +250,7 @@ export interface WebSearchResult {
 }
 
 export interface ProviderChatRequest {
+	responseSchema?: { name: string; schema: Record<string, unknown> };
 	model?: string;
 	messages: readonly ChatMessage[];
 	maxTokens?: number;

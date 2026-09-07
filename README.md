@@ -8,7 +8,7 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.33.0`; the beta
+The `codex/research-learning-map` development branch is at `0.35.0`; the beta
 release link above remains the published release.
 
 ## Features
@@ -23,6 +23,10 @@ release link above remains the published release.
   question branches, a mind map, and optional conversation panes. It reads original
   PDFs or validated MinerU packages through Direct API or an independent Codex CLI
   adapter. See the [交互深读使用说明](docs/interactive-reading.md).
+- Adds a bounded Direct API reading assistant for progress, verified text evidence,
+  knowledge retrieval, and guided curation/export previews. Requests retain tool
+  traces and token usage; optional schema probes enable native structured output.
+  See the [阅读助手说明](docs/reading-assistant.md).
 - Offers optional BGE hybrid retrieval and reranking through SiliconFlow, with
   incremental local vector storage, evidence previews, and paper scope constraints.
   Learning-note exports support reviewed associations, duplicate reuse, and preserved

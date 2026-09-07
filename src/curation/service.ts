@@ -1,6 +1,7 @@
 import type { App } from "obsidian";
 import { randomUUID } from "node:crypto";
 import type { ReadingBackend, ReadingImage, ReadingSession } from "../reading/types";
+import { CURATION_SCHEMA } from "../reading/schemas";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 import { contentHash } from "../retrieval/chunks";
 import { curationSkill, prepareCuration, verifyCurationContext } from "./context";
@@ -68,7 +69,7 @@ export class CurationService {
 			const source = await this.workspace.document(context.sessionId); const images: ReadingImage[] = [];
 			for (const evidence of context.evidence.filter(item => item.visual)) { const original = source.evidence.find(item => "V:" + item.id === evidence.id); if (!original || !backend.images) throw new Error("本轮图像证据不可用"); const image = await source.image(original, signal); if (!image) throw new Error("图像证据缺失"); images.push({ ...image, evidenceId: evidence.id }); }
 			signal.throwIfAborted(); review.usage.calls = 1; await this.save(review);
-			const text = await backend.complete({ system: curationSkill, prompt: context.prompt, images, signal, maxTokens: 4500, onUsage: usage => { review.usage = { ...review.usage, ...usage, kind: "reported", note: "服务商返回用量；可能包含缓存输入与推理开销" }; } });
+			const text = await backend.complete({ system: curationSkill, prompt: context.prompt, schema: CURATION_SCHEMA, images, signal, maxTokens: 4500, onUsage: usage => { review.usage = { ...review.usage, ...usage, kind: "reported", note: "服务商返回用量；可能包含缓存输入与推理开销" }; } });
 			signal.throwIfAborted(); review.suggestions = parseCurationResult(text, context);
 			if (review.usage.kind === "estimated") review.usage.output = estimatedTokens(text);
 			await verifyCurationContext(this.app, this.workspace, context); signal.throwIfAborted(); review.state = "ready"; review.updated = now();

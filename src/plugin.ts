@@ -57,6 +57,8 @@ import { ProcessExecutionService } from "./runtime/process-execution";
 import { runMineruProcessCommand } from "./runtime/mineru-process";
 import { AgentLoopService, type AgentLoopRunOutcome } from "./agent/agent-loop-service";
 import { ReadingAssistantService } from "./assistant/service";
+import { probeReadingSchema } from "./assistant/probe";
+import { structuredProfileKey, supportsReadingSchema } from "./providers/structured";
 import { FileAssistantStorage } from "./assistant/store";
 import { ReadingAssistantModal } from "./views/reading-assistant";
 import { ReadingExportModal } from "./views/reading-export";
@@ -2513,6 +2515,12 @@ export default class AgentDashboardPlugin extends Plugin {
 			outcomes: session => readReadingOutcomes(this.app, session, this.getCurationService()),
 		}, new FileAssistantStorage(this.readingPluginDirectory()));
 	}
+	async testReadingSchema(profileId: string): Promise<void> {
+		const profile = this.getVerifiedProviderProfiles().find(p => p.id === profileId); if (!profile) throw new Error("请选择已通过连接测试的 Direct API");
+		const snapshot = structuredClone(profile); const result = await probeReadingSchema(this.createLLMProvider(snapshot), snapshot);
+		const current = this.getProviderProfile(profileId); if (!current || structuredProfileKey(current) !== result.key) throw new Error("接口配置已变化，请重新测试");
+		current.structuredOutput = result; await this.saveSettings(); new Notice(result.message, 8000);
+	}
 	openReadingAssistant(sessionId: string, nodeId: string): void {
 		try {
 			const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(n => n.id === nodeId && n.status === "done")) throw new Error("请先选择一个已完成的正式阅读节点");
@@ -3290,7 +3298,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	createReadingBackend(session: ReadingSession, streaming = true): ReadingBackend {
 		if (session.backend === "codex-cli") return new CodexReadingBackend(this.settings.codexExecutable, session.model || this.settings.codexModel, this.readingPluginDirectory());
 		const profile = this.getProviderProfile(session.backend); if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
-		return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, streaming && profile.lastTest.streamingVerified === true);
+		return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, streaming && profile.lastTest.streamingVerified === true, supportsReadingSchema(profile));
 	}
 	async activateReadingWorkspace(): Promise<void> {
 		const leaf = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0] || this.app.workspace.getLeaf("tab");

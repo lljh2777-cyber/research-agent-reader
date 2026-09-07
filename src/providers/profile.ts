@@ -60,6 +60,7 @@ export interface ProviderProfile {
 	model: string;
 	secretId: string;
 	timeoutSeconds: number;
+	structuredOutput?: { verified: boolean; key: string; testedAt: string; message: string; input?: number; output?: number };
 	webSearch: ProfileWebSearchMode;
 	capabilities: {
 		streaming: boolean;
@@ -105,6 +106,7 @@ export function normalizeProviderProfile(profile: unknown): ProviderProfile {
 	const source = asRecord(profile);
 	const capabilities = asRecord(source.capabilities);
 	const rawLastTest = asRecord(source.lastTest);
+	const structured = asRecord(source.structuredOutput);
 	const metadata = providerMetadata(source.type);
 	const fallback = makeProviderProfile(metadata.id);
 	const model = String(source.model || metadata.defaultModel).trim().slice(0, 160);
@@ -153,6 +155,11 @@ export function normalizeProviderProfile(profile: unknown): ProviderProfile {
 			visionConfigured,
 		},
 		lastTest,
+		...(typeof structured.key === "string" && /^[a-f0-9]{64}$/.test(structured.key) && typeof structured.testedAt === "string" && Number.isFinite(Date.parse(structured.testedAt)) ? { structuredOutput: {
+			key: structured.key, verified: structured.verified === true, testedAt: structured.testedAt, message: String(structured.message || "").slice(0, 600),
+			...(typeof structured.input === "number" && Number.isFinite(structured.input) && structured.input >= 0 ? { input: structured.input } : {}),
+			...(typeof structured.output === "number" && Number.isFinite(structured.output) && structured.output >= 0 ? { output: structured.output } : {}),
+		} } : {}),
 		createdAt: String(source.createdAt || fallback.createdAt),
 		updatedAt: String(source.updatedAt || fallback.updatedAt),
 	};
