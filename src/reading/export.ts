@@ -33,9 +33,9 @@ export function readingExportKey(session: ReadingSession, scope: ReadingExportSc
 function exportBody(session: ReadingSession, scope: ReadingExportScope, nodeId: string, options: ReadingExportOptions): string {
 	const nodes = readingExportNodes(session, scope, nodeId);
 	const body = ["# " + safeReadingMarkdown(session.title).trim(), "", "本文记录交互学习过程，学习进度不代表正式 X-Ray 核验状态。", "",
-		"原文位置：" + readingPathCode(session.source.path), "", "会话：" + readingPathCode(session.id), ""];
+		"原文位置：" + readingPathCode(session.source.path), ""];
 	for (const node of nodes) {
-		body.push("## " + safeReadingMarkdown(node.title).trim(), "", "节点：" + readingPathCode(node.id) + (node.parentId ? "；起点：" + readingPathCode(node.parentId) : "；主线起点"), "");
+		body.push("## " + safeReadingMarkdown(node.title).trim(), "");
 		const trail: string[] = []; let current = node;
 		while (current.branchId) {
 			const branch = session.branches.find((b) => b.id === current.branchId)!;
@@ -63,6 +63,7 @@ export function readingExportContent(session: ReadingSession, scope: ReadingExpo
 	const revision = options.revisionOf && /^wiki\/qa\/[^\r\n\[\]|#<>]+\.md$/.test(options.revisionOf) && !options.revisionOf.includes("..") ? options.revisionOf : "";
 	return ["---", "title: " + JSON.stringify(session.title + " · 学习记录"), "type: qa", "tags: [qa, reading]", "created: " + (options.created || new Date().toISOString()), "reading_session: " + JSON.stringify(session.id),
 		"reading_export_key: " + readingExportKey(session, scope, nodeId), "reading_content_hash: " + readingExportHash(session, scope, nodeId, options), "reading_source_fingerprint: " + JSON.stringify(session.source.fingerprint),
+		"reading_nodes: " + JSON.stringify(readingExportNodes(session, scope, nodeId).map(node => ({ id: node.id, parent: node.parentId, branch: node.branchId }))),
 		"related_notes: " + JSON.stringify(relatedPaths(options)), ...(revision ? ["reading_revision_of: " + JSON.stringify(revision)] : []), "---", "",
 		...(revision ? ["上一版：" + wikiLink(revision), ""] : []), exportBody(session, scope, nodeId, options)].join("\n");
 }

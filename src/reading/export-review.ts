@@ -18,14 +18,15 @@ export async function readingAssociations(app: App, session: ReadingSession, sco
 		candidates.set(evidence.path, { path: evidence.path, title: evidence.label, hash, reason: "本次回答已读取", heading: evidence.heading || "", excerpt: evidence.text.slice(0, 1800), role: evidence.role || "知识库补充", origins: evidence.origins || [] });
 	}
 	const sample = nodes.length <= 6 ? nodes : [...nodes.slice(0, 3), ...nodes.slice(-3)];
-	const query = sample.map(node => node.question || node.title).join("；").slice(0, 700) + " " + sample[0].content.replace(/\[[^\]]+\]/g, "").slice(0, 250);
+	// Keep the query topical: long generated answers and prompt boilerplate can dominate reranking.
+	const query = session.title.slice(0, 300) + "\n" + sample.map(node => node.title.trim() || node.question.slice(0, 80)).join("；").slice(0, 600);
 	// Association is an explicit cross-note operation, rather than a paper-specific factual answer.
 	const result = await search(query, { signal, identityQuery: "跨论文关联笔记", limit: 6 }); signal.throwIfAborted();
 	for (const hit of result.hits) {
 		if (!safeRelatedPath(hit.path) || candidates.has(hit.path)) continue;
 		candidates.set(hit.path, { path: hit.path, title: hit.title, hash: hit.hash, reason: "主题可能相关", heading: hit.heading, excerpt: hit.text, role: ROLE_LABELS[hit.role], origins: hit.origins });
 	}
-	return { candidates: [...candidates.values()], warnings: [...result.warnings, ...(nodes.length > 6 ? ["关联检索使用前后各三个回答的摘要；完整导出内容仍包括所有选定回答。"] : [])] };
+	return { candidates: [...candidates.values()], warnings: [...result.warnings, ...(nodes.length > 6 ? ["关联检索使用论文标题和前后各三个节点的主题；完整导出内容仍包括所有选定回答。"] : [])] };
 }
 export function exportBodyText(text: string): string { return text.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n\s*/, "").replace(/^上一版：[^\n]*\n\s*/, ""); }
 /** A bounded changed region, not an O(n²) diff for a 300-node session. */

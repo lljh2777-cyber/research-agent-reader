@@ -9,7 +9,7 @@ const { contentHash } = loadReading("retrieval/chunks.ts");
 	const path = "wiki/sources/related.md"; const hash = contentHash("真实依据");
 	node.evidence = [{ id: "k1", kind: "vault", path, text: "真实依据", label: "已读论文", sourceHash: hash }];
 	const app = { vault: { getFileByPath: p => p === path ? { path } : null, cachedRead: async () => "真实依据" } };
-	const model = async (query, options) => { assert.equal(options.identityQuery, "跨论文关联笔记"); return { warnings: [], hits: [{ path, hash, title: "duplicate" }, { path: "papers/a/article.md", title: "outside" }, { path: "wiki/methods/related.md", hash, title: "方法", heading: "原理", text: "补充说明", role: "background", origins: [path] }] }; };
+	const model = async (query, options) => { assert.equal(query, session.title + "\n" + node.title); assert(!query.includes(node.content)); assert.equal(options.identityQuery, "跨论文关联笔记"); return { warnings: [], hits: [{ path, hash, title: "duplicate" }, { path: "papers/a/article.md", title: "outside" }, { path: "wiki/methods/related.md", hash, title: "方法", heading: "原理", text: "补充说明", role: "background", origins: [path] }] }; };
 	const result = await readingAssociations(app, session, "node", node.id, model, new AbortController().signal);
 	assert.equal(result.candidates.length, 2); assert.equal(result.candidates[0].reason, "本次回答已读取"); assert.equal(result.candidates[1].role, "背景解释");
 	const cancelled = new AbortController(); cancelled.abort(); await assert.rejects(readingAssociations(app, session, "node", node.id, model, cancelled.signal), /abort/i);

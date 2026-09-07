@@ -51,6 +51,13 @@ async function main() {
 	const racing = new KnowledgeRetrievalService(async () => docs, store, { ...models, async rerank(query, input) { const result = await models.rerank(query, input); docs = []; return result; } }, () => "rerank");
 	const raced = await racing.search("alpha"); assert.equal(raced.hits.length, 0); assert(raced.warnings.some((warning) => warning.includes("发生变化")));
 	service.dispose(); racing.dispose();
+	// Stop after the first saved batch; resume must only send the remaining inputs.
+	const long = makeDoc("wiki/sources/long.md", "Long", Array.from({ length: 20 }, (_, i) => "## Section " + i + "\nContent " + i + "\n").join("\n"));
+	let checkpoint = null; const batches = [];
+	const resumable = new KnowledgeRetrievalService(async () => [long], { read: async () => checkpoint, write: async value => { checkpoint = { ...value, vectors: new Map(value.vectors) }; } }, { ...models, embed: async inputs => { batches.push(inputs.length); return inputs.map(vector); } }, () => "hybrid");
+	const unsubscribe = resumable.subscribe(() => { if (resumable.status.done === 16) resumable.stop(); }); await resumable.update(); unsubscribe();
+	assert.equal(resumable.status.state, "interrupted"); assert.equal(checkpoint.vectors.size, 16);
+	await resumable.update(); assert.equal(resumable.status.state, "ready"); assert.deepEqual(batches, [16, 4]); resumable.dispose();
 
 	const requests = []; let response = null;
 	const adapter = new BgeModels(() => "synthetic", { async request(options) { requests.push(options); return { json: response }; } });
