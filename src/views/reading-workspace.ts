@@ -1,4 +1,4 @@
-import { Component, ItemView, MarkdownRenderer, Menu, Modal, Notice, setIcon, type WorkspaceLeaf } from "obsidian";
+import { Component, ItemView, MarkdownRenderer, Menu, Modal, Notice, setIcon, type WorkspaceLeaf, type EventRef } from "obsidian";
 import { setTimeout, clearTimeout } from "node:timers";
 import type AgentDashboardPlugin from "../plugin";
 import { ActionInputModal } from "../modals/action-input";
@@ -17,6 +17,8 @@ import { ReadingEvidencePanel } from "./reading-evidence-panel";
 import { LEARNING_LABELS, markReading, visitReadingEvidence } from "../reading/progress";
 import { TEACHING_STYLES } from "../reading/teaching";
 import type { ReadingTeachingStyle } from "../reading/types";
+import { readingUsageSummary, USAGE_STAGES } from "../reading/usage";
+import { readReadingOutcomes, type ReadingOutcome } from "../reading/outcomes";
 import type { ReadingLearningState } from "../reading/types";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
@@ -41,6 +43,8 @@ export class ReadingWorkspaceView extends ItemView {
 	private modeMotion = new ReadingModeMotion(this.contentEl);
 	private modeMainScroll = 0;
 	private evidencePanel?: ReadingEvidencePanel;
+	private outcomes = new Map<string, ReadingOutcome[]>(); private outcomeSequence = 0;
+	private outcomeTimer?: ReturnType<typeof setTimeout>; private outcomeUnsubscribe?: () => void; private outcomeEvents: EventRef[] = [];
 	private renderer = new Component();
 	private draftTimers = new Map<string, ReturnType<typeof setTimeout>>();
 	private scrollTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -63,6 +67,10 @@ export class ReadingWorkspaceView extends ItemView {
 	async onOpen(): Promise<void> {
 		this.service = this.plugin.getReadingWorkspace(); await this.service.ready();
 		this.evidencePanel = new ReadingEvidencePanel(this.app, this.service, this.plugin);
+		this.outcomeUnsubscribe = this.plugin.getCurationService().subscribe(() => this.scheduleOutcomes());
+		const refreshExports = (file: { path: string }): void => { if (file.path.startsWith("wiki/qa/")) this.scheduleOutcomes(); };
+		this.outcomeEvents.push(this.app.vault.on("create", refreshExports), this.app.vault.on("modify", refreshExports), this.app.vault.on("delete", refreshExports));
+		this.outcomeEvents.push(this.app.vault.on("rename", (file, old) => { if (file.path.startsWith("wiki/qa/") || old.startsWith("wiki/qa/")) this.scheduleOutcomes(); }));
 		const restored = this.service.repository.sessions.get(this.sessionId);
 		if (!restored || restored.archived || readingCategory(restored) !== "reading") this.sessionId = recentReading(this.service.repository.sessions.values())[0]?.id || "";
 		this.renderer.load(); this.unsubscribe = this.service.repository.subscribe((id) => { if (id === this.sessionId) { this.render(); this.evidencePanel?.sync(this.session, this.contentEl); } });
@@ -80,9 +88,11 @@ export class ReadingWorkspaceView extends ItemView {
 		this.contentEl.addEventListener("scroll", dismissOnScroll, true);
 		this.selectionCleanup = () => { document.removeEventListener("pointerdown", dismissSelection); document.removeEventListener("keydown", dismissOnEscape); this.contentEl.removeEventListener("scroll", dismissOnScroll, true); };
 		this.render(true);
+		this.scheduleOutcomes();
 		if (this.service.repository.errors.length) new Notice("部分阅读会话无法加载，文件已保留：" + this.service.repository.errors.join("；"), 10000);
 	}
 	async onClose(): Promise<void> {
+		this.outcomeSequence++; clearTimeout(this.outcomeTimer); this.outcomeUnsubscribe?.(); this.outcomeEvents.forEach(ref => this.app.vault.offref(ref));
 		this.evidencePanel?.dispose();
 		this.modeMotion.stop();
 		this.unsubscribe?.(); this.unsubscribeStream?.(); this.cleanupDrag?.(); this.selectionCleanup?.(); this.hideSelectionActions(); this.renderer.unload();
@@ -98,7 +108,8 @@ export class ReadingWorkspaceView extends ItemView {
 	private updateUI(edit: (ui: ReadingSession["ui"]) => void): void {
 		const id = this.sessionId; this.handle(this.service.repository.transact(id, (session) => edit(session.ui)));
 	}
-	private selectSession(id: string): void { this.modeMotion.stop(); this.sessionId = id; this.quote = id ? this.service.repository.get(id).ui.pendingQuote : undefined; this.signature = ""; this.contentEl.replaceChildren(); this.render(true); this.app.workspace.requestSaveLayout();
+	private selectSession(id: string): void { this.modeMotion.stop(); this.outcomes.clear(); this.sessionId = id; this.quote = id ? this.service.repository.get(id).ui.pendingQuote : undefined; this.signature = ""; this.contentEl.replaceChildren(); this.render(true); this.app.workspace.requestSaveLayout();
+		this.scheduleOutcomes();
 		if (id) this.handle(this.service.repository.transact(id, (s) => { s.lastOpenedAt = new Date().toISOString(); }));
 	}
 	private rememberScroll(key: string, edit: (ui: ReadingSession["ui"]) => void): void {
@@ -128,6 +139,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const more = actionButton(actions, "ellipsis", "更多阅读选项", () => {
 			const menu = new Menu();
 			if (session) menu.addItem((item) => item.setTitle("阅读模型").setIcon("sliders-horizontal").onClick(() => this.openModel()));
+			if (session) menu.addItem(item => item.setTitle("阅读用量").setIcon("gauge").onClick(() => { const modal = this.modal("本会话模型用量"); element(modal.contentEl, "pre", "reading-usage-summary", readingUsageSummary(this.session!)); modal.open(); }));
 			menu.addItem(item => item.setTitle("知识库维护").setIcon("notebook-pen").onClick(() => this.plugin.openKnowledgeMaintenance()));
 			menu.addItem((item) => item.setTitle("交互演示").setIcon("play").onClick(() => this.handle(this.service.demo().then((id) => this.selectSession(id)))));
 			menu.addItem((item) => item.setTitle("一次性深读").setIcon("file-text").onClick(() => new ActionInputModal(this.app, this.plugin, ACTION_BY_ID.get("pdf-xray")!, ({ input, overrides, options }) => this.handle(this.plugin.runClassicReading(input, overrides, options))).open()));
@@ -231,6 +243,7 @@ export class ReadingWorkspaceView extends ItemView {
 		else if (focusDivider) this.contentEl.querySelector<HTMLElement>(".reading-divider")?.focus({ preventScroll: true });
 		else if (focusResize) [...this.contentEl.querySelectorAll<HTMLElement>(".reading-float")].find((w) => w.dataset.windowKey === focusResize)?.querySelector<HTMLElement>(".reading-resize")?.focus({ preventScroll: true });
 		this.evidencePanel?.sync(session, this.contentEl);
+		this.renderOutcomes();
 	}
 	private renderMode(session: ReadingSession, animate: boolean): void {
 		const messages = this.contentEl.querySelector<HTMLElement>(".reading-main-chat .reading-messages")!;
@@ -453,8 +466,34 @@ export class ReadingWorkspaceView extends ItemView {
 			if (node.retrieval.error) element(details, "p", "reading-error", node.retrieval.error);
 		}
 		if (node.error) element(article, "p", "reading-error", node.error);
+		const outcome = element(article, "details", "reading-sources reading-outcomes"); outcome.dataset.outcomeNode = node.id;
+		if (node.usage?.length) {
+			const usage = element(article, "details", "reading-sources reading-usage"); element(usage, "summary", "", "模型用量 · " + node.usage.filter(e => e.state !== "cached").length + " 次调用");
+			for (const entry of node.usage) element(usage, "p", "reading-usage-entry", USAGE_STAGES[entry.stage] + " · " + ({ running: "进行中", done: "已返回", failed: "失败", interrupted: "中断", cached: "复用缓存，无模型调用" })[entry.state] + "\n" + entry.model + "\n输入 " + (entry.input ?? "未报告，文字估算约 " + entry.estimatedInput) + " / 输出 " + (entry.output ?? (entry.estimatedOutput === undefined ? "未知" : "未报告，估算约 " + entry.estimatedOutput)) + " token" + (entry.cachedInput === undefined ? "" : " · 其中缓存输入 " + entry.cachedInput));
+		} else if (node.status === "done" && !this.session!.demo) element(article, "small", "reading-usage-unrecorded", "此回答未记录模型用量");
+		if (node.status === "failed" || node.status === "interrupted") element(article, "small", "reading-usage-unrecorded", "重试会核对原文，匹配的证据选择可复用；讲解将重新请求，已完成的记忆摘要保留。");
 		if (node.status === "failed" || node.status === "interrupted") actionButton(tools, "rotate-cw", "重试", () => this.handle(this.service.generate(this.sessionId, node.id)));
 		if (node.status === "running" || node.status === "pending") actionButton(tools, "square", "停止", () => this.service.stop(this.sessionId, node.id));
+	}
+	private scheduleOutcomes(): void {
+		clearTimeout(this.outcomeTimer); const token = ++this.outcomeSequence;
+		this.outcomeTimer = setTimeout(() => {
+			const session = this.session; if (!session || session.demo) { this.outcomes.clear(); this.renderOutcomes(); return; }
+			void readReadingOutcomes(this.app, structuredClone(session), this.plugin.getCurationService()).then(result => {
+				if (token !== this.outcomeSequence || session.id !== this.sessionId) return; this.outcomes = result; this.renderOutcomes();
+			}).catch(() => { if (token === this.outcomeSequence) this.contentEl.querySelectorAll<HTMLElement>(".reading-outcomes").forEach(el => { el.hidden = false; el.replaceChildren(); element(el, "summary", "", "关联记录读取失败"); button(el, "重新读取记录", () => this.scheduleOutcomes()); }); });
+		}, 150);
+	}
+	private renderOutcomes(): void {
+		this.contentEl.querySelectorAll<HTMLElement>("[data-outcome-node]").forEach(el => {
+			const rows = this.outcomes.get(el.dataset.outcomeNode!) || []; el.replaceChildren(); el.hidden = !rows.length;
+			if (!rows.length) return;
+			element(el, "summary", "", [...new Set(rows.map(row => row.label))].join(" · ") + "（" + rows.length + "）");
+			for (const row of rows) button(el, row.label + " · " + row.path, () => {
+				if (row.reviewId) { const review = this.plugin.getCurationService().reviews.get(row.reviewId); if (review) this.plugin.openKnowledgeCuration(this.sessionId, el.dataset.outcomeNode!, review); }
+				else this.plugin.openVaultFile(row.path);
+			}).classList.add("reading-outcome-link");
+		});
 	}
 	private renderCitations(content: HTMLElement, node: ReadingNode): void {
 		const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT); const texts: Text[] = []; let current: Node | null;

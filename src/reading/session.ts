@@ -92,6 +92,8 @@ export function validateReadingSession(value: unknown): ReadingSession {
 		|| !session.ui.drafts || typeof session.ui.drafts !== "object" || Array.isArray(session.ui.drafts)
 		|| Object.values(session.ui.drafts).some((value) => typeof value !== "string")) throw new Error("阅读会话界面或记忆格式无效");
 	for (const node of session.nodes) {
+		if (node.usage !== undefined && (!Array.isArray(node.usage) || node.usage.some(e => !e || typeof e.id !== "string" || typeof e.model !== "string" || typeof e.started !== "string" || !Number.isFinite(e.estimatedInput) || !["selection", "answer", "memory"].includes(e.stage) || !["running", "done", "failed", "interrupted", "cached"].includes(e.state) || [e.estimatedInput, e.estimatedOutput, e.input, e.output, e.cachedInput].some(value => value !== undefined && (!Number.isFinite(value) || value < 0))))) throw new Error("阅读用量记录无效");
+		if (node.selectionCache && (typeof node.selectionCache.key !== "string" || !Array.isArray(node.selectionCache.value?.ids) || node.selectionCache.value.ids.some(id => typeof id !== "string"))) node.selectionCache = undefined;
 		if (node.learningState !== undefined && !["unmarked", "understood", "revisit", "question"].includes(node.learningState)) throw new Error("学习标记无效");
 		if (node.reviewedEvidence !== undefined && (!Array.isArray(node.reviewedEvidence) || node.reviewedEvidence.some(id => !node.evidence.some(e => e.id === id)))) throw new Error("原文核对标记无效");
 		if (typeof node.title !== "string" || typeof node.error !== "string" || node.evidence.some((item) => !item || typeof item.id !== "string"

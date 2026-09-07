@@ -2,6 +2,12 @@ export const READING_VIEW_TYPE = "research-interactive-reading";
 export type ReadingStatus = "pending" | "running" | "done" | "failed" | "interrupted";
 export type ReadingLearningState = "unmarked" | "understood" | "revisit" | "question";
 export type ReadingTeachingStyle = "balanced" | "foundations" | "methods" | "evidence";
+export interface ReadingUsageEntry {
+	id: string; stage: "selection" | "answer" | "memory"; model: string; started: string;
+	state: "running" | "done" | "failed" | "interrupted" | "cached";
+	estimatedInput: number; estimatedOutput?: number; input?: number; output?: number; cachedInput?: number;
+}
+export interface ReadingEvidenceSelection { ids: string[]; query: string; needsVisual: boolean; vaultQuery?: string; }
 export interface ReadingEvidenceView {
 	history: { nodeId: string; evidenceId: string }[]; cursor: number;
 	x: number; y: number; width: number; height: number;
@@ -30,6 +36,8 @@ export interface ReadingEvidence {
 }
 export interface ReadingQuote { nodeId: string; text: string; start: number; end: number }
 export interface ReadingNode {
+	usage?: ReadingUsageEntry[];
+	selectionCache?: { key: string; value: ReadingEvidenceSelection };
 	learningState?: ReadingLearningState;
 	reviewedEvidence?: string[];
 	id: string;

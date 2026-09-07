@@ -74,6 +74,7 @@ export class ReadingRepository {
 				const session = validateReadingSession(JSON.parse(await this.storage.read(id)));
 				if (session.id !== id) throw new Error("会话标识与文件不一致");
 				let interrupted = false;
+				for (const node of session.nodes) for (const entry of node.usage || []) if (entry.state === "running") { entry.state = "interrupted"; interrupted = true; }
 				for (const node of session.nodes) if (node.status === "running" || node.status === "pending") {
 					node.status = "interrupted"; node.error = "上次生成已中断，可重试"; interrupted = true;
 				}

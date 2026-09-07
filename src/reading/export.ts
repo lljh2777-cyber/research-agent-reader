@@ -17,6 +17,7 @@ export interface ReadingExportOptions { related?: string[]; revisionOf?: string;
 export interface ReadingExportRecord { path: string; hash: string; text: string; created: string; }
 export interface ReadingExportReview { key: string; hash: string; text: string; history: ReadingExportRecord[]; duplicate?: ReadingExportRecord; revisionOf?: string; }
 export const safeRelatedPath = (path: string): boolean => inKnowledgeScope(path) && !/[\\[\]|#%<>:\r\n]/.test(path) && !path.split("/").some(part => !part);
+export function readingNodeContentHash(node: ReadingSession["nodes"][number]): string { return contentHash(JSON.stringify([node.title, node.question, node.content, node.quote, node.evidence])); }
 const relatedPaths = (options: ReadingExportOptions): string[] => [...new Set((options.related || []).filter(safeRelatedPath))].sort();
 const wikiLink = (path: string): string => "[[" + path.replace(/\.md$/i, "") + "]]";
 export function readingExportNodes(session: ReadingSession, scope: ReadingExportScope, nodeId: string): ReadingSession["nodes"] {
@@ -63,7 +64,7 @@ export function readingExportContent(session: ReadingSession, scope: ReadingExpo
 	const revision = options.revisionOf && /^wiki\/qa\/[^\r\n\[\]|#<>]+\.md$/.test(options.revisionOf) && !options.revisionOf.includes("..") ? options.revisionOf : "";
 	return ["---", "title: " + JSON.stringify(session.title + " · 学习记录"), "type: qa", "tags: [qa, reading]", "created: " + (options.created || new Date().toISOString()), "reading_session: " + JSON.stringify(session.id),
 		"reading_export_key: " + readingExportKey(session, scope, nodeId), "reading_content_hash: " + readingExportHash(session, scope, nodeId, options), "reading_source_fingerprint: " + JSON.stringify(session.source.fingerprint),
-		"reading_nodes: " + JSON.stringify(readingExportNodes(session, scope, nodeId).map(node => ({ id: node.id, parent: node.parentId, branch: node.branchId }))),
+		"reading_nodes: " + JSON.stringify(readingExportNodes(session, scope, nodeId).map(node => ({ id: node.id, parent: node.parentId, branch: node.branchId, hash: readingNodeContentHash(node) }))),
 		"related_notes: " + JSON.stringify(relatedPaths(options)), ...(revision ? ["reading_revision_of: " + JSON.stringify(revision)] : []), "---", "",
 		...(revision ? ["上一版：" + wikiLink(revision), ""] : []), exportBody(session, scope, nodeId, options)].join("\n");
 }
