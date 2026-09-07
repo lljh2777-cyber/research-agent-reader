@@ -2,7 +2,7 @@
 const assert = require("node:assert/strict");
 const { loadReading } = require("./reading-test-helpers");
 const { prepareCuration } = loadReading("curation/context.ts");
-const { curationChangeWindow, curationBatch } = loadReading("views/knowledge-curation.ts", { obsidian: { Modal: class {}, Notice: class {} } });
+const { curationChangeWindow, curationBatch, KnowledgeCurationModal } = loadReading("views/knowledge-curation.ts", { obsidian: { Modal: class {}, Notice: class {} } });
 const { createReadingSession, addReadingNode } = loadReading("reading/session.ts");
 async function main() {
 	const title = "A graph foundation model for spatial transcriptomics"; const file = { path: "wiki/sources/paper.md", basename: "paper" }; let metadataTitle = title;
@@ -18,6 +18,9 @@ async function main() {
 	assert.equal(curationBatch(long, "n-299").length, 150); assert(curationBatch(long, "n-299").every(n => n.branchId === "branch"));
 	const before = "---\ntitle: Preserve\n---\n# Title\n\nContext\n\nParagraph\n\nFooter\n"; const after = before.replace("Paragraph", "Paragraph\n\nNew evidence");
 	const changed = curationChangeWindow(before, after); assert(!changed.after.includes("title: Preserve")); assert(changed.after.includes("New evidence")); assert(!changed.before.includes("New evidence")); assert.equal(before.split("title: Preserve").length, 2);
+	let finish, stopped; const fakeModal = { context: { key: "old-batch", sourceCompatible: true }, sequence: 1, operation: false, status: { setText() {} }, service: { cached: () => undefined, generate: () => new Promise(resolve => { finish = resolve; }), stop: key => { stopped = key; } } };
+	const task = KnowledgeCurationModal.prototype.generate.call(fakeModal); fakeModal.context = { key: "new-batch", sourceCompatible: true }; fakeModal.sequence++;
+	KnowledgeCurationModal.prototype.stopGeneration.call(fakeModal); assert.equal(stopped, "old-batch", "scope changes cannot redirect Stop to another batch"); finish({ id: "finished" }); await task; assert.equal(fakeModal.operation, false); assert.equal(fakeModal.reviewId, undefined, "old result cannot enter new scope");
 	console.log("CURATION_CONTEXT_OK");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });
