@@ -106,5 +106,7 @@ async function toolsFor(f) {
 	waiting.get(first.s.id)(step("final", { answer: "first", citations: [] })); const leftResult = await left;
 	assert.equal(rightResult.sessionId, second.s.id); assert.equal(rightResult.answer, "second"); assert.equal(leftResult.sessionId, first.s.id); assert.equal(leftResult.answer, "first"); await isolated.dispose();
 	await Promise.all([f.service.dispose(), g.service.dispose(), restart.dispose()]);
+	await assert.rejects(f.service.start(f.s.id, f.n.id, "p", "after unload"), /已关闭/);
+	await assert.rejects(f.service.dispatch(run.id, "x", () => { throw new Error("must not dispatch"); }), /已关闭/);
 	console.log("READING_ASSISTANT_OK: registry, frozen context, evidence, learning boundaries, actions, persistence, cancellation, budgets");
 })().catch(e => { console.error(e); process.exitCode = 1; });

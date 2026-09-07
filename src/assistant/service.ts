@@ -13,6 +13,7 @@ export class ReadingAssistantService {
 	private initialization?: Promise<void>; private listeners = new Set<() => void>();
 	private active = new Map<string, { controller: AbortController; promise: Promise<AssistantRun> }>();
 	private dispatching = new Set<string>();
+	private disposed = false;
 	constructor(readonly deps: AssistantDependencies, private storage: AssistantStorage) {}
 	subscribe(listener: () => void) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	private emit() { this.listeners.forEach(f => { try { f(); } catch { /* View callbacks cannot interrupt saves. */ } }); }
@@ -26,6 +27,7 @@ export class ReadingAssistantService {
 	stop(sessionId: string) { this.active.get(sessionId)?.controller.abort(); }
 	/** Persist the handoff before invoking business UI. Reopening a preview is safe; advancing is one-shot. */
 	async dispatch(runId: string, actionId: string, handoff: (action: AssistantAction, sessionId: string) => Promise<void> | void): Promise<void> {
+		if (this.disposed) throw new Error("阅读助手已关闭");
 		const key = runId + ":" + actionId; if (this.dispatching.has(key)) throw new Error("操作正在交接"); this.dispatching.add(key);
 		try {
 			await this.ready(); const run = validateAssistantRun(structuredClone(this.runs.get(runId))); const action = run.actions.find(a => a.id === actionId);
@@ -36,10 +38,12 @@ export class ReadingAssistantService {
 			if (action.kind !== "curation" && action.target || action.kind === "export" && action.scope !== "session" && action.nodeIds.length !== 1) throw new Error("操作范围无效");
 			if (action.kind === "advance" && (action.state === "opened" || action.scope !== "node" || session.completed || action.nodeIds.length !== 1 || action.nodeIds[0] !== session.mainIds[session.mainIds.length - 1])) throw new Error("此主线操作已交接或已经过期，请前往阅读界面查看或重试");
 			await new AssistantTools(this.deps, session, run, new AbortController().signal).verify();
-			action.state = "opened"; await this.save(run); await handoff(structuredClone(action), run.sessionId);
+			if (this.disposed) throw new Error("阅读助手已关闭");
+			action.state = "opened"; await this.save(run); if (this.disposed) throw new Error("阅读助手已关闭"); await handoff(structuredClone(action), run.sessionId);
 		} finally { this.dispatching.delete(key); }
 	}
 	start(sessionId: string, nodeId: string, profileId: string, question: string): Promise<AssistantRun> {
+		if (this.disposed) return Promise.reject(new Error("阅读助手已关闭"));
 		if (this.active.has(sessionId)) return Promise.reject(new Error("当前会话的助手仍在运行"));
 		const controller = new AbortController(); const promise = this.run(sessionId, nodeId, profileId, question, controller).finally(() => { this.active.delete(sessionId); this.emit(); });
 		this.active.set(sessionId, { controller, promise }); return promise;
@@ -88,5 +92,5 @@ export class ReadingAssistantService {
 		}
 		finally { clearTimeout(timer); }
 	}
-	async dispose() { for (const r of this.active.values()) r.controller.abort(); await Promise.allSettled([...this.active.values()].map(r => r.promise)); this.listeners.clear(); }
+	async dispose() { this.disposed = true; for (const r of this.active.values()) r.controller.abort(); await Promise.allSettled([...this.active.values()].map(r => r.promise)); this.listeners.clear(); }
 }

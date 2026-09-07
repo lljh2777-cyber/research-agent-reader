@@ -2545,12 +2545,13 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (source.kind === "paper" && doc.source.fingerprint !== source.hash) throw new Error("原文已变化，请重新读取");
 		const modal = new Modal(this.app); modal.titleEl.setText(source.id + " · " + source.label); modal.modalEl.addClass("reading-modal");
 		modal.contentEl.createEl("p", { text: source.role + " · " + source.path + (source.page ? " · 第 " + source.page + " 页" : "") }); modal.contentEl.createEl("pre", { cls: "reading-evidence-text", text: source.text });
-		const open = modal.contentEl.createEl("button", { text: source.kind === "knowledge" ? "打开来源笔记" : "前往原文" });
-		open.onclick = () => { if (source.kind === "knowledge") this.openVaultFile(source.path); else if (doc.source.kind === "article") void this.openReadingEvidence(source.path, source.page).catch(error => new Notice(String(error))); else void this.app.workspace.openLinkText(source.path + (source.page ? "#page=" + source.page : ""), "", true); };
+		const open = modal.contentEl.createEl("button", { text: source.kind === "knowledge" ? "打开来源笔记" : doc.source.kind === "pdf" ? "查看原文页图" : "前往原文" });
+		open.disabled = source.kind === "paper" && doc.source.kind === "pdf";
+		open.onclick = () => { if (source.kind === "knowledge") this.openVaultFile(source.path); else if (doc.source.kind === "article") void this.openReadingEvidence(source.path, source.page).catch(error => new Notice(String(error))); };
 		this.showCurationModal(modal);
 		if (source.kind === "paper") {
 			const original = doc.evidence.find(e => e.page === source.page && e.start === source.start && e.text.startsWith(source.text));
-			if (original) { const image = await doc.image(doc.source.kind === "pdf" && original.page ? { ...original, asset: "pdf-page" } : original); if (image && modal.modalEl.isConnected) { const img = modal.contentEl.createEl("img", { attr: { alt: source.label } }); img.src = image.dataUrl; img.style.maxWidth = "100%"; } }
+			if (original) { const image = await doc.image(doc.source.kind === "pdf" && original.page ? { ...original, asset: "pdf-page" } : original); if (image && modal.modalEl.isConnected) { const img = modal.contentEl.createEl("img", { attr: { alt: source.label } }); img.src = image.dataUrl; img.style.maxWidth = "100%"; if (doc.source.kind === "pdf") { open.disabled = false; open.onclick = () => img.scrollIntoView({ block: "start" }); } } }
 		}
 	}
 	showCurationModal<T extends Modal>(modal: T): T {
