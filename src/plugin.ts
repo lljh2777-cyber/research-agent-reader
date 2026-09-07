@@ -71,7 +71,13 @@ import { ReadingWorkspaceService } from "./reading/workspace";
 import { ReadingEngine } from "./reading/engine";
 import { readingHash } from "./reading/document";
 import { DirectReadingBackend, CodexReadingBackend } from "./reading/backend";
-import { READING_VIEW_TYPE } from "./reading/types";
+import { READING_VIEW_TYPE, type ReadingBackend, type ReadingSession } from "./reading/types";
+import { LearningLibrary } from "./curation/learning";
+import { CurationService } from "./curation/service";
+import { CurationWriter } from "./curation/writer";
+import { FileCurationStore } from "./curation/store";
+import type { CurationReview } from "./curation/types";
+import { KnowledgeCurationModal, KnowledgeMaintenanceModal } from "./views/knowledge-curation";
 import { serializeActionRequest } from "./runtime/action-request";
 import type { DashboardActionOptions } from "./actions";
 import { AnnotationPopover } from "./annotations/annotation-popover";
@@ -259,6 +265,9 @@ export default class AgentDashboardPlugin extends Plugin {
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private knowledgeService: KnowledgeRetrievalService | null = null;
 	private knowledgeModels: BgeModels | null = null;
+	private learningLibrary?: LearningLibrary;
+	private curationService?: CurationService;
+	private curationWriter?: CurationWriter;
 	private annotationPopover: AnnotationPopover | null = null;
 	private annotationChip: HTMLElement | null = null;
 	private persistence?: DashboardPersistence;
@@ -370,6 +379,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(QUERY_WIKI_VIEW_TYPE, (leaf) => new QueryWikiView(leaf, this));
 		this.registerView(READING_VIEW_TYPE, (leaf) => new ReadingWorkspaceView(leaf, this));
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
+		this.addCommand({ id: "open-knowledge-maintenance", name: "打开知识库维护", callback: () => this.openKnowledgeMaintenance() });
+		this.registerEvent(this.app.vault.on("modify", file => this.curationService?.noteChange(file.path)));
+		this.registerEvent(this.app.vault.on("delete", file => this.curationService?.noteChange(file.path)));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { this.curationService?.noteChange(oldPath); this.curationService?.noteChange(file.path); }));
 		this.registerView(MINERU_READER_VIEW_TYPE, (leaf) => new MineruReaderView(leaf, this));
 		this.app.workspace.onLayoutReady(() => {
 			this.consolidateMineruReaderLeaves();
@@ -481,6 +494,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		await this.curationService?.dispose();
+		this.learningLibrary?.dispose();
 		this.knowledgeService?.dispose();
 		await this.readingWorkspace?.dispose();
 		this.annotationPopover?.close();
@@ -2462,6 +2477,31 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.knowledgeService;
 	}
 	searchKnowledge(query: string, options: SearchOptions = {}) { return this.getKnowledgeService().search(query, options); }
+	private readingPluginDirectory(): string {
+		const adapter = this.app.vault.adapter; if (!(adapter instanceof FileSystemAdapter)) throw new Error("知识整理需要桌面文件系统");
+		return path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader");
+	}
+	getLearningLibrary(): LearningLibrary {
+		if (!this.learningLibrary) { this.getKnowledgeService(); this.learningLibrary = new LearningLibrary(this.app, this.getReadingWorkspace(), new FileVectorStorage(this.readingPluginDirectory(), "learning-index"), this.knowledgeModels!, () => this.settings.knowledgeRetrievalMode); }
+		return this.learningLibrary;
+	}
+	getCurationService(): CurationService {
+		if (!this.curationService) this.curationService = new CurationService(this.app, this.getReadingWorkspace(), new FileCurationStore(this.readingPluginDirectory()), session => this.createReadingBackend(session, false));
+		return this.curationService;
+	}
+	getCurationWriter(): CurationWriter { return this.curationWriter ||= new CurationWriter(this.getCurationService()); }
+	openKnowledgeMaintenance(): void { new KnowledgeMaintenanceModal(this.app, this).open(); }
+	openKnowledgeCuration(sessionId: string, nodeId: string, review?: CurationReview): void {
+		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review).open(); }
+		catch (error) { new Notice(String(error)); }
+	}
+	async openLearningRecord(sessionId: string, nodeId: string): Promise<void> {
+		await this.activateReadingWorkspace(); const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0]?.view;
+		if (view instanceof ReadingWorkspaceView) { await view.setState({ sessionId }); view.revealLearningNode(nodeId); }
+	}
+	async openCurationSource(sessionId: string, nodeId: string): Promise<void> {
+		await this.openLearningRecord(sessionId, nodeId); const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0]?.view; if (view instanceof ReadingWorkspaceView) view.revealLearningEvidence(nodeId);
+	}
 	async testKnowledgeModels(): Promise<void> {
 		this.getKnowledgeService(); await this.knowledgeModels!.embed(["知识库连接测试"]); await this.knowledgeModels!.rerank("测试", ["知识库连接测试"]);
 	}
@@ -3161,13 +3201,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const adapter = this.app.vault.adapter;
 			if (!(adapter instanceof FileSystemAdapter)) throw new Error("交互深读需要桌面文件系统");
 			this.readingWorkspace = new ReadingWorkspaceService(this.app, adapter.getBasePath(), path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader"));
-			this.readingEngine = new ReadingEngine(this.readingWorkspace, (session) => {
-				if (session.backend === "codex-cli") return new CodexReadingBackend(this.settings.codexExecutable, session.model || this.settings.codexModel,
-					path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader"));
-				const profile = this.getProviderProfile(session.backend);
-				if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
-				return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, profile.lastTest.streamingVerified === true);
-			}, async (query, context) => {
+			this.readingEngine = new ReadingEngine(this.readingWorkspace, session => this.createReadingBackend(session), async (query, context) => {
 				const prefixes = ["sources", "concepts", "methods", "datasets", "synthesis", "mocs", "projects", "entities", "code", "r", "linux"].map((folder) => "wiki/" + folder);
 				let paperPaths: string[] | undefined;
 				if (context && /本文|这篇|本研究|作者/.test(context.question) && !/比较|对比|跨论文|相比/.test(context.question)) {
@@ -3186,6 +3220,11 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.readingWorkspace;
 	}
 	getReadingEngine(): ReadingEngine { this.getReadingWorkspace(); return this.readingEngine!; }
+	createReadingBackend(session: ReadingSession, streaming = true): ReadingBackend {
+		if (session.backend === "codex-cli") return new CodexReadingBackend(this.settings.codexExecutable, session.model || this.settings.codexModel, this.readingPluginDirectory());
+		const profile = this.getProviderProfile(session.backend); if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
+		return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, streaming && profile.lastTest.streamingVerified === true);
+	}
 	async activateReadingWorkspace(): Promise<void> {
 		const leaf = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0] || this.app.workspace.getLeaf("tab");
 		await leaf.setViewState({ type: READING_VIEW_TYPE, active: true }); await this.app.workspace.revealLeaf(leaf);

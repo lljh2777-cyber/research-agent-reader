@@ -19,11 +19,13 @@ export function validatedReview(raw: unknown): CurationReview {
 }
 export class CurationService {
 	readonly reviews = new Map<string, CurationReview>(); readonly revisions = new Map<string, CurationRevision>(); readonly errors: string[] = [];
+	changesPending = false;
 	private initialization?: Promise<void>; private listeners = new Set<() => void>(); private operations = new Map<string, Promise<CurationReview>>();
 	private controllers = new Map<string, AbortController>(); private queue: Promise<unknown> = Promise.resolve(); private generationCache = new Map<string, CurationReview>();
 	constructor(readonly app: App, readonly workspace: ReadingWorkspaceService, readonly store: CurationRecordStore, private backendFor: (session: ReadingSession) => ReadingBackend) {}
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	get activeCount(): number { return this.operations.size; }
+	noteChange(path: string): void { if ([...this.reviews.values()].some(r => r.context.target.path === path || r.context.evidence.some(e => e.path === path) || r.context.source.kind === "article" && path.startsWith(r.context.source.path.replace(/article\.md$/, "")))) { this.changesPending = true; this.emit(); } }
 	emit(): void { this.listeners.forEach(listener => { try { listener(); } catch { /* A closed view must not interrupt persistence. */ } }); }
 	ready(): Promise<void> {
 		if (!this.initialization) this.initialization = (async () => {
@@ -91,9 +93,10 @@ export class CurationService {
 			for (const revision of [...this.revisions.values()].filter(value => value.state === "applied")) {
 				const review = this.reviews.get(revision.reviewId); if (!review) continue;
 				const current = [...this.revisions.values()].filter(value => value.state === "applied" && value.writes.some(write => write.role === "target" && write.path === review.context.target.path)).sort((a, b) => b.created.localeCompare(a.created))[0] || revision;
-				try { await verifyCurationContext(this.app, this.workspace, review.context, current.writes.find(write => write.role === "target")!.afterHash); }
+				try { await verifyCurationContext(this.app, this.workspace, review.context, current.writes.find(write => write.role === "target")!.afterHash); if (revision.needsReview) await this.saveRevision({ ...revision, needsReview: undefined, updated: now() }); }
 				catch (error) { if (revision.needsReview !== String(error)) await this.saveRevision({ ...revision, needsReview: String(error), updated: now() }); }
 			}
+			this.changesPending = false; this.emit();
 		});
 	}
 	async dispose(): Promise<void> { this.stop(); await Promise.allSettled([...this.operations.values()]); await this.queue; this.listeners.clear(); }

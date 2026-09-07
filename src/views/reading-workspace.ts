@@ -108,11 +108,13 @@ export class ReadingWorkspaceView extends ItemView {
 				const control = actionButton(modes, name, label, () => this.updateUI((ui) => { ui.mode = mode; })); control.setAttribute("aria-pressed", String(session.ui.mode === mode));
 			}
 			actionButton(actions, "download", "导出学习笔记", () => this.openExport(), true);
+			if (!session.demo) actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, session.ui.selectedId), true);
 		}
 		const create = actionButton(actions, "plus", "新建阅读", () => this.openSource()); create.classList.add("reading-primary");
 		const more = actionButton(actions, "ellipsis", "更多阅读选项", () => {
 			const menu = new Menu();
 			if (session) menu.addItem((item) => item.setTitle("阅读模型").setIcon("sliders-horizontal").onClick(() => this.openModel()));
+			menu.addItem(item => item.setTitle("知识库维护").setIcon("notebook-pen").onClick(() => this.plugin.openKnowledgeMaintenance()));
 			menu.addItem((item) => item.setTitle("交互演示").setIcon("play").onClick(() => this.handle(this.service.demo().then((id) => this.selectSession(id)))));
 			menu.addItem((item) => item.setTitle("一次性深读").setIcon("file-text").onClick(() => new ActionInputModal(this.app, this.plugin, ACTION_BY_ID.get("pdf-xray")!, ({ input, overrides, options }) => this.handle(this.plugin.runClassicReading(input, overrides, options))).open()));
 			const box = more.getBoundingClientRect(); menu.showAtPosition({ x: box.right, y: box.bottom });
@@ -587,7 +589,9 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	private openExport(): void {
 		const sessionId = this.sessionId; const nodeId = this.session!.ui.selectedId;
-		const modal = new ReadingExportModal(this.app, () => this.service.repository.get(sessionId), nodeId, (query, options) => this.plugin.searchKnowledge(query, options), path => this.plugin.openVaultFile(path));
+		const modal = new ReadingExportModal(this.app, () => this.service.repository.get(sessionId), nodeId, (query, options) => this.plugin.searchKnowledge(query, options), path => this.plugin.openVaultFile(path), () => this.plugin.openKnowledgeCuration(sessionId, nodeId));
 		this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open();
 	}
+	revealLearningNode(nodeId: string): void { if (this.session?.nodes.some(node => node.id === nodeId)) this.selectNode(nodeId, true); }
+	revealLearningEvidence(nodeId: string): void { const evidence = this.session?.nodes.find(node => node.id === nodeId)?.evidence.find(item => item.kind === "paper"); if (evidence) this.showEvidence(nodeId, evidence.id); }
 }

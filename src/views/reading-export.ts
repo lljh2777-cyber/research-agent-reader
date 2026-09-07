@@ -9,7 +9,7 @@ export class ReadingExportModal extends Modal {
 	private candidates: ReadingAssociation[] = []; private selected = new Set<string>();
 	private status!: HTMLElement; private suggestions!: HTMLElement; private history!: HTMLElement; private preview!: HTMLElement;
 	private submit!: HTMLButtonElement; private discover!: HTMLButtonElement; private scopeSelect!: HTMLSelectElement;
-	constructor(app: App, private getSession: () => ReadingSession, private nodeId: string, private search: AssociationSearch, private openFile: (path: string) => void) { super(app); }
+	constructor(app: App, private getSession: () => ReadingSession, private nodeId: string, private search: AssociationSearch, private openFile: (path: string) => void, private curate?: () => void) { super(app); }
 	onOpen(): void {
 		this.renderer.load(); this.titleEl.setText("整理为学习笔记"); this.modalEl.classList.add("reading-modal", "reading-export-modal");
 		this.contentEl.createEl("p", { cls: "reading-export-intro", text: "检查内容，选择关联，然后保存。每次修订保留前一版，学习记录保存到 wiki/qa/。" });
@@ -20,6 +20,7 @@ export class ReadingExportModal extends Modal {
 		this.status = side.createEl("p", { cls: "reading-export-status", attr: { role: "status", "aria-live": "polite" } });
 		const controls = side.createDiv("reading-export-controls"); this.discover = controls.createEl("button", { text: "查找关联笔记" }); this.discover.onclick = () => void this.findAssociations();
 		const refresh = controls.createEl("button", { text: "刷新预览" }); refresh.onclick = () => void this.refresh();
+		if (this.curate && !this.getSession().demo) { const organize = controls.createEl("button", { text: "整理到已有笔记" }); organize.onclick = () => { this.close(); this.curate?.(); }; }
 		this.suggestions = side.createDiv("reading-export-associations"); this.history = side.createDiv("reading-export-history");
 		const paper = grid.createDiv("reading-export-paper"); paper.createEl("small", { text: "学习笔记预览" }); this.preview = paper.createDiv("markdown-rendered reading-export-preview");
 		const footer = this.contentEl.createDiv("reading-export-footer"); footer.createEl("span", { text: "相似内容仅作关联候选；正式论文笔记的深读状态独立保留。" });

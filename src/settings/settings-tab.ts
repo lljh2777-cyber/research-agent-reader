@@ -61,6 +61,7 @@ import type {
 
 interface SettingsPluginHost extends PluginHost {
 	getKnowledgeService(): KnowledgeRetrievalService;
+	openKnowledgeMaintenance(): void;
 	testKnowledgeModels(): Promise<void>;
 	providerRuntimeState: Map<string, ProviderRuntimeEntry>;
 	obsidianCliProbeState: ObsidianCliProbeState;
@@ -166,6 +167,8 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 	hide(): void { this.retrievalUnsubscribe?.(); this.retrievalUnsubscribe = undefined; }
 	private renderKnowledgeRetrieval(container: HTMLElement): void {
 		this.createSettingsPageHeader(container, "知识库检索", "让问题更容易找到对应段落。本文事实优先限定论文，跨论文比较再扩大范围。");
+		new Setting(container).setName("学习整理与修订").setDesc("审阅整理建议，查看修订历史，分别维护正式知识与学习记录索引。")
+			.addButton(button => button.setButtonText("打开知识库维护").onClick(() => this.plugin.openKnowledgeMaintenance()));
 		new Setting(container).setName("检索模式").setDesc("关键词保留现有流程；重排和混合检索供 Direct API 知识库对话、两种后端的 PDF 交互深读与导出关联共用。")
 			.addDropdown((select) => select.addOption("lexical", "关键词（兼容现有流程）").addOption("rerank", "关键词＋BGE 重排").addOption("hybrid", "混合检索＋BGE 重排")
 				.setValue(this.plugin.settings.knowledgeRetrievalMode).onChange(async (value) => { this.plugin.settings.knowledgeRetrievalMode = value as RetrievalMode; await this.plugin.saveSettings(); }));
