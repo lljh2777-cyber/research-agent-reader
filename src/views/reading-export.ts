@@ -9,13 +9,14 @@ export class ReadingExportModal extends Modal {
 	private candidates: ReadingAssociation[] = []; private selected = new Set<string>();
 	private status!: HTMLElement; private suggestions!: HTMLElement; private history!: HTMLElement; private preview!: HTMLElement;
 	private submit!: HTMLButtonElement; private discover!: HTMLButtonElement; private scopeSelect!: HTMLSelectElement;
-	constructor(app: App, private getSession: () => ReadingSession, private nodeId: string, private search: AssociationSearch, private openFile: (path: string) => void, private curate?: () => void) { super(app); }
+	constructor(app: App, private getSession: () => ReadingSession, private nodeId: string, private search: AssociationSearch, private openFile: (path: string) => void, private curate?: () => void, initialScope: ReadingExportScope = "node") { super(app); this.exportScope = initialScope; }
 	onOpen(): void {
 		this.renderer.load(); this.titleEl.setText("整理为学习笔记"); this.modalEl.classList.add("reading-modal", "reading-export-modal");
 		this.contentEl.createEl("p", { cls: "reading-export-intro", text: "检查内容，选择关联，然后保存。每次修订保留前一版，学习记录保存到 wiki/qa/。" });
 		const grid = this.contentEl.createDiv("reading-export-grid"); const side = grid.createDiv("reading-export-sidebar");
 		const label = side.createEl("label", { cls: "reading-field", text: "导出范围" }); this.scopeSelect = label.createEl("select"); this.scopeSelect.setAttribute("aria-label", "导出范围");
 		for (const [value, title] of [["node", "选中节点"], ["branch", "选中支线"], ["session", "完整会话"]]) this.scopeSelect.createEl("option", { value, text: title });
+		this.scopeSelect.value = this.exportScope;
 		this.scopeSelect.onchange = () => { this.exportScope = this.scopeSelect.value as ReadingExportScope; this.controller?.abort(); this.candidates = []; this.selected.clear(); this.renderCandidates(); void this.refresh(); };
 		this.status = side.createEl("p", { cls: "reading-export-status", attr: { role: "status", "aria-live": "polite" } });
 		const controls = side.createDiv("reading-export-controls"); this.discover = controls.createEl("button", { text: "查找关联笔记" }); this.discover.onclick = () => void this.findAssociations();

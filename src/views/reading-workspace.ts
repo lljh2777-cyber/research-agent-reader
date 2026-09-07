@@ -133,6 +133,7 @@ export class ReadingWorkspaceView extends ItemView {
 				const control = actionButton(modes, name, label, () => this.updateUI((ui) => { ui.mode = mode; })); control.dataset.readingMode = mode; control.setAttribute("aria-pressed", String(session.ui.mode === mode));
 			}
 			actionButton(actions, "download", "导出学习笔记", () => this.openExport(), true);
+			if (!session.demo) actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, session.ui.selectedId), true);
 			if (!session.demo) actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, session.ui.selectedId), true);
 		}
 		const create = actionButton(actions, "plus", "新建阅读", () => this.openSource()); create.classList.add("reading-primary");

@@ -56,6 +56,12 @@ import {
 import { ProcessExecutionService } from "./runtime/process-execution";
 import { runMineruProcessCommand } from "./runtime/mineru-process";
 import { AgentLoopService, type AgentLoopRunOutcome } from "./agent/agent-loop-service";
+import { ReadingAssistantService } from "./assistant/service";
+import { FileAssistantStorage } from "./assistant/store";
+import { ReadingAssistantModal } from "./views/reading-assistant";
+import { ReadingExportModal } from "./views/reading-export";
+import { readReadingOutcomes } from "./reading/outcomes";
+import { inKnowledgeScope, contentHash as assistantHash } from "./retrieval/chunks";
 import type { PaperIngestFlowOptions } from "./agent/paper-ingest-flow";
 import { VaultLintService } from "./services/vault-lint";
 import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./services/vault-evidence";
@@ -262,6 +268,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;
 	private readingWorkspace?: ReadingWorkspaceService;
+	private readingAssistant?: ReadingAssistantService;
+	private assistantModal?: ReadingAssistantModal;
 	private readingEngine?: ReadingEngine;
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private knowledgeService: KnowledgeRetrievalService | null = null;
@@ -497,6 +505,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	async onunload(): Promise<void> {
 		for (const modal of [...this.curationModals]) modal.close();
+		await this.readingAssistant?.dispose();
 		await this.curationService?.dispose();
 		this.learningLibrary?.dispose();
 		this.knowledgeService?.dispose();
@@ -2493,6 +2502,49 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.curationService;
 	}
 	getCurationWriter(): CurationWriter { return this.curationWriter ||= new CurationWriter(this.getCurationService()); }
+	getReadingAssistant(): ReadingAssistantService {
+		return this.readingAssistant ||= new ReadingAssistantService({ workspace: this.getReadingWorkspace(),
+			backend: (session, profileId) => {
+				if (!this.getVerifiedProviderProfiles().some(p => p.id === profileId)) throw new Error("请选择已通过连接测试的 Direct API 模型");
+				return this.createReadingBackend({ ...session, backend: profileId }, false);
+			}, search: (query, options) => this.searchKnowledge(query, options),
+			readFile: async filename => { if (!inKnowledgeScope(filename)) throw new Error("来源不在正式知识范围"); const file = this.app.vault.getAbstractFileByPath(filename); if (!(file instanceof TFile)) throw new Error("知识来源已缺失"); return this.app.vault.read(file); },
+			learning: (session, nodeId, signal) => this.getLearningLibrary().find(session, [nodeId], signal),
+			outcomes: session => readReadingOutcomes(this.app, session, this.getCurationService()),
+		}, new FileAssistantStorage(this.readingPluginDirectory()));
+	}
+	openReadingAssistant(sessionId: string, nodeId: string): void {
+		try {
+			const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(n => n.id === nodeId && n.status === "done")) throw new Error("请先选择一个已完成的正式阅读节点");
+			this.assistantModal?.close(); this.assistantModal = this.showCurationModal(new ReadingAssistantModal(this.app, this, sessionId, nodeId));
+			const modal = this.assistantModal, close = modal.onClose.bind(modal); modal.onClose = () => { close(); if (this.assistantModal === modal) this.assistantModal = undefined; };
+		} catch (error) { new Notice(String(error)); }
+	}
+	async dispatchAssistantAction(runId: string, actionId: string): Promise<void> {
+		await this.getReadingAssistant().dispatch(runId, actionId, async (action, sessionId) => {
+			if (action.kind === "curation") this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, action.nodeIds[0], undefined, { nodeIds: action.nodeIds, target: action.target }));
+			else if (action.kind === "export") this.showCurationModal(new ReadingExportModal(this.app, () => this.getReadingWorkspace().repository.get(sessionId), action.nodeIds[0], (query, options) => this.searchKnowledge(query, options), filename => this.openVaultFile(filename), () => this.openKnowledgeCuration(sessionId, action.nodeIds[0]), action.scope));
+			else {
+				await this.openLearningRecord(sessionId, action.nodeIds[0]);
+				void this.getReadingWorkspace().advance(sessionId).catch(error => new Notice("主线讲解未完成，请在节点中重试：" + String(error), 8000));
+			}
+		});
+	}
+	async openAssistantEvidence(runId: string, sourceId: string): Promise<void> {
+		const run = this.getReadingAssistant().runs.get(runId), source = run?.sources.find(s => s.id === sourceId); if (!run || !source) throw new Error("助手引用不存在");
+		const doc = await this.getReadingWorkspace().document(run.sessionId); await doc.verify();
+		if (source.kind === "knowledge" && assistantHash(await this.getReadingAssistant().deps.readFile(source.path)) !== source.hash) throw new Error("知识来源已变化，请重新读取");
+		if (source.kind === "paper" && doc.source.fingerprint !== source.hash) throw new Error("原文已变化，请重新读取");
+		const modal = new Modal(this.app); modal.titleEl.setText(source.id + " · " + source.label); modal.modalEl.addClass("reading-modal");
+		modal.contentEl.createEl("p", { text: source.role + " · " + source.path + (source.page ? " · 第 " + source.page + " 页" : "") }); modal.contentEl.createEl("pre", { cls: "reading-evidence-text", text: source.text });
+		const open = modal.contentEl.createEl("button", { text: source.kind === "knowledge" ? "打开来源笔记" : "前往原文" });
+		open.onclick = () => { if (source.kind === "knowledge") this.openVaultFile(source.path); else if (doc.source.kind === "article") void this.openReadingEvidence(source.path, source.page).catch(error => new Notice(String(error))); else void this.app.workspace.openLinkText(source.path + (source.page ? "#page=" + source.page : ""), "", true); };
+		this.showCurationModal(modal);
+		if (source.kind === "paper") {
+			const original = doc.evidence.find(e => e.page === source.page && e.start === source.start && e.text.startsWith(source.text));
+			if (original) { const image = await doc.image(doc.source.kind === "pdf" && original.page ? { ...original, asset: "pdf-page" } : original); if (image && modal.modalEl.isConnected) { const img = modal.contentEl.createEl("img", { attr: { alt: source.label } }); img.src = image.dataUrl; img.style.maxWidth = "100%"; } }
+		}
+	}
 	showCurationModal<T extends Modal>(modal: T): T {
 		this.curationModals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.curationModals.delete(modal); }; modal.open(); return modal;
 	}

@@ -2,15 +2,17 @@ import { randomUUID } from "node:crypto";
 import { setTimeout, clearTimeout } from "node:timers";
 import rules from "../../skills/reading-assistant/SKILL.md";
 import { ASSISTANT_CAPABILITIES, parseAssistantStep } from "./capabilities";
-import { assistantContext, AssistantTools } from "./tools";
+import { assistantContext, assistantContextHash, AssistantTools } from "./tools";
 import { validateAssistantRun } from "./store";
 import { readingTokenEstimate } from "../reading/usage";
 import { contentHash } from "../retrieval/chunks";
-import type { AssistantDependencies, AssistantRun, AssistantStorage } from "./types";
+import type { AssistantAction, AssistantDependencies, AssistantRun, AssistantStorage } from "./types";
+import { curationTarget } from "../curation/policy";
 export class ReadingAssistantService {
 	readonly runs = new Map<string, AssistantRun>(); readonly errors: string[] = [];
 	private initialization?: Promise<void>; private listeners = new Set<() => void>();
 	private active = new Map<string, { controller: AbortController; promise: Promise<AssistantRun> }>();
+	private dispatching = new Set<string>();
 	constructor(readonly deps: AssistantDependencies, private storage: AssistantStorage) {}
 	subscribe(listener: () => void) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	private emit() { this.listeners.forEach(f => { try { f(); } catch { /* View callbacks cannot interrupt saves. */ } }); }
@@ -22,6 +24,21 @@ export class ReadingAssistantService {
 	private async save(run: AssistantRun) { await this.storage.write(run.id, JSON.stringify(run)); this.runs.set(run.id, structuredClone(run)); this.emit(); }
 	isRunning(sessionId: string) { return this.active.has(sessionId); }
 	stop(sessionId: string) { this.active.get(sessionId)?.controller.abort(); }
+	/** Persist the handoff before invoking business UI. Reopening a preview is safe; advancing is one-shot. */
+	async dispatch(runId: string, actionId: string, handoff: (action: AssistantAction, sessionId: string) => Promise<void> | void): Promise<void> {
+		const key = runId + ":" + actionId; if (this.dispatching.has(key)) throw new Error("操作正在交接"); this.dispatching.add(key);
+		try {
+			await this.ready(); const run = validateAssistantRun(structuredClone(this.runs.get(runId))); const action = run.actions.find(a => a.id === actionId);
+			if (run.state !== "done" || !action) throw new Error("请求未完成或操作不存在");
+			const session = this.deps.workspace.repository.get(run.sessionId);
+			if (session.demo || action.nodeIds.some(id => !session.nodes.some(n => n.id === id && n.status === "done")) || assistantContextHash(session, action.nodeIds, action.scope) !== action.contextHash) throw new Error("阅读内容已变化，请重新准备操作");
+			if (action.kind === "curation" && (!curationTarget(action.target) || action.scope !== "node" || action.nodeIds.some(id => session.nodes.find(n => n.id === id)?.branchId !== session.nodes.find(n => n.id === action.nodeIds[0])?.branchId))) throw new Error("整理目标或范围无效");
+			if (action.kind !== "curation" && action.target || action.kind === "export" && action.scope !== "session" && action.nodeIds.length !== 1) throw new Error("操作范围无效");
+			if (action.kind === "advance" && (action.state === "opened" || action.scope !== "node" || session.completed || action.nodeIds.length !== 1 || action.nodeIds[0] !== session.mainIds[session.mainIds.length - 1])) throw new Error("此主线操作已交接或已经过期，请前往阅读界面查看或重试");
+			await new AssistantTools(this.deps, session, run, new AbortController().signal).verify();
+			action.state = "opened"; await this.save(run); await handoff(structuredClone(action), run.sessionId);
+		} finally { this.dispatching.delete(key); }
+	}
 	start(sessionId: string, nodeId: string, profileId: string, question: string): Promise<AssistantRun> {
 		if (this.active.has(sessionId)) return Promise.reject(new Error("当前会话的助手仍在运行"));
 		const controller = new AbortController(); const promise = this.run(sessionId, nodeId, profileId, question, controller).finally(() => { this.active.delete(sessionId); this.emit(); });

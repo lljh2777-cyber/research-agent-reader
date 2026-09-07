@@ -7,8 +7,10 @@ import { curationTarget } from "../curation/policy";
 import type { AssistantDependencies, AssistantRun, AssistantSource } from "./types";
 import type { AssistantToolName } from "./capabilities";
 
-export function assistantContextHash(session: ReadingSession, ids: string[]): string {
-	return contentHash(JSON.stringify([session.source, session.mainIds, session.mainSummary, session.completed, ids.map(id => session.nodes.find(n => n.id === id))]));
+export function assistantContextHash(session: ReadingSession, ids: string[], scope = "node"): string {
+	const first = session.nodes.find(n => n.id === ids[0]);
+	const nodes = session.nodes.filter(n => scope === "session" || (scope === "branch" ? n.branchId === first?.branchId : ids.includes(n.id)));
+	return contentHash(JSON.stringify([session.source, session.mainIds, session.mainSummary, session.completed, nodes.map(n => [n.id, n.parentId, n.branchId, n.status, n.title, n.question, n.content, n.evidence])]));
 }
 export function assistantContext(session: ReadingSession, nodeId: string) {
 	const node = session.nodes.find(n => n.id === nodeId); if (!node || node.status !== "done") throw new Error("请选择一个已完成的阅读节点");
@@ -81,7 +83,8 @@ export class AssistantTools {
 			if (args.kind === "export" && args.scope !== "session" && ids.length !== 1) throw new Error("节点或支线导出只能指定一个起点");
 			if (args.kind !== "export" && args.scope !== "node") throw new Error("此操作只接受节点范围");
 			if (args.kind === "advance" && (this.session.completed || ids.length !== 1 || ids[0] !== this.session.mainIds[this.session.mainIds.length - 1])) throw new Error("只能从未完成主线的最新单元继续");
-			const action = { id: randomUUID(), kind: args.kind as "curation" | "export" | "advance", nodeIds: ids, target: String(args.target), scope: args.scope as "node" | "branch" | "session", contextHash: assistantContextHash(this.session, ids), state: "prepared" as const };
+			if (args.kind === "curation" && ids.some(id => this.node(id).branchId !== this.node(ids[0]).branchId)) throw new Error("一次整理请选择同一主线或支线中的节点");
+			const action = { id: randomUUID(), kind: args.kind as "curation" | "export" | "advance", nodeIds: ids, target: String(args.target), scope: args.scope as "node" | "branch" | "session", contextHash: assistantContextHash(this.session, ids, String(args.scope)), state: "prepared" as const };
 			this.run.actions.push(action); value = { ...action, status: "仅准备操作卡，尚未执行。请用户在卡片中继续。" };
 		} else throw new Error("未知助手工具");
 		this.signal.throwIfAborted(); const output = JSON.stringify(value); if (output.length > 19000) throw new Error("工具结果过长，请缩小问题范围"); this.cache.set(key, output); return { output, cached: false };

@@ -47,7 +47,7 @@ export class KnowledgeCurationModal extends Modal {
 	private renderedState = "";
 	private regenerateButton!: HTMLButtonElement;
 	private runningKey?: string;
-	constructor(app: App, private plugin: AgentDashboardPlugin, private sessionId: string, private nodeId: string, private initialReview?: CurationReview) { super(app); }
+	constructor(app: App, private plugin: AgentDashboardPlugin, private sessionId: string, private nodeId: string, private initialReview?: CurationReview, private initialSelection?: { nodeIds: string[]; target: string }) { super(app); }
 	private get service() { return this.plugin.getCurationService(); }
 	private get session() { return this.plugin.getReadingWorkspace().repository.get(this.sessionId); }
 	onOpen(): void {
@@ -55,7 +55,7 @@ export class KnowledgeCurationModal extends Modal {
 		this.contentEl.createEl("p", { cls: "curation-intro", text: "从一小段学习内容开始，核对论文依据，再决定如何补充已有笔记。" });
 		const grid = this.contentEl.createDiv("curation-grid"); const side = grid.createDiv("curation-side"); const paper = grid.createDiv("curation-paper");
 		side.createEl("small", { cls: "curation-eyebrow", text: "01 / 本批学习内容" }); side.createEl("strong", { text: readingTitle(this.session) });
-		this.nodeIds = new Set(this.initialReview?.context.nodeIds || [this.nodeId]); const nodes = side.createDiv("curation-nodes");
+		this.nodeIds = new Set(this.initialReview?.context.nodeIds || this.initialSelection?.nodeIds || [this.nodeId]); const nodes = side.createDiv("curation-nodes");
 		for (const node of curationBatch(this.session, this.nodeId)) {
 			const label = nodes.createEl("label", { cls: "curation-node" }); const check = label.createEl("input", { type: "checkbox" }); check.checked = this.nodeIds.has(node.id); label.createEl("span", { text: node.title });
 			check.onchange = () => { if (check.checked && this.nodeIds.size >= 3) { check.checked = false; new Notice("每批最多三个节点"); return; } if (check.checked) this.nodeIds.add(node.id); else this.nodeIds.delete(node.id); this.reset(); };
@@ -68,7 +68,7 @@ export class KnowledgeCurationModal extends Modal {
 		const renderTargets = () => { const previous = this.target.value; this.target.empty(); this.target.createEl("option", { value: "", text: "选择已有正式笔记" });
 			for (const file of allFiles.filter(file => file.path.toLowerCase().includes(filter.value.toLowerCase()) || file.path === previous)) this.target.createEl("option", { value: file.path, text: file.path.replace("wiki/", "") }); this.target.value = previous; };
 		renderTargets(); filter.oninput = renderTargets;
-		this.target.value = this.initialReview?.context.target.path || ""; this.target.onchange = () => this.reset();
+		this.target.value = this.initialReview?.context.target.path || this.initialSelection?.target || ""; this.target.onchange = () => this.reset();
 		const tools = side.createDiv("curation-actions"); action(tools, "查找关联", () => this.find(false)); action(tools, "相似学习记录", () => this.find(true));
 		this.choices = side.createDiv("curation-candidates");
 		this.evidence = side.createDiv("curation-evidence"); action(side, "读取依据与估算", () => this.prepare());
@@ -82,6 +82,7 @@ export class KnowledgeCurationModal extends Modal {
 		action(footer, "维护记录", () => { this.close(); this.plugin.openKnowledgeMaintenance(); });
 		this.unsubscribe = this.service.subscribe(() => { if (this.closed || this.operation) return; const record = this.service.reviews.get(this.reviewId); if (record && this.renderedState !== record.state) this.renderReview(); });
 		if (this.initialReview) { this.context = this.initialReview.context; this.reviewId = this.initialReview.id; this.cacheNotice = true; this.renderEvidence(); this.renderReview(); } else this.reset();
+		if (!this.initialReview && this.initialSelection) void this.prepare().catch(error => { if (!this.closed) this.status.setText(String(error)); });
 	}
 	onClose(): void { this.closed = true; this.sequence++; this.controller?.abort(); this.unsubscribe?.(); this.contentEl.empty(); }
 	private reset(): void { this.sequence++; this.controller?.abort(); this.context = undefined; this.reviewId = ""; this.selected.clear(); this.evidence.empty(); this.results.empty(); this.status.setText("选择目标笔记后先读取依据。此步骤不调用回答模型。"); this.generateButton.disabled = true; this.regenerateButton.disabled = true; this.previewButton.disabled = true; }

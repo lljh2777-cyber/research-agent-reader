@@ -78,6 +78,18 @@ async function toolsFor(f) {
 	const restart = new ReadingAssistantService(g.deps, restartStore); await restart.ready(); assert.equal(restart.runs.get(restored.id).state, "interrupted"); assert.equal(restart.runs.get(restored.id).calls[0].state, "interrupted");
 	g.set(async () => step("reading_context", { state: "all", offset: 0 })); await assert.rejects(g.service.start(g.s.id, g.n.id, "p", "loop"), /上限|预算/); assert.ok(g.calls() <= 8);
 	g.deps.workspace.document = async () => { throw new Error("source missing"); }; g.set(async () => "unused"); await assert.rejects(g.service.start(g.s.id, g.n.id, "p", "read"), /source missing/); assert.equal(g.calls(), 0);
+	const h = fixture(); h.set(async (request, count) => count === 1 ? step("prepare_action", { kind: "advance", nodeIds: [h.n.id], target: "", scope: "node" }) : step("final", { answer: "已准备继续主线操作卡，尚未生成", citations: [] }));
+	const ar = await h.service.start(h.s.id, h.n.id, "p", "continue"); let handoffs = 0;
+	h.storage.fail = true; await assert.rejects(h.service.dispatch(ar.id, ar.actions[0].id, () => { handoffs++; })); assert.equal(handoffs, 0); h.storage.fail = false;
+	await h.service.dispatch(ar.id, ar.actions[0].id, () => { handoffs++; }); assert.equal(handoffs, 1);
+	await assert.rejects(h.service.dispatch(ar.id, ar.actions[0].id, () => { handoffs++; }), /已交接/); assert.equal(handoffs, 1);
+	const restoredActions = new ReadingAssistantService(h.deps, h.storage); await restoredActions.ready(); await assert.rejects(restoredActions.dispatch(ar.id, ar.actions[0].id, () => {}), /已交接/);
+	h.set(async (request, count) => count === 1 ? step("prepare_action", { kind: "export", nodeIds: [h.n.id], target: "", scope: "session" }) : step("final", { answer: "请查看导出预览", citations: [] }));
+	const er = await h.service.start(h.s.id, h.n.id, "p", "export"); const actionId = er.actions[0].id;
+	await h.service.dispatch(er.id, actionId, a => { assert.equal(a.scope, "session"); handoffs++; }); await h.service.dispatch(er.id, actionId, () => { handoffs++; }); assert.equal(handoffs, 3, "previews can reopen");
+	const newBranch = addReadingBranch(h.s, h.n.id); const newNode = addReadingNode(h.s, newBranch.id, "new content"); newNode.status = "done";
+	await assert.rejects(h.service.dispatch(er.id, actionId, () => { handoffs++; }), /变化/); assert.equal(handoffs, 3);
+	await h.service.dispose(); await restoredActions.dispose();
 	await Promise.all([f.service.dispose(), g.service.dispose(), restart.dispose()]);
 	console.log("READING_ASSISTANT_OK: registry, frozen context, evidence, learning boundaries, actions, persistence, cancellation, budgets");
 })().catch(e => { console.error(e); process.exitCode = 1; });
