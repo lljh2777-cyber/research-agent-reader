@@ -31,7 +31,7 @@ export function decodeIndex(bytes: Buffer): VectorSnapshot {
 /** Derived cache only. Atomic replacement; never deletes source or history files. */
 export class FileVectorStorage implements VectorStorage {
 	private root: string;
-	constructor(pluginDirectory: string) { this.root = path.resolve(pluginDirectory, "retrieval-index"); }
+	constructor(pluginDirectory: string, directory: "retrieval-index" | "learning-index" = "retrieval-index") { this.root = path.resolve(pluginDirectory, directory); }
 	private async prepare(): Promise<string> {
 		await fs.mkdir(this.root, { recursive: true });
 		if ((await fs.lstat(this.root)).isSymbolicLink()) throw new Error("索引目录不能是符号链接");
