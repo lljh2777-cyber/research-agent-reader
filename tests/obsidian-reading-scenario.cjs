@@ -37,7 +37,7 @@ module.exports = async function readingUiScenario(app) {
 	const resize = floating.querySelector(".reading-resize"); const box = floating.getBoundingClientRect();
 	resize.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, clientX: box.right, clientY: box.bottom }));
 	document.dispatchEvent(new PointerEvent("pointermove", { clientX: box.left + 580, clientY: box.top + 540 })); document.dispatchEvent(new PointerEvent("pointerup")); await settle();
-	check(session().ui.windows.find((w) => w.key === first).width === 580, "resize persisted");
+	check(Math.abs(session().ui.windows.find((w) => w.key === first).width - Math.min(580, root.getBoundingClientRect().right - box.left - 12)) < 1, "resize persisted within viewport");
 	floating = [...root.querySelectorAll(".reading-float")].find((w) => w.dataset.windowKey === first); click(floating, "收起"); await settle();
 	check(session().ui.windows.find((w) => w.key === first).minimized, "minimize");
 	floating = [...root.querySelectorAll(".reading-float")].find((w) => w.dataset.windowKey === first); click(floating, "展开"); await settle();
