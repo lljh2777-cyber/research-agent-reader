@@ -1,0 +1,47 @@
+// In-memory evidence, storage and fake models. No network or file cleanup.
+const assert = require("node:assert/strict");
+const { loadReading } = require("./reading-test-helpers");
+const { CurationService, validatedReview } = loadReading("curation/service.ts");
+const { curationParagraphs, curationTarget, validateSuggestion, parseCurationResult } = loadReading("curation/policy.ts");
+const { contentHash } = loadReading("retrieval/chunks.ts");
+const { createReadingSession, addReadingNode } = loadReading("reading/session.ts");
+const { readingUsage } = loadReading("reading/backend.ts");
+async function main() {
+	const paper = { kind: "article", path: "papers/a/article.md", fingerprint: "a".repeat(64), title: "Paper A" }; const session = createReadingSession(paper, "fake", "model");
+	const node = addReadingNode(session, null); node.status = "done"; node.title = "有效范围"; node.content = "方法在配对样本上验证。"; node.evidence = [{ id: "text-a", kind: "paper", path: paper.path, text: "该方法仅在配对样本上验证。", label: "原文" }];
+	let target = "---\ntitle: Concept\nstatus: x-ray\n---\n# Concept\n\n## 应用\n已有的方法概述。\n\n```js\nlet protectedCode = 1;\n```\n";
+	const original = target; const file = { path: "wiki/concepts/test.md", basename: "test" };
+	const app = { vault: { getFileByPath: p => p === file.path ? file : null, cachedRead: async () => target }, metadataCache: { getFileCache: () => ({ frontmatter: { title: "Concept", status: "x-ray" } }) } };
+	let sourceChanged = false; const workspace = { ready: async () => {}, repository: { get: () => session }, document: async () => ({ source: paper, evidence: node.evidence, verify: async () => { if (sourceChanged) throw new Error("source changed"); } }) };
+	const records = new Map(); let failReady = false;
+	const store = { list: async kind => [...records.keys()].filter(k => k.startsWith(kind + ":")).map(k => k.split(":")[1]), read: async (kind, id) => structuredClone(records.get(kind + ":" + id)), write: async (kind, record) => { if (failReady && record.state === "ready") throw new Error("disk full"); records.set(kind + ":" + record.id, structuredClone(record)); } };
+	let calls = 0; let failModel = false; let delayModel;
+	const backend = { name: "Fake", model: "model", images: false, complete: async request => { calls++; if (delayModel) await delayModel; request.signal.throwIfAborted(); if (failModel) throw new Error("offline"); request.onUsage?.({ input: 321, output: 75 }); const body = JSON.parse(request.prompt); return JSON.stringify({ suggestions: [{ kind: "add", claim: "补充验证范围", text: "该方法仅在配对样本上验证。", reason: "原文提供了验证范围。", paragraphId: body.target.paragraphs[0].id, citations: [{ id: body.evidence[0].id, quote: body.evidence[0].text }] }] }); } };
+	const service = new CurationService(app, workspace, store, () => backend); const context = await service.prepare(session.id, [node.id], file.path);
+	assert.equal(context.target.paragraphs.length, 1); assert(!context.target.paragraphs.some(p => p.text.includes("protectedCode"))); assert(context.estimate > 0 && context.estimate < 18000);
+	const one = service.generate(context); assert.equal(service.generate(context), one); const review = await one;
+	assert.equal(calls, 1); assert.equal(review.usage.kind, "reported"); assert.equal(review.usage.input, 321); assert(review.suggestions[0].applicable);
+	await service.generate(context); assert.equal(calls, 1, "cached requests do not spend tokens");
+	await service.decide(review.id, "s-0", "ignored"); assert.equal((await service.generate(context)).suggestions[0].decision, "ignored"); assert.equal(calls, 1);
+	const reloaded = new CurationService(app, workspace, store, () => backend); await reloaded.ready(); await reloaded.generate(context); assert.equal(calls, 1, "cache survives reload");
+	target += "\n手工编辑\n"; await assert.rejects(service.generate(context), /目标笔记已变化/); assert.equal(calls, 1);
+	await service.inspect(); assert.equal(service.reviews.get(review.id).state, "stale"); target = original;
+	const evidence = context.evidence[0]; const base = { kind: "add", claim: "claim", reason: "reason", paragraphId: context.target.paragraphs[0].id, citations: [{ id: evidence.id, quote: evidence.text }], text: "该方法仅在配对样本上验证。" };
+	assert(!validateSuggestion({ ...base, text: "样本数为 900。" }, context, 0).applicable);
+	assert(!validateSuggestion({ ...base, citations: [{ id: "unknown", quote: "fake" }] }, context, 0).applicable);
+	assert(!validateSuggestion({ ...base, text: "[[papers/a/article]]" }, context, 0).applicable);
+	assert(!validateSuggestion({ ...base, paragraphId: "arbitrary" }, context, 0).applicable);
+	assert(!validateSuggestion(base, { ...context, sourceCompatible: false }, 0).applicable);
+	assert(!validateSuggestion(base, { ...context, evidence: [{ ...evidence, role: "研究设想" }] }, 0).applicable);
+	assert.throws(() => parseCurationResult("not JSON", context)); assert.throws(() => validatedReview({ ...review, context: { ...context, target: { ...context.target, text: "tampered" } } }), /指纹/);
+	assert(!curationTarget("wiki/qa/answer.md")); assert(!curationTarget("wiki/sources/../evil.md"));
+	// API result can be reused after a failed disk commit, without a second model call.
+	node.content += " 补充"; const newContext = await service.prepare(session.id, [node.id], file.path); failReady = true;
+	await assert.rejects(service.generate(newContext), /disk full/); const counted = calls; failReady = false; await service.generate(newContext); assert.equal(calls, counted);
+	node.content += " 再次"; const cancelContext = await service.prepare(session.id, [node.id], file.path); let release; delayModel = new Promise(resolve => { release = resolve; });
+	const pending = service.generate(cancelContext); await new Promise(resolve => setTimeout(resolve, 10)); service.stop(cancelContext.key); release(); await assert.rejects(pending, /abort/i); delayModel = null;
+	assert([...service.reviews.values()].some(r => r.state === "interrupted"));
+	assert.deepEqual(readingUsage({ prompt_tokens: 0, completion_tokens: 3 }), { input: 0, output: 3, cachedInput: undefined }); assert.equal(readingUsage({}), undefined);
+	await service.dispose(); await reloaded.dispose(); console.log("CURATION_SERVICE_OK");
+}
+main().catch(error => { console.error(error); process.exitCode = 1; });

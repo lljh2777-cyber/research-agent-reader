@@ -7,6 +7,15 @@ import type { LLMProvider } from "../providers/adapters";
 import type { ChatMessage } from "../config";
 import type { ReadingBackend, ReadingBackendRequest } from "./types";
 
+export function readingUsage(raw: unknown): { input?: number; output?: number; cachedInput?: number } | undefined {
+	if (!raw || typeof raw !== "object") return undefined; const usage = raw as Record<string, unknown>;
+	const number = (value: unknown): number | undefined => typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+	const input = number(usage.input_tokens ?? usage.prompt_tokens); const output = number(usage.output_tokens ?? usage.completion_tokens);
+	const details = usage.prompt_tokens_details as Record<string, unknown> | undefined;
+	const cachedInput = number(usage.cached_input_tokens ?? details?.cached_tokens);
+	return input === undefined && output === undefined ? undefined : { input, output, cachedInput };
+}
+
 export class DirectReadingBackend implements ReadingBackend {
 	readonly images: boolean;
 	constructor(private provider: LLMProvider, readonly name: string, readonly model: string, private streaming: boolean) { this.images = provider.capabilities.vision; }
@@ -20,9 +29,10 @@ export class DirectReadingBackend implements ReadingBackend {
 		const abort = (): void => cancel?.(); request.signal.addEventListener("abort", abort, { once: true });
 		try {
 			const options = { timeoutMs: 120_000, registerCancel: (callback: () => void) => { cancel = callback; if (request.signal.aborted) callback(); } };
-			const payload = { model: this.model, messages, maxTokens: 6000 };
+			const payload = { model: this.model, messages, maxTokens: request.maxTokens ?? 6000 };
 			const result = this.streaming ? await this.provider.stream(payload, (delta) => request.onDelta?.(delta), options) : await this.provider.complete(payload, options);
 			request.signal.throwIfAborted();
+			const usage = readingUsage(result.raw?.usage); if (usage) request.onUsage?.(usage);
 			if (!result.text?.trim()) throw new Error("模型返回空结果"); return result.text;
 		} finally { request.signal.removeEventListener("abort", abort); }
 	}
@@ -67,6 +77,7 @@ export class CodexReadingBackend implements ReadingBackend {
 			const consume = (line: string): void => {
 				try {
 					const event = JSON.parse(line);
+					if (event.type === "turn.completed") { const usage = readingUsage(event.usage); if (usage) request.onUsage?.(usage); }
 					if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") answer = event.item.text;
 					if (event.type === "error" || event.type === "turn.failed") errorText += "\n" + (event.message || event.error?.message || "Codex 请求失败");
 				} catch { /* Non-JSON CLI diagnostics are not assistant messages. */ }

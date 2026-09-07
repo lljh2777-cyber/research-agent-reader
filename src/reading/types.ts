@@ -91,6 +91,8 @@ export interface ReadingImage { evidenceId: string; dataUrl: string }
 export interface ReadingBackendRequest {
 	system: string; prompt: string; images: ReadingImage[];
 	signal: AbortSignal; onDelta?: (text: string) => void;
+	maxTokens?: number;
+	onUsage?: (usage: { input?: number; output?: number; cachedInput?: number }) => void;
 }
 export interface ReadingBackend {
 	name: string; model: string; images: boolean;
