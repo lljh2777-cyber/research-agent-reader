@@ -6,6 +6,7 @@ import { contentHash } from "../retrieval/chunks";
 import { curationSkill, prepareCuration, verifyCurationContext } from "./context";
 import { curationParagraphs, curationTarget, estimatedTokens, parseCurationResult, validateSuggestion } from "./policy";
 import type { CurationContext, CurationRecordStore, CurationReview, CurationRevision, CurationSuggestion } from "./types";
+import type { CurationSearch } from "./selection";
 
 const id = (): string => "c-" + randomUUID(); const now = (): string => new Date().toISOString();
 export function validatedReview(raw: unknown): CurationReview {
@@ -27,7 +28,7 @@ export class CurationService {
 	changesPending = false;
 	private initialization?: Promise<void>; private listeners = new Set<() => void>(); private operations = new Map<string, Promise<CurationReview>>();
 	private controllers = new Map<string, AbortController>(); private queue: Promise<unknown> = Promise.resolve(); private generationCache = new Map<string, CurationReview>();
-	constructor(readonly app: App, readonly workspace: ReadingWorkspaceService, readonly store: CurationRecordStore, private backendFor: (session: ReadingSession) => ReadingBackend) {}
+	constructor(readonly app: App, readonly workspace: ReadingWorkspaceService, readonly store: CurationRecordStore, private backendFor: (session: ReadingSession) => ReadingBackend, private search?: CurationSearch) {}
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	get activeCount(): number { return this.operations.size; }
 	noteChange(path: string): void { if ([...this.reviews.values()].some(r => r.context.target.path === path || r.context.evidence.some(e => e.path === path) || r.context.source.kind === "article" && path.startsWith(r.context.source.path.replace(/article\.md$/, "")))) { this.changesPending = true; this.emit(); } }
@@ -46,7 +47,7 @@ export class CurationService {
 	serial<T>(operation: () => Promise<T>): Promise<T> { const result = this.queue.then(operation); this.queue = result.catch(() => undefined); return result; }
 	async save(review: CurationReview): Promise<void> { await this.store.write("reviews", review); this.reviews.set(review.id, structuredClone(review)); this.emit(); }
 	async saveRevision(revision: CurationRevision): Promise<void> { await this.store.write("revisions", revision); this.revisions.set(revision.id, structuredClone(revision)); this.emit(); }
-	async prepare(sessionId: string, nodeIds: string[], targetPath: string, signal?: AbortSignal): Promise<CurationContext> { await this.ready(); return prepareCuration(this.app, this.workspace, this.backendFor, sessionId, nodeIds, targetPath, signal); }
+	async prepare(sessionId: string, nodeIds: string[], targetPath: string, signal?: AbortSignal): Promise<CurationContext> { await this.ready(); return prepareCuration(this.app, this.workspace, this.backendFor, sessionId, nodeIds, targetPath, signal, this.search); }
 	cached(context: CurationContext): CurationReview | undefined { return [...this.reviews.values()].reverse().filter(review => review.context.key === context.key && review.state === "ready").sort((a, b) => b.updated.localeCompare(a.updated))[0]; }
 	generate(context: CurationContext, force = false): Promise<CurationReview> {
 		if (this.operations.has(context.key)) return this.operations.get(context.key)!;

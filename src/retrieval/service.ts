@@ -99,7 +99,8 @@ export class KnowledgeRetrievalService {
 		} catch (error) { signal?.throwIfAborted(); warnings.push((error as Error).message + "；重排不可用，已回退关键词"); mode = "lexical"; ranked = lexical.slice(0, 64); }
 		// Keep two passages per document, not just its highest scoring introduction.
 		const counts = new Map<string, number>(); const hits: KnowledgeHit[] = []; const limit = Math.max(1, Math.min(10, options.limit || 6));
-		for (const hit of ranked) { if (!counts.has(hit.path) && counts.size >= limit || (counts.get(hit.path) || 0) >= 2) continue; counts.set(hit.path, (counts.get(hit.path) || 0) + 1); hits.push(hit); }
+		const perDocument = Math.max(1, Math.min(8, options.perDocumentLimit || 2));
+		for (const hit of ranked) { if (!counts.has(hit.path) && counts.size >= limit || (counts.get(hit.path) || 0) >= perDocument) continue; counts.set(hit.path, (counts.get(hit.path) || 0) + 1); hits.push(hit); }
 		// Source edits during a request invalidate the returned evidence, even if the model completed.
 		const live = new Map((await this.readDocuments(signal)).map((doc) => [doc.path, doc.hash])); const fresh = hits.filter((hit) => live.get(hit.path) === hit.hash);
 		if (fresh.length !== hits.length) warnings.push("检索期间来源发生变化，已排除旧片段，请重试"); signal?.throwIfAborted();

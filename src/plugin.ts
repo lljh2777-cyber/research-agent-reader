@@ -2489,7 +2489,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.learningLibrary;
 	}
 	getCurationService(): CurationService {
-		if (!this.curationService) this.curationService = new CurationService(this.app, this.getReadingWorkspace(), new FileCurationStore(this.readingPluginDirectory()), session => this.createReadingBackend(session, false));
+		if (!this.curationService) this.curationService = new CurationService(this.app, this.getReadingWorkspace(), new FileCurationStore(this.readingPluginDirectory()), session => this.createReadingBackend(session, false), (query, options) => this.searchKnowledge(query, options));
 		return this.curationService;
 	}
 	getCurationWriter(): CurationWriter { return this.curationWriter ||= new CurationWriter(this.getCurationService()); }

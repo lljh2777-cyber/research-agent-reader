@@ -1,0 +1,25 @@
+const assert = require("node:assert/strict");
+const { loadReading } = require("./reading-test-helpers");
+const { selectCurationParagraphs, curationQuotes } = loadReading("curation/selection.ts");
+const { curationParagraphs, validateSuggestion } = loadReading("curation/policy.ts");
+const { contentHash } = loadReading("retrieval/chunks.ts");
+(async () => {
+	const text = "# Method\n\n" + Array.from({ length: 15 }, (_, i) => `Paragraph ${i}: ${i === 14 ? "Unpaired samples were not evaluated." : "General background."}`).join("\n\n");
+	const paragraphs = curationParagraphs(text); const last = paragraphs.at(-1); const path = "wiki/methods/a.md";
+	const search = async (query, options) => { assert.deepEqual(options.paperPaths, [path]); assert.equal(options.perDocumentLimit, 8); return { mode: "hybrid", warnings: [], hits: [{ ...last, path, hash: contentHash(text) }] }; };
+	const found = await selectCurationParagraphs(text, path, "非配对数据", search); assert.equal(found.paragraphs[0].id, last.id); assert.equal(found.paragraphs.length, 8);
+	const stale = await selectCurationParagraphs(text, path, "非配对", async () => ({ mode: "hybrid", warnings: [], hits: [{ ...last, path, hash: "old" }] })); assert(!stale.paragraphs.some(p => p.id === last.id)); assert(stale.warnings.length);
+	const fallback = await selectCurationParagraphs(text, path, "background", async () => { throw new Error("offline"); }); assert.equal(fallback.paragraphs.length, 8); assert(fallback.warnings.length);
+	const abort = new AbortController(); abort.abort(); await assert.rejects(selectCurationParagraphs(text, path, "query", search, abort.signal));
+	const evidence = { id: "P1", text: "Human samples used 7.5 mg.\n未验证小鼠。", role: "本文原文", depth: "原文文本", origins: [] }; evidence.quotes = curationQuotes(evidence);
+	for (const q of evidence.quotes) assert.equal(evidence.text.slice(q.start, q.end), q.text);
+	assert(evidence.quotes[0].text.includes("7.5 mg"));
+	const context = { ruleVersion: "curation-v2", target: { paragraphs }, evidence: [evidence], sourceCompatible: true };
+	const value = { kind: "add", paragraphId: paragraphs[0].id, claim: "人类样本", text: "样本使用 7.5 mg。", reason: "已报告", citations: [{ id: "P1", quoteId: evidence.quotes[0].id }] };
+	const parsed = validateSuggestion(value, context, 0); assert(parsed.applicable); assert.equal(parsed.citations[0].quote, evidence.quotes[0].text);
+	assert(!validateSuggestion({ ...value, citations: [{ id: "P1", quoteId: "forged", quote: evidence.text }] }, context, 0).applicable);
+	const unsupported = validateSuggestion({ ...value, kind: "conflict", text: "" }, context, 0); assert.equal(unsupported.kind, "insufficient"); assert.equal(unsupported.modelKind, "conflict"); assert(!unsupported.applicable);
+	assert.equal(validateSuggestion({ ...value, kind: "conflict", comparison: { targetQuote: paragraphs[0].text, evidenceId: "P1" } }, context, 0).kind, "conflict");
+	assert.equal(validateSuggestion({ ...value, kind: "conflict" }, { ...context, ruleVersion: undefined }, 0).kind, "conflict");
+	console.log("CURATION_SELECTION_OK");
+})().catch(e => { console.error(e); process.exitCode = 1; });

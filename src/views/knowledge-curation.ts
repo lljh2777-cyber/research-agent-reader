@@ -94,6 +94,7 @@ export class KnowledgeCurationModal extends Modal {
 		this.evidence.empty(); const context = this.context; if (!context) return;
 		this.evidence.createEl("p", { cls: "curation-budget", text: "预计文字输入约 " + context.estimate.toLocaleString() + " token · 最多一次生成调用" });
 		this.evidence.createEl("small", { text: context.backendName + " · " + (context.model || "默认模型") + "；图像和推理另计。勾选、差异和历史均在本地完成。" });
+		if (context.selection) this.evidence.createEl("small", { text: "目标选段：" + ({ hybrid: "混合检索＋重排", rerank: "关键词＋重排", lexical: "关键词" }[context.selection.mode] || context.selection.mode) + " · 从 " + context.selection.candidates + " 段中选择 " + context.selection.selected + " 段；相关性不代表事实支持。" });
 		if (context.backendId === "codex-cli") this.evidence.createEl("small", { text: "Codex CLI 还会附加运行上下文，实际输入可能高于这里的文字估算。" });
 		for (const warning of context.warnings) this.evidence.createEl("p", { cls: "reading-error", text: warning });
 		for (const evidence of context.evidence) { const box = detail(this.evidence, evidence.id + " · " + evidence.role + (evidence.visual ? " · 附带图像" : ""), evidence.text); box.createEl("small", { text: evidence.path + (evidence.page ? " · 第 " + evidence.page + " 页" : "") + " · " + evidence.depth }); }
@@ -117,6 +118,7 @@ export class KnowledgeCurationModal extends Modal {
 			check.disabled = review.state !== "ready" || !suggestion.applicable || suggestion.decision !== "pending"; label.createEl("strong", { text: suggestion.claim }); heading.createEl("span", { cls: "curation-badge", text: SUGGESTION_LABELS[suggestion.kind] });
 			check.onchange = () => { if (check.checked) this.selected.add(suggestion.id); else this.selected.delete(suggestion.id); this.previewButton.disabled = !this.selected.size; };
 			card.createEl("p", { text: suggestion.reason }); if (suggestion.text) card.createEl("div", { cls: "curation-proposed", text: suggestion.text });
+			if (suggestion.modelKind && suggestion.modelKind !== suggestion.kind) card.createEl("small", { text: "模型原分类：" + SUGGESTION_LABELS[suggestion.modelKind] + "；依据检查后调整为" + SUGGESTION_LABELS[suggestion.kind] });
 			if (suggestion.decision !== "pending") card.createEl("small", { text: suggestion.decision === "applied" ? "已应用 · 从修订记录查看或撤销" : "已忽略" });
 			const paragraph = review.context.target.paragraphs.find(p => p.id === suggestion.paragraphId); if (paragraph) detail(card, "目标位置 · " + paragraph.heading, paragraph.text);
 			for (const citation of suggestion.citations) { const evidence = review.context.evidence.find(e => e.id === citation.id); const box = detail(card, "核对引用 · " + citation.id, citation.quote); if (evidence) { box.createEl("small", { text: evidence.path + " · " + evidence.origins.join("、") }); if (evidence.kind === "vault") action(box, "打开依据笔记", () => this.plugin.openVaultFile(evidence.path)); else action(box, "返回原文依据", () => this.plugin.openCurationEvidence(review.context, citation.id)); } }

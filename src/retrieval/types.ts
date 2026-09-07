@@ -19,7 +19,7 @@ export interface KnowledgeResult {
 	mode: RetrievalMode; hits: KnowledgeHit[]; warnings: string[]; scope: string[] | null;
 	documents: number; indexedChunks: number; totalChunks: number;
 }
-export interface SearchOptions { signal?: AbortSignal; paperPaths?: string[]; identityQuery?: string; limit?: number; }
+export interface SearchOptions { signal?: AbortSignal; paperPaths?: string[]; identityQuery?: string; limit?: number; perDocumentLimit?: number; }
 export interface RetrievalModels {
 	embed(input: string[], signal?: AbortSignal): Promise<Float32Array[]>;
 	rerank(query: string, input: string[], signal?: AbortSignal): Promise<Array<{ index: number; score: number }>>;

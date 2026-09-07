@@ -29,10 +29,14 @@ export function validateSuggestion(raw: unknown, context: CurationContext, index
 	if (value.claim.length > 500 || value.text.length > 4000 || value.reason.length > 1600) throw new Error("单条整理建议过长，请缩小范围");
 	const warnings: string[] = []; const paragraph = context.target.paragraphs.find(item => item.id === value.paragraphId); const citations: CurationSuggestion["citations"] = [];
 	for (const item of value.citations) {
-		if (!item || typeof item.id !== "string" || typeof item.quote !== "string" || !item.quote.trim() || item.quote.length > 1400) throw new Error("证据引用结构无效");
+		if (!item || typeof item.id !== "string") throw new Error("证据引用结构无效");
 		const evidence = context.evidence.find(e => e.id === item.id);
-		citations.push({ id: item.id, quote: item.quote });
-		if (!evidence || !evidence.text.includes(item.quote)) warnings.push("引用无法在本轮证据中定位");
+		const selected = evidence?.quotes?.find(q => q.id === item.quoteId);
+		const quote = typeof item.quote === "string" ? item.quote : selected?.text;
+		if (typeof quote !== "string" || !quote.trim() || quote.length > 1400) throw new Error("证据引用结构无效");
+		citations.push({ id: item.id, quote, ...(typeof item.quoteId === "string" ? { quoteId: item.quoteId } : {}) });
+		if (item.quoteId !== undefined && (!selected || evidence!.text.slice(selected.start, selected.end) !== selected.text || quote !== selected.text)) warnings.push("引用编号与原文位置不一致");
+		if (!evidence || !evidence.text.includes(quote)) warnings.push("引用无法在本轮证据中定位");
 		else if (!["本文原文", "论文依据", "背景解释"].includes(evidence.role) || /metadata-only/.test(evidence.depth)) warnings.push("引用属于来源边界或非事实内容");
 	}
 	if (!paragraph) warnings.push("目标段落不存在");
@@ -47,8 +51,14 @@ export function validateSuggestion(raw: unknown, context: CurationContext, index
 	if (citations.some(c => /未|没有|不/.test(c.quote) && compact(c.quote).replace(/未|没有|不/g, "") === compact(proposedText))) warnings.push("建议与原句的否定关系不一致");
 	if (/(?:图\s*\d|figure\s*\d)/i.test(value.text) && !citations.some(c => context.evidence.find(e => e.id === c.id)?.visual)) warnings.push("本轮未直接读取相关图像，图表判断需复核");
 	if (["add", "replace", "condition"].includes(String(value.kind)) && !value.text.trim()) warnings.push("没有待写入的正文");
-	return { id: "s-" + index, kind: value.kind as SuggestionKind, paragraphId: value.paragraphId, claim: value.claim, text: value.text, reason: value.reason,
-		citations, warnings: [...new Set(warnings)], applicable: ["add", "replace", "condition"].includes(String(value.kind)) && warnings.length === 0, decision: "pending" };
+	let kind = value.kind as SuggestionKind;
+	const comparison = value.comparison as CurationSuggestion["comparison"];
+	if (kind === "conflict" && context.ruleVersion === "curation-v2" && (!comparison || typeof comparison.targetQuote !== "string" || !comparison.targetQuote.trim() || !paragraph?.text.includes(comparison.targetQuote) || !citations.some(c => c.id === comparison.evidenceId))) {
+		kind = "insufficient"; warnings.push("缺少双方可定位依据，暂按证据不足处理；不能从未验证推断相反结论");
+	}
+	return { id: "s-" + index, kind, modelKind: kinds.includes(value.modelKind as SuggestionKind) ? value.modelKind as SuggestionKind : value.kind as SuggestionKind,
+		...(comparison && typeof comparison.targetQuote === "string" && typeof comparison.evidenceId === "string" ? { comparison } : {}), paragraphId: value.paragraphId, claim: value.claim, text: value.text, reason: value.reason,
+		citations, warnings: [...new Set(warnings)], applicable: ["add", "replace", "condition"].includes(kind) && warnings.length === 0, decision: "pending" };
 }
 export function parseCurationResult(text: string, context: CurationContext): CurationSuggestion[] {
 	const raw = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));

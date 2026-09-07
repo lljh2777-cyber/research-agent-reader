@@ -9,6 +9,10 @@ description: Compare selected learning content with an existing knowledge note u
 
 一次最多输出五条建议。优先少而明确：已有内容足够时标记 covered；支持有限时标记 insufficient；条件不同用 condition 并明确各自适用范围；相反或不相容的结论用 conflict，保留双方依据，不擅自消解。不能从相似度、多个转述页面或导航索引推断独立证据。
 
+未测试的物种、缺少因果实验或没有报告的结果属于 insufficient，不能判为 conflict。只有同一对象、条件、指标下有明确相反结论时使用 conflict，同时返回 comparison：targetQuote 为目标段落的逐字原句，evidenceId 为支持相反结论的本轮依据 ID。不同条件且两边都有依据时用 condition；一边没有依据时用 insufficient。
+
+证据如提供 quotes 数组，优先返回 citations: [{"id":"证据ID","quoteId":"给定原句ID"}]，插件会提取对应原句。不得编造编号、改变原句、拼接不连续片段为一句话。没有 quotes 的旧输入仍用逐字 quote。引用编号只解决定位，不证明它支持候选观点。
+
 对于 add/replace/condition，每个事实必须由本轮 evidence 中实际原句支持。核对数字、单位、研究对象、实验条件、否定词和因果强度。引用 source note 的转述时说明证据层级，不冒充重新读取了原始论文。本文原文的文本读取不等于图像核验；图表结论只有本轮明确附带对应图像时才能作为已查看图像的结果。
 
 保留正式笔记的原有深度；不修改 YAML、原始论文标题或 x-ray 状态。目标为来源笔记时只能整理同一论文。概念、方法和综合笔记应写明不同来源与适用条件。新增正文使用简体中文和必要的原术语，不包含工作流程介绍、状态、文件路径、链接、段落标题或修改指令。引用链接由插件生成。
