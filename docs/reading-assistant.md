@@ -25,3 +25,5 @@
 当前接入 OpenAI Responses 的 `text.format` 和 OpenAI 兼容 Chat Completions 的 `response_format`；其他协议继续使用本地校验。原生格式不能保证引用真实、科学结论正确或所有复杂 Schema 均被服务支持，所以本地校验始终保留。接口协议依据：[OpenAI 官方文档](https://developers.openai.com/api/docs/guides/structured-outputs)、[阿里云官方文档](https://help.aliyun.com/zh/model-studio/qwen-structured-output)。
 
 自动化检查：`pnpm test:assistant` 覆盖上下文、权限、实际读取、存储恢复、操作交接，以及 Schema 探测、配置失效、两种原生协议和未验证时的降级。全部使用内存或 mock，不包含文件清理。正式知识写入继续使用既有差异预览与修订服务。
+
+测试发现默认思考模式可能在工具参数选择时产生较高推理开销。对于阿里云官方接口的 Qwen 3.5～3.8 Plus/Flash，助手协调与格式探测显式使用非思考模式，论文讲解和知识整理继续沿用原有配置。其他接口不发送该专有参数。行为依据：[阿里云思考模式文档](https://help.aliyun.com/zh/model-studio/deep-thinking)。

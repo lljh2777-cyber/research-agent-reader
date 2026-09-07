@@ -59,7 +59,7 @@ export class ReadingAssistantService {
 				if (used + estimate > 42000) throw new Error("助手达到本轮文字输入预算，请拆分任务；已有轨迹已保留"); used += estimate;
 				const call: AssistantRun["calls"][number] = { state: "running", estimatedInput: estimate }; run.calls.push(call); await this.save(run);
 				let raw: string;
-				try { raw = await backend.complete({ system, prompt, schema: ASSISTANT_SCHEMA, images: [], signal: controller.signal, maxTokens: 3000, onUsage: u => { for (const key of ["input", "output", "cachedInput"] as const) if (Number.isFinite(u[key]) && u[key]! >= 0) call[key] = u[key]; } }); call.state = "done"; }
+				try { raw = await backend.complete({ system, prompt, schema: ASSISTANT_SCHEMA, disableReasoning: true, images: [], signal: controller.signal, maxTokens: 3000, onUsage: u => { for (const key of ["input", "output", "cachedInput"] as const) if (Number.isFinite(u[key]) && u[key]! >= 0) call[key] = u[key]; } }); call.state = "done"; }
 				catch (e) { call.state = controller.signal.aborted ? "interrupted" : "failed"; throw e; }
 				finally { await this.save(run); }
 				controller.signal.throwIfAborted(); const step = parseAssistantStep(raw);

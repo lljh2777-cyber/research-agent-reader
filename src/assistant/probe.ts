@@ -13,7 +13,7 @@ export async function probeReadingSchema(provider: LLMProvider, profile: Provide
 	const final = schema.properties.step.anyOf.find(s => s.properties.tool.enum[0] === "final")!;
 	(final.properties.arguments.properties as Record<string, unknown>).answer = { type: "string", enum: [expected] };
 	try {
-		const result = await provider.complete({ model: profile.model, maxTokens: 250, messages: [{ role: "system", content: "This is a JSON capability test. Return the final step with answer=plain and citations=[]. If a response schema is provided, obey that schema instead. Do not call tools." }, { role: "user", content: "Run the format test." }], responseSchema: { name: "reading_capability_probe", schema } }, { timeoutMs: 30000 });
+		const result = await provider.complete({ model: profile.model, maxTokens: 250, disableReasoning: true, messages: [{ role: "system", content: "This is a JSON capability test. Return the final step with answer=plain and citations=[]. If a response schema is provided, obey that schema instead. Do not call tools." }, { role: "user", content: "Run the format test." }], responseSchema: { name: "reading_capability_probe", schema } }, { timeoutMs: 30000 });
 		const usage = readingUsage(result.raw?.usage); const step = parseAssistantStep(result.text);
 		const verified = step.tool === "final" && step.arguments.answer === expected && Array.isArray(step.arguments.citations) && step.arguments.citations.length === 0;
 		return { ...record, ...usage, verified, message: verified ? "原生 Schema 探测通过；仍逐轮执行本地校验。" : "接口未遵守本次 Schema，继续使用本地结构校验。" };

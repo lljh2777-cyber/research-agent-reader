@@ -7,3 +7,7 @@ export function structuredProfileKey(profile: Pick<ProviderProfile, "type" | "ba
 export function supportsReadingSchema(profile: ProviderProfile): boolean {
 	return ["openai", "openai-compatible", "lm-studio"].includes(profile.type) && profile.structuredOutput?.verified === true && profile.structuredOutput.key === structuredProfileKey(profile);
 }
+export function supportsFastCoordination(baseUrl: string, model: string): boolean {
+	try { return /(^|\.)aliyuncs\.com$/i.test(new URL(baseUrl).hostname) && /^qwen3\.[5678]-(?:plus|flash)(?:$|-\d)/i.test(model); }
+	catch { return false; }
+}

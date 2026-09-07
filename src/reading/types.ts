@@ -108,6 +108,7 @@ export interface ReadingResult {
 }
 export interface ReadingImage { evidenceId: string; dataUrl: string }
 export interface ReadingBackendRequest {
+	disableReasoning?: boolean;
 	schema?: Record<string, unknown>;
 	system: string; prompt: string; images: ReadingImage[];
 	signal: AbortSignal; onDelta?: (text: string) => void;

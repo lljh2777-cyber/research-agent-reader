@@ -250,6 +250,8 @@ export interface WebSearchResult {
 }
 
 export interface ProviderChatRequest {
+	/** A cost preference, applied only to explicitly supported hybrid-thinking endpoints. */
+	disableReasoning?: boolean;
 	responseSchema?: { name: string; schema: Record<string, unknown> };
 	model?: string;
 	messages: readonly ChatMessage[];

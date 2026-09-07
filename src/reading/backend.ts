@@ -29,7 +29,7 @@ export class DirectReadingBackend implements ReadingBackend {
 		const abort = (): void => cancel?.(); request.signal.addEventListener("abort", abort, { once: true });
 		try {
 			const options = { timeoutMs: 120_000, registerCancel: (callback: () => void) => { cancel = callback; if (request.signal.aborted) callback(); } };
-			const payload = { model: this.model, messages, maxTokens: request.maxTokens ?? 6000, ...(this.structuredOutput && request.schema ? { responseSchema: { name: "reading_result", schema: request.schema } } : {}) };
+			const payload = { model: this.model, messages, maxTokens: request.maxTokens ?? 6000, ...(request.disableReasoning ? { disableReasoning: true } : {}), ...(this.structuredOutput && request.schema ? { responseSchema: { name: "reading_result", schema: request.schema } } : {}) };
 			const result = this.streaming ? await this.provider.stream(payload, (delta) => request.onDelta?.(delta), options) : await this.provider.complete(payload, options);
 			request.signal.throwIfAborted();
 			const usage = readingUsage(result.raw?.usage); if (usage) request.onUsage?.(usage);

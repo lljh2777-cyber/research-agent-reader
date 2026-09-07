@@ -5,6 +5,7 @@ import {
 	type ChatMessage,
 	type ProviderCapabilities,
 } from "../config";
+import { supportsFastCoordination } from "./structured";
 import type {
 	PluginHost,
 	ProviderChatRequest,
@@ -410,6 +411,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
 			max_tokens: request.maxTokens || 256,
 			stream,
 			...(request.responseSchema ? { response_format: { type: "json_schema", json_schema: { ...request.responseSchema, strict: true } } } : {}),
+			...(request.disableReasoning && supportsFastCoordination(this.config.baseUrl, request.model || this.config.model) ? { enable_thinking: false } : {}),
 		};
 		const webSearch = request.webSearch;
 		if (webSearch?.protocol === "qwen") {

@@ -4,7 +4,7 @@ import type AgentDashboardPlugin from "../plugin";
 import { ASSISTANT_CAPABILITIES } from "../assistant/capabilities";
 import type { AssistantRun } from "../assistant/types";
 import { safeReadingMarkdown } from "../reading/export";
-import { supportsReadingSchema } from "../providers/structured";
+import { supportsFastCoordination, supportsReadingSchema } from "../providers/structured";
 
 const states = { running: "正在处理", done: "已完成", failed: "未完成", interrupted: "已中断" };
 function button(parent: HTMLElement, text: string, run: () => unknown): HTMLButtonElement {
@@ -28,7 +28,7 @@ export class ReadingAssistantModal extends Modal {
 		this.profile.value = profiles.some(p => p.id === this.session.backend) ? this.session.backend : profiles.some(p => p.id === this.plugin.settings.activeProviderId) ? this.plugin.settings.activeProviderId : profiles[0]?.id || "";
 		this.history = toolbar.createEl("select", { attr: { "aria-label": "助手请求历史" } }); this.history.onchange = () => { this.selectedRun = this.history.value; this.following = false; this.render(); };
 		const formats = this.contentEl.createEl("details", { cls: "assistant-formats" }); formats.createEl("summary", { text: "模型格式与调用边界" });
-		const formatStatus = formats.createEl("p"); const showFormat = () => { const p = this.plugin.getProviderProfile(this.profile.value); formatStatus.setText(p ? (supportsReadingSchema(p) ? "原生 Schema 已验证。" : "使用本地严格结构校验。") + " " + (p.structuredOutput?.message || "可通过一次短请求检测接口是否支持 Schema。") : "请在插件设置中添加并测试 Direct API。"); }; this.profile.onchange = showFormat; showFormat();
+		const formatStatus = formats.createEl("p"); const showFormat = () => { const p = this.plugin.getProviderProfile(this.profile.value); formatStatus.setText(p ? (supportsReadingSchema(p) ? "原生 Schema 已验证。" : "使用本地严格结构校验。") + " " + (p.structuredOutput?.message || "可通过一次短请求检测接口是否支持 Schema。") + (supportsFastCoordination(p.baseUrl, p.model) ? " 助手协调使用非思考模式以减少开销；论文讲解沿用原有配置。" : "") : "请在插件设置中添加并测试 Direct API。"); }; this.profile.onchange = showFormat; showFormat();
 		button(formats, "检测 Schema（一次短请求）", async () => { if (this.service.isRunning(this.sessionId)) throw new Error("请等待当前助手请求结束"); await this.plugin.testReadingSchema(this.profile.value); if (!this.closed) showFormat(); });
 		formats.createEl("small", { text: "最多八轮模型调用，文字输入累计预算约 42,000 token；格式错误停止，可手动重试。关闭窗口仍会继续，停止使用下方独立按钮。" });
 		this.status = this.contentEl.createEl("p", { cls: "assistant-status", attr: { role: "status", "aria-live": "polite" } });
