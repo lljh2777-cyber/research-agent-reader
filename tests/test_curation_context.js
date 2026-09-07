@@ -14,6 +14,13 @@ async function main() {
 	const context = await prepareCuration(app, workspace, backend, session.id, [node.id], file.path); assert(context.sourceCompatible, "first-page title supports PDF identity, not its generic basename");
 	metadataTitle = "Another foundation model unrelated to the selected paper"; assert(!(await prepareCuration(app, workspace, backend, session.id, [node.id], file.path)).sourceCompatible);
 	await assert.rejects(prepareCuration(app, workspace, backend, session.id, [node.id, "2", "3", "4"], file.path), /一至三个/);
+	const read = app.vault.cachedRead; const full = "# Paper\n\n" + Array.from({ length: 8 }, (_, i) => "段落" + i + "。" + "已有研究证据。".repeat(600)).join("\n\n");
+	app.vault.cachedRead = async () => full;
+	const bounded = await prepareCuration(app, workspace, backend, session.id, [node.id], file.path);
+	assert(bounded.estimate <= 18000); assert(bounded.target.paragraphs.length < 8 && bounded.target.paragraphs.length > 0);
+	assert.equal(bounded.selection.selected, bounded.target.paragraphs.length); assert(bounded.warnings.some(w => w.includes("输入预算")));
+	assert(bounded.target.paragraphs.every(p => full.slice(p.start, p.end) === p.text), "budget reduces whole paragraphs without changing their source spans");
+	assert.deepEqual(bounded.evidence, context.evidence, "budget reduction preserves original evidence"); app.vault.cachedRead = read;
 	const long = structuredClone(session); long.nodes = Array.from({ length: 300 }, (_, i) => ({ ...node, id: "n-" + i, branchId: i < 150 ? null : "branch" }));
 	assert.equal(curationBatch(long, "n-299").length, 150); assert(curationBatch(long, "n-299").every(n => n.branchId === "branch"));
 	const before = "---\ntitle: Preserve\n---\n# Title\n\nContext\n\nParagraph\n\nFooter\n"; const after = before.replace("Paragraph", "Paragraph\n\nNew evidence");

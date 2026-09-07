@@ -51,9 +51,12 @@ export async function prepareCuration(app: App, workspace: ReadingWorkspaceServi
 	const sourceCompatible = !targetPath.startsWith("wiki/sources/") || (key && targetPath === "wiki/sources/" + key + ".md") || pdfTitle || normalize(title) === normalize(session.source.title) || [metadata.source_path, metadata.pdf, metadata.source_pdf, metadata.article_path].some(value => value && normalize(value) === normalize(session.source.path));
 	if (!sourceCompatible) warnings.push("目标来源笔记与当前论文身份未匹配；请选择同一论文或概念/方法笔记");
 	for (const item of evidence) item.quotes = curationQuotes(item);
-	const prompt = JSON.stringify({ instruction: "比较待核对的学习内容与目标段落。仅使用 evidence 的事实依据，不把学习回答当作证据。最多五条建议。", learning: nodes.map(node => ({ title: node!.title, question: node!.question, text: node!.content })),
+	const buildPrompt = (): string => JSON.stringify({ instruction: "比较待核对的学习内容与目标段落。仅使用 evidence 的事实依据，不把学习回答当作证据。最多五条建议。", learning: nodes.map(node => ({ title: node!.title, question: node!.question, text: node!.content })),
 		target: { title, category: targetPath.split("/")[1], depth: metadata.reading_depth || metadata.status || "未标注", paragraphs }, evidence: evidence.map(({ text: _text, quotes, ...item }) => ({ ...item, quotes })), sourceCompatible });
-	const estimate = estimatedTokens(curationSkill + prompt); if (estimate > 18000) throw new Error("本批预计输入超过 18,000 token，请减少节点或选择更聚焦的目标笔记");
+	let prompt = buildPrompt(); let estimate = estimatedTokens(curationSkill + prompt); const selectedCount = paragraphs.length;
+	while (estimate > 18000 && paragraphs.length > 1) { paragraphs.pop(); prompt = buildPrompt(); estimate = estimatedTokens(curationSkill + prompt); }
+	if (paragraphs.length !== selectedCount) { selection.selected = paragraphs.length; warnings.push("为控制输入预算，目标段落由 " + selectedCount + " 段缩减为 " + paragraphs.length + " 段；本批未覆盖其余段落，原文证据保持完整"); }
+	if (estimate > 18000) throw new Error("本批预计输入超过 18,000 token，请减少节点或选择更聚焦的目标笔记");
 	const learningHash = curationLearningHash(session, nodeIds);
 	const context: CurationContext = { ruleVersion: CURATION_RULE_VERSION, selection, key: "", sessionId, nodeIds, learningHash, title: readingTitle(session), source: session.source, target: { path: targetPath, title, text, hash: contentHash(text), paragraphs },
 		evidence, backendId: session.backend, backendName: backend.name, model: backend.model, prompt, estimate, sourceCompatible: !!sourceCompatible, warnings };
