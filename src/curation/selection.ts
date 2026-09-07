@@ -1,5 +1,5 @@
 import type { KnowledgeResult, SearchOptions } from "../retrieval/types";
-import { contentHash, retrievalTerms } from "../retrieval/chunks";
+import { contentHash, retrievalTerms, retrievalPassageText } from "../retrieval/chunks";
 import { curationParagraphs } from "./policy";
 import type { CurationEvidence } from "./types";
 export type CurationSearch = (query: string, options: SearchOptions) => Promise<KnowledgeResult>;
@@ -11,13 +11,13 @@ export async function selectCurationParagraphs(text: string, path: string, query
 		const result = await search(query, { signal, identityQuery: "整理目标段落", paperPaths: [path], limit: 1, perDocumentLimit: 8 }); signal?.throwIfAborted();
 		mode = result.mode; warnings.push(...result.warnings);
 		for (const hit of result.hits) {
-			if (hit.path !== path || hit.hash !== contentHash(text) || text.slice(hit.start, hit.end) !== hit.text) { warnings.push("排除路径、指纹或位置不符的检索片段"); continue; }
+			if (hit.path !== path || hit.hash !== contentHash(text) || !Number.isInteger(hit.start) || !Number.isInteger(hit.end) || hit.start < 0 || hit.end > text.length || hit.end <= hit.start || retrievalPassageText(text.slice(hit.start, hit.end)) !== hit.text) { warnings.push("排除路径、指纹或位置不符的检索片段"); continue; }
 			for (const p of all) if (p.start < hit.end && p.end > hit.start) semantic.set(p.id, p);
 		}
 	} catch (error) { signal?.throwIfAborted(); warnings.push("目标段落检索不可用，已回退本地关键词：" + String(error)); }
 	// Six ranked candidates plus two lexical anchors; no passage is accepted as a fact by its score.
 	const paragraphs = [...new Map([...semantic.values()].slice(0, 6).concat(lexical).map(p => [p.id, p])).values()].slice(0, 8);
-	return { paragraphs, warnings, selection: { mode, candidates: all.length, selected: paragraphs.length } };
+	return { paragraphs, warnings: [...new Set(warnings)], selection: { mode, candidates: all.length, selected: paragraphs.length } };
 }
 /** Exact source spans, so a model may cite an ID without retyping the quotation. */
 export function curationQuotes(evidence: CurationEvidence): NonNullable<CurationEvidence["quotes"]> {

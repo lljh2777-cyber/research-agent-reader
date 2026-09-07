@@ -13,7 +13,7 @@ export function evidenceRole(document: KnowledgeDocument, heading: string): Evid
 	if (/\/sources\//.test(document.path)) return "evidence";
 	return "background";
 }
-function plain(text: string): string { return text.replace(/!\[[^\]]*\]\([^\n]*?\)/g, "").replace(/!\[\[[^\]]*\]\]/g, "").replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target: string, label: string) => label || target).trim(); }
+export function retrievalPassageText(text: string): string { return text.replace(/!\[[^\]]*\]\([^\n]*?\)/g, "").replace(/!\[\[[^\]]*\]\]/g, "").replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_, target: string, label: string) => label || target).trim(); }
 export function chunkDocument(doc: KnowledgeDocument): KnowledgeChunk[] {
 	const chunks: KnowledgeChunk[] = []; const frontmatter = /^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/.exec(doc.text);
 	let cursor = frontmatter?.[0].length || 0; let trail: string[] = []; let fenced = "";
@@ -31,7 +31,7 @@ export function chunkDocument(doc: KnowledgeDocument): KnowledgeChunk[] {
 	for (const section of sections) for (let start = section.start; start < section.end;) {
 		let end = Math.min(section.end, start + 1800);
 		if (end < section.end) { const paragraph = doc.text.lastIndexOf("\n\n", end); if (paragraph > start + 900) end = paragraph; if (/[\uD800-\uDBFF]/.test(doc.text[end - 1])) end--; }
-		const text = plain(doc.text.slice(start, end)); const input = doc.title + "\n" + section.heading + "\n" + text;
+		const text = retrievalPassageText(doc.text.slice(start, end)); const input = doc.title + "\n" + section.heading + "\n" + text;
 		if (text) chunks.push({ id: contentHash(doc.path + "|" + doc.hash + "|" + start + "|" + end).slice(0, 24), vectorKey: contentHash(EMBEDDING_MODEL + "|v1|" + input), path: doc.path,
 			hash: doc.hash, title: doc.title, heading: section.heading, start, end, text, input, role: evidenceRole(doc, section.heading), origins: doc.origins, depth: doc.depth, basis: doc.basis });
 		if (end === section.end) break;
