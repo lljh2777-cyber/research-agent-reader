@@ -13,6 +13,7 @@
 		"test": "node tests/run_dashboard_tests.js",
 		"test:reading": "node tests/run_reading_tests.js",
 		"test:knowledge": "node tests/run_knowledge_tests.js",
+		"test:curation": "node tests/run_curation_tests.js",
 		"test:retrieval-benchmark": "node tests/test_retrieval_benchmark.js",
 		"verify": "pnpm typecheck && pnpm build && pnpm test",
 		"release:check": "node scripts/release-audit.mjs",

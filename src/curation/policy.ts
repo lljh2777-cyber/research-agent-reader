@@ -31,10 +31,12 @@ export function validateSuggestion(raw: unknown, context: CurationContext, index
 	for (const item of value.citations) {
 		if (!item || typeof item.id !== "string" || typeof item.quote !== "string" || !item.quote.trim() || item.quote.length > 1400) throw new Error("证据引用结构无效");
 		const evidence = context.evidence.find(e => e.id === item.id);
+		citations.push({ id: item.id, quote: item.quote });
 		if (!evidence || !evidence.text.includes(item.quote)) warnings.push("引用无法在本轮证据中定位");
-		else { citations.push({ id: item.id, quote: item.quote }); if (!["本文原文", "论文依据", "背景解释"].includes(evidence.role) || /metadata-only/.test(evidence.depth)) warnings.push("引用属于来源边界或非事实内容"); }
+		else if (!["本文原文", "论文依据", "背景解释"].includes(evidence.role) || /metadata-only/.test(evidence.depth)) warnings.push("引用属于来源边界或非事实内容");
 	}
 	if (!paragraph) warnings.push("目标段落不存在");
+	if (value.kind === "replace" && paragraph && /\[\[|\]\(/.test(paragraph.text)) warnings.push("替换会影响原段落链接，请改为追加补充");
 	if (!citations.length) warnings.push("缺少可核对的证据引用");
 	if (!context.sourceCompatible) warnings.push("来源笔记与当前论文身份未匹配");
 	if (value.text.trim() && (validateModelNoteBodyMarkdown(value.text).length || /^\s*#{1,6}\s/m.test(value.text) || /\[\[|\]\(|\[\^[^\]]*\]|^\s*---\s*$/m.test(value.text))) warnings.push("建议正文包含未授权结构或链接");

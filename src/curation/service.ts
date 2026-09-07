@@ -14,7 +14,12 @@ export function validatedReview(raw: unknown): CurationReview {
 	const paragraphs = curationParagraphs(context.target.text);
 	if (!context.target.paragraphs.every(p => paragraphs.some(original => original.id === p.id && original.text === p.text && original.start === p.start && original.end === p.end))) throw new Error("整理段落定位错误");
 	for (const evidence of context.evidence) if (!evidence || !["paper", "vault"].includes(evidence.kind) || typeof evidence.text !== "string" || typeof evidence.path !== "string" || typeof evidence.hash !== "string" || !Array.isArray(evidence.origins)) throw new Error("整理证据结构错误");
-	const copy = structuredClone(record); copy.suggestions = record.suggestions.map((suggestion, index) => ({ ...validateSuggestion(suggestion, copy.context, index), decision: ["pending", "ignored", "applied"].includes(suggestion.decision) ? suggestion.decision : "pending" }));
+	const copy = structuredClone(record); copy.suggestions = record.suggestions.map((suggestion, index) => {
+		const checked = validateSuggestion(suggestion, copy.context, index);
+		// Earlier versions could discard an invalid quotation. Reload must never promote a blocked record.
+		return { ...checked, warnings: [...new Set([...checked.warnings, ...(Array.isArray(suggestion.warnings) ? suggestion.warnings.filter(w => typeof w === "string") : [])])], applicable: checked.applicable && suggestion.applicable !== false,
+			decision: ["pending", "ignored", "applied"].includes(suggestion.decision) ? suggestion.decision : "pending" };
+	});
 	return copy;
 }
 export class CurationService {
@@ -51,6 +56,7 @@ export class CurationService {
 	}
 	private async run(prepared: CurationContext, signal: AbortSignal): Promise<CurationReview> {
 		await this.ready(); const context = structuredClone(prepared); await verifyCurationContext(this.app, this.workspace, context); signal.throwIfAborted();
+		if (!context.sourceCompatible) throw new Error("当前论文与目标来源笔记不匹配，请重新选择目标");
 		const cached = this.cached(context); if (cached) return cached;
 		const recovered = this.generationCache.get(context.key); if (recovered) { await this.save(recovered); this.generationCache.delete(context.key); return recovered; }
 		const stamp = now(); const review: CurationReview = { version: 1, id: id(), context, created: stamp, updated: stamp, state: "generating", suggestions: [], usage: { kind: "estimated", input: context.estimate, calls: 0, model: context.model, note: "文字输入估算；图像和推理开销以服务商实际计量为准" }, error: "" };

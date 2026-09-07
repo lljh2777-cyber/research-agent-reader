@@ -27,6 +27,7 @@ async function main() {
 	target += "\n手工编辑\n"; await assert.rejects(service.generate(context), /目标笔记已变化/); assert.equal(calls, 1);
 	await service.inspect(); assert.equal(service.reviews.get(review.id).state, "stale"); target = original;
 	const evidence = context.evidence[0]; const base = { kind: "add", claim: "claim", reason: "reason", paragraphId: context.target.paragraphs[0].id, citations: [{ id: evidence.id, quote: evidence.text }], text: "该方法仅在配对样本上验证。" };
+	const tampered = structuredClone(context); tampered.evidence[0].text = "forged source quote"; await assert.rejects(service.generate(tampered), /引用片段与原文不匹配/);
 	assert(!validateSuggestion({ ...base, text: "样本数为 900。" }, context, 0).applicable);
 	assert(!validateSuggestion({ ...base, citations: [{ id: "unknown", quote: "fake" }] }, context, 0).applicable);
 	assert(!validateSuggestion({ ...base, text: "[[papers/a/article]]" }, context, 0).applicable);
@@ -34,6 +35,7 @@ async function main() {
 	assert(!validateSuggestion(base, { ...context, sourceCompatible: false }, 0).applicable);
 	assert(!validateSuggestion(base, { ...context, evidence: [{ ...evidence, role: "研究设想" }] }, 0).applicable);
 	assert.throws(() => parseCurationResult("not JSON", context)); assert.throws(() => validatedReview({ ...review, context: { ...context, target: { ...context.target, text: "tampered" } } }), /指纹/);
+	const blockedRecord = structuredClone(review); blockedRecord.suggestions[0].applicable = false; blockedRecord.suggestions[0].warnings = ["旧引用无法定位"]; assert(!validatedReview(blockedRecord).suggestions[0].applicable, "reload cannot promote previously blocked evidence");
 	assert(!curationTarget("wiki/qa/answer.md")); assert(!curationTarget("wiki/sources/../evil.md"));
 	// API result can be reused after a failed disk commit, without a second model call.
 	node.content += " 补充"; const newContext = await service.prepare(session.id, [node.id], file.path); failReady = true;

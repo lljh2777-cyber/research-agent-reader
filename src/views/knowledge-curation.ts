@@ -11,6 +11,12 @@ function action(parent: HTMLElement, text: string, run: () => unknown | Promise<
 	button.onclick = () => { button.disabled = true; void Promise.resolve().then(run).catch(error => new Notice(String(error), 8000)).finally(() => { if (button.isConnected) button.disabled = false; }); }; return button;
 }
 function detail(parent: HTMLElement, title: string, text: string): HTMLElement { const box = parent.createEl("details"); box.createEl("summary", { text: title }); box.createEl("pre", { text, cls: "curation-text" }); return box; }
+export function curationChangeWindow(before: string, after: string): { before: string; after: string } {
+	const left = before.split(/\r?\n/), right = after.split(/\r?\n/); let start = 0, end = 0;
+	while (start < Math.min(left.length, right.length) && left[start] === right[start]) start++;
+	while (end < Math.min(left.length, right.length) - start && left[left.length - 1 - end] === right[right.length - 1 - end]) end++;
+	return { before: left.slice(Math.max(0, start - 2), left.length - Math.max(0, end - 2)).join("\n"), after: right.slice(Math.max(0, start - 2), right.length - Math.max(0, end - 2)).join("\n") };
+}
 export function curationBatch(session: ReadingSession, selectedId: string): ReadingSession["nodes"] {
 	const node = session.nodes.find(n => n.id === selectedId); return node ? session.nodes.filter(n => n.status === "done" && n.branchId === node.branchId) : [];
 }
@@ -24,7 +30,9 @@ export class RevisionPreviewModal extends Modal {
 			const item = files.createEl("details", { cls: "curation-revision-file" }); item.open = write.role === "target"; item.createEl("summary", { text: write.path });
 			const diff = readingExportDiff(write.before || "", write.after); item.createEl("p", { text: `变化区段：新增 ${diff.added} 行，删除 ${diff.removed} 行` });
 			if (diff.lines) detail(item, "只看变化" + (diff.omitted ? "（节选）" : ""), diff.lines);
-			const columns = item.createDiv("curation-diff-columns"); for (const [name, text] of [["修改前", write.before || "（新文件）"], ["修改后", write.after]]) { const col = columns.createDiv(); col.createEl("small", { text: name }); col.createEl("pre", { text, cls: "curation-text" }); }
+			const changed = curationChangeWindow(write.before || "", write.after);
+			const columns = item.createDiv("curation-diff-columns"); for (const [name, text] of [["修改前 · 变化位置", changed.before || "（新增）"], ["修改后 · 变化位置", changed.after]]) { const col = columns.createDiv(); col.createEl("small", { text: name }); col.createEl("pre", { text, cls: "curation-text" }); }
+			detail(item, "完整修改前文件", write.before || "（新文件）"); detail(item, "完整修改后文件", write.after);
 		}
 		const footer = this.contentEl.createDiv("curation-footer"); footer.createEl("span", { text: "保存前一版本 · 保留修订记录" });
 		if (this.apply) action(footer, this.revision.undoOf ? "确认撤销" : "应用选中修改", async () => { await this.apply!(); this.done?.(); this.close(); new Notice("修订已保存"); }, true);
@@ -83,6 +91,7 @@ export class KnowledgeCurationModal extends Modal {
 		this.evidence.empty(); const context = this.context; if (!context) return;
 		this.evidence.createEl("p", { cls: "curation-budget", text: "预计文字输入约 " + context.estimate.toLocaleString() + " token · 最多一次生成调用" });
 		this.evidence.createEl("small", { text: context.backendName + " · " + (context.model || "默认模型") + "；图像和推理另计。勾选、差异和历史均在本地完成。" });
+		if (context.backendId === "codex-cli") this.evidence.createEl("small", { text: "Codex CLI 还会附加运行上下文，实际输入可能高于这里的文字估算。" });
 		for (const warning of context.warnings) this.evidence.createEl("p", { cls: "reading-error", text: warning });
 		for (const evidence of context.evidence) { const box = detail(this.evidence, evidence.id + " · " + evidence.role + (evidence.visual ? " · 附带图像" : ""), evidence.text); box.createEl("small", { text: evidence.path + (evidence.page ? " · 第 " + evidence.page + " 页" : "") + " · " + evidence.depth }); }
 	}
@@ -135,6 +144,7 @@ function filterTarget(select: HTMLSelectElement, path: string): void { if (![...
 
 export class KnowledgeMaintenanceModal extends Modal {
 	private tab = "pending"; private body!: HTMLElement; private counts!: HTMLElement; private closed = false; private unsubscribes: Array<() => void> = [];
+	private indexUnsubscribes: Array<() => void> = [];
 	constructor(app: App, private plugin: AgentDashboardPlugin) { super(app); }
 	onOpen(): void {
 		this.titleEl.setText("知识库维护"); this.modalEl.addClass("curation-modal", "curation-maintenance-modal");
@@ -145,10 +155,10 @@ export class KnowledgeMaintenanceModal extends Modal {
 		this.unsubscribes.push(this.plugin.getCurationService().subscribe(() => this.renderCounts()));
 		void this.plugin.getCurationService().ready().then(() => { if (!this.closed) this.render(); }).catch(error => new Notice(String(error)));
 	}
-	onClose(): void { this.closed = true; this.unsubscribes.forEach(unsubscribe => unsubscribe()); this.contentEl.empty(); }
+	onClose(): void { this.closed = true; [...this.unsubscribes, ...this.indexUnsubscribes].forEach(unsubscribe => unsubscribe()); this.contentEl.empty(); }
 	private renderCounts(): void { if (this.closed) return; const service = this.plugin.getCurationService(); this.counts.setText(`${service.reviews.size} 批整理 · ${service.revisions.size} 次修订 · ${service.activeCount} 批正在生成` + (service.changesPending ? " · 文件有变化，待检查" : "")); }
 	private render(): void {
-		if (this.closed) return; this.body.empty(); this.renderCounts(); const service = this.plugin.getCurationService();
+		if (this.closed) return; this.indexUnsubscribes.forEach(unsubscribe => unsubscribe()); this.indexUnsubscribes = []; this.body.empty(); this.renderCounts(); const service = this.plugin.getCurationService();
 		if (this.tab === "indices") { this.renderIndices(); return; }
 		if (service.errors.length) detail(this.body, "无法加载的记录（原文件保留）", service.errors.join("\n"));
 		if (this.tab !== "history") {
@@ -174,7 +184,7 @@ export class KnowledgeMaintenanceModal extends Modal {
 		for (const [title, index, description] of [["正式知识索引", this.plugin.getKnowledgeService(), "用于有证据的知识问答，排除学习 QA。"], ["学习记录索引", this.plugin.getLearningLibrary().index, "只用于寻找相似学习内容，不作为论文依据。排除演示与测试。"]] as const) {
 			const box = this.body.createEl("article", { cls: "curation-record" }); box.createEl("strong", { text: title }); box.createEl("p", { text: description }); const status = box.createEl("p"); const progress = box.createEl("progress"); progress.max = 1;
 			const render = () => { if (!box.isConnected) return; const s = index.status; status.setText(s.message + ` · ${s.documents} 篇 / ${s.done} 个已索引片段 / ${s.changed} 篇变化`); progress.value = s.total ? s.done / s.total : 0; };
-			this.unsubscribes.push(index.subscribe(render)); render(); action(box, "更新变化内容", async () => { await index.update(); render(); }, true); action(box, "停止", () => index.stop()); action(box, "检查变化", async () => { await index.inspect(); render(); });
+			this.indexUnsubscribes.push(index.subscribe(render)); render(); action(box, "更新变化内容", async () => { await index.update(); render(); }, true); action(box, "停止", () => index.stop()); action(box, "检查变化", async () => { await index.inspect(); render(); });
 			void index.inspect().then(render).catch(error => { if (box.isConnected) status.setText(String(error)); });
 		}
 		this.body.createEl("small", { text: "更新索引会把新增或变化的片段发给已配置的 BGE 模型；历史浏览和检查变化仅在本地进行。" });

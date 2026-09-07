@@ -47,7 +47,9 @@ export async function prepareCuration(app: App, workspace: ReadingWorkspaceServi
 	if (!evidence.length) throw new Error("Vault 中未找到足够依据，暂不能生成整理建议");
 	const key = session.source.path.replace(/\\/g, "/").match(/papers\/([^/]+)\/article\.md$/)?.[1];
 	const normalize = (value: unknown): string => String(value || "").replace(/\\/g, "/").toLowerCase().trim();
-	const sourceCompatible = !targetPath.startsWith("wiki/sources/") || (key && targetPath === "wiki/sources/" + key + ".md") || normalize(title) === normalize(session.source.title) || [metadata.source_path, metadata.pdf, metadata.source_pdf, metadata.article_path].some(value => value && normalize(value) === normalize(session.source.path));
+	const titleText = (value: string): string => value.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+	const pdfTitle = session.source.kind === "pdf" && titleText(title).length >= 30 && titleText(source.evidence.filter(item => !item.asset && item.page !== undefined && item.page <= 2).map(item => item.text).join(" ").slice(0, 18000)).includes(titleText(title));
+	const sourceCompatible = !targetPath.startsWith("wiki/sources/") || (key && targetPath === "wiki/sources/" + key + ".md") || pdfTitle || normalize(title) === normalize(session.source.title) || [metadata.source_path, metadata.pdf, metadata.source_pdf, metadata.article_path].some(value => value && normalize(value) === normalize(session.source.path));
 	if (!sourceCompatible) warnings.push("目标来源笔记与当前论文身份未匹配；请选择同一论文或概念/方法笔记");
 	const prompt = JSON.stringify({ instruction: "比较待核对的学习内容与目标段落。仅使用 evidence 的事实依据，不把学习回答当作证据。最多五条建议。", learning: nodes.map(node => ({ title: node!.title, question: node!.question, text: node!.content })),
 		target: { title, category: targetPath.split("/")[1], depth: metadata.reading_depth || metadata.status || "未标注", paragraphs }, evidence, sourceCompatible });
@@ -65,5 +67,10 @@ export async function verifyCurationContext(app: App, workspace: ReadingWorkspac
 	if (!target || contentHash(await app.vault.cachedRead(target)) !== targetHash) throw new Error("目标笔记已变化，请重新预览");
 	const source = await workspace.document(context.sessionId); await source.verify();
 	if (source.source.fingerprint !== context.source.fingerprint) throw new Error("论文来源已变化，请重新核对证据");
+	for (const evidence of context.evidence.filter(item => item.kind === "paper")) {
+		if (evidence.path !== context.source.path || evidence.hash !== context.source.fingerprint || !source.evidence.some(item =>
+			(evidence.visual ? "V:" + item.id === evidence.id && !!item.asset : !item.asset && item.start === evidence.start && item.page === evidence.page)
+			&& item.text.startsWith(evidence.text))) throw new Error("保存的引用片段与原文不匹配，请重新读取依据");
+	}
 	for (const evidence of context.evidence.filter(item => item.kind === "vault")) { const file = app.vault.getFileByPath(evidence.path); if (!file || contentHash(await app.vault.cachedRead(file)) !== evidence.hash) throw new Error("引用的知识依据已变化，请重新生成建议"); }
 }
