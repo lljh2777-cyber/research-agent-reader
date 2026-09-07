@@ -247,7 +247,7 @@ async function writeReport(out) {
 		for (const [label, runs] of arms) lines.push("", label + "：" + (runs?.[q.id]?.slice(0, 5).map((item) => "`" + item.path + "`").join("；") || (runs?.[q.id] ? "未返回候选" : "待完成")));
 		lines.push("");
 	}
-	lines.push("## 复现与来源完整性", "", "- 语料哈希：`" + protocol.corpusHash + "`", "- 问题哈希：`" + protocol.questionHash + "`", "- 当前源文件校验：" + (integrity.unchanged ? "全部未变化" : "存在变化：" + integrity.changed.join("、")), "- 私有语料、问题和结果仅保存在本机实验目录；仓库只保存通用脚本与合成测试。", "- 检索路径：只读 preflight 提供主题路由，实际参考依据直接读取测试库对应笔记；排除 papers、qa、annotations、日志和导航索引。", "");
+	lines.push("## 复现与来源完整性", "", "- 语料哈希：`" + protocol.corpusHash + "`", "- 问题哈希：`" + protocol.questionHash + "`", "- 当前源文件校验：" + (integrity.unchanged ? "全部未变化" : "存在变化：" + integrity.changed.join("、")), "- 私有语料、问题和结果仅保存在本机实验目录；仓库只保存通用脚本与合成测试。", "- 检索范围：排除 papers、qa、annotations、日志、顶层导航索引和 wiki/index.md；范围内的 MOC 和项目页仍纳入。参考片段须直接阅读核验，不能用检索分数替代证据。", "");
 	await fs.writeFile(path.join(out, "report.md"), lines.join("\n"), "utf8");
 	return { integrity };
 }
