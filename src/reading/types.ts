@@ -1,6 +1,7 @@
 export const READING_VIEW_TYPE = "research-interactive-reading";
 export type ReadingStatus = "pending" | "running" | "done" | "failed" | "interrupted";
 export type ReadingLearningState = "unmarked" | "understood" | "revisit" | "question";
+export type ReadingTeachingStyle = "balanced" | "foundations" | "methods" | "evidence";
 export interface ReadingEvidenceView {
 	history: { nodeId: string; evidenceId: string }[]; cursor: number;
 	x: number; y: number; width: number; height: number;
@@ -63,6 +64,7 @@ export interface ReadingWindow {
 	scrollTop?: number;
 }
 export interface ReadingSession {
+	teachingStyle?: ReadingTeachingStyle;
 	version: 1;
 	id: string;
 	title: string;

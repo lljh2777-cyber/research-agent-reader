@@ -15,6 +15,8 @@ import { ReadingExportModal } from "./reading-export";
 import { ReadingModeMotion } from "./reading-mode-motion";
 import { ReadingEvidencePanel } from "./reading-evidence-panel";
 import { LEARNING_LABELS, markReading, visitReadingEvidence } from "../reading/progress";
+import { TEACHING_STYLES } from "../reading/teaching";
+import type { ReadingTeachingStyle } from "../reading/types";
 import type { ReadingLearningState } from "../reading/types";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
@@ -644,8 +646,11 @@ export class ReadingWorkspaceView extends ItemView {
 		const backend = element(element(modal.contentEl, "label", "reading-field", "讲解后端"), "select"); element(backend, "option", "", "Codex CLI").value = "codex-cli";
 		this.plugin.getVerifiedProviderProfiles().forEach((profile) => { element(backend, "option", "", profile.name + " · " + profile.model).value = profile.id; }); backend.value = session.backend;
 		const model = element(element(modal.contentEl, "label", "reading-field", "Codex 模型（可选）"), "input"); model.value = session.model; model.placeholder = "留空使用配置中的模型";
+		const style = element(element(modal.contentEl, "label", "reading-field", "后续讲解重点"), "select");
+		for (const [value, label] of Object.entries(TEACHING_STYLES)) element(style, "option", "", label).value = value;
+		style.value = session.teachingStyle || "balanced";
 		backend.onchange = () => { model.parentElement!.hidden = backend.value !== "codex-cli"; }; model.parentElement!.hidden = backend.value !== "codex-cli";
-		button(modal.contentEl, "保存", () => this.handle(this.service.repository.transact(session.id, (draft) => { draft.backend = backend.value; draft.model = model.value.trim(); }).then(() => modal.close()))).classList.add("mod-cta"); modal.open();
+		button(modal.contentEl, "保存", () => this.handle(this.service.repository.transact(session.id, (draft) => { draft.backend = backend.value; draft.model = model.value.trim(); draft.teachingStyle = style.value as ReadingTeachingStyle; }).then(() => modal.close()))).classList.add("mod-cta"); modal.open();
 	}
 	private openExport(): void {
 		const sessionId = this.sessionId; const nodeId = this.session!.ui.selectedId;

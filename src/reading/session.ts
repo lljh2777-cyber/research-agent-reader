@@ -108,6 +108,7 @@ export function validateReadingSession(value: unknown): ReadingSession {
 	session.archived = session.archived === true; session.pinned = session.pinned === true;
 	if (session.lastOpenedAt && !Number.isFinite(Date.parse(session.lastOpenedAt))) session.lastOpenedAt = undefined;
 	session.ui.mode = session.ui.mode === "map" ? "map" : "split";
+	if (!["balanced", "foundations", "methods", "evidence"].includes(session.teachingStyle || "balanced")) session.teachingStyle = "balanced";
 	if (!["all", "unmarked", "understood", "revisit", "question"].includes(session.ui.learningFilter || "all")) session.ui.learningFilter = "all";
 	const pane = session.ui.evidenceView;
 	if (pane) {

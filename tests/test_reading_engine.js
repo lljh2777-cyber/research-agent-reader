@@ -22,7 +22,7 @@ const { ReadingEngine, validateReadingResult } = loadReading("reading/engine.ts"
 	backend.complete = (request) => new Promise((resolve, reject) => { request.signal.addEventListener("abort", () => reject(new Error("aborted"))); });
 	const pending = engine.generate(session.id, next.id); await new Promise((resolve) => setTimeout(resolve, 10)); workspace.stopHandler(session.id, next.id);
 	await assert.rejects(pending); assert.equal(repo.get(session.id).nodes[1].status, "interrupted");
-	let retryCall = 0; backend.complete = async () => ++retryCall === 1 ? JSON.stringify({ ids: ["text-1-0"], query: "comparison", vaultQuery: "相关方法" }) : JSON.stringify(result);
+	let retryCall = 0; backend.complete = async () => ++retryCall === 1 ? JSON.stringify({ ids: ["text-1-0"], query: "comparison", vaultQuery: "相关方法" }) : JSON.stringify({ ...result, title: "方法", content: "方法设计。[text-1-0]" });
 	await engine.generate(session.id, next.id); assert.equal(searches, 1); assert.equal(repo.get(session.id).nodes[1].retrieval.query, "相关方法");
 	assert.deepEqual(repo.get(session.id).nodes[1].retrieval.paths, []);
 	console.log("READING_ENGINE_OK");
