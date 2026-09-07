@@ -25,6 +25,9 @@ module.exports = async function readingDesignScenario(app) {
 	const range = document.createRange(); range.selectNodeContents(content.querySelector("p"));
 	const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
 	content.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); await pause(); await workspace.repository.flush();
+	check(!workspace.repository.get(id).ui.pendingQuote && !root.querySelector(".reading-float"), "selection alone leaves reading undisturbed");
+	check(root.querySelector(".reading-selection-actions [aria-label='复制选中文字']"), "copy action offered");
+	click(root.querySelector(".reading-selection-actions"), "追问选中文字"); await pause(); await workspace.repository.flush();
 	const quote = workspace.repository.get(id).ui.pendingQuote;
 	check(quote?.nodeId === first && quote.text.includes("`[证据ID: fixture-a, fixture-b]`"), "quote crosses citation with raw offsets");
 	check(body.slice(quote.start, quote.end) === quote.text, "stored quote offsets unchanged");
@@ -35,6 +38,13 @@ module.exports = async function readingDesignScenario(app) {
 	check(workspace.repository.get(id).ui.split > split, "keyboard split resize");
 	click(root, "仅思维导图"); await pause();
 	check(root.querySelector(".reading-mode-switch [aria-pressed='true']")?.getAttribute("aria-label") === "仅思维导图", "mode state accessible");
+	check(root.querySelector(".reading-composer-collapsed") && !root.querySelector(".reading-map-area > .reading-composer"), "global composer collapsed beside active popup");
+	click(root, "从主线新建支线"); await pause();
+	let mainInput = root.querySelector("textarea[data-composer^='main:']"); check(mainInput, "global composer expanded");
+	mainInput.value = "收起后保留的主线草稿"; mainInput.dispatchEvent(new Event("input", { bubbles: true }));
+	click(root, "收起主输入框"); await pause(); click(root, "从主线新建支线"); await pause();
+	mainInput = root.querySelector("textarea[data-composer^='main:']"); check(mainInput.value === "收起后保留的主线草稿", "collapsed composer preserves draft");
+	check(root.querySelector(".reading-float .reading-composer-context").textContent.includes("新建子支线"), "quoted input target explicit");
 	click(root, "放大导图"); await pause(); check(workspace.repository.get(id).ui.zoom > 1, "map zoom");
 	click(root, "恢复原始缩放"); await pause(); check(workspace.repository.get(id).ui.zoom === 1, "zoom reset");
 	click(root, "新建阅读"); await pause(); check(document.querySelector(".reading-modal .modal-title")?.textContent === "开始交互阅读", "new reading entry"); [...view.modals][0].close();

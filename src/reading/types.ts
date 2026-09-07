@@ -74,6 +74,7 @@ export interface ReadingSession {
 	ui: {
 		mode: "split" | "map"; split: number; selectedId: string;
 		mainFocusId?: string; mainScroll?: number; pendingQuote?: ReadingQuote;
+		mainComposerExpanded?: boolean;
 		zoom: number; scrollX: number; scrollY: number;
 		collapsed: string[]; drafts: Record<string, string>; windows: ReadingWindow[];
 	};

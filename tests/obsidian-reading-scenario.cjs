@@ -49,6 +49,8 @@ module.exports = async function readingUiScenario(app) {
 	check(textNode, "rendered quote text"); const range = document.createRange(); range.setStart(textNode, 0); range.setEnd(textNode, 10);
 	const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
 	content.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); await settle();
+	check(!session().ui.pendingQuote && root.querySelector(".reading-selection-actions"), "selection offers actions before branching");
+	click(root.querySelector(".reading-selection-actions"), "追问选中文字"); await settle();
 	check(session().ui.pendingQuote?.nodeId === branchNode, "selection quote persisted");
 	floating = [...root.querySelectorAll(".reading-float")].find((w) => w.dataset.windowKey === branchId);
 	type(floating.querySelector("textarea"), "解释选中的内容"); click(floating, "发送"); await settle();

@@ -6187,6 +6187,10 @@ body.agent-dashboard-mineru-resizing {
 .reading-quote { margin:12px 0 20px; padding:10px 14px; color:var(--reading-muted); border-left:2px solid var(--reading-branch); font-size:12px; line-height:1.7; background:var(--reading-branch-soft); }
 .reading-composer { display:flex; flex-direction:column; flex-shrink:0; padding:12px 14px 10px; margin:8px 22px 20px; gap:8px; border:1px solid var(--reading-line); border-radius:14px; background:var(--reading-card); box-shadow:0 4px 20px #00000005; }
 .reading-composer:focus-within { border-color:var(--reading-accent); }
+.reading-composer-collapsed { display:flex; justify-content:center; padding:0 12px 14px; }
+.reading-composer-collapsed .reading-action { border:1px solid var(--reading-line); background:var(--reading-card); }
+.reading-selection-actions { position:absolute; z-index:30; display:flex; gap:2px; padding:4px; border:1px solid var(--reading-line); border-radius:8px; background:var(--reading-card); box-shadow:0 4px 20px #0003; }
+.reading-selection-actions .reading-action { height:28px; font-size:11px; padding:0 7px; }
 .reading-composer-context { display:flex; align-items:center; gap:6px; min-height:20px; color:var(--reading-accent); }
 .reading-composer-context .reading-icon { width:13px; height:13px; }
 .reading-composer-context small { font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
@@ -6254,7 +6258,7 @@ body.agent-dashboard-mineru-resizing {
 .reading-library-group-label { margin:0 0 6px; font-size:11px; color:var(--text-muted); }
 .reading-library-row { display:flex; align-items:center; gap:8px; padding:10px; border:1px solid var(--background-modifier-border); border-radius:10px; margin:6px 0; }
 .reading-library-row.is-current { border-color:var(--text-accent); }
-.reading-library-open { display:flex; flex:1; min-width:0; flex-direction:column; align-items:flex-start; height:auto; gap:4px; border:0; box-shadow:none; padding:0; background:transparent; text-align:left; white-space:normal; }
+.reading-library-modal button.reading-library-open { display:flex; flex:1; min-width:0; flex-direction:column; align-items:flex-start; height:auto; gap:4px; border:0; box-shadow:none; padding:0; background:transparent; text-align:left; white-space:normal; }
 .reading-library-open strong { font-size:14px; line-height:1.6; }
 .reading-library-open small { font-size:11px; color:var(--text-muted); }
 .reading-library-path { display:block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

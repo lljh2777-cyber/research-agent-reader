@@ -36,6 +36,8 @@ export class ReadingWorkspaceView extends ItemView {
 	private localDrafts = new Map<string, string>();
 	private quote?: ReadingQuote;
 	private cleanupDrag?: () => void;
+	private selectionBar?: HTMLElement;
+	private selectionCleanup?: () => void;
 	private modals = new Set<Modal>();
 	constructor(leaf: WorkspaceLeaf, private readonly plugin: AgentDashboardPlugin) { super(leaf); }
 	getViewType(): string { return READING_VIEW_TYPE; }
@@ -58,11 +60,17 @@ export class ReadingWorkspaceView extends ItemView {
 			});
 		});
 		this.quote = this.session?.ui.pendingQuote;
+		const dismissSelection = (event: PointerEvent): void => { if (!this.selectionBar?.contains(event.target as Node)) this.hideSelectionActions(); };
+		const dismissOnEscape = (event: KeyboardEvent): void => { if (event.key === "Escape") this.hideSelectionActions(); };
+		const dismissOnScroll = (): void => this.hideSelectionActions();
+		document.addEventListener("pointerdown", dismissSelection); document.addEventListener("keydown", dismissOnEscape);
+		this.contentEl.addEventListener("scroll", dismissOnScroll, true);
+		this.selectionCleanup = () => { document.removeEventListener("pointerdown", dismissSelection); document.removeEventListener("keydown", dismissOnEscape); this.contentEl.removeEventListener("scroll", dismissOnScroll, true); };
 		this.render(true);
 		if (this.service.repository.errors.length) new Notice("部分阅读会话无法加载，文件已保留：" + this.service.repository.errors.join("；"), 10000);
 	}
 	async onClose(): Promise<void> {
-		this.unsubscribe?.(); this.unsubscribeStream?.(); this.cleanupDrag?.(); this.renderer.unload();
+		this.unsubscribe?.(); this.unsubscribeStream?.(); this.cleanupDrag?.(); this.selectionCleanup?.(); this.hideSelectionActions(); this.renderer.unload();
 		for (const modal of this.modals) modal.close();
 		for (const timer of this.draftTimers.values()) clearTimeout(timer);
 		for (const timer of this.scrollTimers.values()) clearTimeout(timer);
@@ -119,10 +127,10 @@ export class ReadingWorkspaceView extends ItemView {
 	private render(force = false): void {
 		const session = this.session;
 		const signature = JSON.stringify(session ? [session.id, session.title, session.archived, session.pinned, session.nodes, session.outline, session.completed, session.backend, session.model,
-			session.ui.mode, session.ui.split, session.ui.selectedId, session.ui.mainFocusId, session.ui.pendingQuote, session.ui.zoom,
+			session.ui.mode, session.ui.split, session.ui.selectedId, session.ui.mainFocusId, session.ui.pendingQuote, session.ui.mainComposerExpanded, session.ui.zoom,
 			session.ui.windows.map(({ scrollTop: _scroll, ...geometry }) => geometry), session.ui.collapsed] : null);
 		if (!force && this.signature === signature) return; this.signature = signature;
-		this.cleanupDrag?.();
+		this.cleanupDrag?.(); this.hideSelectionActions();
 		const oldScroll = new Map<string, [number, number]>();
 		this.contentEl.querySelectorAll<HTMLElement>("[data-scroll-key]").forEach((node) => oldScroll.set(node.dataset.scrollKey!, [node.scrollLeft, node.scrollTop]));
 		const focused = this.contentEl.contains(document.activeElement) ? document.activeElement as HTMLTextAreaElement : null;
@@ -168,7 +176,12 @@ export class ReadingWorkspaceView extends ItemView {
 		const zoom = button(controls, Math.round(session.ui.zoom * 100) + "%", () => this.updateUI((ui) => { ui.zoom = 1; }), "恢复原始缩放"); zoom.className = "reading-zoom-value";
 		actionButton(controls, "plus", "放大导图", () => this.updateUI((ui) => { ui.zoom = Math.min(1.8, ui.zoom + 0.1); }), true);
 		actionButton(controls, "focus", "定位选中节点", () => { const card = [...map.querySelectorAll<HTMLElement>("[data-node-id]")].find((item) => item.dataset.nodeId === session.ui.selectedId); card?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" }); }, true);
-		if (session.ui.mode === "map") this.renderComposer(mapArea, "main");
+		if (session.ui.mode === "map") {
+			if (session.ui.windows.some((w) => !w.minimized) && !session.ui.mainComposerExpanded) {
+				const collapsed = element(mapArea, "div", "reading-composer-collapsed");
+				actionButton(collapsed, "message-square-plus", "从主线新建支线", () => this.updateUI((ui) => { ui.mainComposerExpanded = true; }));
+			} else this.renderComposer(mapArea, "main");
+		}
 		if (!session.mainIds.length) button(mapArea, "开始讲解 →", () => this.handle(this.service.advance(session.id)));
 		const windows = element(this.contentEl, "div", "reading-windows");
 		for (const floating of session.ui.windows) this.renderWindow(windows, floating);
@@ -312,7 +325,8 @@ export class ReadingWorkspaceView extends ItemView {
 		const tools = element(article, "div", "reading-answer-tools");
 		const selectionAction = actionButton(tools, "text-cursor-input", "选中文字后追问", () => this.captureQuote(node, content));
 		selectionAction.disabled = node.status !== "done";
-		content.onmouseup = () => { const selected = window.getSelection(); if (node.status === "done" && selected?.toString().trim() && content.contains(selected.anchorNode) && content.contains(selected.focusNode)) { this.captureQuote(node, content); } };
+		content.onmouseup = () => this.showSelectionActions(node, content);
+		content.onkeyup = (event) => { if (event.shiftKey && event.key.startsWith("Arrow")) this.showSelectionActions(node, content); };
 		if (node.evidence.length) {
 			const sources = element(article, "details", "reading-sources"); const summary = element(sources, "summary"); icon(summary, "quote"); element(summary, "span", "", "查看原文依据"); element(summary, "span", "reading-source-count", String(node.evidence.length)); icon(summary, "chevron-down");
 			for (const [index, evidence] of node.evidence.entries()) {
@@ -345,15 +359,30 @@ export class ReadingWorkspaceView extends ItemView {
 			fragment.append(text.data.slice(offset)); text.parentElement?.closest("code")?.classList.add("reading-citation-code"); text.replaceWith(fragment);
 		}
 	}
-	private captureQuote(node: ReadingNode, content: HTMLElement): void {
-		const selected = window.getSelection(); const text = selected?.toString().trim() || "";
-		if (!text || !content.contains(selected?.anchorNode || null)) { new Notice("先在这条回答中选中文字"); return; }
+	private hideSelectionActions(): void { this.selectionBar?.remove(); this.selectionBar = undefined; }
+	private showSelectionActions(node: ReadingNode, content: HTMLElement): void {
+		this.hideSelectionActions(); const selected = window.getSelection();
+		if (node.status !== "done" || !selected?.rangeCount || !selected.toString().trim() || !content.contains(selected.anchorNode) || !content.contains(selected.focusNode)) return;
+		const range = selected.getRangeAt(0).cloneRange();
+		const rect = range.getBoundingClientRect(); const outer = this.contentEl.getBoundingClientRect();
+		const bar = element(this.contentEl, "div", "reading-selection-actions"); this.selectionBar = bar; bar.setAttribute("role", "toolbar"); bar.setAttribute("aria-label", "选中文字操作");
+		bar.style.left = Math.max(8, Math.min(outer.width - 280, rect.left - outer.left)) + "px";
+		bar.style.top = Math.max(8, Math.min(outer.height - 42, rect.bottom - outer.top + 6)) + "px";
+		bar.onpointerdown = (event) => event.preventDefault();
+		actionButton(bar, "message-square-plus", "追问选中文字", () => { this.hideSelectionActions(); this.captureQuote(node, content, range); });
+		actionButton(bar, "copy", "复制选中文字", () => this.handle(navigator.clipboard.writeText(readingSelectionText(range)).then(() => { this.hideSelectionActions(); new Notice("已复制选中文字"); })));
+	}
+	private captureQuote(node: ReadingNode, content: HTMLElement, selectedRange?: Range): void {
+		const selected = window.getSelection(); const range = selectedRange || (selected?.rangeCount ? selected.getRangeAt(0) : undefined);
+		if (!range?.toString().trim() || !content.contains(range.startContainer) || !content.contains(range.endContainer)) { new Notice("先在这条回答中选中文字"); return; }
 		try {
-			const range = selected!.getRangeAt(0); const before = range.cloneRange(); before.selectNodeContents(content); before.setEnd(range.startContainer, range.startOffset);
+			const before = range.cloneRange(); before.selectNodeContents(content); before.setEnd(range.startContainer, range.startOffset);
 			const after = range.cloneRange(); after.selectNodeContents(content); after.setStart(range.endContainer, range.endOffset);
 			this.quote = resolveReadingQuote(node.id, node.content, readingSelectionText(range).trim(), readingSelectionText(before), readingSelectionText(after));
 		} catch (error) { new Notice(String(error)); return; }
-		this.handle(this.service.repository.transact(this.sessionId, (session) => { session.ui.selectedId = node.id; session.ui.pendingQuote = this.quote; this.ensureWindow(session, node.id); }).then(() => {
+		const sessionId = this.sessionId; const quote = this.quote;
+		this.handle(this.service.repository.transact(sessionId, (session) => { session.ui.selectedId = node.id; session.ui.pendingQuote = quote; this.ensureWindow(session, node.id); }).then(() => {
+			if (sessionId !== this.sessionId) return;
 			this.render(true); const key = node.branchId || node.id;
 			[...this.contentEl.querySelectorAll<HTMLElement>(".reading-float")].find((w) => w.dataset.windowKey === key)?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
 		}));
@@ -365,9 +394,10 @@ export class ReadingWorkspaceView extends ItemView {
 		const compact = parent.classList.contains("reading-float");
 		const box = element(parent, "div", "reading-composer"); const localKey = sessionId + "|" + key;
 		const quoted = this.quote && this.quote.nodeId === target ? this.quote : undefined;
-		const targetLabel = quoted ? "引用追问：" + quoted.text.slice(0, 80) : branchId ? "继续这条支线" : "基于：" + (target ? readingNode(session, target).title : "请先开始主线");
+		const targetLabel = quoted ? "新建子支线 · 引用：" + quoted.text.slice(0, 80) : branchId ? "继续当前支线 · 从最后一轮续问" : "新建支线 · " + (target ? "主线 " + String(session.mainIds.indexOf(target) + 1).padStart(2, "0") + "：" + readingNode(session, target).title : "请先开始主线");
 		const context = element(box, "div", "reading-composer-context"); icon(context, quoted ? "quote" : "corner-down-right"); element(context, "small", "", targetLabel).title = targetLabel;
 		if (quoted) actionButton(context, "x", "取消引用", () => { this.quote = undefined; this.updateUI((ui) => { ui.pendingQuote = undefined; }); this.render(true); }, true);
+		if (!compact && session.ui.mode === "map" && session.ui.windows.some((w) => !w.minimized)) actionButton(context, "chevron-down", "收起主输入框", () => this.updateUI((ui) => { ui.mainComposerExpanded = false; }), true);
 		const input = element(box, "textarea"); input.rows = compact ? 1 : 2; input.placeholder = branchId ? "继续聊聊这个问题…" : "哪里还不理解？从这里展开追问…"; input.dataset.composer = key; input.setAttribute("aria-label", targetLabel);
 		input.title = "Enter 发送 · Shift + Enter 换行";
 		input.value = this.localDrafts.get(localKey) ?? session.ui.drafts[key] ?? "";
