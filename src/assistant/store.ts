@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AssistantRun, AssistantStorage } from "./types";
-import { ASSISTANT_CAPABILITIES } from "./capabilities";
+import { ASSISTANT_CAPABILITIES, parseAssistantStep } from "./capabilities";
 const ID = /^a-[a-f0-9-]{36}$/;
 export function validateAssistantRun(raw: unknown): AssistantRun {
 	const r = raw as AssistantRun;
@@ -17,6 +17,7 @@ export function validateAssistantRun(raw: unknown): AssistantRun {
 		|| new Set(r.sources.map(s => s.id)).size !== r.sources.length || r.citations.some(id => !r.sources.some(s => s.id === id))
 		|| r.actions.some(a => !a || !str(a.id, 50) || !["curation", "export", "advance"].includes(a.kind) || !["node", "branch", "session"].includes(a.scope) || !["prepared", "opened"].includes(a.state) || !array(a.nodeIds, 3) || !a.nodeIds.length || a.nodeIds.some(id => !str(id, 100)) || !str(a.target) || !/^[a-f0-9]{64}$/.test(a.contextHash))
 		|| new Set(r.actions.map(a => a.id)).size !== r.actions.length) throw new Error("助手记录内容无效");
+	for (const s of r.steps) if (s.arguments) parseAssistantStep(JSON.stringify({ step: { tool: s.tool, arguments: s.arguments } }));
 	return r;
 }
 export class FileAssistantStorage implements AssistantStorage {

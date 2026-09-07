@@ -87,13 +87,14 @@ export class AssistantTools {
 		} else if (tool === "prepare_action") {
 			const ids = [...new Set(args.nodeIds as string[])]; if (!ids.length || ids.length > 3) throw new Error("请选择一至三个节点"); ids.forEach(id => this.node(id));
 			if (!["curation", "export", "advance"].includes(String(args.kind)) || !["node", "branch", "session"].includes(String(args.scope))) throw new Error("操作类别或范围无效");
-			if (args.kind === "curation" && (!this.paths.has(String(args.target)) || !curationTarget(String(args.target)))) throw new Error("整理目标必须来自本轮正式知识检索");
+			const candidate = this.candidates.get(String(args.target)); const target = candidate && "path" in candidate ? candidate.path : String(args.target);
+			if (args.kind === "curation" && (!this.paths.has(target) || !curationTarget(target))) throw new Error("整理目标必须使用本轮正式知识检索返回的候选编号或完整路径。可用路径：" + [...this.paths].filter(curationTarget).slice(0, 3).join("、"));
 			if (args.kind !== "curation" && args.target !== "") throw new Error("此操作不接受目标路径");
 			if (args.kind === "export" && args.scope !== "session" && ids.length !== 1) throw new Error("节点或支线导出只能指定一个起点");
 			if (args.kind !== "export" && args.scope !== "node") throw new Error("此操作只接受节点范围");
 			if (args.kind === "advance" && (this.session.completed || ids.length !== 1 || ids[0] !== this.session.mainIds[this.session.mainIds.length - 1])) throw new Error("只能从未完成主线的最新单元继续");
 			if (args.kind === "curation" && ids.some(id => this.node(id).branchId !== this.node(ids[0]).branchId)) throw new Error("一次整理请选择同一主线或支线中的节点");
-			const action = { id: randomUUID(), kind: args.kind as "curation" | "export" | "advance", nodeIds: ids, target: String(args.target), scope: args.scope as "node" | "branch" | "session", contextHash: assistantContextHash(this.session, ids, String(args.scope)), state: "prepared" as const };
+			const action = { id: randomUUID(), kind: args.kind as "curation" | "export" | "advance", nodeIds: ids, target, scope: args.scope as "node" | "branch" | "session", contextHash: assistantContextHash(this.session, ids, String(args.scope)), state: "prepared" as const };
 			this.run.actions.push(action); value = { ...action, status: "仅准备操作卡，尚未执行。请用户在卡片中继续。" };
 		} else throw new Error("未知助手工具");
 		this.signal.throwIfAborted(); const output = JSON.stringify(value); if (output.length > 19000) throw new Error("工具结果过长，请缩小问题范围"); this.cache.set(key, output); return { output, cached: false };

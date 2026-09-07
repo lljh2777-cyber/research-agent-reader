@@ -8,7 +8,7 @@ export interface AssistantCall { state: "running" | "done" | "failed" | "interru
 export interface AssistantRun {
 	version: 1; id: string; sessionId: string; nodeId: string; profileId: string; model: string; question: string; created: string;
 	state: "running" | "done" | "failed" | "interrupted"; answer: string; error: string; citations: string[];
-	steps: { tool: string; summary: string; cached: boolean; ok: boolean }[]; sources: AssistantSource[]; actions: AssistantAction[]; calls: AssistantCall[];
+	steps: { tool: string; arguments?: Record<string, unknown>; summary: string; cached: boolean; ok: boolean }[]; sources: AssistantSource[]; actions: AssistantAction[]; calls: AssistantCall[];
 }
 export interface AssistantStorage { list(): Promise<string[]>; read(id: string): Promise<string>; write(id: string, text: string): Promise<void>; }
 export interface AssistantDependencies {

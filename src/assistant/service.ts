@@ -50,7 +50,7 @@ export class ReadingAssistantService {
 		const context = assistantContext(session, nodeId); const backend = this.deps.backend(session, profileId);
 		const run: AssistantRun = { version: 1, id: "a-" + randomUUID(), sessionId, nodeId, profileId, model: backend.name + " · " + backend.model, question: question.trim(), created: new Date().toISOString(), state: "running", answer: "", error: "", steps: [], sources: [], actions: [], citations: [], calls: [] };
 		await this.save(run); const tools = new AssistantTools(this.deps, session, run, controller.signal); const timer = setTimeout(() => controller.abort(), 240000);
-		const history: { role: string; data: unknown }[] = []; let used = 0; let outputChars = 0;
+		const history: { role: string; data: unknown }[] = []; const failures = new Map<string, number>(); let used = 0; let outputChars = 0;
 		const system = rules + "\n可用工具（参数必须齐全）：" + JSON.stringify(ASSISTANT_CAPABILITIES);
 		try {
 			await tools.verify();
@@ -70,13 +70,22 @@ export class ReadingAssistantService {
 					run.answer = answer; run.citations = citations; run.state = "done"; await this.save(run); return run;
 				}
 				try { const result = await tools.execute(step.tool, step.arguments); outputChars += result.output.length;
-					run.steps.push({ tool: step.tool, summary: result.output.slice(0, 180), cached: result.cached, ok: true }); history.push({ role: "tool", data: { request: step, result: result.output } });
-				} catch (e) { controller.signal.throwIfAborted(); run.steps.push({ tool: step.tool, summary: String(e).slice(0, 300), cached: false, ok: false }); history.push({ role: "tool", data: { request: step, error: String(e).slice(0, 300) } }); }
+					run.steps.push({ tool: step.tool, arguments: step.arguments, summary: result.output.slice(0, 180), cached: result.cached, ok: true }); history.push({ role: "tool", data: { request: step, result: result.output } });
+				} catch (e) { controller.signal.throwIfAborted(); run.steps.push({ tool: step.tool, arguments: step.arguments, summary: String(e).slice(0, 300), cached: false, ok: false }); history.push({ role: "tool", data: { request: step, error: String(e).slice(0, 300) } });
+					const key = JSON.stringify(step); failures.set(key, (failures.get(key) || 0) + 1); if (failures.get(key)! >= 2) throw new Error("助手重复提交相同的无效操作，已停止以避免继续消耗；请根据执行轨迹调整请求");
+				}
 				await this.save(run);
 				if (outputChars > 38000) throw new Error("工具内容超过本轮预算，已有轨迹已保留");
 			}
 			throw new Error("助手达到八轮调用上限，已有轨迹已保留，请缩小任务");
-		} catch (e) { run.state = controller.signal.aborted ? "interrupted" : "failed"; run.error = controller.signal.aborted ? "助手已停止或超时，可重新发起" : String(e); await this.save(run).catch(() => undefined); throw e; }
+		} catch (e) {
+			run.state = controller.signal.aborted ? "interrupted" : "failed"; run.error = controller.signal.aborted ? "助手已停止或超时，可重新发起" : String(e).slice(0, 3000);
+			try { await this.save(run); } catch (saveError) {
+				run.error += "；本次状态保存失败，关闭应用可能丢失本轮结果：" + String(saveError).slice(0, 500);
+				this.runs.set(run.id, structuredClone(run)); this.emit();
+			}
+			throw e;
+		}
 		finally { clearTimeout(timer); }
 	}
 	async dispose() { for (const r of this.active.values()) r.controller.abort(); await Promise.allSettled([...this.active.values()].map(r => r.promise)); this.listeners.clear(); }

@@ -79,7 +79,7 @@ export class ReadingAssistantModal extends Modal {
 		this.results.createEl("small", { text: states[run.state] + " · " + run.model });
 		const trace = this.results.createEl("details", { cls: "assistant-trace" }); trace.open = run.state !== "done";
 		trace.createEl("summary", { text: "执行轨迹 · " + run.steps.length + " 步 · " + run.calls.length + " 次模型调用" });
-		for (const s of run.steps) { const item = trace.createEl("details"); item.createEl("summary", { text: (s.ok ? "✓ " : "! ") + (ASSISTANT_CAPABILITIES.find(c => c.name === s.tool)?.label || s.tool) + (s.cached ? " · 本轮复用" : "") }); item.createEl("pre", { text: s.summary }); }
+		for (const s of run.steps) { const item = trace.createEl("details"); item.createEl("summary", { text: (s.ok ? "✓ " : "! ") + (ASSISTANT_CAPABILITIES.find(c => c.name === s.tool)?.label || s.tool) + (s.cached ? " · 本轮复用" : "") }); item.createEl("pre", { text: (s.arguments ? JSON.stringify(s.arguments, null, 2) + "\n\n" : "") + s.summary }); }
 		const reported = (key: "input" | "output" | "cachedInput") => { const known = run.calls.filter(c => c[key] !== undefined); return known.length ? known.reduce((sum, c) => sum + c[key]!, 0).toLocaleString() + (known.length < run.calls.length ? "（部分调用）" : "") : "未报告"; };
 		trace.createEl("p", { cls: "assistant-usage", text: `接口报告：输入 ${reported("input")} / 输出 ${reported("output")} / 缓存输入 ${reported("cachedInput")} token。累计文字输入估算 ${run.calls.reduce((sum, c) => sum + c.estimatedInput, 0).toLocaleString()} token。` });
 		if (run.answer) { const answer = this.results.createDiv("markdown-rendered assistant-answer"); void MarkdownRenderer.render(this.app, safeReadingMarkdown(run.answer), answer, "", this.renderer).catch(e => { if (answer.isConnected) answer.setText(run.answer); }); }

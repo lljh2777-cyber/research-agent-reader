@@ -8,7 +8,7 @@ export const ASSISTANT_CAPABILITIES = [
 	{ name: "search_learning", label: "查找历史学习", description: "寻找与指定节点相关的其他会话和导出学习记录。结果不能作为论文事实依据。", properties: { nodeId: string } },
 	{ name: "read_evidence", label: "核对原文依据", description: "读取 read_node 或 search_knowledge 实际返回的编号，最多三个。首版助手读取文字，图像需在原文窗对照，不得宣称图表核验。", properties: { ids: strings } },
 	{ name: "outcomes", label: "查看整理记录", description: "读取指定节点的已导出、待审阅、已采纳或复查状态。", properties: { nodeId: string } },
-	{ name: "prepare_action", label: "准备后续操作", description: "准备 curation/export/advance 操作卡，不写入笔记也不自动生成。nodeIds 最多三个；curation 的 target 必须是检索到的正式笔记；export 的 scope 为 node/branch/session，其余用 node；无 target 时填空字符串。用户点击卡片衔接现有操作。", properties: { kind: string, nodeIds: strings, target: string, scope: string } },
+	{ name: "prepare_action", label: "准备后续操作", description: "准备 curation/export/advance 操作卡，不写入笔记也不自动生成。nodeIds 最多三个；curation 的 target 使用 search_knowledge 返回的候选 id（K: 开头），也接受完整 path；export 的 scope 为 node/branch/session，其余用 node；无 target 时填空字符串。用户点击卡片衔接现有操作。", properties: { kind: string, nodeIds: strings, target: string, scope: string } },
 	{ name: "final", label: "完成回答", description: "返回简体中文回答与引用编号。只能引用 read_evidence 已读取的依据；学习记录不能充当论文证据。操作卡仅已准备，不能声称已写入或已继续讲解。", properties: { answer: string, citations: strings } },
 ] as const;
 export type AssistantToolName = typeof ASSISTANT_CAPABILITIES[number]["name"];

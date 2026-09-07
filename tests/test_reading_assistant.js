@@ -56,6 +56,7 @@ async function toolsFor(f) {
 	const hits = JSON.parse((await tools.execute("search_knowledge", { query: "Method" })).output).candidates;
 	const action = await tools.execute("prepare_action", args); assert.match(action.output, /尚未执行/);
 	await tools.execute("prepare_action", args); assert.equal(run.actions.length, 1);
+	await tools.execute("prepare_action", { ...args, target: hits[0].id }); assert.equal(run.actions[1].target, f.path);
 	await tools.execute("read_evidence", { ids: [hits[0].id] }); assert.equal(run.sources[1].kind, "knowledge");
 	f.deps.readFile = async () => "modified"; await assert.rejects(tools.execute("read_evidence", { ids: [hits[0].id] }), /变化/);
 	await assert.rejects(tools.execute("prepare_action", { ...args, target: "wiki/qa/a.md" }), /正式/);
@@ -69,6 +70,7 @@ async function toolsFor(f) {
 	const result = await g.service.start(g.s.id, g.n.id, "p", "核对依据"); assert.equal(result.calls.length, 3); assert.equal(result.sources.length, 1); assert.equal(result.steps.length, 2);
 	g.set(async () => step("final", { answer: "假的 [S99]", citations: ["S99"] })); await assert.rejects(g.service.start(g.s.id, g.n.id, "p", "test"), /未读取/);
 	g.set(async () => "invalid"); await assert.rejects(g.service.start(g.s.id, g.n.id, "p", "test"), /JSON/); assert.equal(g.calls(), 1);
+	g.set(async () => step("read_node", { nodeId: "unknown" })); await assert.rejects(g.service.start(g.s.id, g.n.id, "p", "repeat"), /重复提交/); assert.equal(g.calls(), 2); assert.equal([...g.service.runs.values()].slice(-1)[0].steps[1].arguments.nodeId, "unknown");
 	g.storage.fail = true; const prior = g.calls(); await assert.rejects(g.service.start(g.s.id, g.n.id, "p", "test"), /disk full/); assert.equal(g.calls(), prior); g.storage.fail = false;
 	let entered; const entering = new Promise(r => entered = r);
 	g.set(request => new Promise((resolve, reject) => { entered(); request.signal.addEventListener("abort", () => reject(new Error("abort"))); }));
@@ -91,6 +93,18 @@ async function toolsFor(f) {
 	const newBranch = addReadingBranch(h.s, h.n.id); const newNode = addReadingNode(h.s, newBranch.id, "new content"); newNode.status = "done";
 	await assert.rejects(h.service.dispatch(er.id, actionId, () => { handoffs++; }), /变化/); assert.equal(handoffs, 3);
 	await h.service.dispose(); await restoredActions.dispose();
+	const disk = fixture(); disk.set(async () => { disk.storage.fail = true; return step("final", { answer: "response", citations: [] }); });
+	await assert.rejects(disk.service.start(disk.s.id, disk.n.id, "p", "write fails during generation"), /disk full/);
+	const failedSave = [...disk.service.runs.values()][0]; assert.equal(failedSave.state, "failed"); assert.match(failedSave.error, /状态保存失败/); assert.equal(disk.service.isRunning(disk.s.id), false); await disk.service.dispose();
+	const first = fixture(), second = fixture(); const sessions = new Map([[first.s.id, first.s], [second.s.id, second.s]]); const waiting = new Map();
+	const combinedDeps = { ...first.deps, workspace: { ready: async () => {}, repository: { get: id => sessions.get(id) }, document: async id => ({ source: sessions.get(id).source, verify: async () => {} }) },
+		backend: () => ({ name: "parallel", model: "m", images: false, complete: request => new Promise(resolve => waiting.set(JSON.parse(request.prompt).context.sessionId, resolve)) }) };
+	const isolated = new ReadingAssistantService(combinedDeps, memoryStorage());
+	const left = isolated.start(first.s.id, first.n.id, "p", "left"), right = isolated.start(second.s.id, second.n.id, "p", "right");
+	while (waiting.size < 2) await new Promise(resolve => setImmediate(resolve));
+	waiting.get(second.s.id)(step("final", { answer: "second", citations: [] })); const rightResult = await right;
+	waiting.get(first.s.id)(step("final", { answer: "first", citations: [] })); const leftResult = await left;
+	assert.equal(rightResult.sessionId, second.s.id); assert.equal(rightResult.answer, "second"); assert.equal(leftResult.sessionId, first.s.id); assert.equal(leftResult.answer, "first"); await isolated.dispose();
 	await Promise.all([f.service.dispose(), g.service.dispose(), restart.dispose()]);
 	console.log("READING_ASSISTANT_OK: registry, frozen context, evidence, learning boundaries, actions, persistence, cancellation, budgets");
 })().catch(e => { console.error(e); process.exitCode = 1; });
