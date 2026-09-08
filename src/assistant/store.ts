@@ -18,6 +18,12 @@ export function validateAssistantRun(raw: unknown): AssistantRun {
 		|| r.actions.some(a => !a || !str(a.id, 50) || !["curation", "export", "advance"].includes(a.kind) || !["node", "branch", "session"].includes(a.scope) || !["prepared", "opened"].includes(a.state) || !array(a.nodeIds, 3) || !a.nodeIds.length || a.nodeIds.some(id => !str(id, 100)) || !str(a.target) || !/^[a-f0-9]{64}$/.test(a.contextHash))
 		|| new Set(r.actions.map(a => a.id)).size !== r.actions.length) throw new Error("助手记录内容无效");
 	for (const s of r.steps) if (s.arguments) parseAssistantStep(JSON.stringify({ step: { tool: s.tool, arguments: s.arguments } }));
+	for (const a of r.actions) if (a.execution !== undefined) {
+		const e = a.execution;
+		if (!e || !str(e.id, 50) || !e.id || !["waiting", "running", "succeeded", "failed", "interrupted", "needs-review"].includes(e.state) || !str(e.detail, 1500) || !str(e.updated, 50) || !Number.isFinite(Date.parse(e.updated))
+			|| [e.nodeId, e.reviewId].some(id => id !== undefined && (!str(id, 100) || !id)) || e.path !== undefined && !str(e.path) || e.hash !== undefined && !/^[a-f0-9]{64}$/.test(e.hash)
+			|| e.reused !== undefined && typeof e.reused !== "boolean" || e.warning !== undefined && !str(e.warning, 1000)) throw new Error("助手执行记录无效");
+	}
 	return r;
 }
 export class FileAssistantStorage implements AssistantStorage {

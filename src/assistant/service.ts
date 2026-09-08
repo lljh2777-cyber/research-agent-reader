@@ -6,15 +6,18 @@ import { assistantContext, assistantContextHash, AssistantTools } from "./tools"
 import { validateAssistantRun } from "./store";
 import { readingTokenEstimate } from "../reading/usage";
 import { contentHash } from "../retrieval/chunks";
-import type { AssistantAction, AssistantDependencies, AssistantRun, AssistantStorage } from "./types";
+import type { AssistantAction, AssistantDependencies, AssistantExecution, AssistantRun, AssistantStorage } from "./types";
 import { curationTarget } from "../curation/policy";
 import { ToolFailureGuard, toolFeedback } from "../agent/tool-feedback";
 export class ReadingAssistantService {
 	readonly runs = new Map<string, AssistantRun>(); readonly errors: string[] = [];
+	actionError = "";
 	private initialization?: Promise<void>; private listeners = new Set<() => void>();
 	private active = new Map<string, { controller: AbortController; promise: Promise<AssistantRun> }>();
 	private dispatching = new Set<string>();
 	private disposed = false;
+	private actionQueue: Promise<unknown> = Promise.resolve(); private unsubscribeActions?: () => void;
+	private refreshing?: Promise<void>; private refreshAgain = false; private liveExecutions = new Set<string>();
 	constructor(readonly deps: AssistantDependencies, private storage: AssistantStorage) {}
 	subscribe(listener: () => void) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	private emit() { this.listeners.forEach(f => { try { f(); } catch { /* View callbacks cannot interrupt saves. */ } }); }
@@ -22,17 +25,53 @@ export class ReadingAssistantService {
 		const r = validateAssistantRun(JSON.parse(await this.storage.read(id))); if (r.id !== id) throw new Error("记录编号不一致");
 		if (r.state === "running") { r.state = "interrupted"; r.error = "上次助手请求已中断，可重新发起"; r.calls.forEach(c => { if (c.state === "running") c.state = "interrupted"; }); await this.storage.write(id, JSON.stringify(r)); }
 		this.runs.set(id, r);
-	} catch (e) { this.errors.push(id + "：" + String(e)); } })(); }
+	} catch (e) { this.errors.push(id + "：" + String(e)); }
+		if (!this.disposed) this.unsubscribeActions = this.deps.subscribeActions?.(() => { void this.refreshActions().catch(() => undefined); });
+	})(); }
 	private async save(run: AssistantRun) { await this.storage.write(run.id, JSON.stringify(run)); this.runs.set(run.id, structuredClone(run)); this.emit(); }
 	isRunning(sessionId: string) { return this.active.has(sessionId); }
 	stop(sessionId: string) { this.active.get(sessionId)?.controller.abort(); }
+	private actionSerial<T>(operation: () => Promise<T>): Promise<T> { const task = this.actionQueue.then(operation); this.actionQueue = task.catch(() => undefined); return task; }
+	async recordExecution(runId: string, actionId: string, executionId: string, patch: Partial<Omit<AssistantExecution, "id" | "updated">>): Promise<void> {
+		await this.ready(); await this.actionSerial(async () => {
+			if (this.disposed) throw new Error("阅读助手已关闭");
+			const run = structuredClone(this.runs.get(runId)); const action = run?.actions.find(a => a.id === actionId);
+			if (!run || run.state !== "done" || !action?.execution || action.execution.id !== executionId) throw new Error("操作已被重新打开，请使用最新预览");
+			action.execution = { ...action.execution, ...patch, detail: (patch.detail ?? action.execution.detail).slice(0, 1500), updated: new Date().toISOString() };
+			validateAssistantRun(run); await this.save(run);
+			if (patch.state === "running") this.liveExecutions.add(executionId); else if (patch.state) this.liveExecutions.delete(executionId);
+		});
+	}
+	async refreshActions(): Promise<void> {
+		if (this.disposed || !this.deps.resolveAction) return; this.refreshAgain = true;
+		if (this.refreshing) return this.refreshing;
+		this.refreshing = (async () => { await this.ready(); do {
+			this.refreshAgain = false; await this.actionSerial(async () => {
+				for (const original of [...this.runs.values()]) {
+					if (this.disposed) return; if (original.state !== "done") continue;
+					const run = structuredClone(original); let changed = false;
+					for (const action of run.actions) if (action.execution && !(action.kind === "export" && this.liveExecutions.has(action.execution.id))) {
+						let next: AssistantExecution | undefined;
+						try { next = await this.deps.resolveAction!(run.sessionId, structuredClone(action)); }
+						catch { next = { ...action.execution, state: "needs-review", detail: "暂时无法核对执行记录，请刷新或打开原功能查看" }; }
+						if (next && JSON.stringify(next) !== JSON.stringify(action.execution)) { action.execution = { ...next, detail: next.detail.slice(0, 1500), updated: new Date().toISOString() }; changed = true; }
+					}
+					if (changed && !this.disposed) { validateAssistantRun(run); await this.save(run); }
+				}
+			});
+		} while (this.refreshAgain && !this.disposed); })().then(() => { if (this.actionError) { this.actionError = ""; this.emit(); } })
+			.catch(error => { this.actionError = "执行状态刷新失败：" + String(error).slice(0, 300); this.emit(); throw error; }).finally(() => { this.refreshing = undefined; });
+		return this.refreshing;
+	}
 	/** Persist the handoff before invoking business UI. Reopening a preview is safe; advancing is one-shot. */
 	async dispatch(runId: string, actionId: string, handoff: (action: AssistantAction, sessionId: string) => Promise<void> | void): Promise<void> {
 		if (this.disposed) throw new Error("阅读助手已关闭");
 		const key = runId + ":" + actionId; if (this.dispatching.has(key)) throw new Error("操作正在交接"); this.dispatching.add(key);
 		try {
-			await this.ready(); const run = validateAssistantRun(structuredClone(this.runs.get(runId))); const action = run.actions.find(a => a.id === actionId);
+			await this.ready(); const linked = await this.actionSerial(async () => {
+			const run = validateAssistantRun(structuredClone(this.runs.get(runId))); const action = run.actions.find(a => a.id === actionId);
 			if (run.state !== "done" || !action) throw new Error("请求未完成或操作不存在");
+			if (action.execution && (action.execution.state === "running" || action.execution.nodeId || action.execution.reviewId || action.execution.path)) throw new Error("此操作已关联执行记录，请查看结果或从原功能重试");
 			const session = this.deps.workspace.repository.get(run.sessionId);
 			if (session.demo || action.nodeIds.some(id => !session.nodes.some(n => n.id === id && n.status === "done")) || assistantContextHash(session, action.nodeIds, action.scope) !== action.contextHash) throw new Error("阅读内容已变化，请重新准备操作");
 			if (action.kind === "curation" && (!curationTarget(action.target) || action.scope !== "node" || action.nodeIds.some(id => session.nodes.find(n => n.id === id)?.branchId !== session.nodes.find(n => n.id === action.nodeIds[0])?.branchId))) throw new Error("整理目标或范围无效");
@@ -40,7 +79,11 @@ export class ReadingAssistantService {
 			if (action.kind === "advance" && (action.state === "opened" || action.scope !== "node" || session.completed || action.nodeIds.length !== 1 || action.nodeIds[0] !== session.mainIds[session.mainIds.length - 1])) throw new Error("此主线操作已交接或已经过期，请前往阅读界面查看或重试");
 			await new AssistantTools(this.deps, session, run, new AbortController().signal).verify();
 			if (this.disposed) throw new Error("阅读助手已关闭");
-			action.state = "opened"; await this.save(run); if (this.disposed) throw new Error("阅读助手已关闭"); await handoff(structuredClone(action), run.sessionId);
+			action.state = "opened"; action.execution = { id: randomUUID(), state: "waiting", detail: action.kind === "advance" ? "已交接，等待关联讲解节点" : "预览已准备，等待在对应功能中继续", updated: new Date().toISOString() };
+			await this.save(run); return { action: structuredClone(action), sessionId: run.sessionId };
+			});
+			try { if (this.disposed) throw new Error("阅读助手已关闭"); await handoff(linked.action, linked.sessionId); }
+			catch (error) { if (!this.disposed) await this.recordExecution(runId, actionId, linked.action.execution!.id, { state: "failed", detail: "交接未完成：" + String(error) }); throw error; }
 		} finally { this.dispatching.delete(key); }
 	}
 	start(sessionId: string, nodeId: string, profileId: string, question: string): Promise<AssistantRun> {
@@ -93,5 +136,5 @@ export class ReadingAssistantService {
 		}
 		finally { clearTimeout(timer); }
 	}
-	async dispose() { this.disposed = true; for (const r of this.active.values()) r.controller.abort(); await Promise.allSettled([...this.active.values()].map(r => r.promise)); this.listeners.clear(); }
+	async dispose() { this.disposed = true; this.unsubscribeActions?.(); for (const r of this.active.values()) r.controller.abort(); await Promise.allSettled([...this.active.values()].map(r => r.promise)); await this.actionQueue; this.listeners.clear(); }
 }

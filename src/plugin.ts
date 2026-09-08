@@ -63,6 +63,8 @@ import { FileAssistantStorage } from "./assistant/store";
 import { ReadingAssistantModal } from "./views/reading-assistant";
 import { ReadingExportModal } from "./views/reading-export";
 import { readReadingOutcomes } from "./reading/outcomes";
+import { resolveAssistantAction, safeAssistantExportPath } from "./assistant/action-results";
+import type { AssistantExecution } from "./assistant/types";
 import { inKnowledgeScope, contentHash as assistantHash } from "./retrieval/chunks";
 import type { PaperIngestFlowOptions } from "./agent/paper-ingest-flow";
 import { VaultLintService } from "./services/vault-lint";
@@ -2513,6 +2515,13 @@ export default class AgentDashboardPlugin extends Plugin {
 			readFile: async filename => { if (!inKnowledgeScope(filename)) throw new Error("来源不在正式知识范围"); const file = this.app.vault.getAbstractFileByPath(filename); if (!(file instanceof TFile)) throw new Error("知识来源已缺失"); return this.app.vault.read(file); },
 			learning: (session, nodeId, signal) => this.getLearningLibrary().find(session, [nodeId], signal),
 			outcomes: session => readReadingOutcomes(this.app, session, this.getCurationService()),
+			resolveAction: async (sessionId, action) => {
+				const service = this.getCurationService(); await service.ready();
+				return resolveAssistantAction(this.getReadingWorkspace().repository.get(sessionId), action, { review: id => service.reviews.get(id), revisions: () => service.revisions.values(), readExport: async path => {
+					if (!safeAssistantExportPath(path)) throw new Error("导出路径无效"); const file = this.app.vault.getAbstractFileByPath(path); if (!(file instanceof TFile)) throw new Error("导出文件缺失"); return this.app.vault.read(file);
+				} });
+			},
+			subscribeActions: changed => { const reading = this.getReadingWorkspace().repository.subscribe(changed), curation = this.getCurationService().subscribe(changed); return () => { reading(); curation(); }; },
 		}, new FileAssistantStorage(this.readingPluginDirectory()));
 	}
 	async testReadingSchema(profileId: string): Promise<void> {
@@ -2530,13 +2539,32 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	async dispatchAssistantAction(runId: string, actionId: string): Promise<void> {
 		await this.getReadingAssistant().dispatch(runId, actionId, async (action, sessionId) => {
-			if (action.kind === "curation") this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, action.nodeIds[0], undefined, { nodeIds: action.nodeIds, target: action.target }));
-			else if (action.kind === "export") this.showCurationModal(new ReadingExportModal(this.app, () => this.getReadingWorkspace().repository.get(sessionId), action.nodeIds[0], (query, options) => this.searchKnowledge(query, options), filename => this.openVaultFile(filename), () => this.openKnowledgeCuration(sessionId, action.nodeIds[0]), action.scope));
+			const service = this.getReadingAssistant(), executionId = action.execution!.id;
+			const report = (patch: Partial<Omit<AssistantExecution, "id" | "updated">>) => service.recordExecution(runId, actionId, executionId, patch);
+			const feedbackFailure = (error: unknown) => new Notice("业务结果请在原功能查看；助手状态保存失败：" + String(error), 8000);
+			const failed = async (error: unknown) => { await report({ state: "failed", detail: String(error) }).catch(feedbackFailure); };
+			if (action.kind === "curation") this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, action.nodeIds[0], undefined, { nodeIds: action.nodeIds, target: action.target }, {
+				prepared: async review => { await report({ state: review.state === "generating" ? "running" : "waiting", reviewId: review.id, path: review.context.target.path, detail: "已关联整理批次，结果随原功能更新" }); }, failed,
+			}));
+			else if (action.kind === "export") this.showCurationModal(new ReadingExportModal(this.app, () => this.getReadingWorkspace().repository.get(sessionId), action.nodeIds[0], (query, options) => this.searchKnowledge(query, options), filename => this.openVaultFile(filename), () => this.openKnowledgeCuration(sessionId, action.nodeIds[0]), action.scope, {
+				prepared: async receipt => { await report({ ...receipt, state: "running", detail: "正在保存学习笔记" }); },
+				finished: async result => { await report({ state: result.warning ? "needs-review" : "succeeded", path: result.path, reused: !!result.reused, warning: result.warning?.slice(0, 1000), detail: result.warning || (result.reused ? "已复用已有学习笔记" : "学习笔记已保存") }).catch(feedbackFailure); }, failed,
+			}));
 			else {
 				await this.openLearningRecord(sessionId, action.nodeIds[0]);
-				void this.getReadingWorkspace().advance(sessionId).catch(error => new Notice("主线讲解未完成，请在节点中重试：" + String(error), 8000));
+				void this.getReadingWorkspace().advance(sessionId, { expectedParentId: action.nodeIds[0], prepared: async nodeId => { await report({ state: "running", nodeId, detail: "正在生成主线讲解" }); } })
+					.catch(async error => { await failed(error); new Notice("主线讲解未完成，请在节点中重试：" + String(error), 8000); })
+					.finally(() => { void service.refreshActions().catch(feedbackFailure); });
 			}
 		});
+	}
+	async openAssistantActionResult(runId: string, actionId: string): Promise<void> {
+		const service = this.getReadingAssistant(); await service.refreshActions(); const run = service.runs.get(runId), action = run?.actions.find(a => a.id === actionId), execution = action?.execution;
+		if (!run || !action || !execution) throw new Error("尚无执行记录");
+		if (action.kind === "advance") { await this.openLearningRecord(run.sessionId, execution.nodeId || action.nodeIds[0]); return; }
+		if (action.kind === "curation" && execution.reviewId) { const review = this.getCurationService().reviews.get(execution.reviewId); if (!review || review.context.sessionId !== run.sessionId) throw new Error("整理记录缺失"); this.openKnowledgeCuration(run.sessionId, review.context.nodeIds[0], review); return; }
+		if (action.kind === "export" && execution.path && safeAssistantExportPath(execution.path)) { await this.openVaultFile(execution.path); return; }
+		throw new Error("尚未关联执行结果，请在原功能查看");
 	}
 	async openAssistantEvidence(runId: string, sourceId: string): Promise<void> {
 		const run = this.getReadingAssistant().runs.get(runId), source = run?.sources.find(s => s.id === sourceId); if (!run || !source) throw new Error("助手引用不存在");

@@ -58,9 +58,14 @@ export class ReadingWorkspaceService {
 		const node = addReadingNode(session, branch.id, "为什么需要对照组？"); node.status = "done"; node.content = "这是一条示例支线。你可以继续追问、拖动窗口，或将窗口固定后查看其他节点。";
 		await this.repository.add(session); return session.id;
 	}
-	async advance(sessionId: string): Promise<void> {
+	async advance(sessionId: string, tracking?: { expectedParentId: string; prepared(nodeId: string): Promise<void> }): Promise<void> {
 		let id = "";
-		await this.repository.transact(sessionId, (session) => { id = addReadingNode(session, null).id; });
+		await this.repository.transact(sessionId, (session) => {
+			if (tracking && session.mainIds[session.mainIds.length - 1] !== tracking.expectedParentId) throw new Error("主线起点已变化，请重新准备操作");
+			id = addReadingNode(session, null).id;
+		});
+		try { await tracking?.prepared(id); }
+		catch (error) { await this.repository.transact(sessionId, session => { const node = readingNode(session, id); node.status = "failed"; node.error = "助手执行关联保存失败，尚未调用模型，可在此节点重试：" + String(error); }); throw error; }
 		await this.generate(sessionId, id);
 	}
 	async ask(sessionId: string, parentId: string, question: string, branchId?: string, quote?: ReadingQuote): Promise<string> {

@@ -7,6 +7,7 @@ import { safeReadingMarkdown } from "../reading/export";
 import { supportsFastCoordination, supportsReadingSchema } from "../providers/structured";
 
 const states = { running: "正在处理", done: "已完成", failed: "未完成", interrupted: "已中断" };
+const executionStates = { waiting: "等待操作", running: "执行中", succeeded: "已完成", failed: "未完成", interrupted: "已中断", "needs-review": "需核对" };
 function button(parent: HTMLElement, text: string, run: () => unknown): HTMLButtonElement {
 	const b = parent.createEl("button", { text, attr: { type: "button" } });
 	b.onclick = () => { b.disabled = true; void Promise.resolve().then(run).catch(e => new Notice(String(e), 8000)).finally(() => { if (b.isConnected) b.disabled = false; }); }; return b;
@@ -27,6 +28,7 @@ export class ReadingAssistantModal extends Modal {
 		const profiles = this.plugin.getVerifiedProviderProfiles(); for (const p of profiles) this.profile.createEl("option", { value: p.id, text: p.name + " · " + p.model });
 		this.profile.value = profiles.some(p => p.id === this.session.backend) ? this.session.backend : profiles.some(p => p.id === this.plugin.settings.activeProviderId) ? this.plugin.settings.activeProviderId : profiles[0]?.id || "";
 		this.history = toolbar.createEl("select", { attr: { "aria-label": "助手请求历史" } }); this.history.onchange = () => { this.selectedRun = this.history.value; this.following = false; this.render(); };
+		button(toolbar, "刷新执行结果", () => this.service.refreshActions());
 		const formats = this.contentEl.createEl("details", { cls: "assistant-formats" }); formats.createEl("summary", { text: "模型格式与调用边界" });
 		const formatStatus = formats.createEl("p"); const showFormat = () => { const p = this.plugin.getProviderProfile(this.profile.value); formatStatus.setText(p ? (supportsReadingSchema(p) ? "原生 Schema 已验证。" : "使用本地严格结构校验。") + " " + (p.structuredOutput?.message || "可通过一次短请求检测接口是否支持 Schema。") + (supportsFastCoordination(p.baseUrl, p.model) ? " 助手协调使用非思考模式以减少开销；论文讲解沿用原有配置。" : "") : "请在插件设置中添加并测试 Direct API。"); }; this.profile.onchange = showFormat; showFormat();
 		button(formats, "检测 Schema（一次短请求）", async () => { if (this.service.isRunning(this.sessionId)) throw new Error("请等待当前助手请求结束"); await this.plugin.testReadingSchema(this.profile.value); if (!this.closed) showFormat(); });
@@ -41,7 +43,7 @@ export class ReadingAssistantModal extends Modal {
 		const controls = footer.createDiv("assistant-composer-actions"); controls.createEl("small", { text: "每次请求独立处理 · Ctrl/⌘ + Enter 发送" });
 		this.stop = button(controls, "停止", () => this.service.stop(this.sessionId)); this.submit = button(controls, "发送请求", () => this.send()); this.submit.addClass("mod-cta");
 		this.unsubscribe = this.service.subscribe(() => this.render());
-		void this.service.ready().then(() => { if (!this.closed) this.render(); }).catch(e => { if (!this.closed) this.status.setText(String(e)); }); this.render();
+		void this.service.ready().then(async () => { await this.service.refreshActions(); if (!this.closed) this.render(); }).catch(e => { if (!this.closed) this.status.setText(String(e)); }); this.render();
 	}
 	private saveDraft(): void {
 		clearTimeout(this.draftTimer); const value = this.input.value;
@@ -63,7 +65,7 @@ export class ReadingAssistantModal extends Modal {
 		for (const r of runs) this.history.createEl("option", { value: r.id, text: new Date(r.created).toLocaleString() + " · " + r.question.slice(0, 30) }); this.history.value = this.selectedRun;
 		const running = this.service.isRunning(this.sessionId); this.submit.disabled = running || !this.profile.value; this.profile.disabled = running; this.stop.disabled = !running;
 		const run = runs.find(r => r.id === this.selectedRun);
-		this.status.setText((running ? "助手正在处理本会话的请求，关闭窗口后仍会继续。" : "先核对依据，再整理和导出。") + (this.service.errors.length ? " 有 " + this.service.errors.length + " 条记录无法恢复，原文件已保留。" : ""));
+		this.status.setText((running ? "助手正在处理本会话的请求，关闭窗口后仍会继续。" : "先核对依据，再整理和导出。") + (this.service.errors.length ? " 有 " + this.service.errors.length + " 条记录无法恢复，原文件已保留。" : "") + (this.service.actionError ? " " + this.service.actionError : ""));
 		const scroll = this.results.scrollTop; this.renderer.unload(); this.renderer = new Component(); this.renderer.load(); this.results.empty();
 		if (!run) {
 			this.results.createEl("h3", { text: "把下一步交给阅读助手" });
@@ -76,7 +78,7 @@ export class ReadingAssistantModal extends Modal {
 	}
 	private renderRun(run: AssistantRun): void {
 		this.results.createEl("p", { cls: "assistant-question", text: run.question });
-		this.results.createEl("small", { text: states[run.state] + " · " + run.model });
+		this.results.createEl("small", { text: "助手请求" + states[run.state] + " · " + run.model });
 		const trace = this.results.createEl("details", { cls: "assistant-trace" }); trace.open = run.state !== "done";
 		trace.createEl("summary", { text: "执行轨迹 · " + run.steps.length + " 步 · " + run.calls.length + " 次模型调用" });
 		for (const s of run.steps) { const item = trace.createEl("details"); item.createEl("summary", { text: (s.ok ? "✓ " : "! ") + (ASSISTANT_CAPABILITIES.find(c => c.name === s.tool)?.label || s.tool) + (s.cached ? " · 本轮复用" : "") }); item.createEl("pre", { text: (s.arguments ? JSON.stringify(s.arguments, null, 2) + "\n\n" : "") + s.summary }); }
@@ -92,9 +94,12 @@ export class ReadingAssistantModal extends Modal {
 		if (run.state === "done") for (const a of run.actions) {
 			const card = this.results.createDiv("assistant-action"); const title = { curation: "准备整理建议", export: "预览学习笔记", advance: "继续主线讲解" }[a.kind];
 			card.createEl("strong", { text: title }); card.createEl("small", { text: a.target || ({ node: "选中节点", branch: "所在支线", session: "完整会话" }[a.scope]) });
-			if (a.kind === "advance" && a.state === "opened") button(card, "已交接 · 查看阅读进度", () => { this.close(); return this.plugin.openLearningRecord(run.sessionId, this.session.ui.selectedId); });
+			const e = a.execution; card.dataset.state = e?.state || "prepared";
+			if (e) { card.createEl("small", { cls: "assistant-action-status", text: executionStates[e.state] + " · " + e.detail }); if (e.path && e.path !== a.target) card.createEl("small", { text: e.path }); }
+			if (e?.nodeId || e?.reviewId || e?.path) button(card, a.kind === "advance" ? "查看讲解 / 重试" : a.kind === "curation" ? "查看整理 / 修订" : "打开学习笔记", async () => { await this.plugin.openAssistantActionResult(run.id, a.id); this.close(); });
+			else if (a.kind === "advance" && a.state === "opened") button(card, "查看阅读进度", () => { this.close(); return this.plugin.openLearningRecord(run.sessionId, a.nodeIds[0]); });
 			else button(card, a.state === "opened" ? "重新打开预览" : title, async () => { await this.plugin.dispatchAssistantAction(run.id, a.id); this.close(); });
-			card.createEl("small", { text: a.kind === "advance" ? "点击后调用会话模型生成下一单元。" : "在预览中核对范围和依据；尚未写入笔记。" });
+			if (!e) card.createEl("small", { text: a.state === "opened" ? "旧记录仅保存了交接状态，请在原功能核对结果。" : a.kind === "advance" ? "点击后调用会话模型生成下一单元。" : "在预览中核对范围和依据；尚未写入笔记。" });
 		}
 	}
 	onClose(): void { this.closed = true; if (this.input) this.saveDraft(); this.unsubscribe?.(); this.renderer.unload(); this.contentEl.empty(); }

@@ -3,13 +3,19 @@ import { exportReading, readingExportHash, reviewReadingExport, safeReadingMarkd
 import { exportBodyText, readingAssociations, readingExportDiff, type AssociationSearch, type ReadingAssociation } from "../reading/export-review";
 import type { ReadingSession } from "../reading/types";
 
+export interface ReadingExportHooks {
+	prepared(receipt: { path: string; hash: string; reused: boolean }): Promise<void>;
+	finished(result: { path: string; warning?: string; reused?: boolean }): Promise<void>;
+	failed(error: unknown): Promise<void>;
+}
+
 export class ReadingExportModal extends Modal {
 	private exportScope: ReadingExportScope = "node"; private generation = 0; private closed = false; private sending = false;
 	private controller?: AbortController; private renderer = new Component(); private review?: ReadingExportReview;
 	private candidates: ReadingAssociation[] = []; private selected = new Set<string>();
 	private status!: HTMLElement; private suggestions!: HTMLElement; private history!: HTMLElement; private preview!: HTMLElement;
 	private submit!: HTMLButtonElement; private discover!: HTMLButtonElement; private scopeSelect!: HTMLSelectElement;
-	constructor(app: App, private getSession: () => ReadingSession, private nodeId: string, private search: AssociationSearch, private openFile: (path: string) => void, private curate?: () => void, initialScope: ReadingExportScope = "node") { super(app); this.exportScope = initialScope; }
+	constructor(app: App, private getSession: () => ReadingSession, private nodeId: string, private search: AssociationSearch, private openFile: (path: string) => void, private curate?: () => void, initialScope: ReadingExportScope = "node", private hooks?: ReadingExportHooks) { super(app); this.exportScope = initialScope; }
 	onOpen(): void {
 		this.renderer.load(); this.titleEl.setText("整理为学习笔记"); this.modalEl.classList.add("reading-modal", "reading-export-modal");
 		this.contentEl.createEl("p", { cls: "reading-export-intro", text: "检查内容，选择关联，然后保存。每次修订保留前一版，学习记录保存到 wiki/qa/。" });
@@ -81,9 +87,10 @@ export class ReadingExportModal extends Modal {
 		try {
 			const session = this.getSession(); const related = [...this.selected];
 			if (readingExportHash(session, this.exportScope, this.nodeId, { related }) !== this.review.hash) throw new Error("阅读内容已变化，请刷新预览后保存");
-			const result = await exportReading(this.app, session, this.exportScope, this.nodeId, { related, expectedHash: this.review.hash, relatedHashes: Object.fromEntries(this.candidates.map(candidate => [candidate.path, candidate.hash])) });
+			const result = await exportReading(this.app, session, this.exportScope, this.nodeId, { related, expectedHash: this.review.hash, relatedHashes: Object.fromEntries(this.candidates.map(candidate => [candidate.path, candidate.hash])) }, receipt => this.hooks?.prepared(receipt) || Promise.resolve());
+			await this.hooks?.finished(result);
 			this.close(); new Notice(result.warning || (result.reused ? "已打开已有学习笔记" : "已保存学习笔记")); this.openFile(result.path);
-		} catch (error) { if (!this.closed) this.status.textContent = error instanceof Error ? error.message : "导出失败，请重试"; }
+		} catch (error) { await this.hooks?.failed(error); if (!this.closed) this.status.textContent = error instanceof Error ? error.message : "导出失败，请重试"; }
 		finally { this.sending = false; if (!this.closed) { controls.forEach((control, index) => { control.disabled = disabled[index]; }); this.submit.disabled = false; this.scopeSelect.disabled = false; } }
 	}
 }

@@ -47,7 +47,7 @@ export class KnowledgeCurationModal extends Modal {
 	private renderedState = "";
 	private regenerateButton!: HTMLButtonElement;
 	private runningKey?: string;
-	constructor(app: App, private plugin: AgentDashboardPlugin, private sessionId: string, private nodeId: string, private initialReview?: CurationReview, private initialSelection?: { nodeIds: string[]; target: string }) { super(app); }
+	constructor(app: App, private plugin: AgentDashboardPlugin, private sessionId: string, private nodeId: string, private initialReview?: CurationReview, private initialSelection?: { nodeIds: string[]; target: string }, private hooks?: { prepared(review: CurationReview): Promise<void>; failed(error: unknown): Promise<void> }) { super(app); }
 	private get service() { return this.plugin.getCurationService(); }
 	private get session() { return this.plugin.getReadingWorkspace().repository.get(this.sessionId); }
 	onOpen(): void {
@@ -90,6 +90,7 @@ export class KnowledgeCurationModal extends Modal {
 		const token = ++this.sequence; this.controller?.abort(); const controller = new AbortController(); this.controller = controller; this.status.setText("正在读取原文和目标段落…");
 		const context = await this.service.prepare(this.sessionId, [...this.nodeIds], this.target.value, controller.signal); if (this.closed || token !== this.sequence) return;
 		this.context = context; const cached = this.service.cached(context); this.reviewId = cached?.id || ""; this.cacheNotice = !!cached; this.selected.clear(); this.renderEvidence(); this.renderReview();
+		if (cached) await this.hooks?.prepared(cached);
 	}
 	private renderEvidence(): void {
 		this.evidence.empty(); const context = this.context; if (!context) return;
@@ -102,8 +103,8 @@ export class KnowledgeCurationModal extends Modal {
 	}
 	private async generate(force = false): Promise<void> {
 		if (!this.context || !this.context.sourceCompatible || this.operation) return; const context = this.context; const token = this.sequence; this.operation = true; this.runningKey = context.key; this.status.setText("正在核对证据并生成整理建议…");
-		try { const cached = !force && this.service.cached(context); const review = await this.service.generate(context, force); if (this.closed || token !== this.sequence) return; this.reviewId = review.id; this.cacheNotice = !!cached; this.selected.clear(); this.renderReview(); }
-		catch (error) { if (!this.closed && token === this.sequence) this.status.setText(String(error) + "；可重新读取依据后重试。"); throw error; }
+		try { const cached = !force && this.service.cached(context); const review = await this.service.generate(context, force, record => this.hooks?.prepared(record) || Promise.resolve()); if (this.closed || token !== this.sequence) return; this.reviewId = review.id; this.cacheNotice = !!cached; this.selected.clear(); this.renderReview(); }
+		catch (error) { await this.hooks?.failed(error); if (!this.closed && token === this.sequence) this.status.setText(String(error) + "；可重新读取依据后重试。"); throw error; }
 		finally { this.operation = false; this.runningKey = undefined; }
 	}
 	private stopGeneration(): void { const key = this.runningKey || this.context?.key; if (key) this.service.stop(key); }

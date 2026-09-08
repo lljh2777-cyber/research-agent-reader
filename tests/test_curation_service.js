@@ -47,6 +47,10 @@ async function main() {
 	const finalContext = await service.prepare(session.id, [node.id], file.path); const firstReview = await service.generate(finalContext); const beforeForced = calls;
 	const regenerated = await service.generate(finalContext, true); assert.equal(calls, beforeForced + 1); assert.notEqual(regenerated.id, firstReview.id); assert(service.reviews.has(firstReview.id), "explicit regeneration preserves previous decisions");
 	assert.equal((await service.generate(finalContext)).id, regenerated.id); assert.equal(calls, beforeForced + 1, "subsequent calls reuse latest cache");
+	let tracked; const beforeTracking = calls;
+	await service.generate(finalContext, false, async record => { tracked = record.id; }); assert.equal(tracked, regenerated.id); assert.equal(calls, beforeTracking);
+	await assert.rejects(service.generate(finalContext, true, async () => { assert.equal(calls, beforeTracking); throw new Error("receipt failed"); }), /receipt failed/); assert.equal(calls, beforeTracking);
+	await service.generate(finalContext, true, async record => { assert.equal(calls, beforeTracking); assert(records.has("reviews:" + record.id)); }); assert.equal(calls, beforeTracking + 1);
 	await service.dispose(); await reloaded.dispose(); console.log("CURATION_SERVICE_OK");
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

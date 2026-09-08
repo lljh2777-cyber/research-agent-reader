@@ -50,20 +50,21 @@ export class CurationService {
 	async saveRevision(revision: CurationRevision): Promise<void> { await this.store.write("revisions", revision); this.revisions.set(revision.id, structuredClone(revision)); this.emit(); }
 	async prepare(sessionId: string, nodeIds: string[], targetPath: string, signal?: AbortSignal): Promise<CurationContext> { await this.ready(); return prepareCuration(this.app, this.workspace, this.backendFor, sessionId, nodeIds, targetPath, signal, this.search); }
 	cached(context: CurationContext): CurationReview | undefined { return [...this.reviews.values()].reverse().filter(review => review.context.key === context.key && review.state === "ready").sort((a, b) => b.updated.localeCompare(a.updated))[0]; }
-	generate(context: CurationContext, force = false): Promise<CurationReview> {
-		if (this.operations.has(context.key)) return this.operations.get(context.key)!;
+	generate(context: CurationContext, force = false, prepared?: (review: CurationReview) => Promise<void>): Promise<CurationReview> {
+		if (this.operations.has(context.key)) { const operation = this.operations.get(context.key)!; return prepared ? operation.then(async review => { await prepared(review); return review; }) : operation; }
 		const controller = new AbortController(); this.controllers.set(context.key, controller);
-		const operation = this.run(context, controller.signal, force).finally(() => { this.operations.delete(context.key); this.controllers.delete(context.key); this.emit(); });
+		const operation = this.run(context, controller.signal, force, prepared).finally(() => { this.operations.delete(context.key); this.controllers.delete(context.key); this.emit(); });
 		this.operations.set(context.key, operation); return operation;
 	}
-	private async run(prepared: CurationContext, signal: AbortSignal, force: boolean): Promise<CurationReview> {
-		await this.ready(); const context = structuredClone(prepared); await verifyCurationContext(this.app, this.workspace, context); signal.throwIfAborted();
+	private async run(preparedContext: CurationContext, signal: AbortSignal, force: boolean, prepared?: (review: CurationReview) => Promise<void>): Promise<CurationReview> {
+		await this.ready(); const context = structuredClone(preparedContext); await verifyCurationContext(this.app, this.workspace, context); signal.throwIfAborted();
 		if (!context.sourceCompatible) throw new Error("当前论文与目标来源笔记不匹配，请重新选择目标");
-		const cached = this.cached(context); if (cached && !force) return cached;
-		const recovered = this.generationCache.get(context.key); if (recovered) { await this.save(recovered); this.generationCache.delete(context.key); return recovered; }
+		const cached = this.cached(context); if (cached && !force) { await prepared?.(cached); return cached; }
+		const recovered = this.generationCache.get(context.key); if (recovered) { await this.save(recovered); this.generationCache.delete(context.key); await prepared?.(recovered); return recovered; }
 		const stamp = now(); const review: CurationReview = { version: 1, id: id(), context, created: stamp, updated: stamp, state: "generating", suggestions: [], usage: { kind: "estimated", input: context.estimate, calls: 0, model: context.model, note: "文字输入估算；图像和推理开销以服务商实际计量为准" }, error: "" };
 		await this.save(review);
 		try {
+			await prepared?.(structuredClone(review)); signal.throwIfAborted();
 			const backend = this.backendFor(this.workspace.repository.get(context.sessionId));
 			if (backend.name !== context.backendName || backend.model !== context.model) throw new Error("模型设置已变化，请重新准备本批整理");
 			const source = await this.workspace.document(context.sessionId); const images: ReadingImage[] = [];

@@ -85,7 +85,7 @@ export async function reviewReadingExport(app: App, session: ReadingSession, sco
 	return { key, hash, history, duplicate, revisionOf, text: readingExportContent(session, scope, nodeId, { ...options, revisionOf }) };
 }
 let exportQueue: Promise<unknown> = Promise.resolve();
-export function exportReading(app: App, session: ReadingSession, scope: ReadingExportScope, nodeId: string, options: ReadingExportOptions & { expectedHash?: string; relatedHashes?: Record<string, string> } = {}): Promise<{ path: string; warning?: string; reused?: boolean }> {
+export function exportReading(app: App, session: ReadingSession, scope: ReadingExportScope, nodeId: string, options: ReadingExportOptions & { expectedHash?: string; relatedHashes?: Record<string, string> } = {}, prepared?: (receipt: { path: string; hash: string; reused: boolean }) => Promise<void>): Promise<{ path: string; warning?: string; reused?: boolean }> {
 	const snapshot = structuredClone(session);
 	const chosen = structuredClone(options);
 	const operation = exportQueue.then(async () => {
@@ -96,12 +96,13 @@ export function exportReading(app: App, session: ReadingSession, scope: ReadingE
 			if (!(file instanceof TFile)) throw new Error("关联笔记已移动或缺失，请刷新候选：" + path);
 			if (chosen.relatedHashes?.[path] && contentHash(await app.vault.cachedRead(file)) !== chosen.relatedHashes[path]) throw new Error("关联笔记已变化，请重新查找关联：" + path);
 		}
-		if (review.duplicate) return { path: review.duplicate.path, reused: true };
+		if (review.duplicate) { await prepared?.({ path: review.duplicate.path, hash: contentHash(review.duplicate.text), reused: true }); return { path: review.duplicate.path, reused: true }; }
 		const text = review.text;
 		for (const folder of ["wiki", "wiki/qa"]) if (!app.vault.getAbstractFileByPath(folder)) await app.vault.createFolder(folder);
 		const basename = "wiki/qa/" + new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-") + " " + sanitizeQueryNoteFilename(snapshot.title);
 		let filename = basename + ".md"; let number = 2;
 		while (app.vault.getAbstractFileByPath(filename)) filename = basename + " " + number++ + ".md";
+		await prepared?.({ path: filename, hash: contentHash(text), reused: false });
 		await app.vault.create(filename, text);
 		const line = "\n- " + new Date().toISOString() + " 导出交互学习记录：[[" + filename.slice(0, -3) + "]]；会话 " + readingPathCode(snapshot.id) + "；内容指纹 " + readingPathCode(review.hash)
 			+ (review.revisionOf ? "；上一版 " + readingPathCode(review.revisionOf) : "") + "。\n";

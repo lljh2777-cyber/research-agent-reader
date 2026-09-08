@@ -26,6 +26,8 @@ release link above remains the published release.
 - Adds a bounded Direct API reading assistant for progress, verified text evidence,
   knowledge retrieval, and guided curation/export previews. Requests retain tool
   traces and token usage; optional schema probes enable native structured output.
+  Action cards track linked reading nodes, curation reviews, and exported files,
+  including failures, retries, revisions, and restoration after reload.
   See the [阅读助手说明](docs/reading-assistant.md).
 - Offers optional BGE hybrid retrieval and reranking through SiliconFlow, with
   incremental local vector storage, evidence previews, and paper scope constraints.
