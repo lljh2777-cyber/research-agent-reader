@@ -19,6 +19,7 @@ import { TEACHING_STYLES } from "../reading/teaching";
 import type { ReadingTeachingStyle } from "../reading/types";
 import { readingUsageSummary, USAGE_STAGES } from "../reading/usage";
 import { readReadingOutcomes, type ReadingOutcome } from "../reading/outcomes";
+import { acceptReadingCorrection, readingCoverage } from "../reading/quality";
 import type { ReadingLearningState } from "../reading/types";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
@@ -140,6 +141,10 @@ export class ReadingWorkspaceView extends ItemView {
 		const more = actionButton(actions, "ellipsis", "更多阅读选项", () => {
 			const menu = new Menu();
 			if (session) menu.addItem((item) => item.setTitle("阅读模型").setIcon("sliders-horizontal").onClick(() => this.openModel()));
+			if (session && !session.demo) {
+				menu.addItem(item => item.setTitle("证据覆盖").setIcon("list-checks").onClick(() => this.handle(this.openCoverage())));
+				menu.addItem(item => item.setTitle("重新定位原文").setIcon("folder-search").onClick(() => this.openRelocate()));
+			}
 			if (session) menu.addItem(item => item.setTitle("阅读用量").setIcon("gauge").onClick(() => { const modal = this.modal("本会话模型用量"); element(modal.contentEl, "pre", "reading-usage-summary", readingUsageSummary(this.session!)); modal.open(); }));
 			menu.addItem(item => item.setTitle("知识库维护").setIcon("notebook-pen").onClick(() => this.plugin.openKnowledgeMaintenance()));
 			menu.addItem((item) => item.setTitle("交互演示").setIcon("play").onClick(() => this.handle(this.service.demo().then((id) => this.selectSession(id)))));
@@ -443,6 +448,9 @@ export class ReadingWorkspaceView extends ItemView {
 		catch { content.textContent = node.content; }
 		const tools = element(article, "div", "reading-answer-tools");
 		if (node.status === "done") {
+			actionButton(tools, "message-square-warning", "核对／重新解释", () => this.openCorrection(node), true);
+			if (node.correction) actionButton(tools, "git-compare", "比较核对版本", () => this.compareCorrection(node));
+			if (node.acceptedCorrectionId) actionButton(tools, "git-pull-request-arrow", "查看已选核对版本", () => this.selectNode(node.acceptedCorrectionId!, true));
 			const learning = element(tools, "select", "reading-learning-filter"); learning.setAttribute("aria-label", "我的理解状态：" + node.title);
 			for (const [value, label] of Object.entries(LEARNING_LABELS)) element(learning, "option", "", label).value = value;
 			learning.value = node.learningState || "unmarked";
@@ -523,9 +531,10 @@ export class ReadingWorkspaceView extends ItemView {
 		bar.style.top = Math.max(8, Math.min(outer.height - 42, rect.bottom - outer.top + 6)) + "px";
 		bar.onpointerdown = (event) => event.preventDefault();
 		actionButton(bar, "message-square-plus", "追问选中文字", () => { this.hideSelectionActions(); this.captureQuote(node, content, range); });
+		actionButton(bar, "message-square-warning", "核对选中文字", () => { this.hideSelectionActions(); this.captureQuote(node, content, range, true); });
 		actionButton(bar, "copy", "复制选中文字", () => this.handle(navigator.clipboard.writeText(readingSelectionText(range)).then(() => { this.hideSelectionActions(); new Notice("已复制选中文字"); })));
 	}
-	private captureQuote(node: ReadingNode, content: HTMLElement, selectedRange?: Range): void {
+	private captureQuote(node: ReadingNode, content: HTMLElement, selectedRange?: Range, correction = false): void {
 		const selected = window.getSelection(); const range = selectedRange || (selected?.rangeCount ? selected.getRangeAt(0) : undefined);
 		if (!range?.toString().trim() || !content.contains(range.startContainer) || !content.contains(range.endContainer)) { new Notice("先在这条回答中选中文字"); return; }
 		try {
@@ -534,6 +543,7 @@ export class ReadingWorkspaceView extends ItemView {
 			this.quote = resolveReadingQuote(node.id, node.content, readingSelectionText(range).trim(), readingSelectionText(before), readingSelectionText(after));
 		} catch (error) { new Notice(String(error)); return; }
 		const sessionId = this.sessionId; const quote = this.quote;
+		if (correction) { this.quote = undefined; this.openCorrection(node, quote); return; }
 		this.handle(this.service.repository.transact(sessionId, (session) => { session.ui.selectedId = node.id; session.ui.pendingQuote = quote; this.ensureWindow(session, node.id); }).then(() => {
 			if (sessionId !== this.sessionId) return;
 			this.render(true); const key = node.branchId || node.id;
@@ -685,6 +695,46 @@ export class ReadingWorkspaceView extends ItemView {
 		if (item.kind === "paper") this.handle(this.service.document(this.sessionId).then(async (document) => {
 			await document.verify(); const image = await document.image(document.source.kind === "pdf" && item.page ? { ...item, asset: "pdf-page" } : item); if (image) { const img = element(modal.contentEl, "img"); img.src = image.dataUrl; img.style.maxWidth = "100%"; }
 		})); modal.open();
+	}
+	private openCorrection(node: ReadingNode, quote?: ReadingQuote): void {
+		const sessionId = this.sessionId; const modal = this.modal("核对／重新解释");
+		element(modal.contentEl, "p", "reading-modal-intro", "指出你认为有误或需要重新解释的部分。原回答保留，核对结果会成为独立支线；生成后可比较两个版本。");
+		if (quote) element(modal.contentEl, "blockquote", "reading-quote", quote.text);
+		const input = element(modal.contentEl, "textarea", "reading-correction-input"); input.placeholder = "例如：这里是否混淆了两个指标的分母？请结合原文核对。"; input.maxLength = 4000; input.rows = 3; input.setAttribute("aria-label", "核对要求");
+		const start = button(modal.contentEl, "读取原文并核对", () => {
+			if (start.disabled) return; start.disabled = true;
+			this.handle(this.service.correct(sessionId, node.id, input.value, quote).then(id => { modal.close(); if (this.sessionId === sessionId) this.selectNode(id, true); }).finally(() => { start.disabled = false; }));
+		}); start.classList.add("mod-cta"); modal.open(); input.focus();
+	}
+	private compareCorrection(node: ReadingNode): void {
+		const sessionId = this.sessionId; const original = readingNode(this.session!, node.correction!.of); const modal = this.modal("核对版本对照");
+		element(modal.contentEl, "p", "reading-modal-intro", "选择后，新主线和新支线使用此版本作为背景。旧回答与已创建支线的记忆保留；这不表示科学事实已经核验。");
+		element(modal.contentEl, "h3", "", "原回答"); element(modal.contentEl, "pre", "reading-evidence-text", original.content);
+		element(modal.contentEl, "h3", "", "核对版本"); element(modal.contentEl, "pre", "reading-evidence-text", node.content);
+		const apply = button(modal.contentEl, original.acceptedCorrectionId === node.id ? "已用于后续背景" : "用于后续背景", () => {
+			apply.disabled = true;
+			this.handle(this.service.document(sessionId).then(async doc => { await doc.verify(); await this.service.repository.transact(sessionId, s => acceptReadingCorrection(s, node.id)); modal.close(); }).finally(() => { apply.disabled = false; }));
+		}); apply.classList.add("mod-cta"); apply.disabled = original.acceptedCorrectionId === node.id; modal.open();
+	}
+	private openRelocate(): void {
+		const session = this.session!; const modal = this.modal("重新定位原文");
+		element(modal.contentEl, "p", "reading-modal-intro", "适用于文件移动或重命名。内容指纹完全一致才恢复关联；内容变化请新建会话。");
+		const input = element(modal.contentEl, "input", "reading-correction-input"); input.value = session.source.path; input.setAttribute("aria-label", "原文新位置");
+		const go = button(modal.contentEl, "核对文件并恢复", () => { if (go.disabled) return; go.disabled = true; this.handle(this.service.relocate(session.id, input.value.trim().replace(/^"|"$/g, "")).then(() => { modal.close(); new Notice("原文位置已恢复，历史保留"); }).finally(() => { go.disabled = false; })); }); modal.open();
+	}
+	private async openCoverage(): Promise<void> {
+		const sessionId = this.sessionId; const doc = await this.service.document(sessionId); await doc.verify();
+		const session = this.service.repository.get(sessionId); const rows = readingCoverage(session, doc.evidence); const modal = this.modal("证据覆盖");
+		const texts = rows.filter(r => !r.evidence.asset), images = rows.filter(r => r.evidence.asset);
+		element(modal.contentEl, "p", "reading-modal-intro", `已记录提供的文字片段 ${texts.filter(r => r.provided).length}/${texts.length}；图像 ${images.filter(r => r.provided).length}/${images.length}。旧回答仅有引用记录时，标为历史引用。`);
+		element(modal.contentEl, "p", "reading-modal-intro", "这些是本地输入与个人核对记录，不代表全文科学核验；缺失的补充材料不计入分母。");
+		for (const row of rows) {
+			const e = row.evidence; const open = button(modal.contentEl, `${e.label} · ${e.asset ? "图像" : "文字"} · ${row.provided ? "已提供给模型" : row.legacy ? "历史引用" : "尚无提供记录"}${row.reviewed ? " · 我已核对" : ""}`, () => {
+				const detail = this.modal(e.label); element(detail.contentEl, "pre", "reading-evidence-text", e.text);
+				if (row.nodeId) button(detail.contentEl, "定位相关回答", () => { detail.close(); modal.close(); if (this.sessionId === sessionId) this.selectNode(row.nodeId, true); });
+				if (e.asset) this.handle(doc.verify().then(() => doc.image(e)).then(image => { if (image) { const img = element(detail.contentEl, "img"); img.src = image.dataUrl; img.style.maxWidth = "100%"; } })); detail.open();
+			}); open.classList.add("reading-coverage-row");
+		} modal.open();
 	}
 	private openModel(): void {
 		const session = this.session!; const modal = this.modal("阅读模型");

@@ -46,7 +46,7 @@ export function readingContext(session: ReadingSession, nodeId: string): string 
 	if (!node.branchId) return completedMainContext(session);
 	const branch = session.branches.find((item) => item.id === node.branchId)!;
 	const parent = readingNode(session, branch.parentNodeId);
-	return ["创建时主线背景：", branch.mainSnapshot, "支线起点：", parent.content, "相关祖先对话：", branch.ancestorSummary || branch.ancestorContext,
+	return ["创建时主线背景：", branch.mainSnapshot, "支线起点：", branch.parentContext ?? parent.content, "相关祖先对话：", branch.ancestorSummary || branch.ancestorContext,
 		"支线摘要：", branch.summary, "本支线最近对话：", ...branch.nodeIds.slice(branch.summarizedCount).filter((id) => id !== nodeId)
 			.map((id) => readingNode(session, id)).filter((item) => item.status === "done").map((item) => item.question + "\n" + item.content)].join("\n\n");
 }
@@ -167,6 +167,7 @@ export class ReadingEngine {
 			if (requiredVisuals.some((id) => !images.some((image) => image.evidenceId === id))) throw new Error("选中的图像未完整加载，请重试");
 			this.emit(sessionId, nodeId, "已读取 " + evidence.length + " 条证据" + (images.length ? "和 " + images.length + " 张图像" : "") + "，正在生成讲解…");
 			const prompt = JSON.stringify({ action: node.branchId ? "回答支线追问" : currentModule ? "讲解当前主线单元" : completedCount ? "继续下一个主线单元" : "生成整体提纲并讲解第一单元",
+				correction: node.correction ? { reason: node.correction.reason, instruction: "对照本轮原文核对旧回答，说明哪些需要更正、哪些保持成立及证据缺口。用户的质疑也可能不成立，不盲从，不把重新解释写成事实已验证。" } : undefined,
 				validationFeedback: retryCitation ? "上次正文没有证据标记。请在关键结论旁写实际 [证据ID]，仅填写 evidenceIds 清单不够。" : undefined,
 				question: node.question, quote: node.quote?.text, context, outline: node.branchId ? undefined : session.outline, currentUnit: node.branchId ? undefined : session.outline[completedCount],
 				currentModule: currentModule ? { title: currentModule.title, question: currentModule.question, number: currentModule.number, purpose: currentModule.purpose } : undefined,
@@ -189,6 +190,7 @@ export class ReadingEngine {
 				const target = readingNode(draft, nodeId); target.title = result.title; target.content = result.content; target.status = "done"; target.error = "";
 				target.evidence = evidence.filter((item) => result.evidenceIds.includes(item.id)); target.provider = backend.name; target.model = backend.model;
 				target.retrieval = retrieval;
+				target.providedEvidenceIds = evidence.map(e => e.id); target.providedImageIds = images.map(i => i.evidenceId);
 				if (!node.branchId) { draft.outline = result.outline!; draft.mainSummary = result.mainSummary!; draft.completed = result.completed!; }
 			});
 		} catch (error) {

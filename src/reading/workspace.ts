@@ -4,6 +4,7 @@ import { FileReadingStorage, ReadingRepository, RoutedReadingStorage } from "./s
 import { matchingReading } from "./catalog";
 import { addReadingBranch, addReadingNode, createReadingSession, readingNode } from "./session";
 import type { ReadingNode, ReadingQuote, ReadingSession, ReadingSource } from "./types";
+import { answerHash } from "./quality";
 
 export class ReadingWorkspaceService {
 	readonly repository: ReadingRepository;
@@ -46,6 +47,33 @@ export class ReadingWorkspaceService {
 			this.documents.set(sessionId, loaded);
 		}
 		return loaded;
+	}
+	async relocate(sessionId: string, filename: string): Promise<void> {
+		const original = structuredClone(this.repository.get(sessionId));
+		if (original.demo) throw new Error("演示会话无需重新定位原文");
+		const document = await this.loader.open(original.source.kind, filename);
+		try {
+			if (document.source.fingerprint !== original.source.fingerprint) throw new Error("文件内容不同，请创建新会话，旧证据不能重新绑定");
+			await document.verify();
+			await this.repository.transact(sessionId, session => {
+				if (session.source.path !== original.source.path || session.source.fingerprint !== original.source.fingerprint || session.nodes.some(n => n.status === "running" || n.status === "pending")) throw new Error("来源已变化或正在生成，请稍后重新定位");
+				for (const node of session.nodes) for (const e of node.evidence.filter(e => e.kind === "paper")) {
+					const match = document.evidence.find(item => item.id === e.id); if (!match) throw new Error("新位置无法匹配既有证据"); e.path = match.path; e.asset = match.asset;
+				}
+				(session.sourceRelocations ||= []).push({ from: session.source.path, to: document.source.path, date: new Date().toISOString(), fingerprint: original.source.fingerprint });
+				session.source.path = document.source.path;
+			});
+		} catch (error) { await document.destroy(); throw error; }
+		const previous = this.documents.get(sessionId); this.documents.set(sessionId, document); await previous?.destroy();
+	}
+	async correct(sessionId: string, originalId: string, reason: string, quote?: ReadingQuote): Promise<string> {
+		if (!reason.trim() || reason.length > 4000) throw new Error("请用 4000 字符以内描述要核对的问题"); let id = "";
+		await this.repository.transact(sessionId, session => {
+			const original = readingNode(session, originalId); const branch = addReadingBranch(session, original.id);
+			const node = addReadingNode(session, branch.id, "核对并重新解释：" + reason.trim(), quote);
+			node.correction = { of: originalId, originalHash: answerHash(original.content), reason: reason.trim() }; id = node.id;
+		});
+		void this.generate(sessionId, id).catch(() => undefined); return id;
 	}
 	async demo(purpose: "demo" | "test" = "demo"): Promise<string> {
 		await this.ready();

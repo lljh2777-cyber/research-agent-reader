@@ -36,6 +36,10 @@ export interface ReadingEvidence {
 }
 export interface ReadingQuote { nodeId: string; text: string; start: number; end: number }
 export interface ReadingNode {
+	correction?: { of: string; originalHash: string; reason: string };
+	acceptedCorrectionId?: string;
+	providedEvidenceIds?: string[];
+	providedImageIds?: string[];
 	usage?: ReadingUsageEntry[];
 	selectionCache?: { key: string; value: ReadingEvidenceSelection };
 	learningState?: ReadingLearningState;
@@ -56,6 +60,7 @@ export interface ReadingNode {
 	retrieval?: { query: string; paths: string[]; error?: string; label?: string; warnings?: string[] };
 }
 export interface ReadingBranch {
+	parentContext?: string;
 	id: string;
 	parentNodeId: string;
 	mainSnapshot: string;
@@ -74,6 +79,7 @@ export interface ReadingWindow {
 export interface ReadingModule { title: string; question: string; evidenceIds: string[]; }
 export interface ReadingModulePlan { version: 1; modules: ReadingModule[]; }
 export interface ReadingSession {
+	sourceRelocations?: { from: string; to: string; date: string; fingerprint: string }[];
 	modulePlan?: ReadingModulePlan;
 	teachingStyle?: ReadingTeachingStyle;
 	version: 1;

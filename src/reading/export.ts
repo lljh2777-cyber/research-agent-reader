@@ -17,7 +17,7 @@ export interface ReadingExportOptions { related?: string[]; revisionOf?: string;
 export interface ReadingExportRecord { path: string; hash: string; text: string; created: string; }
 export interface ReadingExportReview { key: string; hash: string; text: string; history: ReadingExportRecord[]; duplicate?: ReadingExportRecord; revisionOf?: string; }
 export const safeRelatedPath = (path: string): boolean => inKnowledgeScope(path) && !/[\\[\]|#%<>:\r\n]/.test(path) && !path.split("/").some(part => !part);
-export function readingNodeContentHash(node: ReadingSession["nodes"][number]): string { return contentHash(JSON.stringify([node.title, node.question, node.content, node.quote, node.evidence])); }
+export function readingNodeContentHash(node: ReadingSession["nodes"][number]): string { return contentHash(JSON.stringify([node.title, node.question, node.content, node.quote, node.evidence, ...(node.acceptedCorrectionId || node.correction ? [node.acceptedCorrectionId, node.correction] : [])])); }
 const relatedPaths = (options: ReadingExportOptions): string[] => [...new Set((options.related || []).filter(safeRelatedPath))].sort();
 const wikiLink = (path: string): string => "[[" + path.replace(/\.md$/i, "") + "]]";
 export function readingExportNodes(session: ReadingSession, scope: ReadingExportScope, nodeId: string): ReadingSession["nodes"] {
@@ -47,6 +47,8 @@ function exportBody(session: ReadingSession, scope: ReadingExportScope, nodeId: 
 		body.push("学习位置：" + trail.join(" → "), "");
 		if (node.question) body.push("问题：" + safeReadingMarkdown(node.question), "");
 		if (node.quote) body.push("引用：" + safeReadingMarkdown(node.quote.text), "");
+		if (node.correction) body.push("核对版本：对应原回答 " + readingPathCode(node.correction.of) + "；" + (session.nodes.some(n => n.acceptedCorrectionId === node.id) ? "用户已选为后续背景" : "尚未选为后续背景") + "。", "");
+		if (node.acceptedCorrectionId) body.push("此处保留历史回答；用户已选用后续核对节点 " + readingPathCode(node.acceptedCorrectionId) + " 作为背景，请同时查阅该节点。", "");
 		body.push(safeReadingMarkdown(node.content), "", "依据：", "");
 		for (const evidence of node.evidence) body.push("- " + readingPathCode(evidence.id) + " " + (evidence.kind === "paper" ? "本文" : "知识库补充") + "：" + readingPathCode(evidence.path)
 			+ (evidence.page ? "，第 " + evidence.page + " 页" : "") + (evidence.start !== undefined ? "，阅读文本字符 " + evidence.start + "–" + evidence.end : "") + (evidence.visualInspected ? "，已查看图像" : "")

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readingCategory } from "./catalog";
 import { validateModulePlan } from "./planning";
+import { answerHash, effectiveReadingContent } from "./quality";
 import type { ReadingBranch, ReadingNode, ReadingQuote, ReadingSession, ReadingSource } from "./types";
 
 export const newReadingId = (): string => "r-" + randomUUID();
@@ -16,8 +17,10 @@ export function readingNode(session: ReadingSession, id: string): ReadingNode {
 	return node;
 }
 export function completedMainContext(session: ReadingSession): string {
-	return session.mainSummary || session.mainIds.map((id) => readingNode(session, id))
-		.filter((node) => node.status === "done").map((node) => node.title + "\n" + node.content).join("\n\n");
+	const main = session.mainIds.map(id => readingNode(session, id)).filter(n => n.status === "done");
+	const base = session.mainSummary || main.map(n => n.title + "\n" + n.content).join("\n\n");
+	const corrections = main.filter(n => n.acceptedCorrectionId).map(n => n.title + "\n" + effectiveReadingContent(session, n));
+	return base + (corrections.length ? "\n\n用户选择的后续核对版本，涉及差异时优先于上方旧摘要；事实仍依赖本轮证据：\n" + corrections.join("\n\n") : "");
 }
 export function addReadingBranch(session: ReadingSession, parentId: string): ReadingBranch {
 	const parent = readingNode(session, parentId);
@@ -27,10 +30,11 @@ export function addReadingBranch(session: ReadingSession, parentId: string): Rea
 	const seen = new Set<string>();
 	while (current?.branchId && !seen.has(current.id)) {
 		seen.add(current.id);
-		ancestors.unshift(current.question + "\n" + current.content);
+		ancestors.unshift(current.question + "\n" + effectiveReadingContent(session, current));
 		current = session.nodes.find((item) => item.id === current!.parentId);
 	}
 	const branch: ReadingBranch = { id: newReadingId(), parentNodeId: parentId,
+		parentContext: effectiveReadingContent(session, parent),
 		mainSnapshot: completedMainContext(session),
 		mainHeadId: session.mainIds.filter((id) => readingNode(session, id).status === "done").slice(-1)[0] || null,
 		ancestorContext: ancestors.join("\n\n"), nodeIds: [], summary: "", summarizedCount: 0 };
@@ -93,7 +97,11 @@ export function validateReadingSession(value: unknown): ReadingSession {
 		|| !session.ui.drafts || typeof session.ui.drafts !== "object" || Array.isArray(session.ui.drafts)
 		|| Object.values(session.ui.drafts).some((value) => typeof value !== "string")) throw new Error("阅读会话界面或记忆格式无效");
 	if (session.modulePlan !== undefined) session.modulePlan = validateModulePlan(session.modulePlan, session.outline);
+	if (session.sourceRelocations !== undefined && (!Array.isArray(session.sourceRelocations) || session.sourceRelocations.some(r => !r || typeof r.from !== "string" || typeof r.to !== "string" || !Number.isFinite(Date.parse(r.date)) || r.fingerprint !== session.source.fingerprint))) throw new Error("原文位置历史无效");
 	for (const node of session.nodes) {
+		if (node.correction) { const original = nodes.get(node.correction.of); if (!original || !node.branchId || session.nodes.indexOf(original) >= session.nodes.indexOf(node) || node.correction.originalHash !== answerHash(original.content) || typeof node.correction.reason !== "string" || node.correction.reason.length > 4000) throw new Error("核对版本关系无效"); }
+		if (node.acceptedCorrectionId) { const correction = nodes.get(node.acceptedCorrectionId); if (correction?.correction?.of !== node.id || correction.status !== "done") throw new Error("所选核对版本无效"); }
+		for (const ids of [node.providedEvidenceIds, node.providedImageIds]) if (ids !== undefined && (!Array.isArray(ids) || ids.length > 32 || ids.some(id => typeof id !== "string"))) throw new Error("证据覆盖记录无效");
 		if (node.usage !== undefined && (!Array.isArray(node.usage) || node.usage.some(e => !e || typeof e.id !== "string" || typeof e.model !== "string" || typeof e.started !== "string" || !Number.isFinite(e.estimatedInput) || !["planning", "selection", "answer", "memory"].includes(e.stage) || !["running", "done", "failed", "interrupted", "cached"].includes(e.state) || [e.estimatedInput, e.estimatedOutput, e.input, e.output, e.cachedInput].some(value => value !== undefined && (!Number.isFinite(value) || value < 0))))) throw new Error("阅读用量记录无效");
 		if (node.selectionCache && (typeof node.selectionCache.key !== "string" || !Array.isArray(node.selectionCache.value?.ids) || node.selectionCache.value.ids.some(id => typeof id !== "string"))) node.selectionCache = undefined;
 		if (node.learningState !== undefined && !["unmarked", "understood", "revisit", "question"].includes(node.learningState)) throw new Error("学习标记无效");
@@ -102,6 +110,7 @@ export function validateReadingSession(value: unknown): ReadingSession {
 			|| typeof item.text !== "string" || typeof item.path !== "string" || typeof item.label !== "string" || !["paper", "vault"].includes(item.kind))) throw new Error("阅读证据格式无效");
 	}
 	for (const branch of session.branches) {
+		if (branch.parentContext !== undefined && typeof branch.parentContext !== "string") throw new Error("支线起点背景无效");
 		if (typeof branch.summary !== "string" || !Number.isInteger(branch.summarizedCount) || branch.summarizedCount < 0 || branch.summarizedCount > branch.nodeIds.length) throw new Error("支线记忆位置无效");
 	}
 	const clamp = (value: number, fallback: number, min: number, max: number): number => Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;

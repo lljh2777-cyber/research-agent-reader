@@ -4208,6 +4208,9 @@
 	color: var(--text-muted);
 }
 
+.reading-correction-input { width: 100%; margin-block: 10px; }
+.reading-coverage-row { display: block; width: 100%; height: auto; white-space: normal; text-align: left; margin-block: 6px; }
+
 .agent-dashboard-grid {
 	gap: 20px 18px;
 }
