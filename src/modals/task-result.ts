@@ -16,6 +16,9 @@ interface TaskResultHost {
 	getTaskRunArtifacts?(run: TaskRun): { articlePath?: string; wikiPath?: string } | null;
 	activateMineruReaderView?(articlePath?: string): Promise<void>;
 	activateReadingWorkspace?(entry?: import("../reading/entry").ReadingEntry): Promise<void>;
+	continuePaperIngest?(run: TaskRun): Promise<void>;
+	registerIngestNote?(notePath: string, runId: string): Promise<void>;
+	readIngestPdf?(run: TaskRun): Promise<void>;
 	openVaultFile?(path: string): void;
 }
 
@@ -121,7 +124,19 @@ export class TaskResultModal extends Modal {
 			});
 		}
 		const wikiPath = lightResult?.wikiPath || "";
+		if (!articlePath && wikiPath && this.run.executionConfig?.backend === "direct-api" && this.plugin.readIngestPdf) {
+			const read = footer.createEl("button", { text: "从原始 PDF 进入深读" }); read.type = "button";
+			read.onclick = async () => { read.disabled = true; try { await this.plugin.readIngestPdf!(this.run); this.close(); } catch (error) { new Notice(String(error)); } finally { read.disabled = false; } };
+		}
+		if (this.run.actionId === "paper-ingest" && this.run.executionConfig?.backend === "direct-api" && this.run.status !== "done" && this.plugin.continuePaperIngest) {
+			const retry = footer.createEl("button", { text: "继续完成入库" }); retry.type = "button";
+			retry.onclick = async () => { retry.disabled = true; try { await this.plugin.continuePaperIngest!(this.run); this.close(); } catch (error) { new Notice(String(error)); } finally { retry.disabled = false; } };
+		}
 		if (wikiPath && this.plugin.openVaultFile) {
+			if (this.run.actionId === "paper-ingest" && this.run.executionConfig?.backend === "direct-api" && this.plugin.registerIngestNote) {
+				const register = footer.createEl("button", { text: "预览入库登记" }); register.type = "button";
+				register.onclick = async () => { register.disabled = true; try { await this.plugin.registerIngestNote!(wikiPath, this.run.id); } catch (error) { new Notice(String(error)); } finally { register.disabled = false; } };
+			}
 			const openWiki = footer.createEl("button", { text: "打开文章 Wiki" });
 			openWiki.type = "button";
 			openWiki.addEventListener("click", () => {

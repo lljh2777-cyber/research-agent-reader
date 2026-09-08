@@ -63,9 +63,11 @@ The model never writes files and never chooses extraction paths:
   snapshot with the plugin-bound Crossref record; filenames, metadata, and
   PDF text-layer candidates remain discovery hints only.
 
-The light runner never updates `papers.csv`, `references.bib`, or index/log
-pages — those registry files remain the Codex CLI pipeline's job, which can
-later upgrade a lightweight product to a fully registered entry.
+The model loop does not write registries. Since 0.39.2, its result offers a local
+registration preview: index/log updates, plus CSV and BibTeX when the configured
+toolkit's knowledge-base resolves to this vault. Standalone vaults are marked
+indexed, not fully registered. Existing bibliographic conflicts stop the update;
+the plugin saves before/after snapshots and supports interrupted-write recovery.
 
 创建文章 Wiki 前必须读取本篇原文。复用 `papers/` 中的既有包时，插件会重新执行
 阅读器的完整包校验；`Clippings/` 仍可作为普通 Markdown 原文使用。没有可用原文、

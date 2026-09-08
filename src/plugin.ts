@@ -12,6 +12,9 @@ import {
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { IngestRecords, validateIngestRequest } from "./agent/ingest-records";
+import { openIngestContinuation } from "./views/ingest-continuation";
+import { IngestRegistrationController } from "./views/ingest-registration";
 
 import { ACTION_BY_ID, type DashboardAction } from "./actions";
 import {
@@ -2736,13 +2739,23 @@ export default class AgentDashboardPlugin extends Plugin {
 	 * Runs 文献入库 through the in-plugin bounded agent loop (Direct API
 	 * brain, allowlisted tools) instead of the Codex CLI toolkit pipeline.
 	 */
-	runLightPaperIngest(
+	private ingestRecords?: IngestRecords;
+	private ingestRegistration?: IngestRegistrationController;
+	async registerIngestNote(notePath: string, runId: string): Promise<void> { await (this.ingestRegistration ||= new IngestRegistrationController(this)).open(notePath, runId); }
+	getIngestRecords(): IngestRecords { return this.ingestRecords ||= new IngestRecords(this.readingPluginDirectory()); }
+	async readIngestPdf(run: TaskRun): Promise<void> {
+		const request = validateIngestRequest(await this.getIngestRecords().read("request", run.id), run.id);
+		await this.activateReadingWorkspace({ source: { kind: "pdf", path: request.options.sourcePdfPath }, backend: request.profileId });
+	}
+	async continuePaperIngest(run: TaskRun): Promise<void> { await openIngestContinuation(this, run); }
+	async runLightPaperIngest(
 		runId: string,
 		options: PaperIngestFlowOptions,
 		profileId: string,
 		hooks: { onEvent?: (event: DashboardProcessEvent) => void } = {},
 	): Promise<AgentLoopRunOutcome> {
 		this.lightAgentResults.delete(runId);
+		await this.getIngestRecords().write("request", runId, { version: 1, runId, profileId, options: structuredClone(options) });
 		return this.agentLoopService.runPaperIngest(runId, options, profileId, hooks)
 			.then(async (outcome) => {
 				const articlePath = outcome.artifacts.articlePath;
