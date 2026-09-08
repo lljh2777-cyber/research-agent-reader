@@ -99,6 +99,8 @@ export function validateReadingSession(value: unknown): ReadingSession {
 	if (session.modulePlan !== undefined) session.modulePlan = validateModulePlan(session.modulePlan, session.outline);
 	if (session.sourceRelocations !== undefined && (!Array.isArray(session.sourceRelocations) || session.sourceRelocations.some(r => !r || typeof r.from !== "string" || typeof r.to !== "string" || !Number.isFinite(Date.parse(r.date)) || r.fingerprint !== session.source.fingerprint))) throw new Error("原文位置历史无效");
 	for (const node of session.nodes) {
+		if (node.requestWeb !== undefined && (typeof node.requestWeb !== "boolean" || node.requestWeb && !node.branchId)) throw new Error("联网只能由问题支线发起");
+		if (node.web && (!node.requestWeb || !["native", "tavily"].includes(node.web.mode) || typeof node.web.query !== "string" || node.web.query.length > 400 || typeof node.web.warning !== "string" || !Array.isArray(node.web.sources) || node.web.sources.length > 3 || node.web.sources.some(s => !s || typeof s.title !== "string" || typeof s.url !== "string" || !/^https?:\/\//.test(s.url) || s.content !== undefined && (typeof s.content !== "string" || s.content.length > 1200)))) throw new Error("联网来源记录无效");
 		if (node.correction) { const original = nodes.get(node.correction.of); if (!original || !node.branchId || session.nodes.indexOf(original) >= session.nodes.indexOf(node) || node.correction.originalHash !== answerHash(original.content) || typeof node.correction.reason !== "string" || node.correction.reason.length > 4000) throw new Error("核对版本关系无效"); }
 		if (node.acceptedCorrectionId) { const correction = nodes.get(node.acceptedCorrectionId); if (correction?.correction?.of !== node.id || correction.status !== "done") throw new Error("所选核对版本无效"); }
 		for (const ids of [node.providedEvidenceIds, node.providedImageIds]) if (ids !== undefined && (!Array.isArray(ids) || ids.length > 32 || ids.some(id => typeof id !== "string"))) throw new Error("证据覆盖记录无效");
@@ -121,6 +123,7 @@ export function validateReadingSession(value: unknown): ReadingSession {
 	session.archived = session.archived === true; session.pinned = session.pinned === true;
 	if (session.lastOpenedAt && !Number.isFinite(Date.parse(session.lastOpenedAt))) session.lastOpenedAt = undefined;
 	session.ui.mode = session.ui.mode === "map" ? "map" : "split";
+	if (session.ui.webDrafts && (typeof session.ui.webDrafts !== "object" || Array.isArray(session.ui.webDrafts) || Object.values(session.ui.webDrafts).some(v => typeof v !== "boolean"))) throw new Error("联网草稿选项无效");
 	if (!["balanced", "foundations", "methods", "evidence"].includes(session.teachingStyle || "balanced")) session.teachingStyle = "balanced";
 	if (!["all", "unmarked", "understood", "revisit", "question"].includes(session.ui.learningFilter || "all")) session.ui.learningFilter = "all";
 	const pane = session.ui.evidenceView;

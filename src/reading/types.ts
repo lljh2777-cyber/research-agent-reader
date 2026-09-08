@@ -36,6 +36,8 @@ export interface ReadingEvidence {
 }
 export interface ReadingQuote { nodeId: string; text: string; start: number; end: number }
 export interface ReadingNode {
+	requestWeb?: boolean;
+	web?: { mode: "native" | "tavily"; query: string; sources: { url: string; title: string; content?: string }[]; warning: string; };
 	correction?: { of: string; originalHash: string; reason: string };
 	acceptedCorrectionId?: string;
 	providedEvidenceIds?: string[];
@@ -102,6 +104,7 @@ export interface ReadingSession {
 	pinned?: boolean;
 	lastOpenedAt?: string;
 	ui: {
+		webDrafts?: Record<string, boolean>;
 		mode: "split" | "map"; split: number; selectedId: string;
 		mainFocusId?: string; mainScroll?: number; pendingQuote?: ReadingQuote;
 		mainComposerExpanded?: boolean;
@@ -117,6 +120,7 @@ export interface ReadingResult {
 }
 export interface ReadingImage { evidenceId: string; dataUrl: string }
 export interface ReadingBackendRequest {
+	webSearch?: import("../types/contracts").NativeWebSearchProtocol;
 	disableReasoning?: boolean;
 	schema?: Record<string, unknown>;
 	system: string; prompt: string; images: ReadingImage[];
@@ -125,6 +129,7 @@ export interface ReadingBackendRequest {
 	onUsage?: (usage: { input?: number; output?: number; cachedInput?: number }) => void;
 }
 export interface ReadingBackend {
+	webSearch?: () => import("../services/web-search").WebSearchBackendResolution;
 	name: string; model: string; images: boolean;
 	complete(request: ReadingBackendRequest): Promise<string>;
 }

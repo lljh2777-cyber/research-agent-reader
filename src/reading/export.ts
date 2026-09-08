@@ -17,7 +17,7 @@ export interface ReadingExportOptions { related?: string[]; revisionOf?: string;
 export interface ReadingExportRecord { path: string; hash: string; text: string; created: string; }
 export interface ReadingExportReview { key: string; hash: string; text: string; history: ReadingExportRecord[]; duplicate?: ReadingExportRecord; revisionOf?: string; }
 export const safeRelatedPath = (path: string): boolean => inKnowledgeScope(path) && !/[\\[\]|#%<>:\r\n]/.test(path) && !path.split("/").some(part => !part);
-export function readingNodeContentHash(node: ReadingSession["nodes"][number]): string { return contentHash(JSON.stringify([node.title, node.question, node.content, node.quote, node.evidence, ...(node.acceptedCorrectionId || node.correction ? [node.acceptedCorrectionId, node.correction] : [])])); }
+export function readingNodeContentHash(node: ReadingSession["nodes"][number]): string { return contentHash(JSON.stringify([node.title, node.question, node.content, node.quote, node.evidence, ...(node.acceptedCorrectionId || node.correction ? [node.acceptedCorrectionId, node.correction] : []), ...(node.web ? [node.web] : [])])); }
 const relatedPaths = (options: ReadingExportOptions): string[] => [...new Set((options.related || []).filter(safeRelatedPath))].sort();
 const wikiLink = (path: string): string => "[[" + path.replace(/\.md$/i, "") + "]]";
 export function readingExportNodes(session: ReadingSession, scope: ReadingExportScope, nodeId: string): ReadingSession["nodes"] {
@@ -54,6 +54,11 @@ function exportBody(session: ReadingSession, scope: ReadingExportScope, nodeId: 
 			+ (evidence.page ? "，第 " + evidence.page + " 页" : "") + (evidence.start !== undefined ? "，阅读文本字符 " + evidence.start + "–" + evidence.end : "") + (evidence.visualInspected ? "，已查看图像" : "")
 			+ (evidence.role ? "；" + safeReadingMarkdown(evidence.role) : "") + (evidence.heading ? "；章节：" + safeReadingMarkdown(evidence.heading) : ""));
 		body.push("");
+		if (node.web) {
+			body.push("网络补充（" + node.web.mode + "）：" + safeReadingMarkdown(node.web.warning), "");
+			for (const [i, source] of node.web.sources.entries()) body.push(`- [网络 W${i + 1}] ` + readingPathCode(source.url) + " · " + safeReadingMarkdown(source.title));
+			body.push("");
+		}
 	}
 	const related = relatedPaths(options);
 	if (related.length) body.push("## 关联笔记", "", "以下关联由导出时选定，用于继续阅读；关联本身不代表结论一致或独立证据。", "", ...related.map(path => "- " + wikiLink(path)), "");

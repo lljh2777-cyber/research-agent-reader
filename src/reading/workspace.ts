@@ -96,13 +96,14 @@ export class ReadingWorkspaceService {
 		catch (error) { await this.repository.transact(sessionId, session => { const node = readingNode(session, id); node.status = "failed"; node.error = "助手执行关联保存失败，尚未调用模型，可在此节点重试：" + String(error); }); throw error; }
 		await this.generate(sessionId, id);
 	}
-	async ask(sessionId: string, parentId: string, question: string, branchId?: string, quote?: ReadingQuote): Promise<string> {
+	async ask(sessionId: string, parentId: string, question: string, branchId?: string, quote?: ReadingQuote, requestWeb = false): Promise<string> {
 		if (!question.trim()) throw new Error("请输入问题");
 		let id = "";
 		await this.repository.transact(sessionId, (session) => {
 			const branch = branchId ? session.branches.find((item) => item.id === branchId) : addReadingBranch(session, parentId);
 			if (!branch) throw new Error("支线不存在");
 			id = addReadingNode(session, branch.id, question.trim(), quote).id;
+			if (requestWeb) readingNode(session, id).requestWeb = true;
 		});
 		void this.generate(sessionId, id).catch(() => undefined);
 		return id;

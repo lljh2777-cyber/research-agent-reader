@@ -19,6 +19,7 @@ export async function prepareCuration(app: App, workspace: ReadingWorkspaceServi
 	if (readingCategory(session) !== "reading" || session.demo || !nodeIds.length || nodeIds.length > 3) throw new Error("每批请选择一至三个正式阅读节点");
 	const nodes = nodeIds.map(id => session.nodes.find(node => node.id === id));
 	if (nodes.some(node => !node || node.status !== "done")) throw new Error("只能整理已完成的阅读回答");
+	if (nodes.some(node => node?.requestWeb)) throw new Error("联网支线可导出为学习记录；正式知识整理请先在不联网的核对节点中重新读取并确认本文依据");
 	if (!curationTarget(targetPath)) throw new Error("请选择已有的来源、概念、方法或综合笔记");
 	const file = app.vault.getFileByPath(targetPath); if (!file) throw new Error("目标笔记不存在");
 	const text = await app.vault.cachedRead(file); if (text.length > 160000) throw new Error("目标笔记超过本轮整理容量");

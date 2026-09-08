@@ -12,6 +12,7 @@ async function main() {
 	const app = { vault: { getFileByPath: p => p === file.path ? file : null, cachedRead: async () => "# Paper\n\n已有的有依据研究概述。\n" }, metadataCache: { getFileCache: () => ({ frontmatter: { title: metadataTitle } }) } };
 	const workspace = { ready: async () => {}, repository: { get: () => session }, document: async () => ({ source, evidence, verify: async () => {} }) }; const backend = () => ({ name: "Fake", model: "fake", images: false });
 	const context = await prepareCuration(app, workspace, backend, session.id, [node.id], file.path); assert(context.sourceCompatible, "first-page title supports PDF identity, not its generic basename");
+	node.requestWeb = true; await assert.rejects(prepareCuration(app, workspace, backend, session.id, [node.id], file.path), /联网支线/); delete node.requestWeb;
 	metadataTitle = "Another foundation model unrelated to the selected paper"; assert(!(await prepareCuration(app, workspace, backend, session.id, [node.id], file.path)).sourceCompatible);
 	await assert.rejects(prepareCuration(app, workspace, backend, session.id, [node.id, "2", "3", "4"], file.path), /一至三个/);
 	const read = app.vault.cachedRead; const full = "# Paper\n\n" + Array.from({ length: 8 }, (_, i) => "段落" + i + "。" + "已有研究证据。".repeat(600)).join("\n\n");

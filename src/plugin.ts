@@ -3341,7 +3341,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	createReadingBackend(session: ReadingSession, streaming = true): ReadingBackend {
 		if (session.backend === "codex-cli") return new CodexReadingBackend(this.settings.codexExecutable, session.model || this.settings.codexModel, this.readingPluginDirectory());
 		const profile = this.getProviderProfile(session.backend); if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
-		return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, streaming && profile.lastTest.streamingVerified === true, supportsReadingSchema(profile));
+		return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, streaming && profile.lastTest.streamingVerified === true, supportsReadingSchema(profile), () => this.resolveWebSearchBackend(profile));
 	}
 	async activateReadingWorkspace(entry?: import("./reading/entry").ReadingEntry): Promise<void> {
 		const leaf = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0] || this.app.workspace.getLeaf("tab");

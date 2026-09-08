@@ -8,6 +8,7 @@ import { READING_MEMORY_SCHEMA, readingSelectionSchema, readingAnswerSchema, rea
 import { currentReadingModule, READING_PLAN_RULES, validateModulePlan } from "./planning";
 import { contentHash } from "../retrieval/chunks";
 import { randomUUID } from "node:crypto";
+import { prepareReadingWeb, finishReadingWeb, readingWebInstruction } from "./web";
 import type { ReadingWorkspaceService } from "./workspace";
 import type { ReadingBackend, ReadingEvidence, ReadingImage, ReadingResult, ReadingSession } from "./types";
 
@@ -103,6 +104,9 @@ export class ReadingEngine {
 			await repository.transact(sessionId, (session) => { const node = readingNode(session, nodeId); node.status = "running"; node.error = ""; node.content = ""; });
 			this.emit(sessionId, nodeId, "正在准备阅读背景和本文证据…");
 			const backend = this.backendFor(repository.get(sessionId));
+			const requestedWeb = readingNode(repository.get(sessionId), nodeId).requestWeb;
+			const webResolution = requestedWeb ? backend.webSearch?.() : undefined;
+			if (requestedWeb && (!webResolution || webResolution.kind === "unavailable")) throw new Error("联网支线不可用：" + (webResolution?.kind === "unavailable" ? webResolution.reason : "请为此会话选择支持联网的 Direct API"));
 			await this.prepareMemory(sessionId, nodeId, backend, controller.signal);
 			let session = structuredClone(repository.get(sessionId)); const node = readingNode(session, nodeId);
 			const document = await this.workspace.document(sessionId);
@@ -165,8 +169,12 @@ export class ReadingEngine {
 			}
 			if (visualRequired && !images.length) throw new Error("需要的图像无法读取，图表尚未核验");
 			if (requiredVisuals.some((id) => !images.some((image) => image.evidenceId === id))) throw new Error("选中的图像未完整加载，请重试");
+			if (requestedWeb && !node.branchId) throw new Error("联网仅用于用户明确选择的问题支线");
+			if (webResolution) this.emit(sessionId, nodeId, "已读取本文依据，正在准备联网补充…");
+			const web = webResolution ? await prepareReadingWeb(webResolution, node.question, session.title, controller.signal) : undefined;
 			this.emit(sessionId, nodeId, "已读取 " + evidence.length + " 条证据" + (images.length ? "和 " + images.length + " 张图像" : "") + "，正在生成讲解…");
 			const prompt = JSON.stringify({ action: node.branchId ? "回答支线追问" : currentModule ? "讲解当前主线单元" : completedCount ? "继续下一个主线单元" : "生成整体提纲并讲解第一单元",
+				webEvidence: web ? { mode: web.mode, query: web.query, sources: web.sources.map((s, i) => ({ id: "W" + (i + 1), ...s })), instruction: readingWebInstruction(web) } : undefined,
 				correction: node.correction ? { reason: node.correction.reason, instruction: "对照本轮原文核对旧回答，说明哪些需要更正、哪些保持成立及证据缺口。用户的质疑也可能不成立，不盲从，不把重新解释写成事实已验证。" } : undefined,
 				validationFeedback: retryCitation ? "上次正文没有证据标记。请在关键结论旁写实际 [证据ID]，仅填写 evidenceIds 清单不够。" : undefined,
 				question: node.question, quote: node.quote?.text, context, outline: node.branchId ? undefined : session.outline, currentUnit: node.branchId ? undefined : session.outline[completedCount],
@@ -178,18 +186,22 @@ export class ReadingEngine {
 				output: node.branchId ? { title: "短标题", content: "Markdown 正文，结论附 [证据ID]", evidenceIds: ["引用的ID"] }
 					: { title: "本单元短标题", content: "Markdown 正文，结论附 [证据ID]", evidenceIds: ["引用的ID"], mainSummary: "截至本单元的累计摘要及进度", ...(!session.modulePlan ? { outline: ["完整主线提纲"], completed: false } : {}) } });
 			let streamed = "";
-			const raw = await measuredReadingCall(repository, sessionId, nodeId, "answer", backend, { system: teachingSkill + "\n" + READING_HOST_RULES, prompt, images, signal: controller.signal, schema: readingAnswerSchema(!node.branchId, evidence.map(e => e.id), Boolean(session.modulePlan)),
+			const hostRules = web?.mode === "native" ? READING_HOST_RULES.replace("不调用工具、联网或修改文件", "仅可调用只读联网搜索，不调用其他工具或修改文件") : READING_HOST_RULES;
+			const raw = await measuredReadingCall(repository, sessionId, nodeId, "answer", backend, { system: teachingSkill + "\n" + hostRules + (web ? "\n" + readingWebInstruction(web) : ""), prompt, images, signal: controller.signal,
+				webSearch: webResolution?.kind === "native" ? webResolution.protocol : undefined, schema: readingAnswerSchema(!node.branchId, evidence.map(e => e.id), Boolean(session.modulePlan)),
 				onDelta: (delta) => { streamed += delta; const match = /"content"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(streamed); if (match) {
 					try { this.emit(sessionId, nodeId, JSON.parse('"' + match[1] + '"')); } catch { /* Incomplete escape; retain previous frame. */ }
 				} } });
 			controller.signal.throwIfAborted(); const parsed = validateReadingResult(raw, evidence, !node.branchId, session.modulePlan ? session.outline : undefined);
 			if (currentModule) parsed.title = currentModule.title;
 			const result = node.branchId ? parsed : stableReadingResult(session, parsed);
+			const webResult = web ? finishReadingWeb(web, result.content, evidence.map(item => item.text)) : undefined;
 			await document.verify(); controller.signal.throwIfAborted();
 			await repository.transact(sessionId, (draft) => {
 				const target = readingNode(draft, nodeId); target.title = result.title; target.content = result.content; target.status = "done"; target.error = "";
 				target.evidence = evidence.filter((item) => result.evidenceIds.includes(item.id)); target.provider = backend.name; target.model = backend.model;
 				target.retrieval = retrieval;
+				target.web = webResult;
 				target.providedEvidenceIds = evidence.map(e => e.id); target.providedImageIds = images.map(i => i.evidenceId);
 				if (!node.branchId) { draft.outline = result.outline!; draft.mainSummary = result.mainSummary!; draft.completed = result.completed!; }
 			});

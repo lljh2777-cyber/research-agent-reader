@@ -476,6 +476,15 @@ export class ReadingWorkspaceView extends ItemView {
 			element(details, "p", "", node.retrieval.paths.join("\n") || "Vault 中未找到足够依据");
 			if (node.retrieval.error) element(details, "p", "reading-error", node.retrieval.error);
 		}
+		if (node.web) {
+			const details = element(article, "details", "reading-sources"); element(details, "summary", "", "网络补充 · " + (node.web.mode === "native" ? "原生联网" : "Tavily"));
+			element(details, "p", "", node.web.warning);
+			if (node.web.mode === "tavily") element(details, "p", "", "实际检索词：" + node.web.query);
+			for (const [index, source] of node.web.sources.entries()) {
+				const row = element(details, "p"); const link = element(row, "a", "", `[网络 W${index + 1}] ${source.title || source.url}`); link.href = source.url; link.target = "_blank"; link.rel = "noopener noreferrer";
+				if (source.content) element(details, "p", "reading-evidence-text", source.content);
+			}
+		}
 		if (node.error) element(article, "p", "reading-error", node.error);
 		const outcome = element(article, "details", "reading-sources reading-outcomes"); outcome.dataset.outcomeNode = node.id;
 		if (node.usage?.length) {
@@ -559,6 +568,10 @@ export class ReadingWorkspaceView extends ItemView {
 		const quoted = this.quote && this.quote.nodeId === target ? this.quote : undefined;
 		const targetLabel = quoted ? "新建子支线 · 引用：" + quoted.text.slice(0, 80) : branchId ? "继续当前支线 · 从最后一轮续问" : "新建支线 · " + (target ? "主线 " + String(session.mainIds.indexOf(target) + 1).padStart(2, "0") + "：" + readingNode(session, target).title : "请先开始主线");
 		const context = element(box, "div", "reading-composer-context"); icon(context, quoted ? "quote" : "corner-down-right"); element(context, "small", "", targetLabel).title = targetLabel;
+		const webLabel = element(context, "label", "reading-web-option"); const web = element(webLabel, "input"); web.type = "checkbox";
+		web.checked = session.backend !== "codex-cli" && session.ui.webDrafts?.[key] === true; web.disabled = session.backend === "codex-cli" || session.demo === true;
+		element(webLabel, "span", "", "联网补充"); webLabel.title = web.disabled ? "联网支线需选择 Direct API 阅读模型" : "仅本次追问使用供应商联网配置；先读取本文，再补充网页";
+		web.onchange = () => this.updateUI(ui => { (ui.webDrafts ||= {})[key] = web.checked; });
 		if (quoted) actionButton(context, "x", "取消引用", () => { this.quote = undefined; this.updateUI((ui) => { ui.pendingQuote = undefined; }); this.render(true); }, true);
 		if (!compact && session.ui.mode === "map" && session.ui.windows.some((w) => !w.minimized)) actionButton(context, "chevron-down", "收起主输入框", () => this.updateUI((ui) => { ui.mainComposerExpanded = false; }), true);
 		const input = element(box, "textarea"); input.rows = compact ? 1 : 2; input.placeholder = branchId ? "继续聊聊这个问题…" : "哪里还不理解？从这里展开追问…"; input.dataset.composer = key; input.setAttribute("aria-label", targetLabel);
@@ -571,9 +584,9 @@ export class ReadingWorkspaceView extends ItemView {
 		const send = async (): Promise<void> => {
 			if (sending || !target || !input.value.trim()) return; const question = input.value; sending = true;
 			try {
-				const id = await this.service.ask(sessionId, quoted?.nodeId || target, question, quoted ? undefined : branchId, quoted);
+				const id = await this.service.ask(sessionId, quoted?.nodeId || target, question, quoted ? undefined : branchId, quoted, web.checked);
 				this.quote = undefined; this.localDrafts.set(localKey, ""); clearTimeout(this.draftTimers.get(localKey));
-				await this.service.repository.transact(sessionId, (draft) => { draft.ui.pendingQuote = undefined; draft.ui.drafts[key] = ""; this.ensureWindow(draft, id); });
+				await this.service.repository.transact(sessionId, (draft) => { draft.ui.pendingQuote = undefined; draft.ui.drafts[key] = ""; if (draft.ui.webDrafts) draft.ui.webDrafts[key] = false; this.ensureWindow(draft, id); });
 			} finally { sending = false; }
 		};
 		const footer = element(box, "div", "reading-composer-footer"); element(footer, "small", "", "Enter 发送 · Shift + Enter 换行");

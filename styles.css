@@ -4210,6 +4210,8 @@
 
 .reading-correction-input { width: 100%; margin-block: 10px; }
 .reading-coverage-row { display: block; width: 100%; height: auto; white-space: normal; text-align: left; margin-block: 6px; }
+.reading-web-option { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 10px; cursor: pointer; }
+.reading-web-option input { margin: 0; }
 
 .agent-dashboard-grid {
 	gap: 20px 18px;
