@@ -8,6 +8,7 @@ import { contentHash, retrievalTerms } from "../retrieval/chunks";
 import { curationParagraphs, curationTarget, estimatedTokens } from "./policy";
 import { CURATION_RULE_VERSION, type CurationContext, type CurationEvidence } from "./types";
 import { curationQuotes, selectCurationParagraphs, type CurationSearch } from "./selection";
+import { curationAnswerSchema } from "../reading/schemas";
 
 export { curationSkill };
 export function curationLearningHash(session: ReadingSession, nodeIds: string[]): string {
@@ -53,8 +54,9 @@ export async function prepareCuration(app: App, workspace: ReadingWorkspaceServi
 	for (const item of evidence) item.quotes = curationQuotes(item);
 	const buildPrompt = (): string => JSON.stringify({ instruction: "比较待核对的学习内容与目标段落。仅使用 evidence 的事实依据，不把学习回答当作证据。最多五条建议。", learning: nodes.map(node => ({ title: node!.title, question: node!.question, text: node!.content })),
 		target: { title, category: targetPath.split("/")[1], depth: metadata.reading_depth || metadata.status || "未标注", paragraphs }, evidence: evidence.map(({ text: _text, quotes, ...item }) => ({ ...item, quotes })), sourceCompatible });
-	let prompt = buildPrompt(); let estimate = estimatedTokens(curationSkill + prompt); const selectedCount = paragraphs.length;
-	while (estimate > 18000 && paragraphs.length > 1) { paragraphs.pop(); prompt = buildPrompt(); estimate = estimatedTokens(curationSkill + prompt); }
+	const estimateInput = (prompt: string) => estimatedTokens(curationSkill + prompt + JSON.stringify(curationAnswerSchema({ evidence, target: { paragraphs } })));
+	let prompt = buildPrompt(); let estimate = estimateInput(prompt); const selectedCount = paragraphs.length;
+	while (estimate > 18000 && paragraphs.length > 1) { paragraphs.pop(); prompt = buildPrompt(); estimate = estimateInput(prompt); }
 	if (paragraphs.length !== selectedCount) { selection.selected = paragraphs.length; warnings.push("为控制输入预算，目标段落由 " + selectedCount + " 段缩减为 " + paragraphs.length + " 段；本批未覆盖其余段落，保留本轮已选原文证据"); }
 	if (estimate > 18000) throw new Error("本批预计输入超过 18,000 token，请减少节点或选择更聚焦的目标笔记");
 	const learningHash = curationLearningHash(session, nodeIds);

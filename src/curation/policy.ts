@@ -30,11 +30,11 @@ export function validateSuggestion(raw: unknown, context: CurationContext, index
 	if (value.claim.length > 500 || value.text.length > 4000 || value.reason.length > 1600) throw new Error("单条整理建议过长，请缩小范围");
 	const warnings: string[] = []; const paragraph = context.target.paragraphs.find(item => item.id === value.paragraphId); const citations: CurationSuggestion["citations"] = [];
 	for (const item of value.citations) {
-		if (!item || typeof item.id !== "string") throw new Error("证据引用结构无效");
+		if (!item || typeof item.id !== "string") throw new Error("证据引用缺少 id，必须使用本批提供的证据编号");
 		const evidence = context.evidence.find(e => e.id === item.id);
 		const selected = evidence?.quotes?.find(q => q.id === item.quoteId);
 		const quote = typeof item.quote === "string" ? item.quote : selected?.text;
-		if (typeof quote !== "string" || !quote.trim() || quote.length > 1400) throw new Error("证据引用结构无效");
+		if (typeof quote !== "string" || !quote.trim() || quote.length > 1400) throw new Error(!evidence ? "引用证据编号不存在：" + item.id.slice(0, 100) : !selected && item.quoteId !== undefined ? "引用原句编号不属于该证据：" + String(item.quoteId).slice(0, 100) : "引用原句为空或超过 1400 字符，请选择本批提供的原句");
 		citations.push({ id: item.id, quote, ...(typeof item.quoteId === "string" ? { quoteId: item.quoteId } : {}) });
 		if (item.quoteId !== undefined && (!selected || evidence!.text.slice(selected.start, selected.end) !== selected.text || quote !== selected.text)) warnings.push("引用编号与原文位置不一致");
 		if (!evidence || !evidence.text.includes(quote)) warnings.push("引用无法在本轮证据中定位");

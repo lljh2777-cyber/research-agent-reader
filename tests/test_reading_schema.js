@@ -8,7 +8,7 @@ const { structuredProfileKey, supportsReadingSchema, supportsFastCoordination } 
 const { probeReadingSchema } = loadReading("assistant/probe.ts");
 const { DirectReadingBackend, readingUsage } = loadReading("reading/backend.ts");
 const { ASSISTANT_SCHEMA } = loadReading("assistant/capabilities.ts");
-const { READING_MEMORY_SCHEMA, READING_SELECTION_SCHEMA, readingAnswerSchema, CURATION_SCHEMA } = loadReading("reading/schemas.ts");
+const { READING_MEMORY_SCHEMA, READING_SELECTION_SCHEMA, readingAnswerSchema, CURATION_SCHEMA, curationAnswerSchema } = loadReading("reading/schemas.ts");
 (async () => {
 	const p = normalizeProviderProfile({ id: "p", type: "openai-compatible", baseUrl: "https://example.test/v1", model: "m", secretId: "test" });
 	let captured;
@@ -45,6 +45,11 @@ const { READING_MEMORY_SCHEMA, READING_SELECTION_SCHEMA, readingAnswerSchema, CU
 	assert.equal(readingUsage({ prompt_tokens: 0, completion_tokens: 0 }).input, 0); assert.equal(readingUsage({}), undefined);
 	const check = schema => { if (schema.type === "object") { assert.equal(schema.additionalProperties, false); assert.deepEqual([...schema.required].sort(), Object.keys(schema.properties).sort()); Object.values(schema.properties).forEach(check); } if (schema.items) check(schema.items); if (schema.anyOf) schema.anyOf.forEach(check); };
 	for (const schema of [ASSISTANT_SCHEMA, READING_MEMORY_SCHEMA, READING_SELECTION_SCHEMA, readingAnswerSchema(true), readingAnswerSchema(false), CURATION_SCHEMA]) check(schema);
+	const bound = curationAnswerSchema({ target: { paragraphs: [{ id: "p1" }] }, evidence: [{ id: "P1", quotes: [{ id: "P1:q1" }] }, { id: "P2", quotes: [{ id: "P2:q1" }] }, { id: "legacy" }] }); check(bound);
+	const properties = bound.properties.suggestions.items.properties;
+	assert.deepEqual(properties.paragraphId.enum, ["p1"]);
+	assert.deepEqual(properties.citations.items.anyOf.slice(0, 2).map(s => [s.properties.id.enum, s.properties.quoteId.enum]), [[["P1"], ["P1:q1"]], [["P2"], ["P2:q1"]]]);
+	assert.equal(properties.citations.items.anyOf[2].properties.quote.type, "string"); assert.equal(CURATION_SCHEMA.properties.suggestions.items.properties.paragraphId.enum, undefined);
 	assert.ok(readingAnswerSchema(true).required.includes("outline")); assert.ok(!readingAnswerSchema(false).required.includes("outline"));
 	console.log("READING_SCHEMA_OK: native protocols, unverified fallback, probe challenge, profile invalidation, usage, shared schemas");
 })().catch(e => { console.error(e); process.exitCode = 1; });

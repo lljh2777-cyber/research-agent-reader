@@ -1,7 +1,7 @@
 import type { App } from "obsidian";
 import { randomUUID } from "node:crypto";
 import type { ReadingBackend, ReadingImage, ReadingSession } from "../reading/types";
-import { CURATION_SCHEMA } from "../reading/schemas";
+import { curationAnswerSchema } from "../reading/schemas";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 import { contentHash } from "../retrieval/chunks";
 import { curationSkill, prepareCuration, verifyCurationContext } from "./context";
@@ -59,6 +59,8 @@ export class CurationService {
 	private async run(preparedContext: CurationContext, signal: AbortSignal, force: boolean, prepared?: (review: CurationReview) => Promise<void>): Promise<CurationReview> {
 		await this.ready(); const context = structuredClone(preparedContext); await verifyCurationContext(this.app, this.workspace, context); signal.throwIfAborted();
 		if (!context.sourceCompatible) throw new Error("当前论文与目标来源笔记不匹配，请重新选择目标");
+		const schema = curationAnswerSchema(context); context.estimate = estimatedTokens(curationSkill + context.prompt + JSON.stringify(schema));
+		if (context.estimate > 18000) throw new Error("本批包含引用格式的输入预算超过 18,000 token，请重新读取依据并缩小范围");
 		const cached = this.cached(context); if (cached && !force) { await prepared?.(cached); return cached; }
 		const recovered = this.generationCache.get(context.key); if (recovered) { await this.save(recovered); this.generationCache.delete(context.key); await prepared?.(recovered); return recovered; }
 		const stamp = now(); const review: CurationReview = { version: 1, id: id(), context, created: stamp, updated: stamp, state: "generating", suggestions: [], usage: { kind: "estimated", input: context.estimate, calls: 0, model: context.model, note: "文字输入估算；图像和推理开销以服务商实际计量为准" }, error: "" };
@@ -70,7 +72,7 @@ export class CurationService {
 			const source = await this.workspace.document(context.sessionId); const images: ReadingImage[] = [];
 			for (const evidence of context.evidence.filter(item => item.visual)) { const original = source.evidence.find(item => "V:" + item.id === evidence.id); if (!original || !backend.images) throw new Error("本轮图像证据不可用"); const image = await source.image(original, signal); if (!image) throw new Error("图像证据缺失"); images.push({ ...image, evidenceId: evidence.id }); }
 			signal.throwIfAborted(); review.usage.calls = 1; await this.save(review);
-			const text = await backend.complete({ system: curationSkill, prompt: context.prompt, schema: CURATION_SCHEMA, images, signal, maxTokens: 4500, onUsage: usage => { review.usage = { ...review.usage, ...usage, kind: "reported", note: "服务商返回用量；可能包含缓存输入与推理开销" }; } });
+			const text = await backend.complete({ system: curationSkill, prompt: context.prompt, schema, images, signal, maxTokens: 4500, onUsage: usage => { review.usage = { ...review.usage, ...usage, kind: "reported", note: "服务商返回用量；可能包含缓存输入与推理开销" }; } });
 			signal.throwIfAborted(); review.suggestions = parseCurationResult(text, context);
 			if (review.usage.kind === "estimated") review.usage.output = estimatedTokens(text);
 			await verifyCurationContext(this.app, this.workspace, context); signal.throwIfAborted(); review.state = "ready"; review.updated = now();
