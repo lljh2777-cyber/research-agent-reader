@@ -135,7 +135,7 @@ export class ReadingWorkspaceView extends ItemView {
 				const control = actionButton(modes, name, label, () => this.updateUI((ui) => { ui.mode = mode; })); control.dataset.readingMode = mode; control.setAttribute("aria-pressed", String(session.ui.mode === mode));
 			}
 			actionButton(actions, "download", "导出学习笔记", () => this.openExport(), true);
-			if (session.source.kind === "code") actionButton(actions, "code-xml", "浏览源码", () => { const modal = new CodeSourceModal(this.app, this.service, this.session!); this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open(); }, true);
+			if (session.source.kind === "code") actionButton(actions, "code-xml", "浏览源码", () => { const modal = new CodeSourceModal(this.app, this.service, this.session!, id => { if (this.sessionId === session.id) this.selectNode(id, false, true); }); this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open(); }, true);
 			if (!session.demo && session.source.kind !== "code") actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, this.session!.ui.selectedId), true);
 			if (!session.demo && session.source.kind !== "code") actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, this.session!.ui.selectedId), true);
 		}
@@ -458,6 +458,12 @@ export class ReadingWorkspaceView extends ItemView {
 		if (node.evidence.length) element(kicker, "span", "reading-answer-source-count", node.evidence.length + " 处依据");
 		element(article, "h3", "", node.title);
 		if (node.quote) element(article, "blockquote", "reading-quote", node.quote.text);
+		if (node.codeQuote) {
+			const quote = node.codeQuote, source = node.evidence.find(e => e.id === quote.evidenceId)!;
+			const block = element(article, "details", "reading-code-quote");
+			element(block, "summary", "", "所选源码 · " + quote.path + ":" + quote.startLine + "–" + quote.endLine);
+			renderCodeEvidence(block, { ...source, ...quote, id: quote.evidenceId });
+		}
 		const content = element(article, "div", "reading-answer-content");
 		const placeholder = node.status === "failed" || node.status === "interrupted" ? "本单元尚未完成，可在下方重试。" : "正在准备讲解…";
 		try { void MarkdownRenderer.render(this.app, safeReadingMarkdown(node.content || this.plugin.getReadingEngine().streamed(this.sessionId, node.id) || placeholder), content, "", this.renderer).then(() => {

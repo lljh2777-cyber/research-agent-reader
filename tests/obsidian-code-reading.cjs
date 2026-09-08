@@ -30,12 +30,25 @@ module.exports = async function codeReadingScenario(app) {
 			root.querySelector(".reading-advance").click(); await pause(650); check(service.repository.get(id).mainIds.length === 2 && service.repository.get(id).completed, kind + " arrow advances one unit");
 			const input = root.querySelector("textarea[data-composer^='main:']"); input.value = "如果没有正数会怎样"; input.dispatchEvent(new Event("input", { bubbles: true })); input.closest(".reading-composer").querySelector(".reading-send").click(); await pause(650);
 			check(service.repository.get(id).branches.length === 1 && root.querySelector(".reading-float"), kind + " branch opens");
+			const parentId = service.repository.get(id).ui.selectedId;
+			root.querySelector('button[aria-label="浏览源码"]').click(); await pause();
+			const codeModal = document.querySelector(".reading-code-source-modal"), codeSelect = codeModal.querySelector("select");
+			codeSelect.value = evidence.id; codeSelect.dispatchEvent(new Event("change")); await pause();
+			const code = codeModal.querySelector(".reading-code-block code"), range = document.createRange(); range.selectNodeContents(code);
+			const selection = document.getSelection(); selection.removeAllRanges(); selection.addRange(range); code.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+			const prepare = codeModal.querySelector('[aria-label="追问选中代码"]'); check(!prepare.disabled, kind + " source selection enabled"); prepare.click();
+			const sourceInput = codeModal.querySelector('[aria-label="源码追问"]'); sourceInput.value = "请解释选中的代码"; sourceInput.dispatchEvent(new Event("input", { bubbles: true }));
+			const sourceSend = codeModal.querySelector('[aria-label="建立源码支线"]'); sourceSend.click(); sourceSend.click(); await pause(650);
+			const quoted = service.repository.get(id).nodes.at(-1);
+			check(quoted.status === "done" && quoted.parentId === parentId && service.repository.get(id).branches.length === 2, kind + " source quote creates one child branch");
+			check(quoted.codeQuote.text === evidence.text && quoted.codeQuote.startLine === evidence.startLine, kind + " exact source quote saved");
+			check(root.querySelector(".reading-code-quote") && root.querySelector(".reading-float"), kind + " quoted source in branch window");
 			const first = service.repository.get(id).mainIds[0]; view.showEvidence(first, evidence.id); await pause(); const evidenceModal = [...document.querySelectorAll(".reading-modal")].find(m => m.querySelector(".reading-code-block"));
 			check(evidenceModal?.textContent.includes("第 " + evidence.startLine), kind + " cited code line location"); closeModal(evidenceModal);
 			root.querySelector('[data-reading-mode="map"]').click(); await pause(650); check(root.dataset.mode === "map", kind + " map mode");
 			view.openExport(); await pause(); const exported = document.querySelector(".reading-export-modal"); check(exported?.textContent.includes("static-read") && exported.textContent.includes("项目代码"), kind + " code export preview"); closeModal(exported);
-			await service.repository.flush(); const saved = JSON.parse(await service.repository.storage.read(id)); check(saved.source.code.files.length && saved.nodes.length === 3 && saved.ui.mode === "map", kind + " source and conversation saved");
-			await view.setState({ sessionId: id }); check(root.querySelectorAll(".reading-map-node").length === 3, kind + " view restores graph");
+			await service.repository.flush(); const saved = JSON.parse(await service.repository.storage.read(id)); check(saved.source.code.files.length && saved.nodes.length === 4 && saved.nodes.at(-1).codeQuote.text === evidence.text && saved.ui.mode === "map", kind + " source and conversation saved");
+			await view.setState({ sessionId: id }); check(root.querySelectorAll(".reading-map-node").length === 4, kind + " view restores graph");
 		}
 		check(hashes() === before, "all source hashes unchanged"); return { status: "passed", checks: checks.length, details: checks, sessions: [...cases.keys()] };
 	} finally { for (const modal of view.modals) if (!originalModals.has(modal)) modal.close(); engine.backendFor = originalBackend; await pause(650); await service.repository.flush(); if (previousId) await view.setState({ sessionId: previousId }); }

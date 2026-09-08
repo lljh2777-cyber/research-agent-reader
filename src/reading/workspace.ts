@@ -5,6 +5,7 @@ import { matchingReading } from "./catalog";
 import { addReadingBranch, addReadingNode, createReadingSession, readingNode } from "./session";
 import type { ReadingNode, ReadingQuote, ReadingSession, ReadingSource } from "./types";
 import { answerHash } from "./quality";
+import { codeQuote } from "../code-reading/quote";
 
 export class ReadingWorkspaceService {
 	readonly repository: ReadingRepository;
@@ -113,6 +114,20 @@ export class ReadingWorkspaceService {
 		const task = this.runGeneration(sessionId, id); this.tasks.add(task);
 		void task.finally(() => this.tasks.delete(task)).catch(() => undefined);
 		return task;
+	}
+	/** start/end are relative to the catalog block. The host binds the immutable quote. */
+	async askCode(sessionId: string, parentId: string, evidenceId: string, start: number, end: number, question: string): Promise<string> {
+		if (!question.trim() || question.length > 4000) throw new Error("请用 4000 字符以内输入问题");
+		const document = await this.document(sessionId); await document.verify();
+		const evidence = document.evidence.find(e => e.id === evidenceId);
+		if (!evidence || document.source.kind !== "code") throw new Error("源码选区不属于此会话");
+		const quote = codeQuote(evidence, start, end); let id = "";
+		await this.repository.transact(sessionId, session => {
+			if (session.source.fingerprint !== document.source.fingerprint) throw new Error("源码版本已变化");
+			const node = addReadingNode(session, addReadingBranch(session, parentId).id, question.trim());
+			node.codeQuote = quote; node.evidence = [structuredClone(evidence)]; id = node.id;
+		});
+		void this.generate(sessionId, id).catch(() => undefined); return id;
 	}
 	private async runGeneration(sessionId: string, id: string): Promise<void> {
 		if (this.repository.get(sessionId).demo) {

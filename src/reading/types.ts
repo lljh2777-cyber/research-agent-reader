@@ -39,6 +39,7 @@ export interface ReadingEvidence {
 	sourceHash?: string;
 }
 export interface ReadingQuote { nodeId: string; text: string; start: number; end: number }
+export interface ReadingCodeQuote { evidenceId: string; path: string; sourceHash: string; text: string; start: number; end: number; startLine: number; endLine: number }
 export interface ReadingNode {
 	requestWeb?: boolean;
 	web?: { mode: "native" | "tavily"; query: string; sources: { url: string; title: string; content?: string }[]; warning: string; };
@@ -61,6 +62,7 @@ export interface ReadingNode {
 	createdAt: string;
 	evidence: ReadingEvidence[];
 	quote?: ReadingQuote;
+	codeQuote?: ReadingCodeQuote;
 	provider?: string;
 	model?: string;
 	retrieval?: { query: string; paths: string[]; error?: string; label?: string; warnings?: string[] };

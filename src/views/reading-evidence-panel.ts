@@ -50,7 +50,7 @@ export class ReadingEvidencePanel {
 		const open = act(footer, "打开来源", () => { void verify().then(() => {
 			if (controller.signal.aborted) return;
 			if (evidence.kind === "vault") return this.plugin.openVaultFile(evidence.path);
-			if (evidence.kind === "code") { new CodeSourceModal(this.app, this.service, session).open(); return; }
+			if (evidence.kind === "code") { this.plugin.showCurationModal(new CodeSourceModal(this.app, this.service, session, id => { void this.plugin.openLearningRecord(session.id, id).catch(error => { status.textContent = String(error); }); })); return; }
 			if (session.source.kind === "article") return this.plugin.openReadingEvidence(evidence.path, evidence.page);
 			return (require("electron") as { shell: { openPath(path: string): Promise<string> } }).shell.openPath(session.source.path).then(error => { if (error) throw new Error(error); });
 		}).catch(error => { status.textContent = String(error); }); }); open.disabled = true;

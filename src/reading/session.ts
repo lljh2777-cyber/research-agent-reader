@@ -3,6 +3,7 @@ import { readingCategory } from "./catalog";
 import { validateModulePlan } from "./planning";
 import { answerHash, effectiveReadingContent } from "./quality";
 import { codeFingerprint, validateCodeSnapshot } from "../code-reading/source";
+import { verifyCodeQuote, readingQuestionContext } from "../code-reading/quote";
 import type { ReadingBranch, ReadingNode, ReadingQuote, ReadingSession, ReadingSource } from "./types";
 
 export const newReadingId = (): string => "r-" + randomUUID();
@@ -31,7 +32,7 @@ export function addReadingBranch(session: ReadingSession, parentId: string): Rea
 	const seen = new Set<string>();
 	while (current?.branchId && !seen.has(current.id)) {
 		seen.add(current.id);
-		ancestors.unshift(current.question + "\n" + effectiveReadingContent(session, current));
+		ancestors.unshift(readingQuestionContext(current) + "\n" + effectiveReadingContent(session, current));
 		current = session.nodes.find((item) => item.id === current!.parentId);
 	}
 	const branch: ReadingBranch = { id: newReadingId(), parentNodeId: parentId,
@@ -75,6 +76,10 @@ export function validateReadingSession(value: unknown): ReadingSession {
 			|| !["pending", "running", "done", "failed", "interrupted"].includes(node.status)
 			|| !Array.isArray(node.evidence) || (node.parentId && !nodes.has(node.parentId))) throw new Error("阅读节点关系无效");
 		nodes.set(node.id, node);
+		if (node.codeQuote) {
+			if (session.source.kind !== "code" || !node.branchId) throw new Error("源码追问只能属于代码支线");
+			verifyCodeQuote(node.codeQuote, node.evidence.find(e => e.id === node.codeQuote!.evidenceId));
+		}
 		for (const e of node.evidence.filter(e => e.kind === "code")) {
 			const file = session.source.code?.files.find(f => f.path === e.path);
 			if (session.source.kind !== "code" || !file || e.sourceHash !== file.hash || !Number.isInteger(e.startLine) || !Number.isInteger(e.endLine)
