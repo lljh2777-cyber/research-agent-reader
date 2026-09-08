@@ -20,6 +20,7 @@ module.exports = async function readingNodeSelectionScenario(app) {
 		button.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, detail: 2 })); await settle();
 	};
 	const floating = key => [...root.querySelectorAll(".reading-float")].find(w => w.dataset.windowKey === key);
+	const originalAdvance = service.advance;
 	try {
 		await view.setState({ sessionId: id });
 		for (const mode of ["split", "map"]) {
@@ -50,11 +51,39 @@ module.exports = async function readingNodeSelectionScenario(app) {
 			await click(first); await pause(500); await service.repository.flush();
 			const saved = JSON.parse(await service.repository.storage.read(id));
 			check(saved.ui.selectedId === first && saved.ui.mainFocusId === first, mode + " selection saved");
+			for (const nodeId of [second, branchNode]) {
+				for (const region of [".reading-node-meta", ".reading-node-meta > span:not(.reading-icon)", ".reading-node-meta svg path", "padding", "lower edge"]) {
+					await service.repository.transact(id, s => { s.ui.windows = []; s.ui.selectedId = first; s.ui.zoom = 1; }); await settle();
+					const card = nodeButton(nodeId).closest(".reading-map-node");
+					card.scrollIntoView({ block: "center", inline: "center", behavior: "instant" }); await pause();
+					const rect = card.getBoundingClientRect();
+					const target = region === "padding" ? card : region === "lower edge" ? root.ownerDocument.elementFromPoint(rect.left + rect.width / 2, rect.bottom - 2) : card.querySelector(region);
+					check(target && target.closest(".reading-map-node") === card && !target.closest("button"), mode + " lower hit region " + region);
+					target.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 })); await settle();
+					check(session().ui.selectedId === nodeId && !session().ui.windows.length && target.isConnected, mode + " lower single click " + region);
+					target.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+					target.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, detail: 2 })); await settle();
+					check(session().ui.windows.length === 1 && session().ui.windows[0].nodeId === nodeId, mode + " lower double click " + region);
+				}
+			}
+			await service.repository.transact(id, s => { s.ui.windows = []; s.ui.selectedId = first; s.ui.collapsed = []; }); await settle();
+			const fold = nodeButton(branchNode).closest(".reading-map-node").querySelector(".reading-node-meta button");
+			fold.querySelector("svg").dispatchEvent(new MouseEvent("click", { bubbles: true })); await settle();
+			check(session().ui.collapsed.includes(branch.id) && session().ui.selectedId === first && !session().ui.windows.length, mode + " fold button does not select or open parent");
+			const expand = nodeButton(branchNode).closest(".reading-map-node").querySelector(".reading-node-meta button");
+			expand.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, detail: 2 })); await settle();
+			check(!session().ui.windows.length && session().ui.selectedId === first, mode + " nested button double click does not open parent");
+			let advances = 0; service.advance = async () => { advances++; };
+			const advance = root.querySelector(".reading-advance"); check(advance, mode + " next-step button available");
+			advance.querySelector("svg").dispatchEvent(new MouseEvent("click", { bubbles: true })); await settle();
+			check(advances === 1 && session().ui.selectedId === first && !session().ui.windows.length, mode + " next-step button keeps its own action");
+			service.advance = originalAdvance;
 		}
 		await view.setState({ sessionId: id }); await settle();
 		check(nodeButton(first).getAttribute("aria-current") === "true", "selection restored on view reload");
 		return { status: "passed", checks: checks.length, details: checks };
 	} finally {
+		service.advance = originalAdvance;
 		await pause(650); await service.repository.flush(); view.localDrafts = originalDrafts;
 		await service.repository.transact(id, s => { s.ui = originalUI; });
 		if (previousId) await view.setState({ sessionId: previousId });

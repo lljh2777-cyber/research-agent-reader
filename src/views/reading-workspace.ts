@@ -309,6 +309,9 @@ export class ReadingWorkspaceView extends ItemView {
 			open.title += " · 单击选中，双击打开小窗"; open.setAttribute("aria-description", "单击或空格选中；双击或 Enter 打开小窗");
 			open.ondblclick = () => this.selectNode(node.id, false, true);
 			open.onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); if (!event.repeat) this.selectNode(node.id, false, true); } };
+			// The footer and card padding are selectable too; nested buttons own their actions.
+			card.onclick = event => { if (!(event.target as Element).closest("button")) this.selectMapNode(node.id); };
+			card.ondblclick = event => { if (!(event.target as Element).closest("button")) this.selectNode(node.id, false, true); };
 			const label = element(open, "span", "reading-node-label");
 			if (node.branchId) { icon(label, "corner-down-right"); element(label, "span", "", "追问"); }
 			else { element(label, "span", "reading-node-number", String(session.mainIds.indexOf(node.id) + 1).padStart(2, "0")); element(label, "span", "", "主线单元"); }
