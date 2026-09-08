@@ -59,6 +59,16 @@ const { contentHash } = loadReading("retrieval/chunks.ts");
 	exported += "changed"; changed(); await service.refreshActions(); assert.equal(service.runs.get(run.id).actions[0].execution.state, "needs-review");
 	const restored = new ReadingAssistantService(serviceDeps, storage); await restored.ready(); await restored.refreshActions(); assert.equal(restored.runs.get(run.id).actions[0].execution.path, "wiki/qa/test.md");
 	const corrupt = structuredClone(service.runs.get(run.id)); corrupt.actions[0].execution.state = "forged"; assert.throws(() => validateAssistantRun(corrupt), /执行记录/);
+	// A failed export may reopen only after checking its receipt; a late successful write is reused, never re-executed.
+	deps.readExport = async () => { throw new Error("file not created"); };
+	await service.recordExecution(run.id, id, second, { state: "failed", detail: "write failed" });
+	await service.refreshActions(); assert.equal(service.runs.get(run.id).actions[0].execution.state, "failed");
+	let retry; await service.dispatch(run.id, id, a => { retry = a.execution.id; }); assert.notEqual(retry, second);
+	await assert.rejects(service.recordExecution(run.id, id, second, { state: "succeeded" }), /最新预览/);
+	await service.recordExecution(run.id, id, retry, { state: "failed", path: "wiki/qa/test.md", hash: contentHash(exported) });
+	deps.readExport = async () => exported;
+	await assert.rejects(service.dispatch(run.id, id, () => { throw new Error("must not duplicate written file"); }), /执行记录/);
+	storage.fail = true; exported += "editing"; await assert.rejects(service.refreshActions(), /disk full/); assert.match(service.actionError, /刷新失败/); storage.fail = false; await service.refreshActions(); assert.equal(service.actionError, "");
 	await service.dispose(); await restored.dispose(); assert.equal(changed, undefined);
 	console.log("ASSISTANT_ACTIONS_OK: business receipts, write-before-effect, failures, retries, edits, undo, old callbacks, restart");
 })().catch(error => { console.error(error); process.exitCode = 1; });

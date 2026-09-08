@@ -35,7 +35,7 @@ export async function resolveAssistantAction(session: ReadingSession, action: As
 	}
 	if (action.kind === "export" && e.path && e.hash) {
 		if (!safeAssistantExportPath(e.path)) return result("needs-review", "导出记录路径不在学习笔记目录");
-		let raw: string; try { raw = await deps.readExport(e.path); } catch { return result(e.state === "running" ? "interrupted" : "needs-review", "未能读取关联的导出文件，请检查是否已保存或被移动"); }
+		let raw: string; try { raw = await deps.readExport(e.path); } catch { return result(e.state === "running" || e.state === "interrupted" ? "interrupted" : e.state === "failed" ? "failed" : "needs-review", "未能读取关联的导出文件，请检查是否已保存或被移动"); }
 		const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)?.[1] || "";
 		let owner: unknown; try { owner = JSON.parse(/^reading_session: (.+)$/m.exec(frontmatter)?.[1] || "null"); } catch { /* An edited header needs review. */ }
 		if (owner !== session.id || contentHash(raw) !== e.hash) return result("needs-review", "导出文件已变化，请核对当前内容；保留手工编辑");

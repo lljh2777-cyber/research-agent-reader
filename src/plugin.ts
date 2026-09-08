@@ -2562,7 +2562,13 @@ export default class AgentDashboardPlugin extends Plugin {
 		const service = this.getReadingAssistant(); await service.refreshActions(); const run = service.runs.get(runId), action = run?.actions.find(a => a.id === actionId), execution = action?.execution;
 		if (!run || !action || !execution) throw new Error("尚无执行记录");
 		if (action.kind === "advance") { await this.openLearningRecord(run.sessionId, execution.nodeId || action.nodeIds[0]); return; }
-		if (action.kind === "curation" && execution.reviewId) { const review = this.getCurationService().reviews.get(execution.reviewId); if (!review || review.context.sessionId !== run.sessionId) throw new Error("整理记录缺失"); this.openKnowledgeCuration(run.sessionId, review.context.nodeIds[0], review); return; }
+		if (action.kind === "curation" && execution.reviewId) {
+			const review = this.getCurationService().reviews.get(execution.reviewId); if (!review || review.context.sessionId !== run.sessionId) throw new Error("整理记录缺失");
+			this.showCurationModal(new KnowledgeCurationModal(this.app, this, run.sessionId, review.context.nodeIds[0], review, undefined, {
+				prepared: record => service.recordExecution(runId, actionId, execution.id, { state: record.state === "generating" ? "running" : "waiting", reviewId: record.id, path: record.context.target.path, detail: "已关联整理批次，结果随原功能更新" }),
+				failed: async error => { await service.recordExecution(runId, actionId, execution.id, { state: "failed", detail: String(error) }).catch(e => new Notice("助手执行状态保存失败：" + String(e))); },
+			})); return;
+		}
 		if (action.kind === "export" && execution.path && safeAssistantExportPath(execution.path)) { await this.openVaultFile(execution.path); return; }
 		throw new Error("尚未关联执行结果，请在原功能查看");
 	}

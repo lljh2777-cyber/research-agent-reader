@@ -96,7 +96,8 @@ export class ReadingAssistantModal extends Modal {
 			card.createEl("strong", { text: title }); card.createEl("small", { text: a.target || ({ node: "选中节点", branch: "所在支线", session: "完整会话" }[a.scope]) });
 			const e = a.execution; card.dataset.state = e?.state || "prepared";
 			if (e) { card.createEl("small", { cls: "assistant-action-status", text: executionStates[e.state] + " · " + e.detail }); if (e.path && e.path !== a.target) card.createEl("small", { text: e.path }); }
-			if (e?.nodeId || e?.reviewId || e?.path) button(card, a.kind === "advance" ? "查看讲解 / 重试" : a.kind === "curation" ? "查看整理 / 修订" : "打开学习笔记", async () => { await this.plugin.openAssistantActionResult(run.id, a.id); this.close(); });
+			if (a.kind === "export" && e && ["failed", "interrupted"].includes(e.state)) button(card, "重试导出预览", async () => { await this.plugin.dispatchAssistantAction(run.id, a.id); this.close(); });
+			else if (e?.nodeId || e?.reviewId || e?.path) button(card, a.kind === "advance" ? ["failed", "interrupted"].includes(e.state) ? "查看讲解 / 重试" : "查看讲解" : a.kind === "curation" ? "查看整理 / 修订" : "打开学习笔记", async () => { await this.plugin.openAssistantActionResult(run.id, a.id); this.close(); });
 			else if (a.kind === "advance" && a.state === "opened") button(card, "查看阅读进度", () => { this.close(); return this.plugin.openLearningRecord(run.sessionId, a.nodeIds[0]); });
 			else button(card, a.state === "opened" ? "重新打开预览" : title, async () => { await this.plugin.dispatchAssistantAction(run.id, a.id); this.close(); });
 			if (!e) card.createEl("small", { text: a.state === "opened" ? "旧记录仅保存了交接状态，请在原功能核对结果。" : a.kind === "advance" ? "点击后调用会话模型生成下一单元。" : "在预览中核对范围和依据；尚未写入笔记。" });
