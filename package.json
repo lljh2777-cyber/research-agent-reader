@@ -1,6 +1,6 @@
 {
 	"name": "research-agent-reader",
-	"version": "0.37.0",
+	"version": "0.38.0",
 	"private": true,
 	"description": "Desktop research reader and optional local-agent dashboard for Obsidian",
 	"author": "Liao Li",
@@ -24,7 +24,8 @@
 		"obsidian:check": "node scripts/obsidian-cli.mjs check",
 		"obsidian:reload": "node scripts/obsidian-cli.mjs reload",
 		"obsidian:qa": "node scripts/obsidian-cli.mjs qa",
-		"verify:obsidian": "pnpm verify && node scripts/obsidian-cli.mjs qa"
+		"verify:obsidian": "pnpm verify && node scripts/obsidian-cli.mjs qa",
+		"test:settings": "node tests/test_settings_navigation.js"
 	},
 	"engines": {
 		"node": ">=20"

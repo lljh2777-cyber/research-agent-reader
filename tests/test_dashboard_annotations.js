@@ -78,7 +78,7 @@ assert.match(serviceSource, /executionConfig\.retrievalMode\s*=\s*webSearchEnabl
 assert.match(serviceSource, /const directProfile = webSearchEnabled\n?\s*\?\s*\(directNativeProtocol \? selectedDirectProfile : null\)\n?\s*: selectedDirectProfile/);
 assert.match(serviceSource, /resolveCliActionExecutionConfig/);
 assert.match(serviceSource, /getCliBackendLabel/);
-assert.match(settingsSource, /title:\s*"批注 AI"/);
+assert.match(source("src/settings/navigation.ts"), /title:\s*"批注 AI"/);
 assert.match(settingsSource, /renderAnnotationSettings/);
 assert.match(settingsSource, /划选批注入口/);
 assert.match(settingsSource, /打开快捷键设置/);
@@ -95,7 +95,7 @@ assert.match(serviceSource, /directNativeProtocol/);
 assert.match(serviceSource, /webSearch: \{ protocol: directNativeProtocol \}/);
 assert.match(pluginSource, /directApiBoundaryLabel\(profileId: string\): string/);
 assert.match(settingsSource, /directApiBoundaryLabel\(profile\.id\)/);
-assert.match(settingsSource, /containerEl\.scrollTop = previousScrollTop/);
+assert.match(settingsSource, /containerEl\.scrollTop = this\.pageScroll\.get\(this\.activePage\)/);
 assert.match(settingsSource, /最大输出 Token/);
 assert.match(runtimeSettingsSource, /annotationMaxTokens:\s*900/);
 assert.match(runtimeSettingsSource, /annotationWebSearchEnabled:\s*false/);

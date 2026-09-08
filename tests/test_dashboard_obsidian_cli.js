@@ -17,7 +17,7 @@ const pkg = JSON.parse(read("package.json"));
 assert.match(settings, /OBSIDIAN_CLI_PATH/);
 assert.match(settings, /path\.join\(path\.dirname\(process\.execPath\), "Obsidian\.com"\)/);
 assert.match(settings, /obsidianCliExecutable/);
-assert.match(settingsTab, /title: "Obsidian CLI"/);
+assert.match(read("src/settings/navigation.ts"), /title: "Obsidian CLI"/);
 assert.match(settingsTab, /renderObsidianCliSettings/);
 assert.match(settingsTab, /version、vaults verbose/);
 assert.match(settingsTab, /不开放任意 eval/);

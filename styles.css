@@ -1318,131 +1318,6 @@
 	height: 15px;
 }
 
-.agent-dashboard-settings-navigation {
-	display: grid;
-	max-width: 920px;
-	border-top: 1px solid var(--background-modifier-border);
-}
-
-.agent-dashboard-settings-navigation-item {
-	display: grid;
-	grid-template-columns: 38px minmax(0, 1fr) minmax(130px, auto);
-	gap: 12px;
-	align-items: center;
-	width: 100%;
-	min-height: 74px;
-	padding: 12px 8px;
-	border: 0;
-	border-bottom: 1px solid var(--background-modifier-border);
-	border-radius: 0;
-	box-shadow: none;
-	color: var(--text-normal);
-	background: transparent;
-	text-align: left;
-}
-
-.agent-dashboard-settings-navigation-item:hover,
-.agent-dashboard-settings-navigation-item:focus-visible {
-	background: var(--background-modifier-hover);
-}
-
-.agent-dashboard-settings-navigation-icon {
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	width: 34px;
-	height: 34px;
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	color: var(--interactive-accent);
-	background: var(--background-secondary);
-}
-
-.agent-dashboard-settings-navigation-icon svg {
-	width: 18px;
-	height: 18px;
-}
-
-.agent-dashboard-settings-navigation-copy {
-	display: grid;
-	gap: 4px;
-	min-width: 0;
-}
-
-.agent-dashboard-settings-navigation-copy strong {
-	font-size: 14px;
-	font-weight: 650;
-}
-
-.agent-dashboard-settings-navigation-copy span {
-	overflow-wrap: anywhere;
-	color: var(--text-muted);
-	font-size: 11px;
-	line-height: 1.45;
-}
-
-.agent-dashboard-settings-navigation-trailing {
-	display: flex;
-	gap: 8px;
-	align-items: center;
-	justify-content: flex-end;
-	min-width: 0;
-	color: var(--text-muted);
-	font-family: var(--font-monospace);
-	font-size: 10px;
-}
-
-.agent-dashboard-settings-navigation-trailing > span:first-child {
-	overflow: hidden;
-	max-width: 210px;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.agent-dashboard-settings-section-title {
-	margin: 22px 2px 8px;
-	color: var(--text-faint);
-	font-size: 11px;
-	font-weight: 650;
-	letter-spacing: 0.05em;
-}
-
-.agent-dashboard-settings-section-title:first-child {
-	margin-top: 4px;
-}
-
-.agent-dashboard-settings-navigation-badge {
-	flex: none;
-	border-radius: 999px;
-	font-family: var(--font-interface);
-	font-size: 10px;
-	font-weight: 650;
-	line-height: 1.4;
-	padding: 1px 8px;
-}
-
-.agent-dashboard-settings-navigation-badge.is-ok {
-	color: var(--color-green);
-	background: rgba(var(--color-green-rgb), 0.13);
-}
-
-.agent-dashboard-settings-navigation-badge.is-warn {
-	color: var(--color-orange);
-	background: rgba(var(--color-orange-rgb), 0.14);
-}
-
-.agent-dashboard-settings-navigation-badge.is-muted {
-	color: var(--text-faint);
-	background: var(--background-modifier-hover);
-}
-
-.agent-dashboard-settings-navigation-chevron,
-.agent-dashboard-settings-navigation-chevron svg {
-	width: 16px;
-	height: 16px;
-	flex: 0 0 16px;
-}
-
 .agent-dashboard-settings-section {
 	max-width: 920px;
 	margin: 28px 0 6px;
@@ -1500,16 +1375,6 @@
 	border-top: 1px solid color-mix(in srgb, var(--interactive-accent), transparent 65%);
 }
 
-@media (max-width: 720px) {
-	.agent-dashboard-settings-navigation-item {
-		grid-template-columns: 34px minmax(0, 1fr) 16px;
-		gap: 9px;
-	}
-
-	.agent-dashboard-settings-navigation-trailing > span:first-child {
-		display: none;
-	}
-}
 
 .agent-dashboard-provider-empty {
 	display: flex;
@@ -4709,32 +4574,6 @@
 	font-size: 18px;
 }
 
-.agent-dashboard-settings-navigation {
-	border-top-color: var(--workbench-hairline);
-}
-
-.agent-dashboard-settings-navigation-item {
-	min-height: 68px;
-	padding: 10px 6px;
-	border-bottom-color: var(--workbench-hairline-soft);
-}
-
-.agent-dashboard-settings-navigation-item:hover,
-.agent-dashboard-settings-navigation-item:focus-visible {
-	background: var(--workbench-panel-hover);
-}
-
-.agent-dashboard-settings-navigation-icon {
-	border: 0;
-	border-radius: 4px;
-	background: var(--workbench-accent-soft);
-	color: var(--workbench-accent);
-}
-
-.agent-dashboard-settings-navigation-copy strong {
-	font-size: 13px;
-}
-
 .agent-dashboard-settings-section {
 	margin-top: 24px;
 	border-bottom: 1px solid var(--workbench-hairline);
@@ -6494,3 +6333,110 @@ body.agent-dashboard-mineru-resizing {
 .reading-outline-label { display: flex; flex-direction: column; min-width: 0; text-align: left; white-space: normal; }
 .reading-outline-label small { color: var(--text-muted); font-size: var(--font-ui-smaller); font-weight: normal; line-height: 1.5; }
 .reading-outline > button:disabled { opacity: 1; color: var(--reading-muted); }
+
+/* Settings workspace: feature discovery first, detailed controls on demand. */
+.agent-dashboard-settings {
+	container: rar-settings / inline-size;
+	--rar-settings-accent: #32745f;
+	--rar-settings-accent-text: #ffffff;
+	--rar-settings-tint: color-mix(in srgb, var(--rar-settings-accent) 9%, var(--background-primary));
+	--interactive-accent: var(--rar-settings-accent);
+}
+.theme-dark .agent-dashboard-settings { --rar-settings-accent: #9bc8b6; --rar-settings-accent-text: #183c2e; }
+.agent-dashboard-settings button.mod-cta { background: var(--rar-settings-accent); color: var(--rar-settings-accent-text); }
+.agent-dashboard-settings .rar-settings-content { width: 100%; max-width: 1040px; margin: 0 auto; padding-bottom: 28px; }
+.rar-settings-hero { display: flex; align-items: center; gap: 18px; padding: 12px 0 28px; }
+.rar-settings-mark { display: grid; place-items: center; width: 58px; height: 64px; flex: none; border: 1px solid color-mix(in srgb, var(--rar-settings-accent) 20%, transparent); border-radius: 16px; color: var(--rar-settings-accent); background: var(--rar-settings-tint); }
+.rar-settings-mark svg { width: 28px; height: 28px; }
+.rar-settings-eyebrow { color: var(--text-muted); font-size: 12px; letter-spacing: .035em; }
+.rar-settings-hero h2 { margin: 4px 0; font-size: 26px; font-weight: 650; letter-spacing: .02em; }
+.rar-settings-hero p { margin: 0; color: var(--text-muted); font-size: 13px; line-height: 1.6; }
+.rar-settings-search { display: flex; align-items: center; gap: 10px; padding: 0 14px; min-height: 44px; border: 1px solid var(--background-modifier-border); border-radius: 9px; background: var(--background-secondary); }
+.rar-settings-search > span { display: flex; color: var(--text-faint); }
+.rar-settings-search svg { width: 17px; height: 17px; }
+.rar-settings-search:focus-within { border-color: var(--rar-settings-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--rar-settings-accent) 12%, transparent); }
+.agent-dashboard-settings .rar-settings-search input { width: 100%; min-width: 0; height: 42px; padding: 0; background: transparent; border: 0; box-shadow: none; font-size: 13px; }
+.agent-dashboard-settings .rar-settings-search button { flex: none; height: 28px; padding: 0 8px; border: 0; box-shadow: none; background: transparent; color: var(--text-muted); font-size: 12px; }
+.rar-settings-search button[hidden] { display: none; }
+.rar-settings-filters { display: flex; flex-wrap: wrap; gap: 5px; padding: 16px 0 12px; border-bottom: 1px solid var(--background-modifier-border); }
+.agent-dashboard-settings .rar-settings-filters button { height: 32px; padding: 0 13px; box-shadow: none; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--text-muted); font-size: 12px; }
+.agent-dashboard-settings .rar-settings-filters button:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+.agent-dashboard-settings .rar-settings-filters button[aria-pressed="true"] { background: var(--rar-settings-tint); color: var(--rar-settings-accent); border-color: color-mix(in srgb, var(--rar-settings-accent) 20%, transparent); font-weight: 600; }
+.rar-settings-results-heading { display: flex; align-items: center; justify-content: space-between; margin: 22px 0 12px; }
+.rar-settings-results-heading h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.rar-settings-results-heading > span { font-size: 12px; color: var(--text-faint); }
+.rar-settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.agent-dashboard-settings button.rar-settings-card {
+	display: grid; grid-template-columns: 36px minmax(0, 1fr) 14px; align-content: start; align-items: start; column-gap: 12px; row-gap: 18px;
+	width: 100%; height: auto; min-height: 140px; padding: 18px 18px 12px; text-align: left; white-space: normal;
+	border: 1px solid var(--background-modifier-border); border-radius: 10px; box-shadow: none; background: var(--background-primary); color: var(--text-normal);
+	transition: border-color 140ms ease, background-color 140ms ease;
+}
+.agent-dashboard-settings button.rar-settings-card:hover { background: var(--rar-settings-tint); border-color: color-mix(in srgb, var(--rar-settings-accent) 45%, var(--background-modifier-border)); }
+.agent-dashboard-settings :is(.rar-settings-card, .rar-settings-filters button, summary, .rar-settings-text-link):focus-visible { outline: 2px solid var(--rar-settings-accent); outline-offset: 3px; }
+.rar-settings-card-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; background: var(--rar-settings-tint); color: var(--rar-settings-accent); }
+.rar-settings-card-icon svg { width: 19px; height: 19px; }
+.rar-settings-card-copy { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.rar-settings-card-copy strong { font-size: 14px; font-weight: 600; line-height: 1.4; }
+.rar-settings-card-copy > span { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.rar-settings-card-arrow { padding-top: 4px; color: var(--text-faint); }
+.rar-settings-card-arrow svg { width: 14px; height: 14px; }
+.rar-settings-card-footer { grid-column: 1 / -1; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--background-modifier-border); padding-top: 10px; min-width: 0; font-size: 11px; line-height: 1.5; }
+.rar-settings-card-category { flex: none; color: var(--text-faint); }
+.rar-settings-card-status { color: var(--text-muted); margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rar-settings-card-status.is-ok { color: var(--rar-settings-accent); }
+.rar-settings-more { margin-top: 18px; }
+.rar-settings-more > summary { padding: 12px 0; color: var(--text-muted); font-size: 12px; cursor: pointer; }
+.rar-settings-more[open] > summary { margin-bottom: 8px; }
+.rar-settings-empty { padding: 36px 20px; border: 1px dashed var(--background-modifier-border); border-radius: 10px; text-align: center; font-size: 13px; }
+.rar-settings-empty p { color: var(--text-muted); }
+.rar-settings-note { display: flex; gap: 8px; align-items: flex-start; margin-top: 24px; color: var(--text-muted); font-size: 12px; line-height: 1.7; }
+.rar-settings-note > span:first-child { display: flex; flex: none; padding-top: 3px; }
+.rar-settings-note svg { width: 14px; height: 14px; }
+.agent-dashboard-settings .agent-dashboard-settings-page-header { max-width: none; padding: 0 0 22px; margin: 0 0 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.agent-dashboard-settings .agent-dashboard-settings-page-header h2 { margin-top: 22px; font-size: 23px; line-height: 1.4; }
+.agent-dashboard-settings .agent-dashboard-settings-page-header h2:focus { outline: none; }
+.agent-dashboard-settings .agent-dashboard-settings-page-header p { max-width: 820px; margin-top: 8px; font-size: 13px; line-height: 1.7; }
+.rar-settings-breadcrumb { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.rar-settings-breadcrumb-category { padding-left: 12px; border-left: 1px solid var(--background-modifier-border); font-size: 12px; color: var(--text-faint); }
+.rar-settings-breadcrumb select { margin-left: auto; max-width: 200px; min-width: 0; font-size: 12px; }
+.agent-dashboard-settings .rar-settings-text-link { display: inline-flex; height: auto; margin-top: 12px; padding: 0; background: transparent; border: 0; box-shadow: none; color: var(--rar-settings-accent); font-size: 12px; }
+.agent-dashboard-settings .rar-settings-content > .setting-item,
+.agent-dashboard-settings .agent-dashboard-provider-form,
+.agent-dashboard-settings .agent-dashboard-settings-section { max-width: none; }
+.agent-dashboard-settings .setting-item { gap: 20px; padding: 16px 0; margin-bottom: 0; border-radius: 0; background: transparent; }
+.agent-dashboard-settings .setting-item-info { min-width: 0; }
+.agent-dashboard-settings .setting-item-name { font-size: 13px; font-weight: 550; }
+.agent-dashboard-settings .setting-item-description { font-size: 12px; line-height: 1.65; }
+.agent-dashboard-settings .setting-item-control { flex-wrap: wrap; gap: 8px; min-width: 0; max-width: 55%; }
+.agent-dashboard-settings .setting-item-control :is(input, select, textarea) { max-width: 100%; }
+.agent-dashboard-settings .agent-dashboard-provider-form > .setting-item { padding-left: 0; padding-right: 0; }
+.agent-dashboard-settings .agent-dashboard-provider-form :is(input[type="text"], select) { min-width: min(240px, 100%); }
+.agent-dashboard-settings .agent-dashboard-settings-section { margin-top: 28px; padding-bottom: 10px; border-bottom: 1px solid var(--background-modifier-border); }
+.agent-dashboard-settings .agent-dashboard-settings-section h3 { font-size: 14px; color: var(--text-normal); }
+.agent-dashboard-settings .agent-dashboard-settings-section p { font-size: 12px; }
+.agent-dashboard-settings .agent-dashboard-provider-setting-emphasis { border-left: 0; background: transparent; }
+.agent-dashboard-settings .agent-dashboard-provider-manager > .setting-item-control { max-width: 75%; }
+.agent-dashboard-settings .agent-dashboard-provider-manager .mod-warning { color: var(--text-error); background: transparent; border: 1px solid var(--background-modifier-border); box-shadow: none; }
+.rar-settings-disclosure { margin-top: 14px; border: 1px solid var(--background-modifier-border); border-radius: 9px; overflow: clip; }
+.rar-settings-disclosure > summary { padding: 15px 16px; cursor: pointer; font-size: 13px; font-weight: 550; line-height: 1.6; }
+.rar-settings-disclosure > summary:hover { background: var(--background-modifier-hover); }
+.rar-settings-disclosure-description { display: block; margin-left: 16px; margin-top: 2px; font-size: 12px; font-weight: normal; color: var(--text-muted); }
+.rar-settings-disclosure-body { padding: 0 18px 6px; border-top: 1px solid var(--background-modifier-border); }
+.rar-settings-disclosure-body > .agent-dashboard-settings-section:first-child { margin-top: 16px; }
+.rar-settings-disclosure-body > .setting-item:first-child { border-top: 0; }
+@container rar-settings (max-width: 650px) {
+	.rar-settings-grid { grid-template-columns: minmax(0, 1fr); }
+	.agent-dashboard-settings button.rar-settings-card { min-height: 124px; padding: 16px; row-gap: 14px; }
+	.rar-settings-hero { gap: 12px; }
+	.rar-settings-mark { width: 44px; height: 52px; border-radius: 12px; }
+	.rar-settings-hero h2 { font-size: 23px; }
+	.rar-settings-breadcrumb-category { display: none; }
+	.rar-settings-breadcrumb select { max-width: 50%; }
+	.agent-dashboard-settings .setting-item { flex-direction: column; align-items: stretch; gap: 10px; }
+	.agent-dashboard-settings .setting-item-control { max-width: 100%; justify-content: flex-start; }
+	.agent-dashboard-settings .setting-item-control :is(input[type="text"], input[type="password"], textarea) { width: 100%; min-width: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+	.agent-dashboard-settings button.rar-settings-card { transition: none; }
+}
