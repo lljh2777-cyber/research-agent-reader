@@ -18,6 +18,7 @@ interface TaskResultHost {
 	activateReadingWorkspace?(entry?: import("../reading/entry").ReadingEntry): Promise<void>;
 	continuePaperIngest?(run: TaskRun): Promise<void>;
 	registerIngestNote?(notePath: string, runId: string): Promise<void>;
+	getIngestRegistrationAvailability?(notePath: string): Promise<{ eligible: boolean; reason: string }>;
 	readIngestPdf?(run: TaskRun): Promise<void>;
 	openVaultFile?(path: string): void;
 }
@@ -135,6 +136,13 @@ export class TaskResultModal extends Modal {
 		if (wikiPath && this.plugin.openVaultFile) {
 			if (this.run.actionId === "paper-ingest" && this.run.executionConfig?.backend === "direct-api" && this.plugin.registerIngestNote) {
 				const register = footer.createEl("button", { text: "预览入库登记" }); register.type = "button";
+				if (this.plugin.getIngestRegistrationAvailability) {
+					register.disabled = true;
+					void this.plugin.getIngestRegistrationAvailability(wikiPath).then(state => {
+						register.disabled = !state.eligible; register.title = state.reason;
+						if (!state.eligible) register.textContent = state.reason.includes("复用") ? "既有笔记，无需轻量登记" : "入库元数据待核对";
+					}).catch(error => { register.title = String(error); register.textContent = "登记状态无法读取"; });
+				}
 				register.onclick = async () => { register.disabled = true; try { await this.plugin.registerIngestNote!(wikiPath, this.run.id); } catch (error) { new Notice(String(error)); } finally { register.disabled = false; } };
 			}
 			const openWiki = footer.createEl("button", { text: "打开文章 Wiki" });

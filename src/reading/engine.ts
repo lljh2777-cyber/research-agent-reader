@@ -98,6 +98,7 @@ export class ReadingEngine {
 		const repository = this.workspace.repository;
 		if (readingNode(repository.get(sessionId), nodeId).status === "done") return;
 		const retryCitation = readingNode(repository.get(sessionId), nodeId).error === MISSING_READING_CITATION;
+		const retryEvidence = ["正文引用与证据列表不一致", "模型引用了本轮未提供的证据"].includes(readingNode(repository.get(sessionId), nodeId).error);
 		const controller = new AbortController(); this.active.set(key, controller);
 		const timer = setTimeout(() => controller.abort(), 300_000);
 		try {
@@ -171,12 +172,12 @@ export class ReadingEngine {
 			if (requiredVisuals.some((id) => !images.some((image) => image.evidenceId === id))) throw new Error("选中的图像未完整加载，请重试");
 			if (requestedWeb && !node.branchId) throw new Error("联网仅用于用户明确选择的问题支线");
 			if (webResolution) this.emit(sessionId, nodeId, "已读取本文依据，正在准备联网补充…");
-			const web = webResolution ? await prepareReadingWeb(webResolution, node.question, session.title, controller.signal) : undefined;
+			const web = webResolution ? await prepareReadingWeb(webResolution, node.question, session.source.title || session.title, controller.signal) : undefined;
 			this.emit(sessionId, nodeId, "已读取 " + evidence.length + " 条证据" + (images.length ? "和 " + images.length + " 张图像" : "") + "，正在生成讲解…");
 			const prompt = JSON.stringify({ action: node.branchId ? "回答支线追问" : currentModule ? "讲解当前主线单元" : completedCount ? "继续下一个主线单元" : "生成整体提纲并讲解第一单元",
 				webEvidence: web ? { mode: web.mode, query: web.query, sources: web.sources.map((s, i) => ({ id: "W" + (i + 1), ...s })), instruction: readingWebInstruction(web) } : undefined,
 				correction: node.correction ? { reason: node.correction.reason, instruction: "对照本轮原文核对旧回答，说明哪些需要更正、哪些保持成立及证据缺口。用户的质疑也可能不成立，不盲从，不把重新解释写成事实已验证。" } : undefined,
-				validationFeedback: retryCitation ? "上次正文没有证据标记。请在关键结论旁写实际 [证据ID]，仅填写 evidenceIds 清单不够。" : undefined,
+				validationFeedback: retryCitation ? "上次正文没有证据标记。请在关键结论旁写实际 [证据ID]，仅填写 evidenceIds 清单不够。" : retryEvidence ? "上次正文引用与 evidenceIds 不一致。仅使用本轮 evidence 中的实际 ID，正文每个本文引用都须列入 evidenceIds；网络链接单独标明，不用本文 ID 代替。" : undefined,
 				question: node.question, quote: node.quote?.text, context, outline: node.branchId ? undefined : session.outline, currentUnit: node.branchId ? undefined : session.outline[completedCount],
 				currentModule: currentModule ? { title: currentModule.title, question: currentModule.question, number: currentModule.number, purpose: currentModule.purpose } : undefined,
 				teachingPreference: teachingPreference(session), completedUnits: node.branchId ? undefined : completedCount,

@@ -2742,6 +2742,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private ingestRecords?: IngestRecords;
 	private ingestRegistration?: IngestRegistrationController;
 	async registerIngestNote(notePath: string, runId: string): Promise<void> { await (this.ingestRegistration ||= new IngestRegistrationController(this)).open(notePath, runId); }
+	async getIngestRegistrationAvailability(notePath: string): Promise<{ eligible: boolean; reason: string }> { return (this.ingestRegistration ||= new IngestRegistrationController(this)).availability(notePath); }
 	getIngestRecords(): IngestRecords { return this.ingestRecords ||= new IngestRecords(this.readingPluginDirectory()); }
 	async readIngestPdf(run: TaskRun): Promise<void> {
 		const request = validateIngestRequest(await this.getIngestRecords().read("request", run.id), run.id);

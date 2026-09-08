@@ -971,7 +971,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				containerEl,
 				action.label,
 				isPaperIngest
-					? "两种运行方式：轻量 Agent · Direct API（无需编码 Agent，轮数与 Token 上限在 Direct API 页配置）和 Codex CLI · 完整入库（登记 papers.csv/references.bib/索引）。下面的模型/推理/速度默认值作用于 Codex CLI 方式。"
+					? "两种运行方式：轻量 Agent · Direct API（完成后可预览并确认入库登记，轮数与 Token 上限在 Direct API 页配置）和 Codex CLI · 完整入库。下面的模型/推理/速度默认值作用于 Codex CLI 方式。"
 					: STAGE_WRITE_BACKEND_ACTION_IDS.has(action.id)
 						? "可选择受阶段写入边界约束的 Agent；运行前仍可修改。"
 						: "该操作固定使用 Codex CLI 权限边界；可覆盖模型、推理和速度。",

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type AgentDashboardPlugin from "../plugin";
-import { IngestRegistrationWriter, planIngestRegistration, registrationFiles, registrationHash, type RegistrationPlan } from "../agent/ingest-registration";
+import { IngestRegistrationWriter, planIngestRegistration, registrationFiles, registrationHash, ingestRegistrationAvailability, type RegistrationPlan } from "../agent/ingest-registration";
 import { readTrustedVaultFile, resolveTrustedVaultPath } from "../runtime/trusted-vault-fs";
 
 export class IngestRegistrationController {
@@ -43,6 +43,7 @@ export class IngestRegistrationController {
 			await fs.rename(pending, target);
 		}
 	}
+	async availability(notePath: string): Promise<{ eligible: boolean; reason: string }> { return ingestRegistrationAvailability(notePath, await this.read(notePath)); }
 	async open(notePath: string, id: string): Promise<void> {
 		const vault = this.vaultRoot;
 		let full = false;

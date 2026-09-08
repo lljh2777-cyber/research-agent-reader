@@ -20,13 +20,14 @@ const { DirectReadingBackend } = loadReading("reading/backend.ts");
 	const source = { kind: "pdf", path: "paper.pdf", title: "Paper", fingerprint: "a".repeat(64) };
 	const session = createReadingSession(source); const main = addReadingNode(session, null); main.status = "done"; main.content = "Main unchanged";
 	const branch = addReadingBranch(session, main.id), node = addReadingNode(session, branch.id, "Question"); node.requestWeb = true;
+	node.status = "failed"; node.error = "正文引用与证据列表不一致";
 	const storage = memoryStorage(), repository = new ReadingRepository(storage); await repository.add(session);
 	const events = [], evidence = [{ id: "text-1", kind: "paper", path: source.path, label: "Methods", text: "Original evidence" }];
 	const workspace = { repository, document: async () => ({ source, catalog: "text-1", evidence, verify: async () => { events.push("read-paper"); }, image: async () => null }) };
 	const backend = { name: "mock", model: "mock", images: false, webSearch: () => ({ ...tavily, search: async (...args) => { events.push("search"); return tavily.search(...args); } }),
 		complete: async request => {
 			if (request.system.includes("证据选择器")) return JSON.stringify({ ids: ["text-1"], query: "query", needsVisual: false, vaultQuery: null });
-			const prompt = JSON.parse(request.prompt); assert.equal(prompt.webEvidence.sources[0].content, "Actual excerpt"); events.push("answer");
+			const prompt = JSON.parse(request.prompt); assert.equal(prompt.webEvidence.sources[0].content, "Actual excerpt"); assert.match(prompt.validationFeedback, /上次正文引用/); events.push("answer");
 			return JSON.stringify({ title: "Answer", content: "Paper [text-1]. Web [网络 W1].", evidenceIds: ["text-1"] });
 		} };
 	await new ReadingEngine(workspace, () => backend).generate(session.id, node.id);

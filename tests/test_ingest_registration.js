@@ -1,11 +1,14 @@
 const assert = require("node:assert/strict");
 const { loadReading } = require("./reading-test-helpers");
 const parseYaml = text => Object.fromEntries(text.split(/\r?\n/).filter(Boolean).map(line => { const i = line.indexOf(":"); return [line.slice(0, i), JSON.parse(line.slice(i + 1).trim())]; }));
-const { planIngestRegistration, IngestRegistrationWriter, parseRegistryCsv } = loadReading("agent/ingest-registration.ts", { obsidian: { parseYaml } });
+const { planIngestRegistration, IngestRegistrationWriter, parseRegistryCsv, ingestRegistrationAvailability } = loadReading("agent/ingest-registration.ts", { obsidian: { parseYaml } });
 const notePath = "wiki/sources/test_2026.md", csvPath = "tool-library/metadata/papers.csv", bibPath = "tool-library/references.bib";
 const note = '---\ntitle: "A scientific paper"\ntitle_zh: "测试论文"\ncitekey: "test_2026"\nauthors: "Smith"\nyear: "2026"\ndoi: "10.1234/test"\ningest_mode: "lightweight"\nregistry_status: "pending"\ndepth: "abstract-level"\nsource_kind: "article"\nsource_path: "papers/test_2026/article.md"\n---\n# A scientific paper\n\nUser content remains.\n';
 const fixture = () => ({ [notePath]: note, "文献索引.md": "# Index\n", "wiki/log.md": "# Log\n", "papers/index.md": "# Packages\n", [csvPath]: null, [bibPath]: null });
 (async () => {
+	assert.equal(ingestRegistrationAvailability(notePath, note).eligible, true);
+	assert.match(ingestRegistrationAvailability(notePath, '---\ntitle: "Existing note"\n---\nBody').reason, /复用/);
+	assert.equal(ingestRegistrationAvailability(notePath, null).eligible, false);
 	assert.deepEqual(parseRegistryCsv('a,b\n"quoted,cell","a""b"\n'), [["a", "b"], ["quoted,cell", 'a"b']]);
 	const plan = planIngestRegistration(notePath, fixture(), true, "run-1", "2026-09-08T00:00:00Z", "scope");
 	assert.equal(plan.writes.length, 6); assert.match(plan.writes[0].after, /registry_status: "registered"/); assert.match(plan.writes[0].after, /User content remains/);
@@ -22,6 +25,12 @@ const fixture = () => ({ [notePath]: note, "文献索引.md": "# Index\n", "wiki
 	const tampered = structuredClone(plan); tampered.writes[0].after += "injected"; await assert.rejects(writer.apply(tampered), /不一致/);
 	const conflict = fixture(); conflict[csvPath] = "citekey,title,doi,status,updated\nother,Other,10.1234/test,abstract-level,today\n";
 	assert.throws(() => planIngestRegistration(notePath, conflict, true, "r", plan.created, "scope"), /冲突/);
+	conflict[csvPath] = "citekey,title,doi,status,updated\nother,Other,https://doi.org/10.1234/TEST,abstract-level,today\n";
+	assert.throws(() => planIngestRegistration(notePath, conflict, true, "r", plan.created, "scope"), /冲突/);
+	const bibConflict = fixture(); bibConflict[bibPath] = '@article{another_key,\n title = {Different title},\n doi = {https://doi.org/10.1234/TEST}\n}';
+	assert.throws(() => planIngestRegistration(notePath, bibConflict, true, "r", plan.created, "scope"), /重复/);
+	bibConflict[bibPath] = '@misc{test_2026,\n title = {A scientific paper},\n doi = {10.9999/other}\n}';
+	assert.throws(() => planIngestRegistration(notePath, bibConflict, true, "r", plan.created, "scope"), /核对标题与 DOI/);
 	assert.throws(() => planIngestRegistration("../outside.md", fixture(), false, "r", plan.created, "scope"), /文章 Wiki/);
 	console.log("INGEST_REGISTRATION_OK");
 })().catch(e => { console.error(e); process.exitCode = 1; });
