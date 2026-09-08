@@ -12,6 +12,7 @@
 		"typecheck": "tsc --noEmit",
 		"test": "node tests/run_dashboard_tests.js",
 		"test:reading": "node tests/run_reading_tests.js",
+		"test:code-reading": "node tests/test_code_reading_source.js",
 		"test:assistant": "node tests/test_reading_assistant.js && node tests/test_reading_schema.js && node tests/test_agent_feedback.js && node tests/test_assistant_actions.js",
 		"test:knowledge": "node tests/run_knowledge_tests.js",
 		"test:curation": "node tests/run_curation_tests.js",
