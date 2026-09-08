@@ -64,9 +64,10 @@ module.exports = async function readingMotionScenario(app) {
 		checks.push("rapid reversal", "settled panel width", "single composer", "transcript scroll");
 		clickMode("map"); await readMode("map"); root.style.width = "620px"; await pause(120);
 		check(!root.classList.contains("is-mode-transitioning"), "resize settles transition");
-		check(root.clientWidth === 620 && root.querySelector(".reading-map-area").clientWidth === 620, "compact map fills viewport");
+		// Themes may reserve a scrollbar gutter inside the requested 620px border box.
+		check(Math.abs(root.getBoundingClientRect().width - 620) < 1 && root.querySelector(".reading-map-area").clientWidth === root.clientWidth, "compact map fills viewport");
 		clickMode("split"); await readMode("split"); await settled();
-		check(Math.abs(root.querySelector(".reading-main-chat").getBoundingClientRect().width - 310) < 2, "compact split width");
+		check(Math.abs(root.querySelector(".reading-main-chat").getBoundingClientRect().width - root.clientWidth / 2) < 2, "compact split width");
 		root.style.width = originalWidth; await pause(120); checks.push("resize cleanup", "620px layout");
 		// Respect reduced motion without modifying the user's operating-system preference.
 		win.matchMedia = query => query.includes("prefers-reduced-motion") ? { matches: true } : originalMatchMedia.call(win, query);

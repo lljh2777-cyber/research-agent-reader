@@ -80,7 +80,7 @@ export class ReadingWorkspaceService {
 		const session = createReadingSession({ kind: "pdf", path: "demo://reading", fingerprint: "0".repeat(64), title: "交互演示（示例内容）" }); session.demo = true; session.purpose = purpose;
 		const titles = ["研究问题是什么", "为什么这样设计实验", "图表如何支持结论"];
 		for (const title of titles) {
-			const node = addReadingNode(session, null); node.title = title; node.content = "这是用于验证阅读界面的示例内容，不代表任何论文结论。\n\n可以选择这段文字建立追问，或点击右侧节点查看对应的回答。"; node.status = "done";
+			const node = addReadingNode(session, null); node.title = title; node.content = "这是用于验证阅读界面的示例内容，不代表任何论文结论。\n\n可以选择这段文字建立追问；导图节点单击选中，双击打开小窗查看回答。"; node.status = "done";
 		}
 		const branch = addReadingBranch(session, session.mainIds[1]);
 		const node = addReadingNode(session, branch.id, "为什么需要对照组？"); node.status = "done"; node.content = "这是一条示例支线。你可以继续追问、拖动窗口，或将窗口固定后查看其他节点。";

@@ -134,8 +134,8 @@ export class ReadingWorkspaceView extends ItemView {
 				const control = actionButton(modes, name, label, () => this.updateUI((ui) => { ui.mode = mode; })); control.dataset.readingMode = mode; control.setAttribute("aria-pressed", String(session.ui.mode === mode));
 			}
 			actionButton(actions, "download", "导出学习笔记", () => this.openExport(), true);
-			if (!session.demo) actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, session.ui.selectedId), true);
-			if (!session.demo) actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, session.ui.selectedId), true);
+			if (!session.demo) actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, this.session!.ui.selectedId), true);
+			if (!session.demo) actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, this.session!.ui.selectedId), true);
 		}
 		const create = actionButton(actions, "plus", "新建阅读", () => this.openSource()); create.classList.add("reading-primary");
 		const more = actionButton(actions, "ellipsis", "更多阅读选项", () => {
@@ -163,13 +163,20 @@ export class ReadingWorkspaceView extends ItemView {
 	private render(force = false): void {
 		const session = this.session;
 		const contentSignature = JSON.stringify(session ? [session.id, session.title, session.archived, session.pinned, session.nodes, session.outline, session.completed, session.backend, session.model,
-			session.ui.split, session.ui.selectedId, session.ui.mainFocusId, session.ui.pendingQuote, session.ui.mainComposerExpanded, session.ui.zoom,
+			session.ui.split, session.ui.pendingQuote, session.ui.mainComposerExpanded, session.ui.zoom,
 			session.ui.learningFilter,
 			session.ui.windows.map(({ scrollTop: _scroll, ...geometry }) => geometry), session.ui.collapsed] : null);
-		const signature = contentSignature + session?.ui.mode;
+		const signature = contentSignature + JSON.stringify([session?.ui.mode, session?.ui.selectedId, session?.ui.mainFocusId]);
 		if (!force && this.signature === signature) return; this.signature = signature;
 		if (!force && session && this.contentSignature === contentSignature && this.contentEl.querySelector(".reading-body")) {
-			this.cleanupDrag?.(); this.hideSelectionActions(); this.renderMode(session, true); return;
+			this.cleanupDrag?.(); this.hideSelectionActions();
+			// Keep node elements mounted between the two clicks of a native double-click.
+			this.contentEl.querySelectorAll<HTMLElement>(".reading-map-node").forEach(card => {
+				const selected = card.dataset.nodeId === session.ui.selectedId;
+				card.classList.toggle("is-selected", selected); card.querySelector(".reading-node-open")?.setAttribute("aria-current", String(selected));
+			});
+			const focus = this.contentEl.querySelector<HTMLButtonElement>(".reading-focus-node"); if (focus) focus.disabled = !session.ui.selectedId;
+			this.renderMode(session, this.contentEl.dataset.mode !== session.ui.mode); return;
 		}
 		this.contentSignature = contentSignature; this.modeMotion.stop();
 		this.cleanupDrag?.(); this.hideSelectionActions();
@@ -215,7 +222,7 @@ export class ReadingWorkspaceView extends ItemView {
 		actionButton(mapHeading, "search", "搜索导图节点", () => this.openNodeSearch(), true);
 		const latest = actionButton(mapHeading, "list-end", "返回最新主线", () => this.selectNode(session.mainIds[session.mainIds.length - 1], true), true); latest.disabled = !session.mainIds.length;
 		const map = element(mapArea, "div", "reading-map-scroll"); map.dataset.scrollKey = "map";
-		map.tabIndex = 0; map.setAttribute("aria-label", "学习导图；拖动空白处平移");
+		map.tabIndex = 0; map.setAttribute("aria-label", "学习导图；单击选中节点，双击打开小窗；拖动空白处平移");
 		map.onscroll = () => { const x = map.scrollLeft; const y = map.scrollTop; this.rememberScroll("map", (ui) => { ui.scrollX = x; ui.scrollY = y; }); };
 		let panX = 0; let panY = 0; let scrollX = 0; let scrollY = 0;
 		this.drag(map, (event, first) => {
@@ -225,7 +232,7 @@ export class ReadingWorkspaceView extends ItemView {
 		}, (event) => !(event.target as HTMLElement).closest(".reading-map-node"));
 		this.renderMap(map, session);
 		const mapFooter = element(mapArea, "div", "reading-map-footer");
-		element(mapFooter, "span", "reading-map-hint", session.nodes.length + " 个节点 · 拖动空白处平移");
+		element(mapFooter, "span", "reading-map-hint", session.nodes.length + " 个节点 · 单击选中 · 双击打开");
 		const filter = element(mapFooter, "select", "reading-learning-filter"); filter.setAttribute("aria-label", "筛选学习状态");
 		for (const [value, label] of [["all", "全部学习状态"], ...Object.entries(LEARNING_LABELS)]) element(filter, "option", "", label).value = value;
 		filter.value = session.ui.learningFilter || "all"; filter.onchange = () => this.updateUI(ui => { ui.learningFilter = filter.value as ReadingLearningState | "all"; });
@@ -234,7 +241,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const zoom = button(controls, Math.round(session.ui.zoom * 100) + "%", () => this.updateUI((ui) => { ui.zoom = 1; }), "恢复原始缩放"); zoom.className = "reading-zoom-value";
 		actionButton(controls, "plus", "放大导图", () => this.updateUI((ui) => { ui.zoom = Math.min(1.8, ui.zoom + 0.1); }), true);
 		actionButton(controls, "scan", "适应视野", () => this.fitMap(), true);
-		const focus = actionButton(controls, "focus", "定位选中节点", () => this.revealMapNode(session.ui.selectedId), true); focus.disabled = !session.ui.selectedId;
+		const focus = actionButton(controls, "focus", "定位选中节点", () => this.revealMapNode(this.session!.ui.selectedId), true); focus.classList.add("reading-focus-node"); focus.disabled = !session.ui.selectedId;
 		element(mapArea, "div", "reading-map-composer");
 		this.renderMode(session, false);
 		if (!session.mainIds.length) button(mapArea, "开始讲解 →", () => this.handle(this.service.advance(session.id)));
@@ -298,7 +305,10 @@ export class ReadingWorkspaceView extends ItemView {
 			if (session.ui.learningFilter && session.ui.learningFilter !== "all" && session.ui.learningFilter !== learning) card.classList.add("is-learning-muted");
 			card.style.left = point.x + "px"; card.style.top = point.y + "px"; card.dataset.nodeId = node.id;
 			card.style.width = READING_MAP.width + "px"; card.style.height = READING_MAP.height + "px"; card.dataset.status = node.status;
-			const open = button(card, "", () => this.selectNode(node.id), node.title || "正在准备"); open.className = "reading-node-open"; open.setAttribute("aria-current", String(session.ui.selectedId === node.id));
+			const open = button(card, "", () => this.selectMapNode(node.id), node.title || "正在准备"); open.className = "reading-node-open"; open.setAttribute("aria-current", String(session.ui.selectedId === node.id));
+			open.title += " · 单击选中，双击打开小窗"; open.setAttribute("aria-description", "单击或空格选中；双击或 Enter 打开小窗");
+			open.ondblclick = () => this.selectNode(node.id, false, true);
+			open.onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); if (!event.repeat) this.selectNode(node.id, false, true); } };
 			const label = element(open, "span", "reading-node-label");
 			if (node.branchId) { icon(label, "corner-down-right"); element(label, "span", "", "追问"); }
 			else { element(label, "span", "reading-node-number", String(session.mainIds.indexOf(node.id) + 1).padStart(2, "0")); element(label, "span", "", "主线单元"); }
@@ -337,7 +347,11 @@ export class ReadingWorkspaceView extends ItemView {
 			if (fitted.limited) new Notice("已缩小至 40%；长导图可折叠支线，或搜索并定位节点");
 		}));
 	}
-	private selectNode(id: string, reveal = false): void {
+	private selectMapNode(id: string): void {
+		const node = readingNode(this.session!, id);
+		this.updateUI(ui => { ui.selectedId = id; if (!node.branchId) ui.mainFocusId = id; });
+	}
+	private selectNode(id: string, reveal = false, popup = false): void {
 		const session = this.session!; const node = readingNode(session, id);
 		this.quote = undefined;
 		this.handle(this.service.repository.transact(session.id, (draft) => {
@@ -345,10 +359,10 @@ export class ReadingWorkspaceView extends ItemView {
 			draft.ui.pendingQuote = undefined;
 			revealReadingPath(draft, id);
 			if (!node.branchId) draft.ui.mainFocusId = id;
-			if (draft.ui.mode === "map" || node.branchId) this.ensureWindow(draft, id);
+			if (popup || draft.ui.mode === "map" || node.branchId) this.ensureWindow(draft, id);
 		}).then(() => {
 			if (session.id !== this.sessionId) return;
-			const selector = node.branchId || session.ui.mode === "map" ? ".reading-float [data-answer-id]" : ".reading-main-chat [data-answer-id]";
+			const selector = popup || node.branchId || session.ui.mode === "map" ? ".reading-float [data-answer-id]" : ".reading-main-chat [data-answer-id]";
 			const answer = [...this.contentEl.querySelectorAll<HTMLElement>(selector)].find((item) => item.dataset.answerId === id);
 			answer?.scrollIntoView({ block: "nearest", behavior: "smooth" }); answer?.classList.add("reading-highlight");
 			if (reveal) this.focusMapNode(id);
