@@ -53,6 +53,7 @@ import {
 } from "./paper-ingest-flow";
 import type { AgentLoopResult, AgentLoopStep } from "./types";
 import { MineruPackageLoader } from "../mineru/package-loader";
+import { createBoundPdfReadTool, pdfDraftKey } from "./pdf-draft";
 import { readTrustedVaultFile, type VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
 
 export interface AgentLoopServiceDeps {
@@ -485,6 +486,8 @@ export class AgentLoopService {
 
 			// ---- Phase 3: note draft fields (model loop) + plugin commit ----
 			const draftArticlePath = state.receipts.articleVaultPath || state.existingSourcePath;
+			const usePdf = Boolean(authorizedPdfSnapshot && options.articleWikiSource !== "article" && (options.articleWikiSource === "pdf" || !draftArticlePath));
+			const draftSource = usePdf ? pdfDraftKey(authorizedPdfSnapshot!) : draftArticlePath;
 			const draftOptions = state.existingAnalysisPath
 				? { ...options, createArticleWiki: false }
 				: options;
@@ -492,6 +495,7 @@ export class AgentLoopService {
 				draftOptions,
 				draftArticlePath,
 				state.titleConflict,
+				usePdf,
 			);
 			if (draftDecision.blocker) {
 				state.conflicts.push(draftDecision.blocker);
@@ -508,10 +512,10 @@ export class AgentLoopService {
 						options,
 						identity.citekey,
 						identity.title,
-						draftArticlePath,
+						draftSource,
 					),
 					user: buildDraftUserMessage(identity.citekey, identity.title),
-					tools: buildDraftTools(toolDeps, draftArticlePath),
+					tools: usePdf ? [createBoundPdfReadTool(authorizedPdfSnapshot!, identity.title)] : buildDraftTools(toolDeps, draftArticlePath),
 					provider: resolved.provider,
 					model: resolved.model,
 					maxTokens,
@@ -531,7 +535,7 @@ export class AgentLoopService {
 				}
 				state.draft = parseNoteDraft(draftLoop.final);
 				const draftReceiptProblems = validateDraftReceipts(
-					draftArticlePath,
+					draftSource,
 					identity.title,
 					draftLoop.toolCalls,
 					state.draft?.status,
@@ -569,6 +573,9 @@ export class AgentLoopService {
 									motivation: state.draft.motivation,
 									evidenceGaps: state.draft.evidenceGaps,
 									notes: [],
+									sourcePath: usePdf ? options.sourcePdfPath : draftArticlePath,
+									sourceKind: usePdf ? "pdf" : "article",
+									sourceHash: authorizedPdfSnapshot?.sha256,
 								},
 								"",
 								{ signal: abortController.signal },

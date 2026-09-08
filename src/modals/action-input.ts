@@ -361,7 +361,7 @@ export class ActionInputModal extends Modal {
 				? section.createEl("p", {
 					cls: "agent-dashboard-action-options-warning",
 					text: this.runner === "light-agent"
-						? "当前无法运行 MinerU 提取，请检查 MinerU CLI 配置与本地知识库目录。创建文章 Wiki 可复用已有且验证通过的 papers 原文包或已确认的 Clippings 原文；没有可用原文时，需先完成原文转换。"
+						? "当前无法运行 MinerU 提取。文章 Wiki 可直接读取已确认 PDF 的文字层，或复用已验证的原文包；扫描件无正文时仍需 OCR。"
 						: "未检测到 MinerU CLI。生成原文 Markdown 只需它：npm 全局安装 mineru-open-api 后，在设置 → 工具链与运行环境中配置（无需 Python 或工具包目录）。",
 				})
 				: null;

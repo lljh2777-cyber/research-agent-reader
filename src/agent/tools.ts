@@ -898,6 +898,9 @@ export async function runAuthorizedMineruExtract(
 }
 
 export interface SourceNoteFields {
+	sourcePath?: string;
+	sourceKind?: "pdf" | "article";
+	sourceHash?: string;
 	title: string;
 	title_zh: string;
 	authors: string;
@@ -1039,6 +1042,8 @@ function buildSourceNoteMarkdown(
 		"ingest_mode: \"lightweight\"",
 		"registry_status: \"pending\"",
 		`created: ${yamlSafeScalar(created)}`,
+		...(fields.sourcePath ? [`source_path: ${yamlSafeScalar(fields.sourcePath)}`, `source_kind: ${yamlSafeScalar(fields.sourceKind || "article")}`] : []),
+		...(fields.sourceHash ? [`source_pdf_sha256: ${yamlSafeScalar(fields.sourceHash)}`] : []),
 		...(depthNote ? [depthNote] : []),
 		"---",
 	].join("\n");

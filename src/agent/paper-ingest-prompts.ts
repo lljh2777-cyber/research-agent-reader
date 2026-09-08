@@ -155,7 +155,9 @@ export function buildDraftSystemPrompt(
 		"",
 		"## 任务",
 		articleVaultPath
-			? "1. 必须先调用 article_read(mode=overview) 阅读插件绑定的本篇原文 Markdown 证据包（可能来自 papers 或 Clippings）；必要时再用 page 补读。没有成功的 overview 工具回执时，插件会拒绝创建 Wiki。"
+			? /^pdf-sha256:/.test(articleVaultPath)
+				? "1. 必须先调用 pdf_read(mode=overview) 读取绑定 PDF 前三页的摘要级文字；必要时用 mode=page 和 page 页码补读。没有可读正文时返回 insufficient-evidence；图表尚未核验。"
+				: "1. 必须先调用 article_read(mode=overview) 阅读插件绑定的本篇原文 Markdown 证据包（可能来自 papers 或 Clippings）；必要时再用 page 补读。没有成功的 overview 工具回执时，插件会拒绝创建 Wiki。"
 			: "1. 本次没有已验证的原文 Markdown；必须返回 status=insufficient-evidence，不得仅凭标题或书目元数据生成科学结论。",
 		"2. title_zh 必须是非空、审校后的完整简体中文译名；保留方法/软件/模型/基因/数据集等专有名词。无法可靠给出时返回 status=insufficient-evidence，插件不会创建不合格 Wiki。",
 		"3. 三个正文小节各 2-4 句简体中文，abstract-level 封顶，不写成深度解读；证据不足就留空，不要编造。",
@@ -168,6 +170,7 @@ export function buildDraftSystemPrompt(
 }
 
 function describeWikiSource(options: PaperIngestPromptOptions, articleVaultPath: string): string {
+	if (/^pdf-sha256:/.test(articleVaultPath)) return "已确认的原始 PDF 快照，由 pdf_read 按页读取；仅支持摘要级文字解释。";
 	if (articleVaultPath) {
 		return `已验证原文层 Markdown；插件已将 article_read 固定绑定到 ${articleVaultPath}，不得猜测或改用其他路径。`;
 	}

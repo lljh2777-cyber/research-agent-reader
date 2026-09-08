@@ -94,6 +94,41 @@ export interface AuthorizedPdfPageRaster {
 	scale: number;
 }
 
+/** Bounded text reading from the same bytes the reader confirmed during identity checks. */
+export async function readAuthorizedPdfText(snapshot: AuthorizedPdfSnapshot, signal: AbortSignal, pageNumber?: number,
+	deps: Pick<LocalPdfIdentityDeps, "readFile" | "loadPdfJs"> = {
+		readFile: async (file, abort) => new Uint8Array(await fs.promises.readFile(file, { signal: abort })),
+		loadPdfJs: async () => await loadPdfJs() as PdfJsApi,
+	}): Promise<string> {
+	const controller = new AbortController(); const abort = () => controller.abort();
+	signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort();
+	const timer = setTimeout(abort, 20_000); let task: PdfLoadingTask | undefined;
+	const wait = <T>(promise: Promise<T>): Promise<T> => waitForAbortable(promise, controller.signal, "PDF 正文读取已取消或超时");
+	try {
+		const bytes = await wait(deps.readFile(snapshot.path, controller.signal));
+		if (bytes.length !== snapshot.size || bytes.length > MAX_LOCAL_PDF_BYTES || createHash("sha256").update(bytes).digest("hex") !== snapshot.sha256) throw new Error("PDF 授权快照已变化");
+		const pdfjs = await wait(deps.loadPdfJs()); task = pdfjs.getDocument({ data: bytes, isEvalSupported: false });
+		const pdf = await wait(task.promise);
+		if (!Number.isInteger(pdf.numPages) || pdf.numPages < 1 || pdf.numPages > MINERU_RESOURCE_LIMITS.pdfPages) throw new Error("PDF 页数无效或超限");
+		if (pageNumber !== undefined && (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > pdf.numPages)) throw new Error("PDF 页码超出范围");
+		const pages = pageNumber ? [pageNumber] : Array.from({ length: Math.min(3, pdf.numPages) }, (_, i) => i + 1);
+		const blocks: string[] = [];
+		for (const number of pages) {
+			const page = await wait(pdf.getPage(number));
+			try {
+				const content = await wait(page.getTextContent());
+				const text = pageTextFromVisibleItems(visibleFirstPageItems(content.items || [], page.getViewport({ scale: 1 })));
+				if (text.trim()) blocks.push(`PDF 第 ${number} 页（文字层，未核验图表）\n${text}`);
+			} finally { page.cleanup?.(); }
+		}
+		if (!blocks.length) throw new Error("PDF 所选页没有可读正文，请使用 MinerU OCR；未生成科学结论");
+		return blocks.join("\n\n");
+	} finally {
+		clearTimeout(timer); signal.removeEventListener("abort", abort);
+		if (task?.destroy) void task.destroy().catch(() => undefined);
+	}
+}
+
 function safeFileName(sourcePath: string): string {
 	return String(sourcePath || "")
 		.replace(/\\/g, "/")

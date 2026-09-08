@@ -344,7 +344,7 @@ export function validateDraftReceipts(
 	const expected = normalizeReceiptPath(articleVaultPath);
 	const normalizedTitle = normalizeBibliographicTitle(expectedTitle);
 	const observed = toolCalls.some((call) => (
-		call.tool === "article_read"
+		call.tool === (/^pdf-sha256:[a-f0-9]{64}$/.test(articleVaultPath) ? "pdf_read" : "article_read")
 		&& call.ok
 		&& (call.data?.paths || []).some((path) => normalizeReceiptPath(path) === expected)
 		&& (call.data?.queryTerms || []).includes("overview")
@@ -352,7 +352,7 @@ export function validateDraftReceipts(
 	));
 	return observed
 		? []
-		: ["未成功读取插件绑定且标题一致的原文 Markdown 摘要证据包"];
+		: ["未成功读取插件绑定且标题一致的原文摘要证据包"];
 }
 
 /** Validates the identity phase output; throws with a readable reason. */
@@ -1034,6 +1034,7 @@ export function evaluateDraftPhase(
 	options: PaperIngestFlowOptions,
 	articleVaultPath: string,
 	titleConflict: boolean,
+	pdfAvailable = false,
 ): { run: boolean; blocker: string; downgradeNote: string } {
 	if (!options.createArticleWiki || titleConflict) return { run: false, blocker: "", downgradeNote: "" };
 	if (options.createArticleMarkdown && !articleVaultPath) {
@@ -1050,6 +1051,7 @@ export function evaluateDraftPhase(
 			downgradeNote: "",
 		};
 	}
+	if (pdfAvailable && options.articleWikiSource !== "article" && (options.articleWikiSource === "pdf" || !articleVaultPath)) return { run: true, blocker: "", downgradeNote: "" };
 	if (!articleVaultPath) {
 		return {
 			run: false,
