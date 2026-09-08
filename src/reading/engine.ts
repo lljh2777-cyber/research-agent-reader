@@ -11,6 +11,8 @@ import { randomUUID } from "node:crypto";
 import type { ReadingWorkspaceService } from "./workspace";
 import type { ReadingBackend, ReadingEvidence, ReadingImage, ReadingResult, ReadingSession } from "./types";
 
+const MISSING_READING_CITATION = "正文缺少实际证据标记，请重试；证据清单不能代替结论旁的引用";
+
 export function parseReadingJson(text: string): Record<string, unknown> {
 	const stripped = text.trim().replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
 	const value: unknown = JSON.parse(stripped);
@@ -26,10 +28,13 @@ export function validateReadingResult(text: string, evidence: ReadingEvidence[],
 	const known = new Set(evidence.map((item) => item.id));
 	if (raw.evidenceIds.some((id) => typeof id !== "string" || !known.has(id))) throw new Error("模型引用了本轮未提供的证据");
 	const cited = new Set(raw.evidenceIds);
+	const inline = new Set<string>();
 	for (const match of raw.content.matchAll(/\[(?:证据\s*ID\s*[:：]\s*)?([^\[\]\n]+)\]/gi)) {
 		const ids = match[1].split(/[,，、]\s*/).map(id => id.trim());
 		if (ids.some(id => /^(?:text-|page-|figure-|vault-)/.test(id)) && ids.some(id => !known.has(id) || !cited.has(id))) throw new Error("正文引用与证据列表不一致");
+		for (const id of ids) if (known.has(id) && cited.has(id)) inline.add(id);
 	}
+	if (!inline.size) throw new Error(MISSING_READING_CITATION);
 	if (main && (typeof raw.mainSummary !== "string" || !raw.mainSummary.trim() || raw.mainSummary.length > 12_000
 		|| !Array.isArray(raw.outline) || !raw.outline.length || raw.outline.length > 40 || raw.outline.some((item) => typeof item !== "string" || !item.trim() || item.length > 200)
 		|| typeof raw.completed !== "boolean")) throw new Error("主线结果缺少提纲、进度摘要或完成状态");
@@ -91,6 +96,7 @@ export class ReadingEngine {
 		const key = sessionId + ":" + nodeId; if (this.active.has(key)) return;
 		const repository = this.workspace.repository;
 		if (readingNode(repository.get(sessionId), nodeId).status === "done") return;
+		const retryCitation = readingNode(repository.get(sessionId), nodeId).error === MISSING_READING_CITATION;
 		const controller = new AbortController(); this.active.set(key, controller);
 		const timer = setTimeout(() => controller.abort(), 300_000);
 		try {
@@ -161,6 +167,7 @@ export class ReadingEngine {
 			if (requiredVisuals.some((id) => !images.some((image) => image.evidenceId === id))) throw new Error("选中的图像未完整加载，请重试");
 			this.emit(sessionId, nodeId, "已读取 " + evidence.length + " 条证据" + (images.length ? "和 " + images.length + " 张图像" : "") + "，正在生成讲解…");
 			const prompt = JSON.stringify({ action: node.branchId ? "回答支线追问" : currentModule ? "讲解当前主线单元" : completedCount ? "继续下一个主线单元" : "生成整体提纲并讲解第一单元",
+				validationFeedback: retryCitation ? "上次正文没有证据标记。请在关键结论旁写实际 [证据ID]，仅填写 evidenceIds 清单不够。" : undefined,
 				question: node.question, quote: node.quote?.text, context, outline: node.branchId ? undefined : session.outline, currentUnit: node.branchId ? undefined : session.outline[completedCount],
 				currentModule: currentModule ? { title: currentModule.title, question: currentModule.question, number: currentModule.number, purpose: currentModule.purpose } : undefined,
 				teachingPreference: teachingPreference(session), completedUnits: node.branchId ? undefined : completedCount,

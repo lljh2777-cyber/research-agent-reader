@@ -80,6 +80,22 @@ async function fixture(kind = "pdf") {
 		await assert.rejects(f.engine.generate(f.s.id, f.n.id));
 		assert.equal(calls, 1); assert.equal(f.repo.get(f.s.id).modulePlan, undefined); assert.equal(f.repo.get(f.s.id).outline.length, 0); assert.equal(f.repo.get(f.s.id).mainIds.length, 1);
 	}
+	// Missing inline citations fail visibly; an explicit retry reuses the saved plan/selection.
+	{
+		const f = await fixture(); const complete = f.backend.complete; let attempts = 0;
+		f.backend.complete = async r => {
+			const input = JSON.parse(r.prompt); const raw = await complete(r);
+			if (input.action !== "讲解当前主线单元") return raw;
+			if (++attempts === 1) { assert.equal(input.validationFeedback, undefined); return JSON.stringify({ ...JSON.parse(raw), content: "缺少正文引用" }); }
+			assert.match(input.validationFeedback, /证据标记/); return raw;
+		};
+		await assert.rejects(f.engine.generate(f.s.id, f.n.id), /正文缺少/);
+		assert.equal(f.repo.get(f.s.id).nodes[0].status, "failed"); assert.equal(f.repo.get(f.s.id).completed, false); assert.equal(f.repo.get(f.s.id).mainSummary, "");
+		await f.engine.generate(f.s.id, f.n.id);
+		assert.equal(f.requests.filter(r => r.input.action === "规划全文路线").length, 1);
+		assert.equal(f.requests.filter(r => r.input.catalog && r.input.action !== "规划全文路线").length, 1);
+		assert.equal(f.repo.get(f.s.id).nodes[0].status, "done");
+	}
 	// Fully scanned sources require actual image input; never plan from page labels alone.
 	for (const [count, vision, expected] of [[2, true, "planning reached"], [2, false, "视觉模型"], [4, true, "3 张图像"]]) {
 		const f = await fixture(); let calls = 0;
