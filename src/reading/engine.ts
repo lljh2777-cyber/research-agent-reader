@@ -2,7 +2,7 @@ import teachingSkill from "../../skills/paper-guided-reading/SKILL.md";
 import { setTimeout, clearTimeout } from "node:timers";
 import { readingNode, completedMainContext } from "./session";
 import { selectReadingEvidence } from "./document";
-import { stableReadingResult, teachingPreference } from "./teaching";
+import { READING_HOST_RULES, stableReadingResult, teachingPreference } from "./teaching";
 import { measuredReadingCall } from "./usage";
 import { READING_MEMORY_SCHEMA, READING_SELECTION_SCHEMA, readingAnswerSchema } from "./schemas";
 import { contentHash } from "../retrieval/chunks";
@@ -140,7 +140,7 @@ export class ReadingEngine {
 				output: node.branchId ? { title: "短标题", content: "Markdown 正文，结论附 [证据ID]", evidenceIds: ["引用的ID"] }
 					: { title: "本单元短标题", content: "Markdown 正文，结论附 [证据ID]", evidenceIds: ["引用的ID"], outline: ["完整主线提纲"], mainSummary: "截至本单元的累计摘要及进度", completed: false } });
 			let streamed = "";
-			const raw = await measuredReadingCall(repository, sessionId, nodeId, "answer", backend, { system: teachingSkill + "\n知识库补充应标明来源角色。导航、设想、来源说明不是本文实验事实；同一论文的多篇转述不是多份独立证据。高相关分不能补足缺失的表格和原始数据。\n请仅返回符合 output 字段所示格式的 JSON 对象。", prompt, images, signal: controller.signal, schema: readingAnswerSchema(!node.branchId),
+			const raw = await measuredReadingCall(repository, sessionId, nodeId, "answer", backend, { system: teachingSkill + "\n" + READING_HOST_RULES, prompt, images, signal: controller.signal, schema: readingAnswerSchema(!node.branchId),
 				onDelta: (delta) => { streamed += delta; const match = /"content"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(streamed); if (match) {
 					try { this.emit(sessionId, nodeId, JSON.parse('"' + match[1] + '"')); } catch { /* Incomplete escape; retain previous frame. */ }
 				} } });
