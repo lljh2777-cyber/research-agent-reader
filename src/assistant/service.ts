@@ -8,6 +8,7 @@ import { readingTokenEstimate } from "../reading/usage";
 import { contentHash } from "../retrieval/chunks";
 import type { AssistantAction, AssistantDependencies, AssistantRun, AssistantStorage } from "./types";
 import { curationTarget } from "../curation/policy";
+import { ToolFailureGuard, toolFeedback } from "../agent/tool-feedback";
 export class ReadingAssistantService {
 	readonly runs = new Map<string, AssistantRun>(); readonly errors: string[] = [];
 	private initialization?: Promise<void>; private listeners = new Set<() => void>();
@@ -54,7 +55,7 @@ export class ReadingAssistantService {
 		const context = assistantContext(session, nodeId); const backend = this.deps.backend(session, profileId);
 		const run: AssistantRun = { version: 1, id: "a-" + randomUUID(), sessionId, nodeId, profileId, model: backend.name + " · " + backend.model, question: question.trim(), created: new Date().toISOString(), state: "running", answer: "", error: "", steps: [], sources: [], actions: [], citations: [], calls: [] };
 		await this.save(run); const tools = new AssistantTools(this.deps, session, run, controller.signal); const timer = setTimeout(() => controller.abort(), 240000);
-		const history: { role: string; data: unknown }[] = []; const failures = new Map<string, number>(); let used = 0; let outputChars = 0;
+		const history: { role: string; data: unknown }[] = []; const failures = new ToolFailureGuard(); let used = 0; let outputChars = 0;
 		const system = rules + "\n可用工具（参数必须齐全）：" + JSON.stringify(ASSISTANT_CAPABILITIES);
 		try {
 			await tools.verify();
@@ -73,10 +74,10 @@ export class ReadingAssistantService {
 					await tools.verify(); for (const s of run.sources.filter(s => s.kind === "knowledge")) if (contentHash(await this.deps.readFile(s.path)) !== s.hash) throw new Error("回答期间知识来源已变化");
 					run.answer = answer; run.citations = citations; run.state = "done"; await this.save(run); return run;
 				}
-				try { const result = await tools.execute(step.tool, step.arguments); outputChars += result.output.length;
+				try { const result = await tools.execute(step.tool, step.arguments); outputChars += result.output.length; failures.succeeded(step.tool, step.arguments);
 					run.steps.push({ tool: step.tool, arguments: step.arguments, summary: result.output.slice(0, 180), cached: result.cached, ok: true }); history.push({ role: "tool", data: { request: step, result: result.output } });
-				} catch (e) { controller.signal.throwIfAborted(); run.steps.push({ tool: step.tool, arguments: step.arguments, summary: String(e).slice(0, 300), cached: false, ok: false }); history.push({ role: "tool", data: { request: step, error: String(e).slice(0, 300) } });
-					const key = JSON.stringify(step); failures.set(key, (failures.get(key) || 0) + 1); if (failures.get(key)! >= 2) throw new Error("助手重复提交相同的无效操作，已停止以避免继续消耗；请根据执行轨迹调整请求");
+				} catch (e) { controller.signal.throwIfAborted(); const feedback = toolFeedback(e); run.steps.push({ tool: step.tool, arguments: step.arguments, summary: JSON.stringify(feedback).slice(0, 300), cached: false, ok: false }); history.push({ role: "tool", data: { request: step, error: feedback } });
+					if (failures.failed(step.tool, step.arguments)) throw new Error("助手重复提交相同的无效操作，已停止以避免继续消耗；请根据执行轨迹调整请求");
 				}
 				await this.save(run);
 				if (outputChars > 38000) throw new Error("工具内容超过本轮预算，已有轨迹已保留");

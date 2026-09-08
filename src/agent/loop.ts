@@ -1,3 +1,4 @@
+import { ToolFailureGuard } from "./tool-feedback";
 import type {
 	AgentLoopRequest,
 	AgentLoopResult,
@@ -268,6 +269,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 	const transcript: Array<{ role: "user" | "assistant"; content: string }> = [];
 	let toolOutputBudget = maxToolOutputChars;
 	let consecutiveProtocolFailures = 0;
+	const toolFailures = new ToolFailureGuard();
 	let status: AgentLoopResult["status"] = "failed";
 	let final: Record<string, unknown> | null = null;
 	let finalText = "";
@@ -407,6 +409,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 					content: `<tool_result tool="${turn.tool}" status="error">未知工具。可用工具：${[...toolsByName.keys()].join(", ")}</tool_result>`,
 				});
 				record({ kind: "tool", step, title: `未知工具 ${turn.tool}`, detail: "已拒绝" });
+				if (toolFailures.failed(turn.tool, turn.arguments)) throw new Error("轻量 Agent 重复提交相同的未知工具，已停止；请检查模型执行轨迹");
 				continue;
 			}
 
@@ -426,6 +429,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 			let toolStatus = "ok";
 			try {
 				const result = await tool.execute(turn.arguments, context);
+				toolFailures.succeeded(tool.name, turn.arguments);
 				toolResult = result.output;
 				toolResultSummary = String(result.summary || "").slice(0, 500);
 				toolReceiptData = normalizeToolReceiptData(result.receiptData);
@@ -456,6 +460,7 @@ export async function runBoundedAgentLoop(request: AgentLoopRequest): Promise<Ag
 				role: "user",
 				content: `<tool_result tool="${tool.name}" status="${toolStatus}">\n${budgeted}\n</tool_result>`,
 			});
+			if (toolStatus === "error" && !controller.signal.aborted && toolFailures.failed(tool.name, turn.arguments)) throw new Error("轻量 Agent 重复提交相同的失败操作，已停止；请检查工具参数或恢复外部服务后重试");
 		}
 
 		if (status === "failed" && !error) {

@@ -13,6 +13,8 @@ description: Coordinate bounded reading, evidence retrieval and review handoffs 
 
 核对当前节点时，先调用 read_node 获取本轮 references，再将其中的编号传入 read_evidence。不要从背景摘要中的旧引用直接请求原文，也不要猜测编号。
 
+read_node 的 evidenceRead 提供可直接使用的读取参数，按本轮问题选择相关片段。P:/K: 是候选编号；S 编号只能用于最终回答引用，不能作为读取参数。工具失败时先检查 error.code 与 recovery，修正参数后再调用；不得原样重复失败请求。progress.latestMainNodeId 是推进主线的起点，当前选中支线不会改变该起点；canAdvance 为 false 时不要准备推进卡。
+
 只为用户请求的操作准备卡片。prepare_action 仅准备已有界面的入口；最终说“已准备”，不能说已导出、已修改或已经讲完下一节。用户理解状态和人工核对标记只能由用户表达，不能自动判断。无需操作时直接结束，不为凑步骤调用工具。
 
 用户要整理进正式笔记时，先 search_knowledge 查找目标，再用候选 id 准备 curation 操作。只有用户要找过去的学习、重复内容或其他会话时才调用 search_learning；它不能提供正式入库目标。导出当前节点或推进最新主线的操作卡不需要额外检索。

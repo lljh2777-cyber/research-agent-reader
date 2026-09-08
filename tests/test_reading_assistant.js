@@ -36,6 +36,7 @@ async function toolsFor(f) {
 	f.s.mainSummary = "frozen background"; const branch = addReadingBranch(f.s, f.n.id); const bn = addReadingNode(f.s, branch.id, "branch question"); bn.status = "done";
 	f.s.mainSummary = "new unrelated background"; const sibling = addReadingBranch(f.s, f.n.id); const sn = addReadingNode(f.s, sibling.id); sn.status = "done"; sn.content = "sibling private conversation";
 	const context = assistantContext(f.s, bn.id); assert.match(context.background, /frozen background/); assert.doesNotMatch(JSON.stringify(context), /new unrelated|sibling private/);
+	assert.equal(context.progress.latestMainNodeId, f.n.id); assert.equal(context.progress.canAdvance, true);
 	branch.summary = "long dialogue".repeat(3000); const longContext = assistantContext(f.s, bn.id); assert.match(longContext.background, /frozen background/); assert.ok(longContext.background.length < 7000); branch.summary = "";
 	const { run, tools } = await toolsFor(f);
 	assert.equal(run.calls[0].input, 200); assert.ok(run.calls[0].estimatedInput > 0); assert.equal(run.state, "done");
@@ -46,6 +47,9 @@ async function toolsFor(f) {
 	await assert.rejects(tools.execute("read_node", { nodeId: "another-session" }), /不属于/);
 	await assert.rejects(tools.execute("read_evidence", { ids: ["forged"] }), /未由/);
 	const refs = JSON.parse((await tools.execute("read_node", { nodeId: f.n.id })).output).references;
+	const suggestedRead = JSON.parse((await tools.execute("read_node", { nodeId: f.n.id })).output).evidenceRead;
+	assert.deepEqual(suggestedRead, { tool: "read_evidence", arguments: { ids: [refs[0].id] } });
+	await assert.rejects(tools.execute("read_evidence", { ids: ["S1"] }), error => error.code === "unknown_evidence" && error.recovery.availableIds.includes(refs[0].id));
 	await assert.rejects(tools.execute("read_evidence", { ids: [refs[0].id, "forged"] })); assert.equal(run.sources.length, 0, "failed evidence read is atomic");
 	const original = JSON.parse((await tools.execute("read_evidence", { ids: [refs[0].id] })).output).sources[0]; assert.equal(original.text, "observed"); assert.equal(original.page, 1);
 	assert.equal((await tools.execute("read_evidence", { ids: [refs[0].id] })).cached, false); assert.equal(run.sources.length, 1);
