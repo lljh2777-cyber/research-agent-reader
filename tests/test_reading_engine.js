@@ -6,6 +6,8 @@ const { ReadingEngine, validateReadingResult } = loadReading("reading/engine.ts"
 (async () => {
 	const repo = new ReadingRepository(memoryStorage());
 	const session = createReadingSession({ kind: "pdf", path: "a.pdf", fingerprint: "a".repeat(64), title: "paper" }); const node = addReadingNode(session, null); await repo.add(session);
+	// Existing outline-only sessions retain their route and two-call flow.
+	await repo.transact(session.id, s => { s.outline = ["问题", "方法"]; });
 	let calls = 0; const evidence = [{ id: "text-1-0", kind: "paper", path: "a.pdf", label: "Page one", text: "Direct observed evidence", page: 1 }];
 	const result = { title: "问题", content: "本文研究问题。[text-1-0]", evidenceIds: ["text-1-0"], outline: ["问题", "方法"], mainSummary: "已讲问题", completed: false };
 	const backend = { name: "mock", model: "test", images: false, complete: async (request) => { calls++; assert.ok(request.signal); return calls % 2 ? JSON.stringify({ ids: ["text-1-0"], query: "question", needsVisual: false }) : JSON.stringify(result); } };

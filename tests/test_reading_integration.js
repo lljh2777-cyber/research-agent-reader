@@ -6,7 +6,7 @@ const { ReadingEngine } = loadReading("reading/engine.ts");
 const { readingCatalog } = loadReading("reading/document.ts");
 (async () => {
 	const storage = memoryStorage(); const repo = new ReadingRepository(storage);
-	const create = () => { const s = createReadingSession({ kind: "pdf", path: "a.pdf", fingerprint: "a".repeat(64), title: "test" }); addReadingNode(s, null); return s; };
+	const create = () => { const s = createReadingSession({ kind: "pdf", path: "a.pdf", fingerprint: "a".repeat(64), title: "test" }); s.outline = ["Intro"]; addReadingNode(s, null); return s; };
 	const a = create(); const b = create(); await repo.add(a); await repo.add(b);
 	const evidence = [{ id: "text-1-0", kind: "paper", path: "a.pdf", label: "Intro", text: "Evidence" }];
 	let changed = false; let answerCalls = 0;

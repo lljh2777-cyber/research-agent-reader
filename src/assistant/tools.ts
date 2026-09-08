@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { contentHash, inKnowledgeScope, retrievalPassageText } from "../retrieval/chunks";
 import { readingContext } from "../reading/engine";
+import { currentReadingModule } from "../reading/planning";
 import type { ReadingSession } from "../reading/types";
 import type { KnowledgeHit } from "../retrieval/types";
 import { curationTarget } from "../curation/policy";
@@ -21,11 +22,13 @@ export function assistantContextHash(session: ReadingSession, ids: string[], sco
 export function assistantContext(session: ReadingSession, nodeId: string) {
 	const node = session.nodes.find(n => n.id === nodeId); if (!node || node.status !== "done") throw new Error("请选择一个已完成的阅读节点");
 	const branch = session.branches.find(b => b.id === node.branchId);
+	const next = currentReadingModule(session);
 	const background = branch ? ["创建时主线背景：", boundedBackground(branch.mainSnapshot, 3000), "支线起点：", boundedBackground(session.nodes.find(n => n.id === branch.parentNodeId)?.content || "", 600),
 		"相关祖先：", boundedBackground(branch.ancestorSummary || branch.ancestorContext, 900), "支线摘要：", boundedBackground(branch.summary, 700), "近期支线对话：",
 		boundedBackground(branch.nodeIds.filter(id => id !== nodeId).map(id => session.nodes.find(n => n.id === id)).filter(n => n?.status === "done").slice(-2).map(n => n!.question + "\n" + n!.content).join("\n\n"), 1200)].join("\n\n") : boundedBackground(readingContext(session, nodeId), 6500);
 	return { sessionId: session.id, title: session.title, source: session.source.kind, selected: { id: node.id, title: node.title, question: node.question, branchId: node.branchId, learningState: node.learningState || "unmarked" },
 		background, progress: { done: session.mainIds.filter(id => session.nodes.find(n => n.id === id)?.status === "done").length, planned: session.outline.length,
+			nextUnit: next ? { number: next.number, title: next.title, question: next.question } : null,
 			latestMainNodeId: session.mainIds[session.mainIds.length - 1] || null, canAdvance: !session.completed && session.nodes.find(n => n.id === session.mainIds[session.mainIds.length - 1])?.status === "done" },
 		counts: Object.fromEntries(["understood", "revisit", "question", "unmarked"].map(state => [state, session.nodes.filter(n => n.status === "done" && (n.learningState || "unmarked") === state).length])) };
 }

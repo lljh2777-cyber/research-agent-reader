@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ReadingBackend, ReadingBackendRequest, ReadingNode, ReadingSession, ReadingUsageEntry } from "./types";
 import type { ReadingRepository } from "./store";
-export const USAGE_STAGES = { selection: "选择证据", answer: "生成讲解", memory: "压缩记忆" };
+export const USAGE_STAGES = { planning: "规划路线", selection: "选择证据", answer: "生成讲解", memory: "压缩记忆" };
 export const readingTokenEstimate = (text: string): number => Math.ceil(Buffer.byteLength(text, "utf8") / 3);
 export async function measuredReadingCall(repository: ReadingRepository, sessionId: string, nodeId: string, stage: ReadingUsageEntry["stage"], backend: ReadingBackend, request: ReadingBackendRequest): Promise<string> {
 	const entry: ReadingUsageEntry = { id: randomUUID(), stage, model: backend.name + " · " + backend.model, started: new Date().toISOString(), state: "running", estimatedInput: readingTokenEstimate(request.system + request.prompt) };

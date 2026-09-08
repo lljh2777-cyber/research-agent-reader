@@ -8,7 +8,7 @@ const { structuredProfileKey, supportsReadingSchema, supportsFastCoordination } 
 const { probeReadingSchema } = loadReading("assistant/probe.ts");
 const { DirectReadingBackend, readingUsage } = loadReading("reading/backend.ts");
 const { ASSISTANT_SCHEMA } = loadReading("assistant/capabilities.ts");
-const { READING_MEMORY_SCHEMA, READING_SELECTION_SCHEMA, readingAnswerSchema, CURATION_SCHEMA, curationAnswerSchema } = loadReading("reading/schemas.ts");
+const { READING_MEMORY_SCHEMA, READING_SELECTION_SCHEMA, readingAnswerSchema, readingPlanSchema, readingSelectionSchema, CURATION_SCHEMA, curationAnswerSchema } = loadReading("reading/schemas.ts");
 (async () => {
 	const p = normalizeProviderProfile({ id: "p", type: "openai-compatible", baseUrl: "https://example.test/v1", model: "m", secretId: "test" });
 	let captured;
@@ -51,5 +51,10 @@ const { READING_MEMORY_SCHEMA, READING_SELECTION_SCHEMA, readingAnswerSchema, CU
 	assert.deepEqual(properties.citations.items.anyOf.slice(0, 2).map(s => [s.properties.id.enum, s.properties.quoteId.enum]), [[["P1"], ["P1:q1"]], [["P2"], ["P2:q1"]]]);
 	assert.equal(properties.citations.items.anyOf[2].properties.quote.type, "string"); assert.equal(CURATION_SCHEMA.properties.suggestions.items.properties.paragraphId.enum, undefined);
 	assert.ok(readingAnswerSchema(true).required.includes("outline")); assert.ok(!readingAnswerSchema(false).required.includes("outline"));
+	const planned = readingAnswerSchema(true, ["text-1-0"], true); check(planned);
+	assert(!planned.required.includes("outline")); assert(!planned.required.includes("completed")); assert(planned.required.includes("mainSummary"));
+	assert.deepEqual(planned.properties.evidenceIds.items.enum, ["text-1-0"]);
+	const planSchema = readingPlanSchema(["text-1-0"]); check(planSchema); assert.deepEqual(planSchema.properties.modules.items.properties.evidenceIds.items.enum, ["text-1-0"]);
+	const selectionSchema = readingSelectionSchema(["text-1-0"]); check(selectionSchema); assert.deepEqual(selectionSchema.properties.ids.items.enum, ["text-1-0"]);
 	console.log("READING_SCHEMA_OK: native protocols, unverified fallback, probe challenge, profile invalidation, usage, shared schemas");
 })().catch(e => { console.error(e); process.exitCode = 1; });

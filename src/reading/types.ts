@@ -3,7 +3,7 @@ export type ReadingStatus = "pending" | "running" | "done" | "failed" | "interru
 export type ReadingLearningState = "unmarked" | "understood" | "revisit" | "question";
 export type ReadingTeachingStyle = "balanced" | "foundations" | "methods" | "evidence";
 export interface ReadingUsageEntry {
-	id: string; stage: "selection" | "answer" | "memory"; model: string; started: string;
+	id: string; stage: "planning" | "selection" | "answer" | "memory"; model: string; started: string;
 	state: "running" | "done" | "failed" | "interrupted" | "cached";
 	estimatedInput: number; estimatedOutput?: number; input?: number; output?: number; cachedInput?: number;
 }
@@ -71,7 +71,10 @@ export interface ReadingWindow {
 	x: number; y: number; width: number; height: number;
 	scrollTop?: number;
 }
+export interface ReadingModule { title: string; question: string; evidenceIds: string[]; }
+export interface ReadingModulePlan { version: 1; modules: ReadingModule[]; }
 export interface ReadingSession {
+	modulePlan?: ReadingModulePlan;
 	teachingStyle?: ReadingTeachingStyle;
 	version: 1;
 	id: string;

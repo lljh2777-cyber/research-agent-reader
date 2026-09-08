@@ -37,6 +37,9 @@ async function toolsFor(f) {
 	f.s.mainSummary = "new unrelated background"; const sibling = addReadingBranch(f.s, f.n.id); const sn = addReadingNode(f.s, sibling.id); sn.status = "done"; sn.content = "sibling private conversation";
 	const context = assistantContext(f.s, bn.id); assert.match(context.background, /frozen background/); assert.doesNotMatch(JSON.stringify(context), /new unrelated|sibling private/);
 	assert.equal(context.progress.latestMainNodeId, f.n.id); assert.equal(context.progress.canAdvance, true);
+	f.s.modulePlan = { version: 1, modules: [{ title: "总览", question: "问题？", evidenceIds: ["text-1-0"] }, { title: "方法", question: "如何验证？", evidenceIds: ["text-1-0"] }] }; f.s.outline = ["总览", "方法"];
+	assert.deepEqual(assistantContext(f.s, bn.id).progress.nextUnit, { number: 2, title: "方法", question: "如何验证？" });
+	delete f.s.modulePlan; f.s.outline = [];
 	branch.summary = "long dialogue".repeat(3000); const longContext = assistantContext(f.s, bn.id); assert.match(longContext.background, /frozen background/); assert.ok(longContext.background.length < 7000); branch.summary = "";
 	const { run, tools } = await toolsFor(f);
 	assert.equal(run.calls[0].input, 200); assert.ok(run.calls[0].estimatedInput > 0); assert.equal(run.state, "done");

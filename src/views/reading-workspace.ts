@@ -193,7 +193,9 @@ export class ReadingWorkspaceView extends ItemView {
 				const details = element(messages, "details", "reading-outline"); const summary = element(details, "summary"); icon(summary, "list-tree"); element(summary, "span", "", "阅读路线");
 				element(summary, "span", "reading-outline-count", session.outline.length + " 个单元"); icon(summary, "chevron-down");
 				session.outline.forEach((title, i) => { const row = button(details, "", () => { if (session.mainIds[i]) this.selectNode(session.mainIds[i]); }, title);
-					row.disabled = !session.mainIds[i]; element(row, "span", "reading-outline-number", String(i + 1).padStart(2, "0")); element(row, "span", "", title); });
+					row.disabled = !session.mainIds[i]; element(row, "span", "reading-outline-number", String(i + 1).padStart(2, "0"));
+					const label = element(row, "span", "reading-outline-label"); element(label, "span", "", title);
+					const question = session.modulePlan?.modules[i]?.question; if (question) element(label, "small", "", question); });
 			}
 			for (const id of session.mainIds) this.renderAnswer(messages, readingNode(session, id));
 			if (!session.mainIds.length) button(messages, "开始讲解 →", () => this.handle(this.service.advance(session.id)));

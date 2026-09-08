@@ -25,6 +25,7 @@ const { measuredReadingCall, readingUsageTotals, readingUsageSummary } = loadRea
 	await assert.rejects(measuredReadingCall(repo, s.id, n.id, "answer", backend, request), /disk full/); assert.equal(sent, false); storage.fail = false;
 
 	// An answer failure reuses only validated selection; model/context/source changes invalidate it.
+	await repo.transact(s.id, d => { d.outline = ["问题", "方法"]; });
 	const evidence = [{ id: "text-1-0", kind: "paper", path: "a.pdf", label: "Page one", text: "Evidence", page: 1 }];
 	let verified = 0; let selections = 0; let answers = 0; let failAnswer = true;
 	const workspace = { repository: repo, document: async () => ({ evidence, catalog: "text-1-0 Page one", verify: async () => { verified++; }, image: async () => null }) };
@@ -41,7 +42,7 @@ const { measuredReadingCall, readingUsageTotals, readingUsageSummary } = loadRea
 	await repo.transact(s.id, d => { d.source.fingerprint = "b".repeat(64); }); await assert.rejects(engine.generate(s.id, n.id)); assert.equal(selections, 4);
 	failAnswer = false; await engine.generate(s.id, n.id); assert.equal(selections, 4); assert.equal(repo.get(s.id).nodes[0].status, "done");
 	assert.equal(readingUsageTotals(repo.get(s.id).nodes).cacheHits, 2);
-	const other = createReadingSession(s.source); const otherNode = addReadingNode(other, null); await repo.add(other); await engine.generate(other.id, otherNode.id);
+	const other = createReadingSession(s.source); other.outline = ["问题", "方法"]; const otherNode = addReadingNode(other, null); await repo.add(other); await engine.generate(other.id, otherNode.id);
 	assert.equal(selections, 5); assert.equal(repo.get(other.id).nodes[0].usage.length, 2);
 	console.log("READING_USAGE_OK");
 })().catch(e => { console.error(e); process.exitCode = 1; });

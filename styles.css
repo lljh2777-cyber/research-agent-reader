@@ -6491,3 +6491,5 @@ body.agent-dashboard-mineru-resizing {
 	.curation-footer { flex-wrap: wrap; }
 	.curation-diff-columns { grid-template-columns: 1fr; }
 }
+.reading-outline-label { display: flex; flex-direction: column; min-width: 0; text-align: left; white-space: normal; }
+.reading-outline-label small { color: var(--text-muted); font-size: var(--font-ui-smaller); font-weight: normal; line-height: 1.5; }
