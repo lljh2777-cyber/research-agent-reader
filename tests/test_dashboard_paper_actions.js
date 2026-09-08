@@ -87,12 +87,12 @@ assert.doesNotMatch(dashboard, /isCliBackendId\(backend\)[\s\S]{0,200}stopDirect
 assert.match(modal, /运行方式/);
 assert.match(modal, /lightPaperIngestAvailable\(\)/);
 assert.match(modal, /lightAgentMineruReady\(\)/);
-assert.match(modal, /原文层（papers \+ Clippings）和分析层（wiki\/sources）/);
-assert.match(modal, /两层相互独立且均不覆盖已有内容/);
+assert.match(modal, /papers\/ 与 Clippings\/ 同属原文层，wiki\/sources\/ 是独立分析层/);
+assert.match(modal, /以下两个输出分别查重、分别补全/);
 assert.match(modal, /原文层 Markdown（papers \/ Clippings）/);
 assert.match(modal, /提取失败不会静默改用元数据/);
 assert.match(modal, /仅复用已有原文（papers \/ Clippings）/);
-assert.match(modal, /没有可用原文时，需先完成原文转换/);
+assert.match(modal, /没有可用原文需先完成转换/);
 assert.doesNotMatch(modal, /元数据与用户说明（不读取 PDF）|内容来自元数据与用户说明/);
 assert.match(
 	mineruPublish,

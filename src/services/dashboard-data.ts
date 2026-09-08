@@ -3,6 +3,7 @@ import { normalizePath, type App, type TFile } from "obsidian";
 import { ACTIONS } from "../actions";
 import type { PluginHost, VaultRecord } from "../types/contracts";
 import { isExcludedVaultHealthPath, isVaultHealthScopePath } from "./vault-lint";
+import { dashboardPaperDepth, dashboardRunPriority, dashboardTaskTitle } from "./dashboard-presentation";
 
 export interface DashboardVaultChange {
 	type: "upsert" | "delete";
@@ -44,6 +45,9 @@ interface LinkReport {
 }
 
 interface AgentRun {
+	label: string;
+	detail: string;
+	started: number;
 	agent: string;
 	task: string;
 	status: string;
@@ -139,7 +143,7 @@ export class DashboardDataService {
 		const result = {
 			header: {
 				scope: "研究知识库",
-				title: "文献知识库智能体控制台",
+				title: "研究工作台",
 				status: "本地",
 				vault: this.app.vault.getName(),
 				lastScan: `上次扫描 ${this.formatTime(now)}`,
@@ -148,8 +152,8 @@ export class DashboardDataService {
 			metrics: [
 				{
 					label: "知识库健康",
-					value: healthScore === null ? "—" : String(healthScore),
-					unit: "",
+					value: healthScore === null ? "尚未体检" : String(healthScore),
+					unit: healthScore === null ? "" : "分",
 					tone: healthScore === null ? "neutral" : healthScore >= 90 ? "good" : healthScore >= 75 ? "warn" : "danger",
 					detail: lintSummary
 						? `上次体检 ${this.formatExportTime(lintStatus.latest?.generated_at)}：${lintSummary.errors} 个错误，${lintSummary.warnings} 个警告${lintStale ? "；此后知识库有更新" : ""}`
@@ -158,31 +162,31 @@ export class DashboardDataService {
 							: "尚无体检结果，请运行知识库体检",
 				},
 				{
-					label: "文献流程",
+					label: "文献与阅读",
 					value: String(sourceRecords.length),
-					unit: "",
-					tone: paperDepth.needXray > 0 ? "warn" : "good",
-					detail: `${paperDepth.ingested} 个已入库，${paperDepth.abstractLevel} 个 abstract-level，${paperDepth.needXray} 个待 x-ray`,
+					unit: "篇",
+					tone: "neutral",
+					detail: `仅元数据 ${paperDepth.metadataOnly} · 摘要级 ${paperDepth.abstractLevel} · 全文深读 ${paperDepth.xray}`,
 				},
 				{
 					label: "代码笔记",
 					value: String(codeProjectRecords.length + codeScriptRecords.length),
-					unit: "",
+					unit: "页",
 					tone: "neutral",
-					detail: `${codeProjectRecords.length} 个项目，${staticReadCount} 个 static-read 笔记`,
+					detail: `${codeProjectRecords.length} 个项目 · ${staticReadCount} 页静态阅读`,
 				},
 				{
-					label: "知识枢纽",
+					label: "方法与综合",
 					value: String(methodRecords.length + synthesisRecords.length),
-					unit: "",
-					tone: coverage.missingMethodPages > 0 ? "warn" : "good",
+					unit: "页",
+					tone: "neutral",
 					detail: `${methodRecords.length} 个方法页，${synthesisRecords.length} 个综合页`,
 				},
 			],
 			activity,
 			agentRuns,
 			knowledgeGaps,
-			processingDepth: this.computeProcessingDepth(paperDepth, staticReadCount),
+			processingDepth: this.computeProcessingDepth(paperDepth),
 			coverage,
 			okf,
 		};
@@ -294,10 +298,9 @@ export class DashboardDataService {
 		};
 		for (const record of sourceRecords) {
 			const status = String(record.frontmatter.status || "").toLowerCase();
-			const depth = String(record.frontmatter.analysis_depth || "").toLowerCase();
-			const tags = record.tags.map((tag) => tag.toLowerCase());
-			const isXray = status === "x-ray" || status === "xray" || depth === "x-ray" || tags.includes("x-ray");
-			const isAbstract = status === "abstract-level" || depth === "abstract-level";
+			const depth = dashboardPaperDepth(record);
+			const isXray = depth === "x-ray";
+			const isAbstract = depth === "abstract-level";
 			if (isXray) {
 				counts.xray += 1;
 			} else if (isAbstract) {
@@ -314,12 +317,11 @@ export class DashboardDataService {
 		return counts;
 	}
 
-	computeProcessingDepth(paperDepth: PaperDepth, staticReadCount: number) {
+	computeProcessingDepth(paperDepth: PaperDepth) {
 		const rows = [
 			{ label: "metadata-only", count: paperDepth.metadataOnly },
 			{ label: "abstract-level", count: paperDepth.abstractLevel },
 			{ label: "x-ray", count: paperDepth.xray },
-			{ label: "static-read", count: staticReadCount },
 		];
 		const total = rows.reduce((sum, row) => sum + row.count, 0) || 1;
 		return rows.map((row) => ({
@@ -328,10 +330,9 @@ export class DashboardDataService {
 		}));
 	}
 
-	computeActivity(records: VaultRecord[]) {
-		const now = new Date();
+	computeActivity(records: VaultRecord[], now = new Date()) {
 		const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-		const start = new Date(2026, 6, 1);
+		const start = new Date(now.getFullYear(), now.getMonth() - 2, 1);
 		const counts = new Map<string, number>();
 		const tracks = new Map<string, string>();
 
@@ -366,8 +367,8 @@ export class DashboardDataService {
 		}
 
 		return {
-			title: "研究活动热力图",
-			rangeLabel: `${Array.from(counts.values()).filter((count) => count > 0).length} 个活跃日，${this.formatMonthYear(start)}-${this.formatMonthYear(end)}`,
+				title: "笔记更新分布",
+				rangeLabel: `${Array.from(counts.values()).filter((count) => count > 0).length} 天有更新 · 最近三个月`,
 			tracks: ["文献", "方法", "综合", "代码"],
 			days,
 		};
@@ -392,8 +393,11 @@ export class DashboardDataService {
 	async computeAgentRuns(recordByPath: Map<string, VaultRecord>): Promise<AgentRun[]> {
 		const logRecord = recordByPath.get("wiki/log.md");
 		const persistedRuns = this.plugin.getTaskRuns().map((run) => ({
-			agent: run.agent,
-			task: run.summary || run.label,
+			agent: run.executionConfig?.backend === "direct-api" ? "Direct API" : run.agent,
+			label: ACTIONS.find(action => action.id === run.actionId)?.label || run.label,
+			detail: run.summary || run.label,
+			started: new Date(run.startedAt).getTime() || 0,
+			task: dashboardTaskTitle(run, recordByPath),
 			status: run.status,
 			time: this.formatRunTime(run.startedAt),
 			runId: run.id,
@@ -408,17 +412,16 @@ export class DashboardDataService {
 				const title = (match[3] || category).trim();
 				logRuns.push({
 					agent: this.agentForCategory(category),
+					label: "知识库维护",
+					detail: title,
+					started: new Date(date).getTime() || 0,
 					task: title,
 					status: "done",
 					time: date,
 				});
 			}
 		}
-		const combined = [...persistedRuns, ...logRuns.reverse()].slice(0, 6);
-		if (combined.length > 0) {
-			return combined;
-		}
-		return [{ agent: "research-vault", task: "尚无智能体运行记录", status: "planned", time: "待处理" }];
+		return [...persistedRuns, ...logRuns.reverse()].sort((a, b) => dashboardRunPriority(a.status) - dashboardRunPriority(b.status) || b.started - a.started);
 	}
 
 	formatRunTime(value: string): string {
@@ -477,11 +480,7 @@ export class DashboardDataService {
 		}
 		const inboundCounts = this.computeInboundReferenceCounts(records);
 		const needXray = sourceRecords
-			.filter((record) => {
-				const status = String(record.frontmatter.status || "").toLowerCase();
-				const tags = record.tags.map((tag) => tag.toLowerCase());
-				return status !== "x-ray" && status !== "xray" && !tags.includes("x-ray");
-			})
+			.filter((record) => dashboardPaperDepth(record) !== "x-ray")
 			.map((record) => ({
 				record,
 				score: this.paperGapScore(record, inboundCounts.get(record.path) || 0),
@@ -608,9 +607,7 @@ export class DashboardDataService {
 	}
 
 	paperGapScore(record: VaultRecord, inboundCount: number): number {
-		const status = String(record.frontmatter.status || "").toLowerCase();
-		const depth = String(record.frontmatter.analysis_depth || "").toLowerCase();
-		const depthScore = status === "abstract-level" || depth === "abstract-level" ? 70 : 55;
+		const depthScore = dashboardPaperDepth(record) === "abstract-level" ? 70 : 55;
 		const missingEvidence = ["source_path", "converted_path", "doi"]
 			.filter((key) => !String(record.frontmatter[key] || "").trim())
 			.length;
