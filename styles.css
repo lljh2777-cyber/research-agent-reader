@@ -6493,3 +6493,4 @@ body.agent-dashboard-mineru-resizing {
 }
 .reading-outline-label { display: flex; flex-direction: column; min-width: 0; text-align: left; white-space: normal; }
 .reading-outline-label small { color: var(--text-muted); font-size: var(--font-ui-smaller); font-weight: normal; line-height: 1.5; }
+.reading-outline > button:disabled { opacity: 1; color: var(--reading-muted); }
