@@ -13,6 +13,7 @@ const commands = [
 	[process.execPath, ["tests/test_vault_context.js"]],
 	[process.execPath, ["tests/test_dashboard_query_view.js"]],
 	[process.execPath, ["tests/test_dashboard_annotations.js"]],
+	[process.execPath, ["tests/test_annotation_web_search.js"]],
 	[process.execPath, ["tests/test_annotation_source_integrity.js"]],
 	[process.execPath, ["tests/test_dashboard_obsidian_cli.js"]],
 	[process.execPath, ["tests/test_dashboard_markdown_reader.js"]],

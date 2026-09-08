@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ROLE_LABELS, type RetrievalMode } from "../retrieval/types";
 import type { KnowledgeRetrievalService } from "../retrieval/service";
+import type { WebSearchBackendResolution } from "../services/web-search";
 
 import {
 	App,
@@ -26,7 +27,6 @@ import {
 	type ProviderTypeId,
 } from "../config";
 import {
-	detectNativeWebSearchProtocol,
 	makeProviderProfile,
 	modelHasKnownVisionSupport,
 	type ProfileWebSearchMode,
@@ -61,6 +61,7 @@ import type {
 } from "../types/contracts";
 
 interface SettingsPluginHost extends PluginHost {
+	resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution;
 	getKnowledgeService(): KnowledgeRetrievalService;
 	openKnowledgeMaintenance(): void;
 	testKnowledgeModels(): Promise<void>;
@@ -1529,7 +1530,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.createSettingsPageHeader(
 			containerEl,
 			"批注 AI",
-			"普通解释可自由选择 Agent 或 Direct API；启用浅层联网后仅使用 Agent，始终不写入文件。",
+			"选择划选解释使用的模型。Direct API 与 CLI Agent 均可联网；生成后由你决定是否保存批注。",
 			true,
 		);
 		new Setting(containerEl)
@@ -1560,7 +1561,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			.setName("执行后端")
 			.setDesc(
 				this.plugin.settings.annotationWebSearchEnabled
-					? "联网解释仅使用 Agent；自动模式使用 Codex CLI。"
+					? "Direct API 可使用供应商原生联网或 Tavily；自动模式优先选择已就绪的默认 Direct API，否则使用 Codex CLI。"
 					: "普通解释可自由选择 Agent 或已验证的 Direct API；自动模式优先使用默认 Direct API。",
 			)
 			.addDropdown((dropdown) => {
@@ -1571,10 +1572,6 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					.addOption("opencode", "Agent · OpenCode");
 				verifiedProfiles.forEach((profile) => {
 					dropdown.addOption(profile.id, `Direct API · ${profile.name}`);
-					const option = dropdown.selectEl.options[
-						dropdown.selectEl.options.length - 1
-					];
-					if (option) option.disabled = this.plugin.settings.annotationWebSearchEnabled;
 				});
 				dropdown
 					.setValue(backendId)
@@ -1587,23 +1584,15 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.renderAnnotationWebSearchSettings(containerEl, backendId);
 
 		if (backendId === "auto") {
-			const activeProfile = verifiedProfiles.find(
-				(profile) => profile.id === this.plugin.settings.activeProviderId,
-			);
-			new Setting(containerEl)
-				.setName("自动选择顺序")
-				.setDesc(
-					this.plugin.settings.annotationWebSearchEnabled
-						? "联网解释固定使用 Codex CLI；关闭联网后恢复 Direct API 优先。"
-					: activeProfile
-						? `使用 Direct API“${activeProfile.name}”（${activeProfile.model}）；若以后停用该配置，则使用下方 Codex 回退参数。`
-						: "当前没有启用且已验证的 Direct API，将直接使用下方 Codex 回退参数。",
-				);
+			const activeProfile = verifiedProfiles.find(profile => profile.id === this.plugin.settings.activeProviderId);
+			const webBackend = activeProfile && this.plugin.settings.annotationWebSearchEnabled
+				? this.plugin.resolveWebSearchBackend(activeProfile) : undefined;
+			const useDirect = Boolean(activeProfile) && webBackend?.kind !== "unavailable";
+			new Setting(containerEl).setName("自动选择顺序").setDesc(useDirect
+				? `当前使用 Direct API“${activeProfile!.name}”（${activeProfile!.model}）${webBackend ? `，通过${webBackend.kind === "native" ? "供应商原生联网" : "Tavily 搜索"}` : ""}。请求失败时提示重试，不自动切换后端。`
+				: `当前使用 Codex CLI。${webBackend?.kind === "unavailable" ? `默认 Direct API 联网未就绪：${webBackend.reason}` : "没有启用且已验证的默认 Direct API。"}`);
 			this.renderAnnotationCliSettings(containerEl, "codex-cli", true);
-			this.renderAnnotationTokenSetting(
-				containerEl,
-				Boolean(activeProfile) && !this.plugin.settings.annotationWebSearchEnabled,
-			);
+			this.renderAnnotationTokenSetting(containerEl, useDirect);
 			return;
 		}
 
@@ -1646,33 +1635,26 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("浅层联网解释")
 			.setDesc(
-				"关闭时可使用 Direct API 或 Agent。启用后仅使用 Agent，最多围绕 2 个检索问题、采用不超过 3 个权威来源，不追踪二级链接。",
+				"Direct API 与 CLI Agent 均可使用。仅发送选区及附近语境；浅层查证围绕最多 2 个问题、参考最多 3 个来源，优先权威资料。Tavily 使用选中文字与章节检索，不额外调用模型生成检索词。",
 			)
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.annotationWebSearchEnabled)
 					.onChange(async (value) => {
 						this.plugin.settings.annotationWebSearchEnabled = value;
-						const directBackendSelected = value
-							&& !["auto", "codex-cli", "claude-code", "opencode"].includes(backendId);
-						if (directBackendSelected) {
-							const profile = this.plugin.getProviderProfile(backendId);
-							const nativeCapable = Boolean(
-								profile
-								&& (profile.webSearch || "auto") !== "off"
-								&& detectNativeWebSearchProtocol(profile.baseUrl),
-							);
-							if (!nativeCapable) {
-								this.plugin.settings.annotationBackendId = "codex-cli";
-								new Notice("该 Direct API 供应商不支持原生联网，批注后端已切换为 Codex CLI");
-							}
-						}
 						await this.plugin.saveSettings();
 						this.display();
 					})
 			);
 		if (!this.plugin.settings.annotationWebSearchEnabled) return;
-
+		if (backendId !== "auto" && !isCliBackendId(backendId)) {
+			const profile = this.plugin.getProviderProfile(backendId);
+			const backend = profile ? this.plugin.resolveWebSearchBackend(profile) : undefined;
+			new Setting(containerEl).setName("联网方式").setDesc(backend?.kind === "native"
+				? "供应商原生联网。使用当前配置的模型；回答应附来源链接，插件不将其视为独立核验。"
+				: backend?.kind === "tavily" ? "Tavily 搜索 → 当前 Direct API 模型解释。与知识库联网问答共用同一份 Tavily 凭据。"
+				: `联网未就绪：${backend?.kind === "unavailable" ? backend.reason : "请先选择已验证的 Direct API 配置"}。保留你的后端选择，不会自动切到 CLI。`);
+		}
 		const timeoutSetting = new Setting(containerEl)
 			.setName("联网时间上限")
 			.setDesc(
@@ -1693,7 +1675,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("搜索深度")
-			.setDesc("固定为浅层：Agent 仅临时开放联网工具，并受上述总时间限制。")
+			.setDesc("固定为浅层。Tavily 由插件限制检索与来源数量；原生联网及 CLI 由导读指令约束搜索范围。所有批注解释均受上述总时间限制。")
 			.addDropdown((dropdown) =>
 				dropdown
 					.addOption("shallow", "浅层（固定）")
@@ -1990,7 +1972,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.createProviderSectionHeader(
 			webOptions,
 			"联网搜索（Tavily 兜底）",
-			"仅 Direct API 的联网问答使用：供应商不支持原生联网时，插件侧调用 Tavily 检索并让模型引用 [n] 来源。API Key 保存在 Obsidian SecretStorage，不写入 data.json。",
+			"供 Direct API 联网问答与联网批注共用：原生联网不可用或选择 Tavily 时，由插件检索并附上实际来源。API Key 保存在 Obsidian SecretStorage，不写入 data.json。",
 		);
 		if (this.app.secretStorage && typeof SecretComponent === "function") {
 			const tavilySetting = new Setting(webOptions)
@@ -2403,7 +2385,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		const profileOptions = this.createSettingsDisclosure(containerEl, "api-profile-options", "当前配置的高级选项", "联网方式与连接测试超时");
 		new Setting(profileOptions)
 			.setName("联网搜索")
-			.setDesc("问答视图「联网搜索」模式的取网方式：自动优先供应商原生联网（OpenRouter、通义千问、智谱、DeepSeek Responses），否则回退 Tavily；关闭后该供应商仅可知识库问答。")
+			.setDesc("联网问答与联网批注共用。自动模式优先供应商原生联网，否则使用 Tavily；也可指定一种方式。关闭后仍可进行不联网的问答与批注。")
 			.addDropdown((dropdown) => {
 				const modes: Array<[ProfileWebSearchMode, string]> = [
 					["auto", "自动（原生优先，Tavily 兜底）"],

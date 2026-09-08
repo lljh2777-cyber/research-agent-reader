@@ -8,8 +8,8 @@ import {
 } from "obsidian";
 
 import type AgentDashboardPlugin from "../plugin";
-import { getCliBackendLabel, type CliBackendId } from "../config";
-import { detectNativeWebSearchProtocol } from "../providers/profile";
+import { getCliBackendLabel, isCliBackendId, type CliBackendId } from "../config";
+import { generateDirectExplanation } from "./direct-explanation";
 import {
 	getClaudeDefaultModelLabel,
 	getOpenCodeDefaultModelLabel,
@@ -638,40 +638,24 @@ export class AnnotationService {
 			: !["codex-cli", "claude-code", "opencode"].includes(configuredBackend)
 				? this.plugin.getProviderProfile(configuredBackend)
 				: null;
-		// With shallow web search enabled, Direct API stays usable when the
-		// profile's provider runs server-side web search natively.
-		const directNativeProtocol = selectedDirectProfile
-			&& (selectedDirectProfile.webSearch || "auto") !== "off"
-			? detectNativeWebSearchProtocol(selectedDirectProfile.baseUrl)
-			: null;
-		const directProfile = webSearchEnabled
-			? (directNativeProtocol ? selectedDirectProfile : null)
-			: selectedDirectProfile;
+		const directWebBackend = webSearchEnabled && selectedDirectProfile
+			? this.plugin.resolveWebSearchBackend(selectedDirectProfile) : undefined;
+		if (configuredBackend !== "auto" && !isCliBackendId(configuredBackend) && !selectedDirectProfile?.lastTest?.ok) {
+			throw new Error("所选 Direct API 批注配置不存在或未通过连接测试，请在设置中重新选择");
+		}
+		// Only automatic selection may fall back to a CLI; an explicit API choice
+		// must report its own missing credentials/search configuration.
+		const directProfile = configuredBackend === "auto" && directWebBackend?.kind === "unavailable"
+			? null : selectedDirectProfile;
 		if (directProfile?.lastTest?.ok) {
-			const provider = this.plugin.createLLMProvider(directProfile);
-			const result = await provider.complete(
-				{
-					model: directProfile.model,
-					messages: [
-						{ role: "system", content: system },
-						{ role: "user", content: user },
-					],
-					maxTokens: this.plugin.settings.annotationMaxTokens,
-					...(webSearchEnabled && directNativeProtocol
-						? { webSearch: { protocol: directNativeProtocol } }
-						: {}),
-				},
-				{
-					registerCancel,
-				},
-			);
-			const text = String(result.text || "").trim();
-			if (!text) throw new Error("模型返回了空解释");
-			return {
-				text,
-				provider: directProfile.name,
-				model: directProfile.model,
-			};
+			return generateDirectExplanation({
+				profile: directProfile, provider: this.plugin.createLLMProvider(directProfile),
+				backend: directWebBackend, system, user,
+				query: `${selection.selectedText.slice(0, 300)} ${selection.section.slice(0, 80)}`,
+				maxTokens: this.plugin.settings.annotationMaxTokens,
+				timeoutMs: (webSearchEnabled ? webSearchTimeoutSeconds : directProfile.timeoutSeconds) * 1000,
+				registerCancel,
+			});
 		}
 
 		const action = this.plugin.getDashboardAction("annotation-explain");

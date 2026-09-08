@@ -1288,15 +1288,6 @@ export default class AgentDashboardPlugin extends Plugin {
 			this.settings.annotationBackendId = "auto";
 			changed = true;
 		}
-		if (
-			this.settings.annotationWebSearchEnabled === true
-			&& !["auto", "codex-cli", "claude-code", "opencode"].includes(
-				this.settings.annotationBackendId,
-			)
-		) {
-			this.settings.annotationBackendId = "codex-cli";
-			changed = true;
-		}
 		if (!REASONING_OPTIONS.some((option) => option.id === this.settings.annotationCodexReasoningEffort)) {
 			this.settings.annotationCodexReasoningEffort = DEFAULT_SETTINGS.annotationCodexReasoningEffort;
 			changed = true;
@@ -2652,7 +2643,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	 * server search, plugin-side Tavily searches, or nothing (with an
 	 * actionable reason the query view can surface).
 	 */
-	private resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution {
+	resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution {
 		const normalized = normalizeProviderProfile(profile);
 		const mode = normalized.webSearch || "auto";
 		if (mode === "off") {
@@ -2689,7 +2680,11 @@ export default class AgentDashboardPlugin extends Plugin {
 		) * 1000;
 		return {
 			kind: "tavily",
-			search: (queries) => searchTavily(httpDeps, secret, queries, { maxResults, timeoutMs }),
+			search: (queries, options = {}) => searchTavily(httpDeps, secret, queries, {
+				...options,
+				maxResults: Math.min(maxResults, options.maxResults ?? maxResults),
+				timeoutMs: Math.min(timeoutMs, options.timeoutMs ?? timeoutMs),
+			}),
 		};
 	}
 

@@ -151,6 +151,8 @@ async function main() {
 	const migrationPlugin = new AgentDashboardPlugin();
 	migrationPlugin.loadData = async () => ({
 		settings: {
+			annotationBackendId: "provider-qwen",
+			annotationWebSearchEnabled: true,
 			toolkitRoot: path.resolve(__dirname, "../.."),
 			providerProfiles: [{
 				id: "provider-qwen",
@@ -167,6 +169,8 @@ async function main() {
 	});
 	migrationPlugin.saveData = async () => {};
 	await migrationPlugin.loadSettings();
+	assert.equal(migrationPlugin.settings.annotationBackendId, "provider-qwen", "web annotations must preserve an explicitly selected API across reload");
+	assert.equal(migrationPlugin.sanitizeSettingsForStorage().annotationBackendId, "provider-qwen");
 	assert.strictEqual(
 		migrationPlugin.settings.providerProfiles[0].capabilities.vision,
 		true,
@@ -209,6 +213,16 @@ async function main() {
 		assert.strictEqual(typeof adapter.complete, "function");
 	}
 	assert.strictEqual(typeof plugin.createLLMProvider("codex-cli").testConnection, "function");
+
+	const webProfile = { ...profile, type: "openai-compatible", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" };
+	plugin.getTavilySecretValue = () => "test-tavily";
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, webSearch: "auto" }).kind, "native");
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, webSearch: "tavily" }).kind, "tavily");
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, webSearch: "off" }).kind, "unavailable");
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, baseUrl: "https://api.example.test", webSearch: "auto" }).kind, "tavily");
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, baseUrl: "https://api.example.test", webSearch: "native" }).kind, "unavailable");
+	plugin.getTavilySecretValue = () => "";
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, webSearch: "tavily" }).kind, "unavailable");
 
 	const calls = [];
 	requestHandler = async (options) => {

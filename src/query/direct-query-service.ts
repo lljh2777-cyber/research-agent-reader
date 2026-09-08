@@ -20,7 +20,8 @@ import {
 import type { DashboardLifecycleState } from "../runtime/lifecycle-state";
 import type { ProcessExecutionService } from "../runtime/process-execution";
 import type { DashboardSettings } from "../runtime/settings";
-import { buildWebEvidenceContext } from "../services/web-search";
+import { buildWebEvidenceContext, type WebSearchBackendResolution } from "../services/web-search";
+export type { WebSearchBackendResolution } from "../services/web-search";
 import type {
 	DashboardProcessHooks,
 	DashboardProcessResult,
@@ -68,11 +69,6 @@ export interface VaultImageData {
 	attachment: VaultImageAttachment;
 	content: ChatImageContent;
 }
-
-export type WebSearchBackendResolution =
-	| { kind: "native"; protocol: "qwen" | "openrouter" | "zhipu" | "deepseek" }
-	| { kind: "tavily"; search: (queries: string[]) => Promise<WebSearchResult[]> }
-	| { kind: "unavailable"; reason: string };
 
 interface DirectQueryDependencies {
 	state: DashboardLifecycleState;
