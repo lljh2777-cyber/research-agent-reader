@@ -56,6 +56,9 @@ const ACTION_ICONS: Record<string, string> = {
 	"okf-export": "package-open",
 };
 
+import { readingDashboardState, type ReadingEntry } from "../reading/entry";
+import type { ReadingWorkspaceService } from "../reading/workspace";
+
 interface DashboardHost extends PluginHost {
 	getRunningTaskRun(actionId: string): TaskRun | null;
 	stopTaskRun(runId: string): boolean;
@@ -63,7 +66,8 @@ interface DashboardHost extends PluginHost {
 	stopVaultAction(runId: string): boolean;
 	activateQueryWikiView(initialInput?: string): Promise<void>;
 	activateCodePracticeView(): Promise<void>;
-	activateReadingWorkspace(): Promise<void>;
+	activateReadingWorkspace(entry?: ReadingEntry): Promise<void>;
+	getReadingWorkspace?(): ReadingWorkspaceService;
 	supportsFast(model: string): boolean;
 	lightPaperIngestAvailable(): { ready: boolean; reason: string };
 	lightAgentMineruReady(): boolean;
@@ -133,6 +137,12 @@ export class DashboardView extends ItemView {
 		this.renderLoading();
 		this.registerVaultRefreshEvents();
 		await this.loadAndRender();
+		if (this.plugin.getReadingWorkspace) {
+			try {
+				const reading = this.plugin.getReadingWorkspace(); await reading.ready();
+				if (!this.closed) { this.register(reading.repository.subscribe(() => this.refreshReadingEntry())); this.refreshReadingEntry(); }
+			} catch { /* The reading view reports recovery details; dashboard remains usable. */ }
+		}
 	}
 
 	async onClose(): Promise<void> {
@@ -294,6 +304,7 @@ export class DashboardView extends ItemView {
 				},
 			});
 			button.type = "button";
+			button.dataset.actionId = action.id;
 			button.disabled = !action.enabled || isStopping || (isRunning && !runningTask);
 			if (!action.enabled) button.addClass("is-unavailable");
 			if (isRunning) button.addClass("is-running");
@@ -312,6 +323,19 @@ export class DashboardView extends ItemView {
 				this.openAction(action);
 			});
 		});
+		this.refreshReadingEntry();
+	}
+	private refreshReadingEntry(): void {
+		if (this.closed || !this.plugin.getReadingWorkspace || this.plugin.isActionRunning("pdf-xray")) return;
+		const button = this.contentEl.querySelector<HTMLButtonElement>('[data-action-id="pdf-xray"]'); if (!button) return;
+		const state = readingDashboardState(this.plugin.getReadingWorkspace().repository.sessions.values());
+		const label = button.querySelector(".agent-dashboard-action-state"); if (label) label.textContent = state.label;
+		button.classList.toggle("is-running", state.running);
+		button.title = [state.title, state.label, "打开交互深读；停止生成请使用阅读界面的停止按钮"].filter(Boolean).join("\n");
+		button.setAttribute("aria-label", "PDF 深读，" + state.label + (state.title ? "，" + state.title : ""));
+		let title = button.querySelector<HTMLElement>(".agent-dashboard-action-context");
+		if (!title) title = button.createSpan({ cls: "agent-dashboard-action-context" });
+		title.textContent = state.title; title.hidden = !state.title;
 	}
 
 	requestStopRun(run: TaskRun): void {
@@ -585,7 +609,8 @@ export class DashboardView extends ItemView {
 			return;
 		}
 		if (action.id === "pdf-xray") {
-			void this.plugin.activateReadingWorkspace();
+			const state = this.plugin.getReadingWorkspace && readingDashboardState(this.plugin.getReadingWorkspace().repository.sessions.values());
+			void this.plugin.activateReadingWorkspace(state?.sessionId ? { sessionId: state.sessionId } : undefined);
 			return;
 		}
 		if (this.plugin.isActionRunning(action.id)) {

@@ -1,0 +1,17 @@
+import { readingCategory, readingTitle } from "./catalog";
+import type { ReadingSession, ReadingSource } from "./types";
+
+export interface ReadingEntry { source?: Pick<ReadingSource, "kind" | "path">; backend?: string; sessionId?: string; }
+
+/** Dashboard reflects saved reading work, independent of CLI task status. */
+export function readingDashboardState(sessions: Iterable<ReadingSession>): { sessionId: string; title: string; label: string; running: boolean } {
+	const active = [...sessions].filter(s => !s.demo && readingCategory(s) === "reading" && !s.archived);
+	const running = (s: ReadingSession) => s.nodes.some(n => n.status === "running" || n.status === "pending");
+	active.sort((a, b) => Number(running(b)) - Number(running(a)) || (b.lastOpenedAt || b.updatedAt).localeCompare(a.lastOpenedAt || a.updatedAt));
+	const session = active[0];
+	if (!session) return { sessionId: "", title: "", label: "打开论文开始阅读", running: false };
+	const done = session.nodes.filter(n => !n.branchId && n.status === "done").length;
+	const failed = session.nodes.some(n => n.status === "failed" || n.status === "interrupted");
+	return { sessionId: session.id, title: readingTitle(session), running: running(session),
+		label: `${running(session) ? "生成中" : failed ? "有待重试回答" : session.completed ? "主线已讲完" : "继续阅读"} · ${done}${session.outline.length ? "/" + session.outline.length : ""} 单元` };
+}

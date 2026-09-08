@@ -15,6 +15,7 @@ interface TaskResultHost {
 	} | null;
 	getTaskRunArtifacts?(run: TaskRun): { articlePath?: string; wikiPath?: string } | null;
 	activateMineruReaderView?(articlePath?: string): Promise<void>;
+	activateReadingWorkspace?(entry?: import("../reading/entry").ReadingEntry): Promise<void>;
 	openVaultFile?(path: string): void;
 }
 
@@ -102,6 +103,16 @@ export class TaskResultModal extends Modal {
 			|| this.plugin.getMineruArticlePath?.(this.run)
 			|| "";
 		if (articlePath) {
+			if (this.run.actionId === "paper-ingest" && this.plugin.activateReadingWorkspace) {
+				const read = footer.createEl("button", { cls: "mod-cta", text: "开始／继续交互深读" });
+				read.type = "button";
+				read.addEventListener("click", async () => {
+					read.disabled = true;
+					try { await this.plugin.activateReadingWorkspace!({ source: { kind: "article", path: articlePath }, backend: this.run.executionConfig?.providerId || undefined }); this.close(); }
+					catch (error) { new Notice(String(error)); }
+					finally { read.disabled = false; }
+				});
+			}
 			const openReader = footer.createEl("button", { text: "打开 MinerU 阅读器" });
 			openReader.type = "button";
 			openReader.addEventListener("click", () => {

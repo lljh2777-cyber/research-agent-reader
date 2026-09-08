@@ -4197,6 +4197,17 @@
 	text-transform: none;
 }
 
+.agent-dashboard-action-context {
+	grid-column: 2;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-size: 9px;
+	font-weight: normal;
+	color: var(--text-muted);
+}
+
 .agent-dashboard-grid {
 	gap: 20px 18px;
 }

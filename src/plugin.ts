@@ -3330,9 +3330,13 @@ export default class AgentDashboardPlugin extends Plugin {
 		const profile = this.getProviderProfile(session.backend); if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
 		return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, streaming && profile.lastTest.streamingVerified === true, supportsReadingSchema(profile));
 	}
-	async activateReadingWorkspace(): Promise<void> {
+	async activateReadingWorkspace(entry?: import("./reading/entry").ReadingEntry): Promise<void> {
 		const leaf = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0] || this.app.workspace.getLeaf("tab");
 		await leaf.setViewState({ type: READING_VIEW_TYPE, active: true }); await this.app.workspace.revealLeaf(leaf);
+		if (leaf.view instanceof ReadingWorkspaceView) {
+			if (entry?.sessionId) await leaf.view.setState({ sessionId: entry.sessionId });
+			if (entry?.source) leaf.view.openSource(entry);
+		}
 	}
 	async runClassicReading(input: string, overrides: ExecutionOverrides, options: DashboardActionOptions): Promise<void> {
 		const action = ACTION_BY_ID.get("pdf-xray")!;
