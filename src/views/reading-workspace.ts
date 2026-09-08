@@ -15,6 +15,7 @@ import { ReadingExportModal } from "./reading-export";
 import { ReadingModeMotion } from "./reading-mode-motion";
 import { ReadingEvidencePanel } from "./reading-evidence-panel";
 import { CodeSourceModal, renderCodeEvidence } from "./code-evidence";
+import { ReadingSourceLocation } from "./reading-source-picker";
 import { LEARNING_LABELS, markReading, visitReadingEvidence } from "../reading/progress";
 import { TEACHING_STYLES } from "../reading/teaching";
 import type { ReadingTeachingStyle } from "../reading/types";
@@ -702,14 +703,15 @@ export class ReadingWorkspaceView extends ItemView {
 		const modal = this.modal("开始交互阅读");
 		element(modal.contentEl, "p", "reading-modal-intro", "选择论文或代码，建立可以随时继续的阅读会话。");
 		const kind = element(element(modal.contentEl, "label", "reading-field", "原文类型"), "select"); [["pdf", "原始 PDF"], ["article", "已验证 article.md"], ["code", "Python/R 文件或项目目录"]].forEach(([value, label]) => { element(kind, "option", "", label).value = value; });
-		const path = element(element(modal.contentEl, "label", "reading-field", "原文位置"), "input"); path.placeholder = "PDF 完整路径，或 papers/<citekey>/article.md";
+		const sourceLocation = new ReadingSourceLocation(this.app, element(modal.contentEl, "div"), () => kind.value as ReadingSession["source"]["kind"]); const path = sourceLocation.input;
+		const close = modal.onClose.bind(modal); modal.onClose = () => { sourceLocation.dispose(); close(); };
 		const backend = element(element(modal.contentEl, "label", "reading-field", "讲解后端"), "select"); element(backend, "option", "", "Codex CLI").value = "codex-cli";
 		this.plugin.getVerifiedProviderProfiles().forEach((profile) => { element(backend, "option", "", profile.name + " · " + profile.model).value = profile.id; });
 		const model = element(element(modal.contentEl, "label", "reading-field", "Codex 模型（可选）"), "input"); model.placeholder = "留空使用配置中的模型";
 		backend.onchange = () => { model.parentElement!.hidden = backend.value !== "codex-cli"; };
 		if (entry?.source) { kind.value = entry.source.kind; path.value = entry.source.path; }
 		else if (this.session?.source.kind === "code") kind.value = "code";
-		kind.onchange = () => { path.placeholder = kind.value === "code" ? "Python/R 文件或项目目录的完整路径" : "PDF 完整路径，或 papers/<citekey>/article.md"; }; kind.onchange(new Event("change"));
+		kind.onchange = () => sourceLocation.refresh(); sourceLocation.refresh();
 		if (entry?.backend && [...backend.options].some(o => o.value === entry.backend)) backend.value = entry.backend;
 		model.parentElement!.hidden = backend.value !== "codex-cli";
 		const startNew = element(modal.contentEl, "label", "reading-new-session-option"); const forceNew = element(startNew, "input"); forceNew.type = "checkbox"; element(startNew, "span", "", "为同一原文重新建立会话");
@@ -764,7 +766,8 @@ export class ReadingWorkspaceView extends ItemView {
 	private openRelocate(): void {
 		const session = this.session!; const modal = this.modal("重新定位原文");
 		element(modal.contentEl, "p", "reading-modal-intro", "适用于文件移动或重命名。内容指纹完全一致才恢复关联；内容变化请新建会话。");
-		const input = element(modal.contentEl, "input", "reading-correction-input"); input.value = session.source.path; input.setAttribute("aria-label", "原文新位置");
+		const sourceLocation = new ReadingSourceLocation(this.app, element(modal.contentEl, "div"), () => session.source.kind); const input = sourceLocation.input; input.value = session.source.path; input.setAttribute("aria-label", "原文新位置");
+		const close = modal.onClose.bind(modal); modal.onClose = () => { sourceLocation.dispose(); close(); };
 		const go = button(modal.contentEl, "核对文件并恢复", () => { if (go.disabled) return; go.disabled = true; this.handle(this.service.relocate(session.id, input.value.trim().replace(/^"|"$/g, "")).then(() => { modal.close(); new Notice("原文位置已恢复，历史保留"); }).finally(() => { go.disabled = false; })); }); modal.open();
 	}
 	private async openCoverage(): Promise<void> {
