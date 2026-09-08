@@ -57,6 +57,7 @@ const ACTION_ICONS: Record<string, string> = {
 };
 
 import { readingDashboardState, type ReadingEntry } from "../reading/entry";
+import { recentReading, readingTitle } from "../reading/catalog";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
 interface DashboardHost extends PluginHost {
@@ -99,6 +100,10 @@ export class DashboardView extends ItemView {
 	private loadSequence: number;
 	private closed: boolean;
 	private readonly stoppingRunIds: Set<string>;
+	private runsExpanded = false;
+	private maintenanceExpanded = false;
+	private recentSignature = "";
+	private recentExpanded = false;
 
 	private get currentData(): DashboardData {
 		if (!this.data) throw new Error("Dashboard data is not loaded");
@@ -243,6 +248,7 @@ export class DashboardView extends ItemView {
 				this.stoppingRunIds.delete(runId);
 			}
 		}
+		const scrollTop = this.contentEl.scrollTop;
 		this.contentEl.empty();
 		this.contentEl.addClass("agent-dashboard-view");
 		const shell = this.contentEl.createDiv({ cls: "agent-dashboard-shell" });
@@ -252,27 +258,34 @@ export class DashboardView extends ItemView {
 			cls: "agent-dashboard-grid",
 			attr: { "aria-label": "研究知识库控制台" },
 		});
+		this.recentSignature = "";
+		const recent = main.createDiv({ cls: "agent-dashboard-recent", attr: { "aria-label": "最近阅读" } });
+		this.refreshRecentReading(recent);
+		this.renderAgentRuns(main);
 		this.renderStats(main);
 		this.renderHeatmap(main);
-		this.renderAgentRuns(main);
-		this.renderKnowledgeGaps(main);
-		this.renderProcessingDepth(main);
-		this.renderCoverage(main);
-		this.renderOkfReadiness(main);
+		const maintenance = main.createEl("details", { cls: "agent-dashboard-maintenance" }); maintenance.open = this.maintenanceExpanded;
+		maintenance.createEl("summary", { text: "知识库维护与详细统计" });
+		maintenance.addEventListener("toggle", () => { this.maintenanceExpanded = maintenance.open; });
+		const detail = maintenance.createDiv({ cls: "agent-dashboard-maintenance-grid" });
+		this.renderKnowledgeGaps(detail);
+		this.renderProcessingDepth(detail);
+		this.renderCoverage(detail);
+		this.renderOkfReadiness(detail);
+		this.contentEl.scrollTop = scrollTop;
 	}
 
 	renderHeader(parent: HTMLElement): void {
 		const header = parent.createEl("header", { cls: "agent-dashboard-header" });
+		setIcon(header.createSpan({ cls: "agent-dashboard-brand", attr: { "aria-hidden": "true" } }), "library-big");
 		const titleBlock = header.createDiv({ cls: "agent-dashboard-title-block" });
 		titleBlock.createEl("p", { cls: "agent-dashboard-eyebrow", text: this.currentData.header.scope });
 		titleBlock.createEl("h1", { text: this.currentData.header.title });
 		const status = header.createDiv({ cls: "agent-dashboard-header-status", attr: { "aria-label": "知识库状态" } });
-		const pill = status.createEl("button", {
+		status.createSpan({
 			cls: "agent-dashboard-status-pill agent-dashboard-local-pill",
 			text: this.currentData.header.status,
-			attr: { "aria-pressed": "true" },
 		});
-		pill.type = "button";
 		status.createSpan({ cls: "agent-dashboard-vault-chip", text: this.currentData.header.vault });
 		status.createSpan({ cls: "agent-dashboard-scan-time", text: this.currentData.header.lastScan });
 		const refresh = status.createEl("button", {
@@ -288,12 +301,19 @@ export class DashboardView extends ItemView {
 
 	renderActions(parent: HTMLElement): void {
 		const rail = parent.createEl("nav", { cls: "agent-dashboard-action-rail", attr: { "aria-label": "研究知识库操作" } });
-		this.currentData.actions.filter((action) => action.showInRail !== false).forEach((action) => {
+		const primary = rail.createDiv({ cls: "agent-dashboard-primary-actions" });
+		const secondary = rail.createDiv({ cls: "agent-dashboard-secondary-actions", attr: { "aria-label": "辅助工具" } });
+		const mainIds = ["paper-ingest", "pdf-xray", "vault-retrieval"];
+		const descriptions: Record<string, string> = { "paper-ingest": "导入论文，整理原文与初始笔记", "pdf-xray": "沿主线阅读，带着问题探索", "vault-retrieval": "从已有文献中查找依据与答案" };
+		const actions = this.currentData.actions.filter(action => action.showInRail !== false);
+		const ordered = [...mainIds.flatMap(id => actions.filter(a => a.id === id)), ...actions.filter(a => !mainIds.includes(a.id))];
+		ordered.forEach((action) => {
+			const isPrimary = mainIds.includes(action.id);
 			const isRunning = this.plugin.isActionRunning(action.id);
 			const runningTask = isRunning ? this.plugin.getRunningTaskRun(action.id) : null;
 			const isStopping = Boolean(runningTask && this.stoppingRunIds.has(runningTask.id));
-			const button = rail.createEl("button", {
-				cls: "agent-dashboard-action-button",
+			const button = (isPrimary ? primary : secondary).createEl("button", {
+				cls: "agent-dashboard-action-button" + (isPrimary ? " is-primary" : " is-secondary"),
 				attr: {
 					"aria-label": !action.enabled
 						? `${action.label}，待接入`
@@ -313,8 +333,9 @@ export class DashboardView extends ItemView {
 			button.createSpan({ cls: "agent-dashboard-action-label", text: action.label });
 			button.createSpan({
 				cls: "agent-dashboard-action-state",
-				text: !action.enabled ? "待接入" : isStopping ? "停止中" : isRunning ? "点击停止" : "空闲",
+				text: !action.enabled ? "待接入" : isStopping ? "停止中" : isRunning ? "运行中 · 点击停止" : descriptions[action.id] || "",
 			});
+			if (isPrimary) setIcon(button.createSpan({ cls: "agent-dashboard-action-arrow", attr: { "aria-hidden": "true" } }), "arrow-up-right");
 			this.registerDomEvent(button, "click", () => {
 				if (runningTask) {
 					this.requestStopRun(runningTask);
@@ -326,16 +347,37 @@ export class DashboardView extends ItemView {
 		this.refreshReadingEntry();
 	}
 	private refreshReadingEntry(): void {
-		if (this.closed || !this.plugin.getReadingWorkspace || this.plugin.isActionRunning("pdf-xray")) return;
+		if (this.closed || !this.plugin.getReadingWorkspace) return;
+		const recent = this.contentEl.querySelector<HTMLElement>(".agent-dashboard-recent"); if (recent) this.refreshRecentReading(recent);
+		if (this.plugin.isActionRunning("pdf-xray")) return;
 		const button = this.contentEl.querySelector<HTMLButtonElement>('[data-action-id="pdf-xray"]'); if (!button) return;
 		const state = readingDashboardState(this.plugin.getReadingWorkspace().repository.sessions.values());
 		const label = button.querySelector(".agent-dashboard-action-state"); if (label) label.textContent = state.label;
 		button.classList.toggle("is-running", state.running);
 		button.title = [state.title, state.label, "打开交互深读；停止生成请使用阅读界面的停止按钮"].filter(Boolean).join("\n");
 		button.setAttribute("aria-label", "PDF 深读，" + state.label + (state.title ? "，" + state.title : ""));
-		let title = button.querySelector<HTMLElement>(".agent-dashboard-action-context");
-		if (!title) title = button.createSpan({ cls: "agent-dashboard-action-context" });
-		title.textContent = state.title; title.hidden = !state.title;
+	}
+	private refreshRecentReading(parent: HTMLElement): void {
+		const sessions = this.plugin.getReadingWorkspace ? recentReading(this.plugin.getReadingWorkspace().repository.sessions.values()).slice(0, 3) : [];
+		const signature = JSON.stringify(sessions.map(s => [s.id, readingTitle(s), readingDashboardState([s]).label]));
+		if (signature === this.recentSignature) return; this.recentSignature = signature;
+		parent.empty();
+		parent.classList.toggle("is-expanded", this.recentExpanded);
+		parent.createEl("h2", { text: "最近阅读" });
+		if (!sessions.length) { parent.createEl("p", { cls: "agent-dashboard-empty-state", text: "打开一篇论文后，可以从这里继续阅读。" }); return; }
+		const list = parent.createDiv({ cls: "agent-dashboard-recent-list" });
+		for (const session of sessions) {
+			const state = readingDashboardState([session]); const item = list.createEl("button", { cls: "agent-dashboard-recent-item", attr: { title: readingTitle(session), "aria-label": "继续阅读：" + readingTitle(session) } }); item.type = "button";
+			setIcon(item.createSpan({ cls: "agent-dashboard-recent-icon", attr: { "aria-hidden": "true" } }), "book-open");
+			const copy = item.createSpan({ cls: "agent-dashboard-recent-copy" }); copy.createSpan({ cls: "agent-dashboard-recent-title", text: readingTitle(session) });
+			copy.createSpan({ cls: "agent-dashboard-recent-state", text: state.label });
+			setIcon(item.createSpan({ cls: "agent-dashboard-recent-arrow", attr: { "aria-hidden": "true" } }), "arrow-right");
+			item.addEventListener("click", () => { void this.plugin.activateReadingWorkspace({ sessionId: session.id }).catch(error => new Notice(String(error))); });
+		}
+		if (sessions.length > 1) {
+			const more = parent.createEl("button", { cls: "agent-dashboard-text-action agent-dashboard-recent-more", text: this.recentExpanded ? "收起其他阅读" : `其他 ${sessions.length - 1} 条阅读` }); more.type = "button";
+			more.addEventListener("click", () => { this.recentExpanded = !this.recentExpanded; parent.classList.toggle("is-expanded", this.recentExpanded); more.textContent = this.recentExpanded ? "收起其他阅读" : `其他 ${sessions.length - 1} 条阅读`; });
+		}
 	}
 
 	requestStopRun(run: TaskRun): void {
@@ -359,19 +401,25 @@ export class DashboardView extends ItemView {
 			const card = grid.createEl("article", { cls: `agent-dashboard-metric-card agent-dashboard-tone-${metric.tone}` });
 			card.createDiv({ cls: "agent-dashboard-metric-label", text: metric.label });
 			const value = card.createDiv({ cls: "agent-dashboard-metric-value" });
+			if (!/^\d+$/.test(metric.value)) value.addClass("is-empty");
 			value.createSpan({ text: metric.value });
 			if (metric.unit.length > 0) {
 				value.createEl("small", { text: metric.unit });
 			}
 			card.createEl("p", { cls: "agent-dashboard-metric-detail", text: metric.detail });
+			if (metric.label === "知识库健康" && !/^\d+$/.test(metric.value)) {
+				const check = card.createEl("button", { cls: "agent-dashboard-text-action", text: "运行体检" }); check.type = "button";
+				check.addEventListener("click", () => { const action = ACTION_BY_ID.get("vault-lint"); if (action) this.openAction(action); });
+			}
 		});
 	}
 
 	renderHeatmap(parent: HTMLElement): void {
-		const panel = this.createPanel(parent, "agent-dashboard-panel-wide agent-dashboard-heatmap-panel", "知识活动", this.currentData.activity.title, this.currentData.activity.rangeLabel);
+		const panel = this.createPanel(parent, "agent-dashboard-panel-wide agent-dashboard-heatmap-panel", "知识库概览", this.currentData.activity.title, this.currentData.activity.rangeLabel);
 		const stage = panel
-			.createDiv({ cls: "agent-dashboard-heatmap-scroll", attr: { role: "img", "aria-label": "基于本地 Markdown 修改记录的每日知识库活动热力图" } })
+			.createDiv({ cls: "agent-dashboard-heatmap-scroll", attr: { role: "img", "aria-label": "最近三个月笔记最后修改日期的分布，不代表完整活动记录" } })
 			.createDiv({ cls: "agent-dashboard-heatmap-stage" });
+		stage.style.setProperty("--dashboard-weeks", String(Math.ceil(this.currentData.activity.days.length / 7)));
 		const monthRow = stage.createDiv({ cls: "agent-dashboard-month-row", attr: { "aria-hidden": "true" } });
 		const graph = stage.createDiv({ cls: "agent-dashboard-heatmap-graph" });
 		const weekdayLabels = graph.createDiv({ cls: "agent-dashboard-weekday-labels", attr: { "aria-hidden": "true" } });
@@ -379,7 +427,7 @@ export class DashboardView extends ItemView {
 		const cells = graph.createDiv({ cls: "agent-dashboard-heatmap-cells" });
 		this.renderMonthMarkers(monthRow, this.currentData.activity.days);
 		this.currentData.activity.days.forEach((day) => {
-			const label = day.inRange ? `${day.date}: ${day.count} 个${day.track}笔记更新` : `${day.date}: 不在统计范围内`;
+			const label = day.inRange ? `${day.date}: ${day.count} 篇笔记的最后修改日期在这一天` : `${day.date}: 不在统计范围内`;
 			const cell = cells.createSpan({
 				cls: `agent-dashboard-heat-cell agent-dashboard-heat-level-${day.inRange ? day.level : 0}`,
 				attr: { "aria-label": label, title: label },
@@ -389,8 +437,7 @@ export class DashboardView extends ItemView {
 			}
 		});
 		const footer = panel.createDiv({ cls: "agent-dashboard-heatmap-footer" });
-		const tracks = footer.createDiv({ cls: "agent-dashboard-track-legend" });
-		this.currentData.activity.tracks.forEach((track) => tracks.createSpan({ cls: "agent-dashboard-track-token", text: track }));
+		footer.createEl("p", { cls: "agent-dashboard-activity-note", text: "按笔记最后修改时间统计，不代表完整活动记录或阅读时长。" });
 		const legend = footer.createDiv({ cls: "agent-dashboard-density-legend", attr: { "aria-label": "活动密度图例" } });
 		legend.createSpan({ text: "少" });
 		[0, 1, 2, 3, 4].forEach((level) => legend.createSpan({ cls: `agent-dashboard-density agent-dashboard-density-${level}` }));
@@ -398,7 +445,7 @@ export class DashboardView extends ItemView {
 	}
 
 	renderAgentRuns(parent: HTMLElement): void {
-		const panel = this.createPanel(parent, "agent-dashboard-list-panel", "运行记录", "智能体运行");
+		const panel = this.createPanel(parent, "agent-dashboard-list-panel agent-dashboard-tasks", "当前工作", "任务与结果");
 		this.renderFilterGroup(panel, "runs");
 		const list = panel.createDiv({ cls: "agent-dashboard-table-list" });
 		this.renderAgentRunsList(list);
@@ -412,14 +459,14 @@ export class DashboardView extends ItemView {
 	}
 
 	renderProcessingDepth(parent: HTMLElement): void {
-		const panel = this.createPanel(parent, "agent-dashboard-tri-panel", "处理深度", "证据深度分布");
+		const panel = this.createPanel(parent, "agent-dashboard-tri-panel", "处理深度", "论文证据深度");
 		const bar = panel.createDiv({ cls: "agent-dashboard-stacked-bar", attr: { "aria-label": "证据处理深度分布" } });
 		this.currentData.processingDepth.forEach((row) => {
 			const segment = bar.createSpan({
 				cls: `agent-dashboard-bar-segment agent-dashboard-bar-${this.formatClassToken(row.label)}`,
 				attr: { "aria-label": `${this.displayDepth(row.label)}: ${row.percent}%` },
 			});
-			segment.style.width = `${Math.max(row.percent, 2)}%`;
+			segment.style.width = `${row.percent}%`;
 		});
 		const list = panel.createDiv({ cls: "agent-dashboard-count-list" });
 		this.currentData.processingDepth.forEach((row) => {
@@ -468,6 +515,7 @@ export class DashboardView extends ItemView {
 			this.registerDomEvent(button, "click", () => {
 				if (type === "runs") {
 					this.runsFilter = key as RunsFilter;
+					this.runsExpanded = false;
 				} else {
 					this.gapsFilter = key as GapsFilter;
 				}
@@ -483,23 +531,28 @@ export class DashboardView extends ItemView {
 			parent.createEl("p", { cls: "agent-dashboard-empty-state", text: "当前筛选条件下没有运行记录。" });
 			return;
 		}
-		visibleRuns.forEach((run) => {
+		(this.runsExpanded ? visibleRuns : visibleRuns.slice(0, 5)).forEach((run) => {
 			const row = run.runId
 				? parent.createEl("button", { cls: "agent-dashboard-data-row agent-dashboard-run-row" })
 				: parent.createEl("article", { cls: "agent-dashboard-data-row" });
 			if (run.runId && row instanceof HTMLButtonElement) {
 				const runId = run.runId;
 				row.type = "button";
-				row.setAttr("title", "查看任务输出");
+				row.setAttr("title", run.detail + "\n查看任务输出");
 				this.registerDomEvent(row, "click", () => {
 					const taskRun = this.plugin.getTaskRun(runId);
 					if (taskRun) this.openTaskResult(taskRun);
 				});
 			}
-			row.createSpan({ cls: "agent-dashboard-row-type", text: `${run.agent} / ${run.time}` });
-			row.createSpan({ cls: "agent-dashboard-row-title", text: run.task });
+			const copy = row.createSpan({ cls: "agent-dashboard-run-copy" });
+			copy.createSpan({ cls: "agent-dashboard-row-title", text: run.label + " · " + run.task });
+			copy.createSpan({ cls: "agent-dashboard-row-type", text: `${run.time} · ${run.agent}` });
 			row.createSpan({ cls: `agent-dashboard-status-badge agent-dashboard-status-${run.status}`, text: this.displayStatus(run.status) });
 		});
+		if (visibleRuns.length > 5) {
+			const more = parent.createEl("button", { cls: "agent-dashboard-text-action agent-dashboard-more-runs", text: this.runsExpanded ? "收起历史记录" : `查看全部 ${visibleRuns.length} 条` }); more.type = "button";
+			more.addEventListener("click", () => { this.runsExpanded = !this.runsExpanded; this.renderAgentRunsList(parent); });
+		}
 	}
 
 	renderKnowledgeGapsList(parent: HTMLElement): void {

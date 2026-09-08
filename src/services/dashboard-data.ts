@@ -159,7 +159,7 @@ export class DashboardDataService {
 						? `上次体检 ${this.formatExportTime(lintStatus.latest?.generated_at)}：${lintSummary.errors} 个错误，${lintSummary.warnings} 个警告${lintStale ? "；此后知识库有更新" : ""}`
 						: lintStatus.error
 							? "上次体检报告无法读取"
-							: "尚无体检结果，请运行知识库体检",
+							: "检查链接、结构与来源完整性",
 				},
 				{
 					label: "文献与阅读",

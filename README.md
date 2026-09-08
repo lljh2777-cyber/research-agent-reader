@@ -8,7 +8,7 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.40.3`; the beta
+The `codex/research-learning-map` development branch is at `0.41.0`; the beta
 release link above remains the published release.
 
 ## Features
