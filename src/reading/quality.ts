@@ -13,9 +13,9 @@ export function acceptReadingCorrection(session: ReadingSession, id: string): vo
 }
 export function readingCoverage(session: ReadingSession, catalog: ReadingEvidence[]) {
 	const done = session.nodes.filter(n => n.status === "done");
-	return catalog.filter(e => e.kind === "paper").map(evidence => {
+	return catalog.filter(e => e.kind === "paper" || e.kind === "code").map(evidence => {
 		const provided = done.find(n => (evidence.asset ? n.providedImageIds : n.providedEvidenceIds)?.includes(evidence.id));
-		const legacy = done.find(n => n.evidence.some(e => e.id === evidence.id && e.kind === "paper" && (!evidence.asset || e.visualInspected)));
+		const legacy = done.find(n => n.evidence.some(e => e.id === evidence.id && e.kind === evidence.kind && (!evidence.asset || e.visualInspected)));
 		const reviewed = done.find(n => n.reviewedEvidence?.includes(evidence.id));
 		return { evidence, provided: Boolean(provided), legacy: Boolean(legacy), reviewed: Boolean(reviewed), nodeId: reviewed?.id || provided?.id || legacy?.id || "" };
 	});

@@ -4,12 +4,12 @@ import type { ReadingSession, ReadingSource } from "./types";
 export interface ReadingEntry { source?: Pick<ReadingSource, "kind" | "path">; backend?: string; sessionId?: string; }
 
 /** Dashboard reflects saved reading work, independent of CLI task status. */
-export function readingDashboardState(sessions: Iterable<ReadingSession>): { sessionId: string; title: string; label: string; running: boolean } {
-	const active = [...sessions].filter(s => !s.demo && readingCategory(s) === "reading" && !s.archived);
+export function readingDashboardState(sessions: Iterable<ReadingSession>, kind: "paper" | "code" = "paper"): { sessionId: string; title: string; label: string; running: boolean } {
+	const active = [...sessions].filter(s => !s.demo && readingCategory(s) === "reading" && !s.archived && (kind === "code" ? s.source.kind === "code" : s.source.kind !== "code"));
 	const running = (s: ReadingSession) => s.nodes.some(n => n.status === "running" || n.status === "pending");
 	active.sort((a, b) => Number(running(b)) - Number(running(a)) || (b.lastOpenedAt || b.updatedAt).localeCompare(a.lastOpenedAt || a.updatedAt));
 	const session = active[0];
-	if (!session) return { sessionId: "", title: "", label: "打开论文开始阅读", running: false };
+	if (!session) return { sessionId: "", title: "", label: kind === "code" ? "打开代码开始阅读" : "打开论文开始阅读", running: false };
 	const done = session.nodes.filter(n => !n.branchId && n.status === "done").length;
 	const failed = session.nodes.some(n => n.status === "failed" || n.status === "interrupted");
 	return { sessionId: session.id, title: readingTitle(session), running: running(session),

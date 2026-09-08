@@ -33,7 +33,7 @@ export function readingExportKey(session: ReadingSession, scope: ReadingExportSc
 }
 function exportBody(session: ReadingSession, scope: ReadingExportScope, nodeId: string, options: ReadingExportOptions): string {
 	const nodes = readingExportNodes(session, scope, nodeId);
-	const body = ["# " + safeReadingMarkdown(session.title).trim(), "", "本文记录交互学习过程，学习进度不代表正式 X-Ray 核验状态。", "",
+	const body = ["# " + safeReadingMarkdown(session.title).trim(), "", session.source.kind === "code" ? "本文记录代码交互学习过程（static-read），未运行项目，讲解不代表测试通过。" : "本文记录交互学习过程，学习进度不代表正式 X-Ray 核验状态。", "",
 		"原文位置：" + readingPathCode(session.source.path), ""];
 	for (const node of nodes) {
 		body.push("## " + safeReadingMarkdown(node.title).trim(), "");
@@ -50,7 +50,8 @@ function exportBody(session: ReadingSession, scope: ReadingExportScope, nodeId: 
 		if (node.correction) body.push("核对版本：对应原回答 " + readingPathCode(node.correction.of) + "；" + (session.nodes.some(n => n.acceptedCorrectionId === node.id) ? "用户已选为后续背景" : "尚未选为后续背景") + "。", "");
 		if (node.acceptedCorrectionId) body.push("此处保留历史回答；用户已选用后续核对节点 " + readingPathCode(node.acceptedCorrectionId) + " 作为背景，请同时查阅该节点。", "");
 		body.push(safeReadingMarkdown(node.content), "", "依据：", "");
-		for (const evidence of node.evidence) body.push("- " + readingPathCode(evidence.id) + " " + (evidence.kind === "paper" ? "本文" : "知识库补充") + "：" + readingPathCode(evidence.path)
+		for (const evidence of node.evidence) body.push("- " + readingPathCode(evidence.id) + " " + (evidence.kind === "code" ? "项目代码" : evidence.kind === "paper" ? "本文" : "知识库补充") + "：" + readingPathCode(evidence.path)
+			+ (evidence.startLine ? "，第 " + evidence.startLine + "–" + evidence.endLine + " 行，文件版本 " + readingPathCode(evidence.sourceHash || "") : "")
 			+ (evidence.page ? "，第 " + evidence.page + " 页" : "") + (evidence.start !== undefined ? "，阅读文本字符 " + evidence.start + "–" + evidence.end : "") + (evidence.visualInspected ? "，已查看图像" : "")
 			+ (evidence.role ? "；" + safeReadingMarkdown(evidence.role) : "") + (evidence.heading ? "；章节：" + safeReadingMarkdown(evidence.heading) : ""));
 		body.push("");

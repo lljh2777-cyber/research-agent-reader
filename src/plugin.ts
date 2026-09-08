@@ -396,6 +396,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(QUERY_WIKI_VIEW_TYPE, (leaf) => new QueryWikiView(leaf, this));
 		this.registerView(READING_VIEW_TYPE, (leaf) => new ReadingWorkspaceView(leaf, this));
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
+		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ source: { kind: "code", path: "" } }); } });
 		this.addCommand({ id: "open-knowledge-maintenance", name: "打开知识库维护", callback: () => this.openKnowledgeMaintenance() });
 		this.registerEvent(this.app.vault.on("modify", file => this.curationService?.noteChange(file.path)));
 		this.registerEvent(this.app.vault.on("delete", file => this.curationService?.noteChange(file.path)));
@@ -3352,14 +3353,14 @@ export default class AgentDashboardPlugin extends Plugin {
 			if (entry?.source) leaf.view.openSource(entry);
 		}
 	}
-	async runClassicReading(input: string, overrides: ExecutionOverrides, options: DashboardActionOptions): Promise<void> {
-		const action = ACTION_BY_ID.get("pdf-xray")!;
-		const execution = this.resolveCliActionExecutionConfig(action, "codex-cli", overrides);
+	async runClassicReading(input: string, overrides: ExecutionOverrides, options: DashboardActionOptions, actionId: "pdf-xray" | "code-analysis" = "pdf-xray"): Promise<void> {
+		const action = ACTION_BY_ID.get(actionId)!;
+		const execution = this.resolveCliActionExecutionConfig(action, actionId === "code-analysis" && (overrides.backend === "claude-code" || overrides.backend === "opencode") ? overrides.backend : "codex-cli", overrides);
 		const run = await this.startTaskRun(action, input.slice(0, 160), execution);
 		try {
 			const result = await this.runVaultAction(run.id, action, serializeActionRequest(action, input, options), execution);
 			await this.finishTaskRun(run.id, { status: result.exitCode === 0 ? "done" : "failed", output: result.stdout, error: result.stderr, exitCode: result.exitCode });
-			new Notice("一次性深读" + (result.exitCode === 0 ? "已完成，可在控制台查看" : "失败，请查看控制台任务"));
+			new Notice(action.label + (result.exitCode === 0 ? "已完成，可在控制台查看" : "失败，请查看控制台任务"));
 		} catch (error) { await this.finishTaskRun(run.id, { status: "failed", error: String(error) }); throw error; }
 	}
 	async activateCodePracticeView(): Promise<void> {

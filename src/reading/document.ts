@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { MineruPackageLoader } from "../mineru/package-loader";
 import { MINERU_RESOURCE_LIMITS } from "../mineru/resource-limits";
 import { tokenizeForLexicalRetrieval } from "../query/lexical-retrieval";
+import { openCodeProject } from "../code-reading/source";
 import type { ReadingEvidence, ReadingImage, ReadingSource } from "./types";
 
 interface PdfPage {
@@ -83,6 +84,7 @@ export function selectReadingEvidence(document: ReadingDocument, query: string, 
 export class ReadingDocumentLoader {
 	constructor(private readonly app: App, private readonly vaultRoot: string) {}
 	async open(kind: ReadingSource["kind"], rawPath: string): Promise<ReadingDocument> {
+		if (kind === "code") { if (!rawPath.trim()) throw new Error("请输入 Python/R 文件或项目目录"); return openCodeProject(path.isAbsolute(rawPath) ? rawPath : path.resolve(this.vaultRoot, rawPath)); }
 		return kind === "pdf" ? this.pdf(rawPath) : this.article(rawPath.replace(/\\/g, "/"));
 	}
 	private async pdf(rawPath: string): Promise<ReadingDocument> {

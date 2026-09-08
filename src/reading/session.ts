@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readingCategory } from "./catalog";
 import { validateModulePlan } from "./planning";
 import { answerHash, effectiveReadingContent } from "./quality";
+import { codeFingerprint, validateCodeSnapshot } from "../code-reading/source";
 import type { ReadingBranch, ReadingNode, ReadingQuote, ReadingSession, ReadingSource } from "./types";
 
 export const newReadingId = (): string => "r-" + randomUUID();
@@ -64,15 +65,21 @@ export function addReadingNode(session: ReadingSession, branchId: string | null,
 export function validateReadingSession(value: unknown): ReadingSession {
 	const session = value as ReadingSession;
 	if (!session || session.version !== 1 || !/^r-[a-f0-9-]{36}$/.test(session.id)
-		|| !["pdf", "article"].includes(session.source?.kind) || typeof session.source.path !== "string"
+		|| !["pdf", "article", "code"].includes(session.source?.kind) || typeof session.source.path !== "string"
 		|| !/^[a-f0-9]{64}$/.test(session.source.fingerprint) || !Array.isArray(session.nodes)
 		|| !Array.isArray(session.branches) || !Array.isArray(session.mainIds) || !session.ui) throw new Error("阅读会话格式无效");
 	const nodes = new Map<string, ReadingNode>();
+	if (session.source.kind === "code" && codeFingerprint(validateCodeSnapshot(session.source.code)) !== session.source.fingerprint) throw new Error("代码来源指纹与快照不一致");
 	for (const node of session.nodes) {
 		if (!node.id || nodes.has(node.id) || typeof node.content !== "string" || typeof node.question !== "string"
 			|| !["pending", "running", "done", "failed", "interrupted"].includes(node.status)
 			|| !Array.isArray(node.evidence) || (node.parentId && !nodes.has(node.parentId))) throw new Error("阅读节点关系无效");
 		nodes.set(node.id, node);
+		for (const e of node.evidence.filter(e => e.kind === "code")) {
+			const file = session.source.code?.files.find(f => f.path === e.path);
+			if (session.source.kind !== "code" || !file || e.sourceHash !== file.hash || !Number.isInteger(e.startLine) || !Number.isInteger(e.endLine)
+				|| e.startLine! < 1 || e.endLine! < e.startLine! || e.endLine! > file.lines || e.language !== file.language) throw new Error("代码引用与来源快照不一致");
+		}
 	}
 	const attached = new Set<string>();
 	const checkChain = (ids: string[], branchId: string | null, parent: string | null): void => {
@@ -109,7 +116,7 @@ export function validateReadingSession(value: unknown): ReadingSession {
 		if (node.learningState !== undefined && !["unmarked", "understood", "revisit", "question"].includes(node.learningState)) throw new Error("学习标记无效");
 		if (node.reviewedEvidence !== undefined && (!Array.isArray(node.reviewedEvidence) || node.reviewedEvidence.some(id => !node.evidence.some(e => e.id === id)))) throw new Error("原文核对标记无效");
 		if (typeof node.title !== "string" || typeof node.error !== "string" || node.evidence.some((item) => !item || typeof item.id !== "string"
-			|| typeof item.text !== "string" || typeof item.path !== "string" || typeof item.label !== "string" || !["paper", "vault"].includes(item.kind))) throw new Error("阅读证据格式无效");
+			|| typeof item.text !== "string" || typeof item.path !== "string" || typeof item.label !== "string" || !["paper", "vault", "code"].includes(item.kind))) throw new Error("阅读证据格式无效");
 	}
 	for (const branch of session.branches) {
 		if (branch.parentContext !== undefined && typeof branch.parentContext !== "string") throw new Error("支线起点背景无效");

@@ -30,7 +30,7 @@ export class ReadingExportModal extends Modal {
 		if (this.curate && !this.getSession().demo) { const organize = controls.createEl("button", { text: "整理到已有笔记" }); organize.onclick = () => { this.close(); this.curate?.(); }; }
 		this.suggestions = side.createDiv("reading-export-associations"); this.history = side.createDiv("reading-export-history");
 		const paper = grid.createDiv("reading-export-paper"); paper.createEl("small", { text: "学习笔记预览" }); this.preview = paper.createDiv("markdown-rendered reading-export-preview");
-		const footer = this.contentEl.createDiv("reading-export-footer"); footer.createEl("span", { text: "相似内容仅作关联候选；正式论文笔记的深读状态独立保留。" });
+		const footer = this.contentEl.createDiv("reading-export-footer"); footer.createEl("span", { text: this.getSession().source.kind === "code" ? "保存独立学习记录，已有项目页和脚本页保持独立。静态阅读未执行代码。" : "相似内容仅作关联候选；正式论文笔记的深读状态独立保留。" });
 		this.submit = footer.createEl("button", { text: "保存学习笔记", cls: "mod-cta" }); this.submit.onclick = () => void this.save();
 		this.renderCandidates(); void this.refresh();
 	}

@@ -14,6 +14,7 @@ import { safeReadingMarkdown } from "../reading/export";
 import { ReadingExportModal } from "./reading-export";
 import { ReadingModeMotion } from "./reading-mode-motion";
 import { ReadingEvidencePanel } from "./reading-evidence-panel";
+import { CodeSourceModal, renderCodeEvidence } from "./code-evidence";
 import { LEARNING_LABELS, markReading, visitReadingEvidence } from "../reading/progress";
 import { TEACHING_STYLES } from "../reading/teaching";
 import type { ReadingTeachingStyle } from "../reading/types";
@@ -58,7 +59,7 @@ export class ReadingWorkspaceView extends ItemView {
 	private modals = new Set<Modal>();
 	constructor(leaf: WorkspaceLeaf, private readonly plugin: AgentDashboardPlugin) { super(leaf); }
 	getViewType(): string { return READING_VIEW_TYPE; }
-	getDisplayText(): string { return "PDF 交互深读"; }
+	getDisplayText(): string { return this.session?.source.kind === "code" ? "代码交互阅读" : "PDF 交互深读"; }
 	getIcon(): string { return "workflow"; }
 	getState(): Record<string, unknown> { return { sessionId: this.sessionId }; }
 	async setState(state: unknown): Promise<void> {
@@ -123,7 +124,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const identity = element(header, "div", "reading-identity"); const mark = element(identity, "div", "reading-brand-mark"); icon(mark, "book-open");
 		const names = element(identity, "div", "reading-identity-text");
 		const eyebrow = element(names, "div", "reading-eyebrow"); element(eyebrow, "span", "", "交互深读");
-		if (session) element(eyebrow, "span", "reading-source-badge", session.demo ? "交互演示" : session.source.kind === "pdf" ? "PDF 原文" : "MinerU 原文");
+		if (session) element(eyebrow, "span", "reading-source-badge", session.demo ? "交互演示" : session.source.kind === "code" ? "代码 · 静态阅读" : session.source.kind === "pdf" ? "PDF 原文" : "MinerU 原文");
 		const select = button(names, session ? readingTitle(session) : "选择或管理阅读会话", () => this.openSessionLibrary(), "选择阅读会话"); select.className = "reading-session-select";
 		icon(names, "chevron-down").classList.add("reading-session-chevron");
 		const actions = element(header, "div", "reading-header-actions");
@@ -134,8 +135,9 @@ export class ReadingWorkspaceView extends ItemView {
 				const control = actionButton(modes, name, label, () => this.updateUI((ui) => { ui.mode = mode; })); control.dataset.readingMode = mode; control.setAttribute("aria-pressed", String(session.ui.mode === mode));
 			}
 			actionButton(actions, "download", "导出学习笔记", () => this.openExport(), true);
-			if (!session.demo) actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, this.session!.ui.selectedId), true);
-			if (!session.demo) actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, this.session!.ui.selectedId), true);
+			if (session.source.kind === "code") actionButton(actions, "code-xml", "浏览源码", () => { const modal = new CodeSourceModal(this.app, this.service, this.session!); this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open(); }, true);
+			if (!session.demo && session.source.kind !== "code") actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, this.session!.ui.selectedId), true);
+			if (!session.demo && session.source.kind !== "code") actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, this.session!.ui.selectedId), true);
 		}
 		const create = actionButton(actions, "plus", "新建阅读", () => this.openSource()); create.classList.add("reading-primary");
 		const more = actionButton(actions, "ellipsis", "更多阅读选项", () => {
@@ -148,7 +150,8 @@ export class ReadingWorkspaceView extends ItemView {
 			if (session) menu.addItem(item => item.setTitle("阅读用量").setIcon("gauge").onClick(() => { const modal = this.modal("本会话模型用量"); element(modal.contentEl, "pre", "reading-usage-summary", readingUsageSummary(this.session!)); modal.open(); }));
 			menu.addItem(item => item.setTitle("知识库维护").setIcon("notebook-pen").onClick(() => this.plugin.openKnowledgeMaintenance()));
 			menu.addItem((item) => item.setTitle("交互演示").setIcon("play").onClick(() => this.handle(this.service.demo().then((id) => this.selectSession(id)))));
-			menu.addItem((item) => item.setTitle("一次性深读").setIcon("file-text").onClick(() => new ActionInputModal(this.app, this.plugin, ACTION_BY_ID.get("pdf-xray")!, ({ input, overrides, options }) => this.handle(this.plugin.runClassicReading(input, overrides, options))).open()));
+			const classic = session?.source.kind === "code" ? "code-analysis" : "pdf-xray";
+			menu.addItem((item) => item.setTitle(classic === "code-analysis" ? "一次性代码笔记（Toolkit）" : "一次性深读").setIcon("file-text").onClick(() => new ActionInputModal(this.app, this.plugin, ACTION_BY_ID.get(classic)!, ({ input, overrides, options }) => this.handle(this.plugin.runClassicReading(input, overrides, options, classic))).open()));
 			const box = more.getBoundingClientRect(); menu.showAtPosition({ x: box.right, y: box.bottom });
 		}, true); more.setAttribute("aria-haspopup", "menu");
 	}
@@ -158,7 +161,7 @@ export class ReadingWorkspaceView extends ItemView {
 		element(empty, "p", "", "让 AI 逐步讲解论文，在导图中追问、回看依据，并保存你的阅读过程。");
 		const actions = element(empty, "div", "reading-empty-actions"); actionButton(actions, "plus", "打开一篇论文", () => this.openSource()).classList.add("reading-primary");
 		actionButton(actions, "play", "先体验交互演示", () => this.handle(this.service.demo().then((id) => this.selectSession(id))));
-		element(empty, "small", "", "支持原始 PDF 与已验证的 MinerU article.md");
+			element(empty, "small", "", "支持 PDF、已验证的 MinerU article.md 和 Python/R 代码");
 	}
 	private render(force = false): void {
 		const session = this.session;
@@ -586,7 +589,8 @@ export class ReadingWorkspaceView extends ItemView {
 		const targetLabel = quoted ? "新建子支线 · 引用：" + quoted.text.slice(0, 80) : branchId ? "继续当前支线 · 从最后一轮续问" : "新建支线 · " + (target ? "主线 " + String(session.mainIds.indexOf(target) + 1).padStart(2, "0") + "：" + readingNode(session, target).title : "请先开始主线");
 		const context = element(box, "div", "reading-composer-context"); icon(context, quoted ? "quote" : "corner-down-right"); element(context, "small", "", targetLabel).title = targetLabel;
 		const webLabel = element(context, "label", "reading-web-option"); const web = element(webLabel, "input"); web.type = "checkbox";
-		web.checked = session.backend !== "codex-cli" && session.ui.webDrafts?.[key] === true; web.disabled = session.backend === "codex-cli" || session.demo === true;
+		web.checked = session.source.kind !== "code" && session.backend !== "codex-cli" && session.ui.webDrafts?.[key] === true; web.disabled = session.source.kind === "code" || session.backend === "codex-cli" || session.demo === true;
+		if (session.source.kind === "code") webLabel.hidden = true;
 		element(webLabel, "span", "", "联网补充"); webLabel.title = web.disabled ? "联网支线需选择 Direct API 阅读模型" : "仅本次追问使用供应商联网配置；先读取本文，再补充网页";
 		web.onchange = () => this.updateUI(ui => { (ui.webDrafts ||= {})[key] = web.checked; });
 		if (quoted) actionButton(context, "x", "取消引用", () => { this.quote = undefined; this.updateUI((ui) => { ui.pendingQuote = undefined; }); this.render(true); }, true);
@@ -663,14 +667,14 @@ export class ReadingWorkspaceView extends ItemView {
 			if (!sessions.length) element(list, "p", "reading-library-empty", query ? "没有找到匹配的会话" : "这里还没有会话");
 			for (const group of groups.values()) {
 				const section = element(list, "section", "reading-library-group");
-				if (group.length > 1) element(section, "p", "reading-library-group-label", (group[0].source.kind === "pdf" ? "PDF" : "MinerU") + " · 同一来源的 " + group.length + " 个会话");
+				if (group.length > 1) element(section, "p", "reading-library-group-label", (group[0].source.kind === "code" ? "代码" : group[0].source.kind === "pdf" ? "PDF" : "MinerU") + " · 同一来源的 " + group.length + " 个会话");
 				for (const session of group) {
 					const row = element(section, "div", "reading-library-row" + (session.id === this.sessionId ? " is-current" : "")); row.dataset.sessionId = session.id;
 					const open = button(row, "", () => { modal.close(); this.selectSession(session.id); }, "打开会话：" + readingTitle(session)); open.className = "reading-library-open";
 					element(open, "strong", "", (session.pinned ? "置顶 · " : "") + readingTitle(session));
 					const completed = session.mainIds.filter((id) => readingNode(session, id).status === "done").length;
 					const timestamp = session.lastOpenedAt || session.updatedAt; const date = Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toLocaleString() : "时间未记录";
-					element(open, "small", "", (session.source.kind === "pdf" ? "PDF" : "MinerU") + " · " + completed + " 个主线单元 · " + date);
+					element(open, "small", "", (session.source.kind === "code" ? "代码" : session.source.kind === "pdf" ? "PDF" : "MinerU") + " · " + completed + " 个主线单元 · " + date);
 					element(open, "small", "reading-library-path", session.source.path).title = session.source.path;
 					const actions = element(row, "div", "reading-library-actions");
 					actionButton(actions, session.pinned ? "pin-off" : "pin", session.pinned ? "取消置顶" : "置顶", () => this.handle(this.service.repository.transact(session.id, (s) => { s.pinned = !s.pinned; })), true);
@@ -690,36 +694,41 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	openSource(entry?: import("../reading/entry").ReadingEntry): void {
 		const modal = this.modal("开始交互阅读");
-		element(modal.contentEl, "p", "reading-modal-intro", "选择一篇论文，建立可以随时继续的阅读会话。");
-		const kind = element(element(modal.contentEl, "label", "reading-field", "原文类型"), "select"); [["pdf", "原始 PDF"], ["article", "已验证 article.md"]].forEach(([value, label]) => { element(kind, "option", "", label).value = value; });
+		element(modal.contentEl, "p", "reading-modal-intro", "选择论文或代码，建立可以随时继续的阅读会话。");
+		const kind = element(element(modal.contentEl, "label", "reading-field", "原文类型"), "select"); [["pdf", "原始 PDF"], ["article", "已验证 article.md"], ["code", "Python/R 文件或项目目录"]].forEach(([value, label]) => { element(kind, "option", "", label).value = value; });
 		const path = element(element(modal.contentEl, "label", "reading-field", "原文位置"), "input"); path.placeholder = "PDF 完整路径，或 papers/<citekey>/article.md";
 		const backend = element(element(modal.contentEl, "label", "reading-field", "讲解后端"), "select"); element(backend, "option", "", "Codex CLI").value = "codex-cli";
 		this.plugin.getVerifiedProviderProfiles().forEach((profile) => { element(backend, "option", "", profile.name + " · " + profile.model).value = profile.id; });
 		const model = element(element(modal.contentEl, "label", "reading-field", "Codex 模型（可选）"), "input"); model.placeholder = "留空使用配置中的模型";
 		backend.onchange = () => { model.parentElement!.hidden = backend.value !== "codex-cli"; };
 		if (entry?.source) { kind.value = entry.source.kind; path.value = entry.source.path; }
+		else if (this.session?.source.kind === "code") kind.value = "code";
+		kind.onchange = () => { path.placeholder = kind.value === "code" ? "Python/R 文件或项目目录的完整路径" : "PDF 完整路径，或 papers/<citekey>/article.md"; }; kind.onchange(new Event("change"));
 		if (entry?.backend && [...backend.options].some(o => o.value === entry.backend)) backend.value = entry.backend;
 		model.parentElement!.hidden = backend.value !== "codex-cli";
 		const startNew = element(modal.contentEl, "label", "reading-new-session-option"); const forceNew = element(startNew, "input"); forceNew.type = "checkbox"; element(startNew, "span", "", "为同一原文重新建立会话");
 		element(modal.contentEl, "p", "reading-modal-intro", "默认继续相同原文的已有会话，并沿用该会话的模型。原文变化时会创建新会话。");
-		element(modal.contentEl, "p", "reading-modal-intro", "所选内容和相关图像将交给所选模型分析。阅读过程自动保存。");
-		const submit = button(modal.contentEl, "打开并继续阅读", () => {
+		element(modal.contentEl, "p", "reading-modal-intro", "开始讲解会将所选内容交给模型；代码只做静态阅读，不运行程序。也可先打开来源预览，不调用模型。");
+		const open = (generate: boolean) => {
 			submit.disabled = true;
-			this.handle(this.service.open(kind.value as "pdf" | "article", path.value.trim().replace(/^"|"$/g, ""), backend.value, model.value.trim(), forceNew.checked)
-				.then(({ id, created }) => { modal.close(); this.selectSession(id); if (created) return this.service.advance(id); }).finally(() => { submit.disabled = false; }));
-		}); submit.classList.add("mod-cta"); modal.open();
+			preview.disabled = true;
+			this.handle(this.service.open(kind.value as ReadingSession["source"]["kind"], path.value.trim().replace(/^"|"$/g, ""), backend.value, model.value.trim(), forceNew.checked)
+				.then(({ id }) => { modal.close(); this.selectSession(id); if (generate && !this.service.repository.get(id).mainIds.length) return this.service.advance(id); }).finally(() => { submit.disabled = false; preview.disabled = false; }));
+		};
+		const submit = button(modal.contentEl, "打开并继续阅读", () => open(true)); const preview = button(modal.contentEl, "仅打开来源，不调用模型", () => open(false)); submit.classList.add("mod-cta"); modal.open();
 	}
 	private showEvidence(nodeId: string, evidenceId: string): void {
 		const sessionId = this.sessionId;
 		const pin = () => this.handle(this.service.repository.transact(sessionId, s => visitReadingEvidence(s, nodeId, evidenceId)));
 		if (this.session?.ui.evidenceView) { pin(); return; }
 		const item = readingNode(this.session!, nodeId).evidence.find((evidence) => evidence.id === evidenceId); if (!item) return;
-		const modal = this.modal(item.label); element(modal.contentEl, "p", "reading-evidence-location", item.path + (item.page ? " · 第 " + item.page + " 页" : ""));
+		const modal = this.modal(item.label); element(modal.contentEl, "p", "reading-evidence-location", item.path + (item.page ? " · 第 " + item.page + " 页" : item.startLine ? " · 第 " + item.startLine + "–" + item.endLine + " 行" : ""));
 		button(modal.contentEl, "固定原文对照", () => { modal.close(); pin(); });
 		if (item.heading || item.role) element(modal.contentEl, "p", "reading-evidence-location", [item.role, item.heading].filter(Boolean).join(" · "));
 		if (item.origins?.length) element(modal.contentEl, "p", "reading-evidence-location", "原始来源：" + item.origins.join("、"));
-		if (item.start !== undefined) element(modal.contentEl, "p", "", "阅读文本字符位置：" + item.start + "–" + item.end + (item.page ? "" : "；页码未唯一匹配，以本段原文为准"));
-		element(modal.contentEl, "pre", "reading-evidence-text", item.text);
+		if (item.start !== undefined && item.kind !== "code") element(modal.contentEl, "p", "", "阅读文本字符位置：" + item.start + "–" + item.end + (item.page ? "" : "；页码未唯一匹配，以本段原文为准"));
+		if (item.kind === "code") { renderCodeEvidence(modal.contentEl, item); element(modal.contentEl, "small", "", "回答生成时保存的代码 · 文件版本 " + item.sourceHash?.slice(0, 12)); }
+		else element(modal.contentEl, "pre", "reading-evidence-text", item.text);
 		if (item.kind === "vault") button(modal.contentEl, "打开来源笔记", () => { this.plugin.openVaultFile(item.path); modal.close(); });
 		if (item.kind === "paper" && this.session!.source.kind === "article") button(modal.contentEl, "在阅读器打开原文", () => this.handle(this.service.document(this.sessionId).then(async (source) => { await source.verify(); await this.plugin.openReadingEvidence(item.path, item.page); modal.close(); })));
 		if (item.kind === "paper") this.handle(this.service.document(this.sessionId).then(async (document) => {
@@ -779,7 +788,7 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	private openExport(): void {
 		const sessionId = this.sessionId; const nodeId = this.session!.ui.selectedId;
-		const modal = new ReadingExportModal(this.app, () => this.service.repository.get(sessionId), nodeId, (query, options) => this.plugin.searchKnowledge(query, options), path => this.plugin.openVaultFile(path), () => this.plugin.openKnowledgeCuration(sessionId, nodeId));
+		const modal = new ReadingExportModal(this.app, () => this.service.repository.get(sessionId), nodeId, (query, options) => this.plugin.searchKnowledge(query, options), path => this.plugin.openVaultFile(path), this.session!.source.kind === "code" ? undefined : () => this.plugin.openKnowledgeCuration(sessionId, nodeId));
 		this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open();
 	}
 	revealLearningNode(nodeId: string): void { if (this.session?.nodes.some(node => node.id === nodeId)) this.selectNode(nodeId, true); }

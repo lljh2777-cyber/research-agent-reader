@@ -359,7 +359,7 @@ export class DashboardView extends ItemView {
 	}
 	private refreshRecentReading(parent: HTMLElement): void {
 		const sessions = this.plugin.getReadingWorkspace ? recentReading(this.plugin.getReadingWorkspace().repository.sessions.values()).slice(0, 3) : [];
-		const signature = JSON.stringify(sessions.map(s => [s.id, readingTitle(s), readingDashboardState([s]).label]));
+		const signature = JSON.stringify(sessions.map(s => [s.id, readingTitle(s), readingDashboardState([s], s.source.kind === "code" ? "code" : "paper").label]));
 		if (signature === this.recentSignature) return; this.recentSignature = signature;
 		parent.empty();
 		parent.classList.toggle("is-expanded", this.recentExpanded);
@@ -367,8 +367,8 @@ export class DashboardView extends ItemView {
 		if (!sessions.length) { parent.createEl("p", { cls: "agent-dashboard-empty-state", text: "打开一篇论文后，可以从这里继续阅读。" }); return; }
 		const list = parent.createDiv({ cls: "agent-dashboard-recent-list" });
 		for (const session of sessions) {
-			const state = readingDashboardState([session]); const item = list.createEl("button", { cls: "agent-dashboard-recent-item", attr: { title: readingTitle(session), "aria-label": "继续阅读：" + readingTitle(session) } }); item.type = "button";
-			setIcon(item.createSpan({ cls: "agent-dashboard-recent-icon", attr: { "aria-hidden": "true" } }), "book-open");
+			const state = readingDashboardState([session], session.source.kind === "code" ? "code" : "paper"); const item = list.createEl("button", { cls: "agent-dashboard-recent-item", attr: { title: readingTitle(session), "aria-label": "继续阅读：" + readingTitle(session) } }); item.type = "button";
+			setIcon(item.createSpan({ cls: "agent-dashboard-recent-icon", attr: { "aria-hidden": "true" } }), session.source.kind === "code" ? "code-xml" : "book-open");
 			const copy = item.createSpan({ cls: "agent-dashboard-recent-copy" }); copy.createSpan({ cls: "agent-dashboard-recent-title", text: readingTitle(session) });
 			copy.createSpan({ cls: "agent-dashboard-recent-state", text: state.label });
 			setIcon(item.createSpan({ cls: "agent-dashboard-recent-arrow", attr: { "aria-hidden": "true" } }), "arrow-right");
@@ -661,9 +661,10 @@ export class DashboardView extends ItemView {
 			void this.plugin.activateQueryWikiView(options.initialInput || "");
 			return;
 		}
-		if (action.id === "pdf-xray") {
-			const state = this.plugin.getReadingWorkspace && readingDashboardState(this.plugin.getReadingWorkspace().repository.sessions.values());
-			void this.plugin.activateReadingWorkspace(state?.sessionId ? { sessionId: state.sessionId } : undefined);
+		if (action.id === "pdf-xray" || action.id === "code-analysis") {
+			const code = action.id === "code-analysis";
+			const state = this.plugin.getReadingWorkspace && readingDashboardState(this.plugin.getReadingWorkspace().repository.sessions.values(), code ? "code" : "paper");
+			void this.plugin.activateReadingWorkspace(state?.sessionId ? { sessionId: state.sessionId } : { source: { kind: code ? "code" : "pdf", path: "" } });
 			return;
 		}
 		if (this.plugin.isActionRunning(action.id)) {

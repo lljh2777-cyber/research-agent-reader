@@ -8,7 +8,7 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.41.2`; the beta
+The `codex/research-learning-map` development branch is at `0.42.0`; the beta
 release link above remains the published release.
 
 ## Features
@@ -246,5 +246,5 @@ Markdown 包，并由轻量 Agent 读取已验证的 `article.md` 生成摘要�
 提取到 DOI 时先精确核验，只有本地线索不足时才使用 Crossref 模糊搜索。写入前，用户必须
 对照同一授权 PDF 快照最终渲染的标题页明确确认 Crossref 记录。入库结果可预览并完成本地索引登记；
 工具包绑定当前库时可同步 papers.csv、references.bib。PDF 交互深读支持独立 Direct API 与 Codex CLI；
-一次性深读、代码分析和综合分析等高级工作流继续使用 Toolkit。知识库体检内置可用，OKF 导出仍是 Toolkit 脚本能力。插件不会自行
+代码分析现已支持 Python/R 文件与小型项目的交互阅读，提供主线、支线、源码行号与独立学习笔记，详见 [代码阅读](docs/code-reading.md)。一次性深读、一次性代码笔记和综合分析等高级工作流继续使用 Toolkit。知识库体检内置可用，OKF 导出仍是 Toolkit 脚本能力。插件不会自行
 安装外部程序，也不会包含客户端遥测。

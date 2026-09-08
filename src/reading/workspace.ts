@@ -17,7 +17,7 @@ export class ReadingWorkspaceService {
 	stopHandler?: (sessionId: string, nodeId: string) => void;
 	disposeHandler?: () => void;
 	constructor(app: App, vaultRoot: string, pluginDirectory: string) {
-		this.repository = new ReadingRepository(new RoutedReadingStorage(new FileReadingStorage(pluginDirectory), new FileReadingStorage(pluginDirectory, "reading-test-sessions")));
+		this.repository = new ReadingRepository(new RoutedReadingStorage(new FileReadingStorage(pluginDirectory), new FileReadingStorage(pluginDirectory, "reading-test-sessions"), new FileReadingStorage(pluginDirectory, "code-reading-sessions")));
 		this.loader = new ReadingDocumentLoader(app, vaultRoot);
 	}
 	async ready(): Promise<void> { if (!this.initialization) this.initialization = this.repository.load(); return this.initialization; }
@@ -57,11 +57,12 @@ export class ReadingWorkspaceService {
 			await document.verify();
 			await this.repository.transact(sessionId, session => {
 				if (session.source.path !== original.source.path || session.source.fingerprint !== original.source.fingerprint || session.nodes.some(n => n.status === "running" || n.status === "pending")) throw new Error("来源已变化或正在生成，请稍后重新定位");
-				for (const node of session.nodes) for (const e of node.evidence.filter(e => e.kind === "paper")) {
+				for (const node of session.nodes) for (const e of node.evidence.filter(e => e.kind === "paper" || e.kind === "code")) {
 					const match = document.evidence.find(item => item.id === e.id); if (!match) throw new Error("新位置无法匹配既有证据"); e.path = match.path; e.asset = match.asset;
 				}
 				(session.sourceRelocations ||= []).push({ from: session.source.path, to: document.source.path, date: new Date().toISOString(), fingerprint: original.source.fingerprint });
 				session.source.path = document.source.path;
+				if (document.source.code) session.source.code = document.source.code;
 			});
 		} catch (error) { await document.destroy(); throw error; }
 		const previous = this.documents.get(sessionId); this.documents.set(sessionId, document); await previous?.destroy();

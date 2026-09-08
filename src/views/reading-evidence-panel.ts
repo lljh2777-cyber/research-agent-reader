@@ -4,6 +4,7 @@ import type AgentDashboardPlugin from "../plugin";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 import type { ReadingSession } from "../reading/types";
 import { contentHash } from "../retrieval/chunks";
+import { CodeSourceModal, renderCodeEvidence } from "./code-evidence";
 
 /** One non-modal, resizable source window. Navigating answers does not replace it. */
 export class ReadingEvidencePanel {
@@ -30,14 +31,14 @@ export class ReadingEvidencePanel {
 		act(header, "下一处", () => edit(s => { s.ui.evidenceView!.cursor++; })).disabled = pane.cursor === pane.history.length - 1;
 		act(header, "关闭对照", () => edit(s => { s.ui.evidenceView = undefined; }));
 		const body = panel.createDiv("reading-evidence-panel-body"); body.createEl("h3", { text: evidence.label });
-		body.createEl("p", { cls: "reading-evidence-location", text: evidence.path + (evidence.page ? " · 第 " + evidence.page + " 页" : " · 页码未唯一定位") });
-		body.createEl("p", { cls: "reading-evidence-location", text: [evidence.kind === "paper" ? "本文原文" : "知识库补充", evidence.role, evidence.heading, evidence.visualInspected ? "图像已提供给模型" : "本轮引用文本"].filter(Boolean).join(" · ") });
-		body.createEl("pre", { cls: "reading-evidence-text", text: evidence.text });
+		body.createEl("p", { cls: "reading-evidence-location", text: evidence.path + (evidence.startLine ? " · 第 " + evidence.startLine + "–" + evidence.endLine + " 行" : evidence.page ? " · 第 " + evidence.page + " 页" : " · 页码未唯一定位") });
+		body.createEl("p", { cls: "reading-evidence-location", text: [evidence.kind === "code" ? "项目代码 · 静态阅读" : evidence.kind === "paper" ? "本文原文" : "知识库补充", evidence.role, evidence.heading, evidence.visualInspected ? "图像已提供给模型" : "本轮引用文本"].filter(Boolean).join(" · ") });
+		if (evidence.kind === "code") renderCodeEvidence(body, evidence); else body.createEl("pre", { cls: "reading-evidence-text", text: evidence.text });
 		const status = body.createEl("p", { cls: "reading-evidence-location", text: "正在核对来源完整性…", attr: { role: "status" } });
 		const footer = panel.createDiv("reading-evidence-panel-footer"); const label = footer.createEl("label"); const checked = label.createEl("input", { type: "checkbox" }); checked.disabled = true;
 		checked.checked = !!node.reviewedEvidence?.includes(evidence.id); label.appendText("我已对照此处原文");
 		const verify = async () => {
-			if (evidence.kind === "paper") { const source = await this.service.document(session.id); await source.verify(); return source; }
+			if (evidence.kind === "paper" || evidence.kind === "code") { const source = await this.service.document(session.id); await source.verify(); return source; }
 			const file = this.app.vault.getFileByPath(evidence.path);
 			if (!file || !evidence.sourceHash || contentHash(await this.app.vault.cachedRead(file)) !== evidence.sourceHash) throw new Error("来源缺失、已变化或旧引用未记录指纹；保留历史片段，暂不能标记核对");
 			return undefined;
@@ -49,6 +50,7 @@ export class ReadingEvidencePanel {
 		const open = act(footer, "打开来源", () => { void verify().then(() => {
 			if (controller.signal.aborted) return;
 			if (evidence.kind === "vault") return this.plugin.openVaultFile(evidence.path);
+			if (evidence.kind === "code") { new CodeSourceModal(this.app, this.service, session).open(); return; }
 			if (session.source.kind === "article") return this.plugin.openReadingEvidence(evidence.path, evidence.page);
 			return (require("electron") as { shell: { openPath(path: string): Promise<string> } }).shell.openPath(session.source.path).then(error => { if (error) throw new Error(error); });
 		}).catch(error => { status.textContent = String(error); }); }); open.disabled = true;

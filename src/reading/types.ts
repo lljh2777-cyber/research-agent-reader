@@ -13,14 +13,18 @@ export interface ReadingEvidenceView {
 	x: number; y: number; width: number; height: number;
 }
 export interface ReadingSource {
-	kind: "pdf" | "article";
+	kind: "pdf" | "article" | "code";
+	code?: import("../code-reading/source").CodeSnapshot;
 	path: string;
 	fingerprint: string;
 	title: string;
 }
 export interface ReadingEvidence {
 	id: string;
-	kind: "paper" | "vault";
+	kind: "paper" | "vault" | "code";
+	startLine?: number;
+	endLine?: number;
+	language?: import("../code-reading/source").CodeLanguage;
 	path: string;
 	label: string;
 	text: string;

@@ -21,7 +21,7 @@ export async function readingAssociations(app: App, session: ReadingSession, sco
 	// Keep the query topical: long generated answers and prompt boilerplate can dominate reranking.
 	const query = session.title.slice(0, 300) + "\n" + sample.map(node => node.title.trim() || node.question.slice(0, 80)).join("；").slice(0, 600);
 	// Association is an explicit cross-note operation, rather than a paper-specific factual answer.
-	const result = await search(query, { signal, identityQuery: "跨论文关联笔记", limit: 6 }); signal.throwIfAborted();
+	const result = await search(query, { signal, identityQuery: session.source.kind === "code" ? "跨笔记关联代码项目、脚本与方法" : "跨论文关联笔记", limit: 6 }); signal.throwIfAborted();
 	for (const hit of result.hits) {
 		if (!safeRelatedPath(hit.path) || candidates.has(hit.path)) continue;
 		candidates.set(hit.path, { path: hit.path, title: hit.title, hash: hit.hash, reason: "主题可能相关", heading: hit.heading, excerpt: hit.text, role: ROLE_LABELS[hit.role], origins: hit.origins });
