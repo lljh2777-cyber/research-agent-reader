@@ -3,7 +3,7 @@ module.exports = async function readingWindowScenario(app) {
 	const check = (ok, label) => { if (!ok) throw new Error(label); };
 	const pause = () => new Promise((resolve) => require("node:timers").setTimeout(resolve, 180));
 	const plugin = app.plugins.plugins["research-agent-reader"]; const service = plugin.getReadingWorkspace();
-	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view;
+	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper").view;
 	const id = await service.demo("test"); await view.setState({ sessionId: id });
 	await service.repository.transact(id, (s) => { s.title = "小窗验收 · 缩放与正文（示例）"; s.ui.mode = "map"; });
 	view.selectNode(service.repository.get(id).mainIds[0]); await pause();

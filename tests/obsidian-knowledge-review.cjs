@@ -7,7 +7,7 @@ module.exports = async function knowledgeReviewScenario(app, sessionId) {
 	const plugin = app.plugins.plugins["research-agent-reader"]; const service = plugin.getReadingWorkspace(); await service.ready();
 	const session = service.repository.get(sessionId); check(session && session.nodes.some(node => node.status === "done"), "existing completed reading required");
 	const before = app.vault.getMarkdownFiles().filter(file => file.path.startsWith("wiki/qa/")).map(file => file.path).sort().join("\n");
-	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view;
+	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper").view;
 	await view.setState({ sessionId }); await pause(); [...view.modals].forEach(modal => modal.close());
 	view.contentEl.ownerDocument.defaultView.dispatchEvent(new Event("focus")); view.openExport();
 	const modal = [...view.modals].find(item => item.modalEl.classList.contains("reading-export-modal")); check(modal, "export modal opens");

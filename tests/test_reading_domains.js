@@ -1,0 +1,27 @@
+/* Pure routing/catalog tests; no filesystem writes or cleanup. */
+const assert = require("node:assert/strict");
+const { loadReading } = require("./reading-test-helpers");
+const { readingEntryDomain, readingDashboardState } = loadReading("reading/entry.ts");
+const { recentReading, latestReading } = loadReading("reading/catalog.ts");
+const { createReadingSession } = loadReading("reading/session.ts");
+const create = (kind, title, date) => { const s = createReadingSession({ kind, title, path: title, fingerprint: "a".repeat(64) }); s.lastOpenedAt = date; return s; };
+const pdf = create("pdf", "Paper", "2026-01-01"), article = create("article", "Article", "2026-02-01"), code = create("code", "Project", "2026-03-01"), archived = create("code", "Archived", "2026-04-01"), test = create("code", "Test", "2026-05-01");
+archived.archived = true; test.purpose = "test"; pdf.pinned = true;
+const all = [pdf, article, code, archived, test];
+assert.equal(readingEntryDomain(undefined, all), "paper");
+assert.equal(readingEntryDomain({ domain: "code" }, all), "code");
+assert.equal(readingEntryDomain({ sessionId: code.id }, all), "code", "legacy saved code session keeps its domain");
+assert.equal(readingEntryDomain({ domain: "paper", sessionId: code.id }, all), "code", "session identity wins over stale domain");
+assert.equal(readingEntryDomain({ domain: "code", source: { kind: "article", path: "article.md" } }, all), "paper");
+assert.equal(readingEntryDomain({ domain: "code", sessionId: "missing" }, all), "code");
+assert.deepEqual(recentReading(all, "reading", false, "paper").map(s => s.id), [pdf.id, article.id]);
+assert.deepEqual(recentReading(all, "reading", false, "code").map(s => s.id), [code.id]);
+assert.equal(recentReading(all, "reading", true, "code")[0].id, archived.id);
+assert.equal(recentReading(all, "test", false, "code")[0].id, test.id);
+assert.equal(recentReading(all, "test", false, "paper").length, 0);
+assert.equal(latestReading(all, "paper").id, article.id, "resume latest, not a pinned older reading");
+assert.equal(latestReading(all, "code").id, code.id);
+assert.equal(latestReading([pdf], "code"), undefined);
+assert.equal(readingDashboardState(all, "paper").sessionId, article.id);
+assert.equal(readingDashboardState(all, "code").sessionId, code.id);
+console.log("READING_DOMAINS_OK");

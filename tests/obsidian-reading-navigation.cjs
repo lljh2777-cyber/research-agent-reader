@@ -3,11 +3,11 @@ module.exports = async function readingNavigationScenario(app) {
 	const check = (ok, label) => { if (!ok) throw new Error(label); };
 	const pause = (ms = 350) => new Promise((resolve) => require("node:timers").setTimeout(resolve, ms));
 	const plugin = app.plugins.plugins["research-agent-reader"]; const workspace = plugin.getReadingWorkspace();
-	const original = app.workspace.getLeavesOfType("research-interactive-reading")[0]?.view.sessionId;
+	const original = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper")?.view.sessionId;
 	let view;
 	try {
 		const baseline = await require("./obsidian-reading-long.cjs")(app);
-		view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view;
+		view = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper").view;
 		const id = baseline.sessionId; const session = () => workspace.repository.get(id); const root = view.contentEl;
 		const click = (parent, label) => { const b = [...parent.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === label); check(b, "button " + label); b.click(); };
 		const hidden = session().branches[0].nodeIds.at(-1); const main = session().mainIds[0];

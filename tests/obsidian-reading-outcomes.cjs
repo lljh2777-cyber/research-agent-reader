@@ -5,7 +5,7 @@ module.exports = async function readingOutcomesScenario(app) {
 	const until = async test => { for (let i = 0; i < 100; i++) { if (test()) return; await pause(80); } throw new Error("UI timeout"); };
 	const p = app.plugins.plugins["research-agent-reader"]; const w = p.getReadingWorkspace(); const c = p.getCurationService(); await c.ready();
 	const record = [...c.reviews.values()].find(r => r.state === "ready" && r.suggestions.some(s => s.decision === "pending")); check(record, "existing pending review");
-	await p.activateReadingWorkspace(); const v = app.workspace.getLeavesOfType("research-interactive-reading")[0].view; const previous = v.getState();
+	await p.activateReadingWorkspace(); const v = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper").view; const previous = v.getState();
 	const session = w.repository.get(record.context.sessionId); const original = structuredClone(session); const fake = document.createElement("div");
 	try {
 		await v.setState({ sessionId: session.id }); const root = v.contentEl;

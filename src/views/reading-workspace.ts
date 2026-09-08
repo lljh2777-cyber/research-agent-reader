@@ -5,7 +5,8 @@ import { ActionInputModal } from "../modals/action-input";
 import { ACTION_BY_ID } from "../actions";
 import { READING_VIEW_TYPE, type ReadingNode, type ReadingQuote, type ReadingSession, type ReadingWindow } from "../reading/types";
 import { readingNode } from "../reading/session";
-import { readingCategory, readingSourceKey, readingTitle, recentReading, type ReadingCategory } from "../reading/catalog";
+import { readingCategory, readingSourceKey, readingTitle, recentReading, latestReading, sourceReadingDomain, type ReadingCategory, type ReadingDomain } from "../reading/catalog";
+import { readingEntryDomain } from "../reading/entry";
 import { layoutReading, READING_MAP } from "../reading/layout";
 import { fitReadingZoom, readingTrail, revealReadingPath, searchReadingNodes } from "../reading/navigation";
 import { resolveReadingQuote } from "../reading/selection";
@@ -39,6 +40,8 @@ function actionButton(parent: HTMLElement, name: string, label: string, action: 
 export class ReadingWorkspaceView extends ItemView {
 	private service!: ReadingWorkspaceService;
 	private sessionId = "";
+	private domain: ReadingDomain = "paper";
+	private tabTitle = "";
 	private unsubscribe?: () => void;
 	private unsubscribeStream?: () => void;
 	private signature = "";
@@ -60,12 +63,18 @@ export class ReadingWorkspaceView extends ItemView {
 	private modals = new Set<Modal>();
 	constructor(leaf: WorkspaceLeaf, private readonly plugin: AgentDashboardPlugin) { super(leaf); }
 	getViewType(): string { return READING_VIEW_TYPE; }
-	getDisplayText(): string { return this.session?.source.kind === "code" ? "代码交互阅读" : "PDF 交互深读"; }
-	getIcon(): string { return "workflow"; }
-	getState(): Record<string, unknown> { return { sessionId: this.sessionId }; }
+	getReadingDomain(): ReadingDomain { return this.domain; }
+	getDisplayText(): string { return (this.domain === "code" ? "代码分析" : "PDF 深读") + (this.session ? " · " + readingTitle(this.session) : ""); }
+	getIcon(): string { return this.domain === "code" ? "code-xml" : "book-open"; }
+	getState(): Record<string, unknown> { return { sessionId: this.sessionId, domain: this.domain }; }
 	async setState(state: unknown): Promise<void> {
-		const id = (state as { sessionId?: string })?.sessionId;
-		if (id) { if (this.service?.repository.sessions.has(id)) this.selectSession(id); else this.sessionId = id; }
+		this.service ||= this.plugin.getReadingWorkspace(); await this.service.ready();
+		const requested = state as { sessionId?: string; domain?: ReadingDomain } | undefined;
+		const domain = readingEntryDomain({ domain: this.domain, ...requested }, this.service.repository.sessions.values());
+		const current = this.session; const explicit = requested?.sessionId && this.service.repository.sessions.get(requested.sessionId);
+		const id = explicit ? explicit.id : current && sourceReadingDomain(current.source) === domain && !current.archived ? current.id : latestReading(this.service.repository.sessions.values(), domain)?.id || "";
+		const changed = this.domain !== domain || this.sessionId !== id; this.domain = domain;
+		if (changed) this.selectSession(id); else this.render(true);
 	}
 	async onOpen(): Promise<void> {
 		this.service = this.plugin.getReadingWorkspace(); await this.service.ready();
@@ -75,7 +84,8 @@ export class ReadingWorkspaceView extends ItemView {
 		this.outcomeEvents.push(this.app.vault.on("create", refreshExports), this.app.vault.on("modify", refreshExports), this.app.vault.on("delete", refreshExports));
 		this.outcomeEvents.push(this.app.vault.on("rename", (file, old) => { if (file.path.startsWith("wiki/qa/") || old.startsWith("wiki/qa/")) this.scheduleOutcomes(); }));
 		const restored = this.service.repository.sessions.get(this.sessionId);
-		if (!restored || restored.archived || readingCategory(restored) !== "reading") this.sessionId = recentReading(this.service.repository.sessions.values())[0]?.id || "";
+		if (restored) this.domain = sourceReadingDomain(restored.source);
+		if (!restored || restored.archived || readingCategory(restored) !== "reading") this.sessionId = latestReading(this.service.repository.sessions.values(), this.domain)?.id || "";
 		this.renderer.load(); this.unsubscribe = this.service.repository.subscribe((id) => { if (id === this.sessionId) { this.render(); this.evidencePanel?.sync(this.session, this.contentEl); } });
 		this.unsubscribeStream = this.plugin.getReadingEngine().subscribe((id, nodeId, text) => {
 			if (id !== this.sessionId) return;
@@ -111,7 +121,9 @@ export class ReadingWorkspaceView extends ItemView {
 	private updateUI(edit: (ui: ReadingSession["ui"]) => void): void {
 		const id = this.sessionId; this.handle(this.service.repository.transact(id, (session) => edit(session.ui)));
 	}
-	private selectSession(id: string): void { this.modeMotion.stop(); this.outcomes.clear(); this.sessionId = id; this.quote = id ? this.service.repository.get(id).ui.pendingQuote : undefined; this.signature = ""; this.contentEl.replaceChildren(); this.render(true); this.app.workspace.requestSaveLayout();
+	private selectSession(id: string): void {
+		if (id && sourceReadingDomain(this.service.repository.get(id).source) !== this.domain) { this.handle(this.plugin.activateReadingWorkspace({ sessionId: id })); return; }
+		this.modeMotion.stop(); this.evidencePanel?.dispose(); this.outcomes.clear(); this.sessionId = id; this.quote = id ? this.service.repository.get(id).ui.pendingQuote : undefined; this.signature = ""; this.contentEl.replaceChildren(); this.render(true); this.app.workspace.requestSaveLayout();
 		this.scheduleOutcomes();
 		if (id) this.handle(this.service.repository.transact(id, (s) => { s.lastOpenedAt = new Date().toISOString(); }));
 	}
@@ -122,9 +134,9 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	private renderHeader(session?: ReadingSession): void {
 		const header = element(this.contentEl, "header", "reading-header");
-		const identity = element(header, "div", "reading-identity"); const mark = element(identity, "div", "reading-brand-mark"); icon(mark, "book-open");
+		const identity = element(header, "div", "reading-identity"); const mark = element(identity, "div", "reading-brand-mark"); icon(mark, this.getIcon());
 		const names = element(identity, "div", "reading-identity-text");
-		const eyebrow = element(names, "div", "reading-eyebrow"); element(eyebrow, "span", "", "交互深读");
+		const eyebrow = element(names, "div", "reading-eyebrow"); element(eyebrow, "span", "", this.domain === "code" ? "代码分析" : "PDF 深读");
 		if (session) element(eyebrow, "span", "reading-source-badge", session.demo ? "交互演示" : session.source.kind === "code" ? "代码 · 静态阅读" : session.source.kind === "pdf" ? "PDF 原文" : "MinerU 原文");
 		const select = button(names, session ? readingTitle(session) : "选择或管理阅读会话", () => this.openSessionLibrary(), "选择阅读会话"); select.className = "reading-session-select";
 		icon(names, "chevron-down").classList.add("reading-session-chevron");
@@ -150,21 +162,23 @@ export class ReadingWorkspaceView extends ItemView {
 			}
 			if (session) menu.addItem(item => item.setTitle("阅读用量").setIcon("gauge").onClick(() => { const modal = this.modal("本会话模型用量"); element(modal.contentEl, "pre", "reading-usage-summary", readingUsageSummary(this.session!)); modal.open(); }));
 			menu.addItem(item => item.setTitle("知识库维护").setIcon("notebook-pen").onClick(() => this.plugin.openKnowledgeMaintenance()));
-			menu.addItem((item) => item.setTitle("交互演示").setIcon("play").onClick(() => this.handle(this.service.demo().then((id) => this.selectSession(id)))));
-			const classic = session?.source.kind === "code" ? "code-analysis" : "pdf-xray";
+			if (this.domain === "paper") menu.addItem((item) => item.setTitle("交互演示").setIcon("play").onClick(() => this.handle(this.service.demo().then((id) => this.selectSession(id)))));
+			const classic = this.domain === "code" ? "code-analysis" : "pdf-xray";
 			menu.addItem((item) => item.setTitle(classic === "code-analysis" ? "一次性代码笔记（Toolkit）" : "一次性深读").setIcon("file-text").onClick(() => new ActionInputModal(this.app, this.plugin, ACTION_BY_ID.get(classic)!, ({ input, overrides, options }) => this.handle(this.plugin.runClassicReading(input, overrides, options, classic))).open()));
 			const box = more.getBoundingClientRect(); menu.showAtPosition({ x: box.right, y: box.bottom });
 		}, true); more.setAttribute("aria-haspopup", "menu");
 	}
 	private renderEmpty(): void {
-		const empty = element(this.contentEl, "div", "reading-empty"); icon(empty, "book-open");
-		element(empty, "p", "reading-eyebrow", "从一篇论文，展开理解"); element(empty, "h2", "", "沿着主线读，带着问题探索");
-		element(empty, "p", "", "让 AI 逐步讲解论文，在导图中追问、回看依据，并保存你的阅读过程。");
-		const actions = element(empty, "div", "reading-empty-actions"); actionButton(actions, "plus", "打开一篇论文", () => this.openSource()).classList.add("reading-primary");
-		actionButton(actions, "play", "先体验交互演示", () => this.handle(this.service.demo().then((id) => this.selectSession(id))));
-			element(empty, "small", "", "支持 PDF、已验证的 MinerU article.md 和 Python/R 代码");
+		const code = this.domain === "code"; const empty = element(this.contentEl, "div", "reading-empty"); icon(empty, this.getIcon());
+		element(empty, "p", "reading-eyebrow", code ? "从代码入口，理解整个流程" : "从一篇论文，展开理解"); element(empty, "h2", "", "沿着主线读，带着问题探索");
+		element(empty, "p", "", code ? "逐步理解入口、模块与数据流，划选源码追问，并保留代码依据和学习过程。" : "让 AI 逐步讲解论文，在导图中追问、回看依据，并保存你的阅读过程。");
+		const actions = element(empty, "div", "reading-empty-actions"); actionButton(actions, "plus", code ? "打开代码项目或脚本" : "打开一篇论文", () => this.openSource()).classList.add("reading-primary");
+		if (!code) actionButton(actions, "play", "先体验交互演示", () => this.handle(this.service.demo().then((id) => this.selectSession(id))));
+		element(empty, "small", "", code ? "支持 Python/R 文件与小型项目 · 只做静态阅读" : "支持 PDF 与已验证的 MinerU article.md");
 	}
 	private render(force = false): void {
+		this.contentEl.dataset.readingDomain = this.domain;
+		if (this.tabTitle !== this.getDisplayText()) { this.tabTitle = this.getDisplayText(); (this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.(); }
 		const session = this.session;
 		const contentSignature = JSON.stringify(session ? [session.id, session.title, session.archived, session.pinned, session.nodes, session.outline, session.completed, session.backend, session.model,
 			session.ui.split, session.ui.pendingQuote, session.ui.mainComposerExpanded, session.ui.zoom,
@@ -657,17 +671,18 @@ export class ReadingWorkspaceView extends ItemView {
 		render(); modal.open(); search.focus();
 	}
 	private openSessionLibrary(): void {
-		const modal = this.modal("阅读会话"); modal.modalEl.classList.add("reading-library-modal");
-		const search = element(modal.contentEl, "input", "reading-library-search"); search.type = "search"; search.placeholder = "搜索论文标题或来源路径"; search.setAttribute("aria-label", "搜索阅读会话");
+		const modal = this.modal(this.domain === "code" ? "代码阅读会话" : "论文阅读会话"); modal.modalEl.classList.add("reading-library-modal");
+		const search = element(modal.contentEl, "input", "reading-library-search"); search.type = "search"; search.placeholder = this.domain === "code" ? "搜索项目、脚本或来源路径" : "搜索论文标题或来源路径"; search.setAttribute("aria-label", "搜索阅读会话");
 		const tabs = element(modal.contentEl, "div", "reading-library-tabs"); const list = element(modal.contentEl, "div", "reading-library-list");
 		let scope: ReadingCategory | "archived" = "reading";
 		const render = (): void => {
 			tabs.replaceChildren(); list.replaceChildren();
 			for (const [value, label] of [["reading", "正在阅读"], ["archived", "已归档"], ["demo", "演示"], ["test", "开发测试"]] as const) {
+				if (this.domain === "code" && value === "demo") continue;
 				const tab = button(tabs, label, () => { scope = value; render(); }); tab.setAttribute("aria-pressed", String(scope === value));
 			}
 			const query = search.value.trim().toLocaleLowerCase();
-			const sessions = recentReading(this.service.repository.sessions.values(), scope === "archived" ? "reading" : scope, scope === "archived")
+			const sessions = recentReading(this.service.repository.sessions.values(), scope === "archived" ? "reading" : scope, scope === "archived", this.domain)
 				.filter((s) => (readingTitle(s) + " " + s.source.path).toLocaleLowerCase().includes(query));
 			const groups = new Map<string, ReadingSession[]>();
 			for (const session of sessions) { const key = readingSourceKey(session.source); const group = groups.get(key) || []; group.push(session); groups.set(key, group); }
@@ -691,7 +706,7 @@ export class ReadingWorkspaceView extends ItemView {
 						submit.classList.add("mod-cta"); rename.open(); input.focus(); input.select();
 					}, true);
 					if (readingCategory(session) === "reading") actionButton(actions, session.archived ? "archive-restore" : "archive", session.archived ? "恢复会话" : "归档", () => this.handle(this.service.repository.transact(session.id, (s) => { s.archived = !s.archived; }).then(() => {
-						if (session.id === this.sessionId && this.service.repository.get(session.id).archived) this.selectSession(recentReading(this.service.repository.sessions.values())[0]?.id || "");
+						if (session.id === this.sessionId && this.service.repository.get(session.id).archived) this.selectSession(latestReading(this.service.repository.sessions.values(), this.domain)?.id || "");
 					})), true);
 				}
 			}
@@ -700,9 +715,10 @@ export class ReadingWorkspaceView extends ItemView {
 		render(); modal.open(); search.focus();
 	}
 	openSource(entry?: import("../reading/entry").ReadingEntry): void {
-		const modal = this.modal("开始交互阅读");
-		element(modal.contentEl, "p", "reading-modal-intro", "选择论文或代码，建立可以随时继续的阅读会话。");
-		const kind = element(element(modal.contentEl, "label", "reading-field", "原文类型"), "select"); [["pdf", "原始 PDF"], ["article", "已验证 article.md"], ["code", "Python/R 文件或项目目录"]].forEach(([value, label]) => { element(kind, "option", "", label).value = value; });
+		if (entry?.source && sourceReadingDomain(entry.source) !== this.domain) { this.handle(this.plugin.activateReadingWorkspace(entry)); return; }
+		const code = this.domain === "code"; const modal = this.modal(code ? "开始代码分析" : "开始 PDF 深读");
+		element(modal.contentEl, "p", "reading-modal-intro", code ? "选择脚本或项目，建立可以持续追问的代码阅读会话。" : "选择论文原文，建立可以随时继续的深读会话。");
+		const kind = element(element(modal.contentEl, "label", "reading-field", "原文类型"), "select"); (code ? [["code", "Python/R 文件或项目目录"]] : [["pdf", "原始 PDF"], ["article", "已验证 article.md"]]).forEach(([value, label]) => { element(kind, "option", "", label).value = value; }); kind.disabled = code;
 		const sourceLocation = new ReadingSourceLocation(this.app, element(modal.contentEl, "div"), () => kind.value as ReadingSession["source"]["kind"]); const path = sourceLocation.input;
 		const close = modal.onClose.bind(modal); modal.onClose = () => { sourceLocation.dispose(); close(); };
 		const backend = element(element(modal.contentEl, "label", "reading-field", "讲解后端"), "select"); element(backend, "option", "", "Codex CLI").value = "codex-cli";
@@ -710,13 +726,12 @@ export class ReadingWorkspaceView extends ItemView {
 		const model = element(element(modal.contentEl, "label", "reading-field", "Codex 模型（可选）"), "input"); model.placeholder = "留空使用配置中的模型";
 		backend.onchange = () => { model.parentElement!.hidden = backend.value !== "codex-cli"; };
 		if (entry?.source) { kind.value = entry.source.kind; path.value = entry.source.path; }
-		else if (this.session?.source.kind === "code") kind.value = "code";
 		kind.onchange = () => sourceLocation.refresh(); sourceLocation.refresh();
 		if (entry?.backend && [...backend.options].some(o => o.value === entry.backend)) backend.value = entry.backend;
 		model.parentElement!.hidden = backend.value !== "codex-cli";
 		const startNew = element(modal.contentEl, "label", "reading-new-session-option"); const forceNew = element(startNew, "input"); forceNew.type = "checkbox"; element(startNew, "span", "", "为同一原文重新建立会话");
 		element(modal.contentEl, "p", "reading-modal-intro", "默认继续相同原文的已有会话，并沿用该会话的模型。原文变化时会创建新会话。");
-		element(modal.contentEl, "p", "reading-modal-intro", "开始讲解会将所选内容交给模型；代码只做静态阅读，不运行程序。也可先打开来源预览，不调用模型。");
+		element(modal.contentEl, "p", "reading-modal-intro", code ? "开始讲解会将所选代码交给模型，只做静态阅读，不运行程序。也可先打开来源预览，不调用模型。" : "开始讲解会将所选原文交给模型。也可先打开来源预览，不调用模型。");
 		const open = (generate: boolean) => {
 			submit.disabled = true;
 			preview.disabled = true;

@@ -6,7 +6,7 @@ module.exports = async function readingMotionScenario(app) {
 	await workspace.ready();
 	let session = [...workspace.repository.sessions.values()].find(s => s.demo && s.nodes.length === 300);
 	if (!session) { const id = await workspace.demo("test"); session = workspace.repository.get(id); }
-	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view;
+	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper").view;
 	const previousId = view.getState().sessionId; const originalUI = JSON.parse(JSON.stringify(session.ui));
 	const id = session.id; const root = view.contentEl; const win = root.ownerDocument.defaultView;
 	const originalMatchMedia = win.matchMedia;

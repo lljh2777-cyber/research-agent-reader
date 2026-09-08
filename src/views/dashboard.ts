@@ -349,13 +349,15 @@ export class DashboardView extends ItemView {
 	private refreshReadingEntry(): void {
 		if (this.closed || !this.plugin.getReadingWorkspace) return;
 		const recent = this.contentEl.querySelector<HTMLElement>(".agent-dashboard-recent"); if (recent) this.refreshRecentReading(recent);
-		if (this.plugin.isActionRunning("pdf-xray")) return;
-		const button = this.contentEl.querySelector<HTMLButtonElement>('[data-action-id="pdf-xray"]'); if (!button) return;
-		const state = readingDashboardState(this.plugin.getReadingWorkspace().repository.sessions.values());
-		const label = button.querySelector(".agent-dashboard-action-state"); if (label) label.textContent = state.label;
-		button.classList.toggle("is-running", state.running);
-		button.title = [state.title, state.label, "打开交互深读；停止生成请使用阅读界面的停止按钮"].filter(Boolean).join("\n");
-		button.setAttribute("aria-label", "PDF 深读，" + state.label + (state.title ? "，" + state.title : ""));
+		for (const [actionId, domain, title] of [["pdf-xray", "paper", "PDF 深读"], ["code-analysis", "code", "代码分析"]] as const) {
+			if (this.plugin.isActionRunning(actionId)) continue;
+			const button = this.contentEl.querySelector<HTMLButtonElement>('[data-action-id="' + actionId + '"]'); if (!button) continue;
+			const state = readingDashboardState(this.plugin.getReadingWorkspace().repository.sessions.values(), domain);
+			const label = button.querySelector(".agent-dashboard-action-state"); if (label) label.textContent = state.label;
+			button.classList.toggle("is-running", state.running);
+			button.title = [state.title, state.label, "打开" + title + "；停止生成请使用阅读界面的停止按钮"].filter(Boolean).join("\n");
+			button.setAttribute("aria-label", title + "，" + state.label + (state.title ? "，" + state.title : ""));
+		}
 	}
 	private refreshRecentReading(parent: HTMLElement): void {
 		const sessions = this.plugin.getReadingWorkspace ? recentReading(this.plugin.getReadingWorkspace().repository.sessions.values()).slice(0, 3) : [];
@@ -663,8 +665,7 @@ export class DashboardView extends ItemView {
 		}
 		if (action.id === "pdf-xray" || action.id === "code-analysis") {
 			const code = action.id === "code-analysis";
-			const state = this.plugin.getReadingWorkspace && readingDashboardState(this.plugin.getReadingWorkspace().repository.sessions.values(), code ? "code" : "paper");
-			void this.plugin.activateReadingWorkspace(state?.sessionId ? { sessionId: state.sessionId } : { source: { kind: code ? "code" : "pdf", path: "" } });
+			void this.plugin.activateReadingWorkspace({ domain: code ? "code" : "paper" }).catch(error => new Notice(String(error)));
 			return;
 		}
 		if (this.plugin.isActionRunning(action.id)) {

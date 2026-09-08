@@ -1,7 +1,12 @@
-import { readingCategory, readingTitle } from "./catalog";
+import { readingCategory, readingTitle, sourceReadingDomain, type ReadingDomain } from "./catalog";
 import type { ReadingSession, ReadingSource } from "./types";
 
-export interface ReadingEntry { source?: Pick<ReadingSource, "kind" | "path">; backend?: string; sessionId?: string; }
+export interface ReadingEntry { domain?: ReadingDomain; source?: Pick<ReadingSource, "kind" | "path">; backend?: string; sessionId?: string; }
+/** Old saved layouts only have a session ID. Its source remains authoritative. */
+export function readingEntryDomain(entry: ReadingEntry | undefined, sessions: Iterable<ReadingSession>): ReadingDomain {
+	const session = entry?.sessionId ? [...sessions].find(s => s.id === entry.sessionId) : undefined;
+	return session ? sourceReadingDomain(session.source) : entry?.source ? sourceReadingDomain(entry.source) : entry?.domain === "code" ? "code" : "paper";
+}
 
 /** Dashboard reflects saved reading work, independent of CLI task status. */
 export function readingDashboardState(sessions: Iterable<ReadingSession>, kind: "paper" | "code" = "paper"): { sessionId: string; title: string; label: string; running: boolean } {

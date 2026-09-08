@@ -6,7 +6,7 @@ module.exports = async function readingNodeSelectionScenario(app) {
 	const plugin = app.plugins.plugins["research-agent-reader"]; const service = plugin.getReadingWorkspace(); await service.ready();
 	const fixture = [...service.repository.sessions.values()].find(s => s.demo && s.purpose === "test" && s.mainIds.length >= 3 && s.branches.length && s.nodes.length < 30);
 	if (!fixture) throw new Error("Open an existing small development test session before this check");
-	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view;
+	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper").view;
 	const previousId = view.getState().sessionId; const originalUI = structuredClone(fixture.ui); const originalDrafts = new Map(view.localDrafts);
 	const id = fixture.id; const root = view.contentEl; const session = () => service.repository.get(id);
 	const [first, second] = fixture.mainIds; const branch = fixture.branches[0]; const branchNode = branch.nodeIds[0];

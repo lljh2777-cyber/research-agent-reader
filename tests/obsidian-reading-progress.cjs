@@ -3,7 +3,7 @@ module.exports = async function readingProgressScenario(app) {
 	const check = (ok, label) => { if (!ok) throw new Error(label); };
 	const pause = ms => new Promise(resolve => require("node:timers").setTimeout(resolve, ms));
 	const p = app.plugins.plugins["research-agent-reader"]; const w = p.getReadingWorkspace(); await w.ready(); await p.activateReadingWorkspace();
-	const v = app.workspace.getLeavesOfType("research-interactive-reading")[0].view; const previous = v.getState(); const results = [];
+	const v = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper").view; const previous = v.getState(); const results = [];
 	for (const kind of ["article", "pdf"]) {
 		const s = [...w.repository.sessions.values()].find(s => !s.demo && s.source.kind === kind && s.nodes.some(n => n.evidence.filter(e => e.kind === "paper").length >= 2));
 		check(s, kind + " real session"); const original = JSON.parse(JSON.stringify(s));

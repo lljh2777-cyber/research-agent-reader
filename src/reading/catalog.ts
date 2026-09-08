@@ -1,6 +1,8 @@
 import type { ReadingSession, ReadingSource } from "./types";
 
 export type ReadingCategory = "reading" | "demo" | "test";
+export type ReadingDomain = "paper" | "code";
+export const sourceReadingDomain = (source: Pick<ReadingSource, "kind">): ReadingDomain => source.kind === "code" ? "code" : "paper";
 export function readingCategory(session: ReadingSession): ReadingCategory {
 	if (session.purpose) return session.purpose;
 	if (!session.demo) return "reading";
@@ -16,9 +18,12 @@ export function readingTitle(session: ReadingSession): string {
 	return parts[parts.length - 1] || "未命名阅读";
 }
 export function readingSourceKey(source: ReadingSource): string { return [source.kind, source.path.replace(/\\/g, "/"), source.fingerprint].join("|"); }
-export function recentReading(sessions: Iterable<ReadingSession>, category: ReadingCategory = "reading", archived = false): ReadingSession[] {
-	return [...sessions].filter((s) => readingCategory(s) === category && Boolean(s.archived) === archived)
+export function recentReading(sessions: Iterable<ReadingSession>, category: ReadingCategory = "reading", archived = false, domain?: ReadingDomain): ReadingSession[] {
+	return [...sessions].filter((s) => readingCategory(s) === category && Boolean(s.archived) === archived && (!domain || sourceReadingDomain(s.source) === domain))
 		.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || (b.lastOpenedAt || b.updatedAt || b.createdAt).localeCompare(a.lastOpenedAt || a.updatedAt || a.createdAt) || a.id.localeCompare(b.id));
+}
+export function latestReading(sessions: Iterable<ReadingSession>, domain: ReadingDomain): ReadingSession | undefined {
+	return recentReading(sessions, "reading", false, domain).sort((a, b) => (b.lastOpenedAt || b.updatedAt || b.createdAt).localeCompare(a.lastOpenedAt || a.updatedAt || a.createdAt))[0];
 }
 export function matchingReading(sessions: Iterable<ReadingSession>, source: ReadingSource): ReadingSession | undefined {
 	return recentReading(sessions).filter((s) => readingSourceKey(s.source) === readingSourceKey(source))

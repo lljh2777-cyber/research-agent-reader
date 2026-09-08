@@ -19,7 +19,7 @@ module.exports = async function readingLongScenario(app) {
 		}
 		s.ui.selectedId = s.mainIds[0]; s.ui.mainFocusId = s.mainIds[0];
 	});
-	await plugin.activateReadingWorkspace(); let leaf = app.workspace.getLeavesOfType("research-interactive-reading")[0]; let view = leaf.view;
+	await plugin.activateReadingWorkspace(); let leaf = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper"); let view = leaf.view;
 	const before = performance.now(); await view.setState({ sessionId: id }); const renderMs = performance.now() - before;
 	await pause(500); check(view.contentEl.querySelectorAll(".reading-map-node").length === 300, "300 cards");
 	const map = view.contentEl.querySelector(".reading-map-scroll"); map.scrollTop = 1200;
@@ -32,7 +32,7 @@ module.exports = async function readingLongScenario(app) {
 	await pause(300); check(view.contentEl.querySelectorAll(".reading-map-node").length === 291, "collapse nine turns");
 	const preservedY = view.contentEl.querySelector(".reading-map-scroll").scrollTop; check(preservedY > 1000, "collapse preserves viewport");
 	leaf.detach(); await pause(500); await plugin.activateReadingWorkspace();
-	leaf = app.workspace.getLeavesOfType("research-interactive-reading")[0]; view = leaf.view; await view.setState({ sessionId: id }); await pause(800);
+	leaf = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper"); view = leaf.view; await view.setState({ sessionId: id }); await pause(800);
 	check(view.contentEl.querySelectorAll(".reading-map-node").length === 291, "collapsed state restored");
 	check(view.contentEl.querySelector(".reading-map-scroll").scrollTop > 1000, "map scroll restored");
 	check(view.contentEl.querySelector(".reading-main-chat .reading-messages").scrollTop > 500, "main scroll restored");

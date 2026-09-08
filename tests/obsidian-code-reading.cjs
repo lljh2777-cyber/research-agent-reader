@@ -4,7 +4,7 @@ module.exports = async function codeReadingScenario(app) {
 	const fs = require("node:fs"); const path = require("node:path"); const crypto = require("node:crypto");
 	const plugin = app.plugins.plugins["research-agent-reader"]; const service = plugin.getReadingWorkspace(); await service.ready();
 	const engine = plugin.getReadingEngine(); const originalBackend = engine.backendFor;
-	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view;
+	await plugin.activateReadingWorkspace({ domain: "code" }); const view = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain() === "code").view;
 	const previousId = view.getState().sessionId; const root = view.contentEl; const cases = new Map(); const checks = [];
 	const originalModals = new Set(view.modals); const closeModal = el => { const modal = [...view.modals].find(m => m.modalEl === el); if (!modal) throw new Error("Test modal not registered"); modal.close(); };
 	const check = (ok, label) => { if (!ok) throw new Error(label); checks.push(label); };
@@ -51,5 +51,5 @@ module.exports = async function codeReadingScenario(app) {
 			await view.setState({ sessionId: id }); check(root.querySelectorAll(".reading-map-node").length === 4, kind + " view restores graph");
 		}
 		check(hashes() === before, "all source hashes unchanged"); return { status: "passed", checks: checks.length, details: checks, sessions: [...cases.keys()] };
-	} finally { for (const modal of view.modals) if (!originalModals.has(modal)) modal.close(); engine.backendFor = originalBackend; await pause(650); await service.repository.flush(); if (previousId) await view.setState({ sessionId: previousId }); }
+	} finally { for (const modal of view.modals) if (!originalModals.has(modal)) modal.close(); engine.backendFor = originalBackend; await pause(650); await service.repository.flush(); if (previousId) await view.setState({ sessionId: previousId }); else view.selectSession(""); }
 };

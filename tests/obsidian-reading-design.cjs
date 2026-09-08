@@ -11,7 +11,7 @@ module.exports = async function readingDesignScenario(app) {
 		node.evidence = ["fixture-a", "fixture-b"].map((id, i) => ({ id, kind: "vault", path: "demo-evidence.md", label: "示例依据 " + (i + 1), text: "只用于界面验收的原文示例。" }));
 		s.ui.selectedId = node.id; s.ui.mainFocusId = node.id;
 	});
-	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view;
+	await plugin.activateReadingWorkspace(); const view = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper").view;
 	await view.setState({ sessionId: id }); await pause(); const root = view.contentEl;
 	const click = (parent, label) => { const b = [...parent.querySelectorAll("button")].find((b) => b.getAttribute("aria-label") === label); check(b, "button " + label); b.click(); };
 	const first = workspace.repository.get(id).mainIds[0];

@@ -3,7 +3,7 @@ module.exports = async function readingLibraryScenario(app) {
 	const check = (ok, text) => { if (!ok) throw new Error(text); };
 	const pause = () => new Promise(resolve => require("node:timers").setTimeout(resolve, 200));
 	const p = app.plugins.plugins["research-agent-reader"]; await p.activateReadingWorkspace(); const service = p.getReadingWorkspace();
-	const view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view; const original = view.sessionId;
+	const view = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper").view; const original = view.sessionId;
 	const id = await service.demo("test");
 	const click = (root, label) => { const button = [...root.querySelectorAll("button")].find(b => b.getAttribute("aria-label") === label); check(button, label); button.click(); };
 	try {

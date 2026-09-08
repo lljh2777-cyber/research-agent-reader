@@ -86,6 +86,7 @@ import { ReadingEngine } from "./reading/engine";
 import { readingHash } from "./reading/document";
 import { DirectReadingBackend, CodexReadingBackend } from "./reading/backend";
 import { READING_VIEW_TYPE, type ReadingBackend, type ReadingSession } from "./reading/types";
+import { readingEntryDomain } from "./reading/entry";
 import { LearningLibrary } from "./curation/learning";
 import { CurationService } from "./curation/service";
 import { CurationWriter } from "./curation/writer";
@@ -278,6 +279,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private readingAssistant?: ReadingAssistantService;
 	private assistantModal?: ReadingAssistantModal;
 	private readingEngine?: ReadingEngine;
+	private readingOpenings: Promise<void> = Promise.resolve();
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private knowledgeService: KnowledgeRetrievalService | null = null;
 	private knowledgeModels: BgeModels | null = null;
@@ -396,7 +398,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(QUERY_WIKI_VIEW_TYPE, (leaf) => new QueryWikiView(leaf, this));
 		this.registerView(READING_VIEW_TYPE, (leaf) => new ReadingWorkspaceView(leaf, this));
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
-		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ source: { kind: "code", path: "" } }); } });
+		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ domain: "code" }); } });
 		this.addCommand({ id: "open-knowledge-maintenance", name: "打开知识库维护", callback: () => this.openKnowledgeMaintenance() });
 		this.registerEvent(this.app.vault.on("modify", file => this.curationService?.noteChange(file.path)));
 		this.registerEvent(this.app.vault.on("delete", file => this.curationService?.noteChange(file.path)));
@@ -2594,8 +2596,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		catch (error) { new Notice(String(error)); }
 	}
 	async openLearningRecord(sessionId: string, nodeId: string): Promise<void> {
-		await this.activateReadingWorkspace(); const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0]?.view;
-		if (view instanceof ReadingWorkspaceView) { await view.setState({ sessionId }); view.revealLearningNode(nodeId); }
+		await this.activateReadingWorkspace({ sessionId }); const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE).map(leaf => leaf.view).find(v => v instanceof ReadingWorkspaceView && v.getState().sessionId === sessionId);
+		if (view instanceof ReadingWorkspaceView) view.revealLearningNode(nodeId);
 	}
 	async openCurationEvidence(context: CurationContext, evidenceId: string): Promise<void> {
 		const evidence = context.evidence.find(item => item.id === evidenceId); if (!evidence || evidence.kind !== "paper") throw new Error("本文依据不存在");
@@ -3347,13 +3349,16 @@ export default class AgentDashboardPlugin extends Plugin {
 		const profile = this.getProviderProfile(session.backend); if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
 		return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, streaming && profile.lastTest.streamingVerified === true, supportsReadingSchema(profile), () => this.resolveWebSearchBackend(profile));
 	}
-	async activateReadingWorkspace(entry?: import("./reading/entry").ReadingEntry): Promise<void> {
-		const leaf = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE)[0] || this.app.workspace.getLeaf("tab");
-		await leaf.setViewState({ type: READING_VIEW_TYPE, active: true }); await this.app.workspace.revealLeaf(leaf);
-		if (leaf.view instanceof ReadingWorkspaceView) {
-			if (entry?.sessionId) await leaf.view.setState({ sessionId: entry.sessionId });
-			if (entry?.source) leaf.view.openSource(entry);
-		}
+	activateReadingWorkspace(entry?: import("./reading/entry").ReadingEntry): Promise<void> {
+		const operation = this.readingOpenings.then(async () => {
+			const service = this.getReadingWorkspace(); await service.ready(); const domain = readingEntryDomain(entry, service.repository.sessions.values());
+			const leaves = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE); for (const leaf of leaves) await leaf.loadIfDeferred();
+			const existing = leaves.find(leaf => leaf.view instanceof ReadingWorkspaceView && leaf.view.getReadingDomain() === domain);
+			const leaf = existing || this.app.workspace.getLeaf("tab");
+			if (!existing || entry?.sessionId) await leaf.setViewState({ type: READING_VIEW_TYPE, state: { domain, ...(entry?.sessionId ? { sessionId: entry.sessionId } : {}) }, active: true });
+			await this.app.workspace.revealLeaf(leaf);
+			if (leaf.view instanceof ReadingWorkspaceView && entry?.source) leaf.view.openSource(entry);
+		}); this.readingOpenings = operation.catch(() => undefined); return operation;
 	}
 	async runClassicReading(input: string, overrides: ExecutionOverrides, options: DashboardActionOptions, actionId: "pdf-xray" | "code-analysis" = "pdf-xray"): Promise<void> {
 		const action = ACTION_BY_ID.get(actionId)!;

@@ -6,7 +6,7 @@ module.exports = async function readingUiScenario(app) {
 	const plugin = app.plugins.plugins["research-agent-reader"];
 	await plugin.activateReadingWorkspace();
 	const workspace = plugin.getReadingWorkspace(); const id = await workspace.demo("test");
-	const view = app.workspace.getLeavesOfType("research-interactive-reading")[0].view;
+	const view = app.workspace.getLeavesOfType("research-interactive-reading").find(l => l.view.getReadingDomain?.() === "paper").view;
 	await workspace.repository.transact(id, (s) => { s.title = "集成验收 · 双模式与分支（示例）"; });
 	await view.setState({ sessionId: id });
 	const root = view.contentEl; const session = () => workspace.repository.get(id);
