@@ -11,6 +11,9 @@ connecting optional local AI-agent workflows.
 The `codex/research-learning-map` development branch is at `0.43.2`; the beta
 release link above remains the published release.
 
+全文获取与多来源入库的后续设计见[架构与开发流程](docs/fulltext-acquisition-design.md)。
+该文档基于 `0.43.2`，描述规划中的能力，不代表这些功能已经实现。
+
 ## Features
 
 - Opens Markdown files from configurable folders in a two-pane research reader.
