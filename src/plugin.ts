@@ -20,6 +20,9 @@ import { FileAcquisitionStorage } from "./fulltext/file-storage";
 import { DemoAcquisitionBackend } from "./fulltext/demo-backend";
 import { FulltextAcquisitionModal } from "./fulltext/modal";
 import { acquisitionTaskRun } from "./fulltext/task-run";
+import { HttpsSourceTransport } from "./fulltext/transport";
+import { PmcAcquisitionBackend } from "./fulltext/pmc-backend";
+import { AcquiredPdfPreview } from "./fulltext/pdf-preview";
 import type { AcquisitionMode } from "./fulltext/contracts";
 import { IngestRecords, validateIngestRequest } from "./agent/ingest-records";
 import { openIngestContinuation } from "./views/ingest-continuation";
@@ -314,6 +317,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	private readonly taskRunListeners = new Set<(progressOnly?: boolean) => void>();
 	private readonly acquisitionServices = new Map<AcquisitionMode, AcquisitionService>();
 	private readonly acquisitionModals = new Set<FulltextAcquisitionModal>();
+	private readonly fulltextPreviews = new Set<Modal>();
+	private acquisitionClosing = false;
 	private taskRunMutationQueue: Promise<void> = Promise.resolve();
 	obsidianCliProbeState: ObsidianCliProbeState = { status: "idle" };
 
@@ -530,6 +535,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		this.acquisitionClosing = true; for (const modal of this.fulltextPreviews) modal.close();
 		for (const modal of [...this.acquisitionModals]) modal.close();
 		await Promise.all([...this.acquisitionServices.values()].map(service => service.dispose()));
 		for (const modal of [...this.curationModals]) modal.close();
@@ -2029,8 +2035,9 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!service) {
 			const directory = this.readingPluginDirectory();
 			const deviceId = createHash("sha256").update(hostname() + "\n" + path.resolve(directory).toLowerCase()).digest("hex");
-			service = new AcquisitionService(new AcquisitionRepository(new FileAcquisitionStorage(directory, mode), mode), deviceId, mode === "demo" ? new DemoAcquisitionBackend() : undefined);
-			if (mode === "production") service.subscribe(() => this.notifyTaskRuns());
+			const storage = new FileAcquisitionStorage(directory, mode);
+			service = new AcquisitionService(new AcquisitionRepository(storage, mode), deviceId, mode === "demo" ? new DemoAcquisitionBackend() : new PmcAcquisitionBackend(new HttpsSourceTransport(), storage));
+			if (mode === "production") service.subscribe(progressOnly => { if (!progressOnly) this.notifyTaskRuns(); });
 			this.acquisitionServices.set(mode, service);
 		}
 		return service;
@@ -2038,9 +2045,16 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	openFulltextAcquisition(mode: AcquisitionMode = "production", jobId?: string): void {
 		try {
-			const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal));
+			const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id));
 			this.acquisitionModals.add(modal); modal.open();
 		} catch { new Notice("全文获取需要可读写的桌面插件目录"); }
+	}
+
+	async openAcquiredPdf(jobId: string): Promise<void> {
+		const { snapshot, bytes } = await this.getAcquisitionService().preview(jobId);
+		if (this.acquisitionClosing) return;
+		const modal = new AcquiredPdfPreview(this.app, bytes, snapshot, () => this.fulltextPreviews.delete(modal));
+		this.fulltextPreviews.add(modal); modal.open();
 	}
 
 	getRunningTaskRun(actionId: string): TaskRun | null {

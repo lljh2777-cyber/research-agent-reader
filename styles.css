@@ -6699,3 +6699,10 @@ body.agent-dashboard-mineru-resizing {
 .rar-fulltext-job progress { display: block; width: 100%; margin: 8px 0; }
 .rar-fulltext-job button { margin: 8px 8px 0 0; white-space: normal; height: auto; min-height: 32px; }
 .rar-fulltext-error { color: var(--text-error); }
+.rar-fulltext-preview { width: min(1100px, 95vw); }
+.rar-fulltext-preview .modal-content { overflow-y: auto; }
+.rar-fulltext-preview h3 { overflow-wrap: anywhere; }
+.rar-fulltext-pager { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 12px 0; position: sticky; top: 0; background: var(--background-primary); padding: 8px; z-index: 1; }
+.rar-fulltext-page { display: flex; justify-content: center; }
+.rar-fulltext-page canvas { max-width: 100%; height: auto; background: white; }
+.rar-fulltext-modal button:disabled { opacity: .55; cursor: not-allowed; }

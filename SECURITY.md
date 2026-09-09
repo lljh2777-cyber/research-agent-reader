@@ -73,6 +73,26 @@ loop inside the plugin. Its boundaries are enforced in code, not by prompt:
   injection; the plugin treats them as data, and only the user's modal input
   and the plugin's own state can change what tools are allowed to do.
 
+## Identifier-based fulltext acquisition
+
+The M2 acquisition service is independent of the light agent. It constructs
+exact Europe PMC/Crossref metadata queries and selects PDFs from scoped PMC
+version manifests. Only HTTPS to the three fixed provider hosts is allowed;
+each connection pins a validated public DNS answer and verifies the connected
+peer. Redirects must remain on the same origin. Requests use no ambient proxy,
+credentials, cookies or model-controlled URLs.
+
+Metadata is capped at 2 MiB and PDFs at 64 MiB, with bounded concurrency,
+timeouts, retries and streaming backpressure. A PMC manifest is rechecked before
+download; PDF MD5, SHA-256, format, page count and first-page identity clues are
+validated separately. A missing identity match remains explicitly unconfirmed.
+This status does not authorize MinerU, Wiki writing or scientific conclusions.
+
+The passive preview uses local PDF.js canvases with evaluation disabled and no
+annotation/action layer. Completed artifacts are bound to immutable snapshots
+and rehashed before reuse or preview. Partial files remain in plugin-local
+storage and are never silently promoted, overwritten or automatically removed.
+
 ## Environmental trust assumption
 
 Research Agent Reader defends against untrusted PDFs, remote MinerU output,

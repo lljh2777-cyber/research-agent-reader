@@ -8,13 +8,14 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.44.0`; the beta
+The `codex/research-learning-map` development branch is at `0.45.0`; the beta
 release link above remains the published release.
 
 全文获取与多来源入库的后续设计见[架构与开发流程](docs/fulltext-acquisition-design.md)。
-该文档基于 `0.43.2`，描述规划中的能力，不代表这些功能已经实现。
-`0.44.0` 已完成 M1：标识输入、独立获取记录与开发流程演示；真实全文来源尚未接入。
-入口、存储约定与验收范围见[全文获取 M1](docs/fulltext-acquisition-m1.md)。
+总体设计基于 `0.43.2`，各阶段按实现说明验收。
+`0.45.0` 已完成 M2：输入标识、核对 PMC 版本、下载并校验 PDF、无模型预览与本地快照复用。
+当前仅支持 PMC 提供的 PDF，使用 HTTPS 直连；获取结果暂未接入 MinerU、Wiki 或交互深读。
+使用入口、存储约定和验收范围见[全文获取 M2](docs/fulltext-acquisition-m2.md)；开发演示见 [M1](docs/fulltext-acquisition-m1.md)。
 
 ## Features
 
@@ -177,6 +178,11 @@ Depending on features the user explicitly configures or starts, the plugin can:
   a configured model provider; PDF preflight parsing itself remains local and
   never sends the absolute source path;
 - upload a selected document to the configured MinerU service after confirmation;
+- query public Europe PMC/Crossref metadata by paper identifier and, after
+  source selection, download a PMC PDF into the plugin's `fulltext/production/`
+  storage. This path uses direct HTTPS without model calls, cookies, API keys,
+  or system/Obsidian proxy settings; cached PDFs, metadata and partial attempts
+  are retained and are separate from the existing task-output cleanup;
 - save bounded task and query records in the plugin's local `data.json` file;
 - save completed-task full output, including any model/tool trace or Vault
   excerpts present in that run, in plugin-local sidecars under

@@ -1,20 +1,24 @@
 import { randomUUID } from "node:crypto";
-import { acquisitionActive, acquisitionRetryable, decodeCandidates, decodeRequest, requestKey, type AcquisitionCandidate, type AcquisitionJob, type AcquisitionMode, type AcquisitionRequest, type AcquisitionSnapshot } from "./contracts";
+import { setTimeout, clearTimeout } from "node:timers";
+import { acquisitionActive, acquisitionRetryable, decodeCandidates, decodeIdentity, decodePdfValidation, decodeRequest, requestKey, type AcquisitionCandidate, type AcquisitionJob, type AcquisitionMode, type AcquisitionRequest, type AcquisitionSnapshot, type ResolvedIdentity, type PdfArtifact, type PdfValidation, type PdfSnapshot } from "./contracts";
 import { AcquisitionRepository } from "./repository";
+import { sourceFailure, SourceError } from "./errors";
 
-/** M1 backends are demonstrators only. A real file result requires the M2 artifact contract. */
+export interface DownloadContext { jobId: string; attemptId: string; request: AcquisitionRequest; identity?: ResolvedIdentity; }
 export interface AcquisitionBackend {
-	readonly mode: "demo";
-	resolve(request: AcquisitionRequest, signal: AbortSignal): Promise<void>;
-	discover(request: AcquisitionRequest, signal: AbortSignal): Promise<AcquisitionCandidate[]>;
-	download(candidate: AcquisitionCandidate, signal: AbortSignal, progress: (received: number, total?: number) => void): Promise<void>;
-	verify(request: AcquisitionRequest, signal: AbortSignal): Promise<"valid" | "conflict">;
+	readonly mode: AcquisitionMode;
+	resolve(request: AcquisitionRequest, signal: AbortSignal): Promise<void | ResolvedIdentity>;
+	discover(request: AcquisitionRequest, signal: AbortSignal, identity?: ResolvedIdentity): Promise<AcquisitionCandidate[]>;
+	download(candidate: AcquisitionCandidate, signal: AbortSignal, progress: (received: number, total?: number) => void, context?: DownloadContext): Promise<void | PdfArtifact>;
+	verify(request: AcquisitionRequest, signal: AbortSignal, artifact?: PdfArtifact, identity?: ResolvedIdentity): Promise<"valid" | "conflict" | PdfValidation>;
+	validateSnapshot?(snapshot: PdfSnapshot): Promise<void>;
+	readSnapshot?(snapshot: PdfSnapshot): Promise<Uint8Array>;
 }
-interface Attempt { id: string; controller: AbortController; committing: boolean; }
+interface Attempt { id: string; controller: AbortController; committing: boolean; timer?: ReturnType<typeof setTimeout>; }
 export class AcquisitionService {
 	private readonly attempts = new Map<string, Attempt>();
 	private readonly volatile = new Map<string, AcquisitionJob>();
-	private readonly listeners = new Set<() => void>();
+	private readonly listeners = new Set<(progressOnly?: boolean) => void>();
 	private queue: Promise<unknown> = Promise.resolve();
 	private loading?: Promise<void>;
 	private disposed = false;
@@ -27,8 +31,18 @@ export class AcquisitionService {
 	list(): AcquisitionJob[] { return [...this.repository.jobs.keys()].map(id => this.get(id)!).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
 	get(id: string): AcquisitionJob | undefined { const job = this.volatile.get(id) || this.repository.jobs.get(id); return job && structuredClone(job); }
 	owned(job: AcquisitionJob | undefined): boolean { return job?.deviceId === this.deviceId; }
-	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-	private emit(): void { for (const listener of this.listeners) { try { listener(); } catch { /* A closed view must not break task persistence. */ } } }
+	subscribe(listener: (progressOnly?: boolean) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+	private emit(progressOnly = false): void { for (const listener of this.listeners) { try { listener(progressOnly); } catch { /* A closed view must not break task persistence. */ } } }
+	private release(id: string): void { const attempt = this.attempts.get(id); if (attempt?.timer) clearTimeout(attempt.timer); this.attempts.delete(id); }
+	private deadline(id: string, attempt: Attempt, ms: number): void {
+		if (attempt.timer) clearTimeout(attempt.timer);
+		if (this.mode !== "production") return;
+		attempt.timer = setTimeout(() => {
+			if (!this.current(id, attempt) || attempt.committing) return;
+			attempt.controller.abort(new SourceError("timeout", "获取阶段超时"));
+			void this.serial(async () => { if (this.attempts.get(id) !== attempt) return; this.release(id); await this.persist({ ...this.get(id)!, phase: "failed", errorCode: "timeout", error: "获取阶段超时，请检查直连网络或存储后重试", detail: "未完成文件保留在插件的 fulltext/production/ 目录" }); });
+		}, ms);
+	}
 	private serial<T>(work: () => Promise<T>): Promise<T> { const result = this.queue.then(work); this.queue = result.catch(() => undefined); return result; }
 	ready(): Promise<void> { return this.loading ||= this.recover(); }
 	private async recover(): Promise<void> {
@@ -37,15 +51,15 @@ export class AcquisitionService {
 			if (!this.owned(stored)) continue;
 			let completed = false;
 			if (stored.snapshotId && (stored.phase === "verifying" || stored.phase === "acquired")) {
-				try { const snapshot = await this.repository.snapshot(stored.snapshotId); completed = this.matches(stored, snapshot); } catch { /* No durable receipt: never claim completion. */ }
+				try { const snapshot = await this.repository.snapshot(stored.snapshotId); completed = this.matches(stored, snapshot); if (completed && snapshot.mode === "production") { if (!this.backend?.validateSnapshot) completed = false; else await this.backend.validateSnapshot(snapshot); } } catch { completed = false; }
 			}
-			if (completed && stored.phase !== "acquired") await this.persist({ ...stored, phase: "acquired", detail: "已恢复完整演示记录", error: "" });
+			if (completed && stored.phase !== "acquired") { const snapshot = await this.repository.snapshot(stored.snapshotId!); await this.persist({ ...stored, phase: "acquired", identityCheck: snapshot.mode === "production" ? snapshot.validation.identityCheck : undefined, detail: this.mode === "demo" ? "已恢复完整演示记录" : "已恢复校验完整的本地 PDF 快照", error: "", errorCode: undefined }); }
 			else if (acquisitionActive(stored.phase) || (stored.phase === "acquired" && !completed)) await this.persist({ ...stored, phase: "interrupted", detail: "请重试以重新执行；不会自动连接来源", error: stored.phase === "acquired" ? "完成记录的快照缺失或不匹配" : "" });
 		}
 		this.emit();
 	}
 	private matches(job: AcquisitionJob, snapshot: AcquisitionSnapshot): boolean {
-		return job.mode === snapshot.mode && snapshot.id === job.snapshotId && snapshot.jobId === job.id && snapshot.attemptId === job.attemptId && snapshot.candidateId === job.selectedId && JSON.stringify(snapshot.input) === JSON.stringify(job.request.input);
+		return job.mode === snapshot.mode && snapshot.id === job.snapshotId && snapshot.jobId === job.id && snapshot.attemptId === job.attemptId && snapshot.candidateId === job.selectedId && JSON.stringify(snapshot.input) === JSON.stringify(job.request.input) && (snapshot.mode === "demo" || (JSON.stringify(snapshot.identity) === JSON.stringify(job.identity) && JSON.stringify(snapshot.candidate) === JSON.stringify(job.candidates.find(c => c.id === job.selectedId))));
 	}
 	private async persist(job: AcquisitionJob): Promise<boolean> {
 		const saved = this.repository.jobs.get(job.id);
@@ -53,7 +67,7 @@ export class AcquisitionService {
 		try { await this.repository.save(next); this.volatile.delete(job.id); this.emit(); return true; }
 		catch {
 			this.volatile.set(job.id, { ...next, phase: "failed", error: "记录保存失败", storageWarning: "本次状态未保存。请检查存储后重试；重启后将核验已有快照。" });
-			this.attempts.get(job.id)?.controller.abort(); this.attempts.delete(job.id); this.emit(); return false;
+			this.attempts.get(job.id)?.controller.abort(); this.release(job.id); this.emit(); return false;
 		}
 	}
 	async start(request: AcquisitionRequest): Promise<AcquisitionJob> {
@@ -63,8 +77,14 @@ export class AcquisitionService {
 			const normalized = decodeRequest(request, this.mode);
 			const duplicate = this.list().find(job => this.owned(job) && acquisitionActive(job.phase) && requestKey(job.request) === requestKey(normalized));
 			if (duplicate) return duplicate;
+			if (this.mode === "production" && this.backend?.validateSnapshot) {
+				for (const cached of this.list().filter(job => this.owned(job) && job.phase === "acquired" && job.request.versionPolicy === normalized.versionPolicy && job.identity?.identifiers[normalized.input.kind] === normalized.input.value)) {
+					try { const snapshot = await this.repository.snapshot(cached.snapshotId!); if (snapshot.mode !== "production" || !this.matches(cached, snapshot)) throw new Error("invalid"); await this.backend.validateSnapshot(snapshot); return cached; }
+					catch { await this.persist({ ...cached, phase: "interrupted", error: "已有 PDF 快照校验失败，本次将重新查询来源", detail: "原文件保留，未覆盖" }); }
+				}
+			}
 			const now = new Date().toISOString();
-			const job: AcquisitionJob = { schemaVersion: 1, id: "a-" + randomUUID(), attemptId: "a-" + randomUUID(), revision: 1, mode: this.mode, deviceId: this.deviceId, request: normalized, phase: this.backend ? "queued" : "needs_configuration", createdAt: now, updatedAt: now, detail: this.backend ? "准备开始演示" : "真实全文来源将在后续阶段接入", error: "", candidates: [] };
+			const job: AcquisitionJob = { schemaVersion: 1, id: "a-" + randomUUID(), attemptId: "a-" + randomUUID(), revision: 1, mode: this.mode, deviceId: this.deviceId, request: normalized, phase: this.backend ? "queued" : "needs_configuration", createdAt: now, updatedAt: now, detail: this.backend ? this.mode === "demo" ? "准备开始演示" : "准备查询论文身份与 PMC 来源" : "全文来源不可用", error: "", candidates: [] };
 			// Initial write failures reject before any backend work or visible task is created.
 			try { await this.repository.save(job); } catch { throw new Error("无法保存新任务，请检查插件存储目录"); }
 			this.emit(); if (this.backend) this.launch(job); return this.get(job.id)!;
@@ -73,7 +93,7 @@ export class AcquisitionService {
 	async retry(id: string): Promise<void> {
 		await this.ready(); await this.serial(async () => {
 			const job = this.get(id); if (this.disposed || !this.backend || !job || !this.owned(job) || !acquisitionRetryable(job.phase)) throw new Error("此任务当前不能重试");
-			const next: AcquisitionJob = { ...job, attemptId: "a-" + randomUUID(), phase: "queued", candidates: [], selectedId: undefined, snapshotId: undefined, receivedBytes: undefined, totalBytes: undefined, error: "", detail: "准备重新执行" };
+			const next: AcquisitionJob = { ...job, attemptId: "a-" + randomUUID(), phase: "queued", candidates: [], selectedId: undefined, snapshotId: undefined, receivedBytes: undefined, totalBytes: undefined, identity: undefined, identityCheck: undefined, errorCode: undefined, error: "", detail: "准备重新执行" };
 			if (await this.persist(next)) this.launch(this.get(id)!);
 		});
 	}
@@ -81,7 +101,7 @@ export class AcquisitionService {
 		await this.ready(); await this.serial(async () => {
 			const job = this.get(id), attempt = this.attempts.get(id);
 			if (!job || !attempt || !this.current(id, attempt) || !this.owned(job) || job.phase !== "awaiting_selection" || !job.candidates.some(c => c.id === candidateId)) throw new Error("候选已失效，请重新查看任务");
-			if (await this.persist({ ...job, phase: "downloading", selectedId: candidateId, detail: "演示获取进度" })) void this.runSelected(id, attempt);
+			if (await this.persist({ ...job, phase: "downloading", selectedId: candidateId, detail: this.mode === "demo" ? "演示获取进度" : "重新核验来源清单并获取 PDF" })) { this.deadline(id, attempt, 180000); void this.runSelected(id, attempt); }
 		});
 	}
 	stop(id: string): boolean {
@@ -90,62 +110,76 @@ export class AcquisitionService {
 		attempt.controller.abort();
 		void this.serial(async () => {
 			if (this.attempts.get(id) !== attempt) return;
-			this.attempts.delete(id); await this.persist({ ...this.get(id)!, phase: "cancelled", detail: "已停止演示", error: "" });
+			this.release(id); await this.persist({ ...this.get(id)!, phase: "cancelled", detail: this.mode === "demo" ? "已停止演示" : "已停止获取；未完成文件保留在插件 fulltext/production/ 目录", error: "" });
 		}); return true;
 	}
 	private current(id: string, attempt: Attempt): boolean { return !this.disposed && this.attempts.get(id) === attempt && !attempt.controller.signal.aborted; }
 	private launch(job: AcquisitionJob): void {
 		const attempt: Attempt = { id: job.attemptId, controller: new AbortController(), committing: false };
-		this.attempts.set(job.id, attempt); void this.run(job.id, attempt);
+		this.attempts.set(job.id, attempt); this.deadline(job.id, attempt, 20000); void this.run(job.id, attempt);
 	}
 	private async stage(id: string, attempt: Attempt, changes: Partial<AcquisitionJob>): Promise<boolean> {
-		return this.serial(async () => this.current(id, attempt) && await this.persist({ ...this.get(id)!, ...changes }));
+		return this.serial(async () => { if (!this.current(id, attempt)) return false; if (changes.phase && (changes.phase === "awaiting_selection" || !acquisitionActive(changes.phase)) && attempt.timer) clearTimeout(attempt.timer); return this.persist({ ...this.get(id)!, ...changes }); });
 	}
-	private async fail(id: string, attempt: Attempt): Promise<void> {
-		await this.stage(id, attempt, { phase: "failed", error: "演示来源返回失败，可以重试", detail: "本次未产生可用文件" });
-		if (this.attempts.get(id) === attempt) this.attempts.delete(id);
+	private async fail(id: string, attempt: Attempt, error?: unknown): Promise<void> {
+		const failure = sourceFailure(error);
+		await this.stage(id, attempt, { phase: this.mode === "demo" ? "failed" : failure.outcome, errorCode: failure.code, error: this.mode === "demo" ? "演示来源返回失败，可以重试" : failure.message, detail: this.mode === "demo" ? "本次未产生可用文件" : "本次未生成可用 PDF 快照；已接收的文件保留在插件 fulltext/production/ 目录" });
+		if (this.attempts.get(id) === attempt && !attempt.controller.signal.aborted) this.release(id);
 	}
 	private async run(id: string, attempt: Attempt): Promise<void> {
 		try {
-			if (!await this.stage(id, attempt, { phase: "resolving", detail: "识别虚构论文" })) return;
+			if (!await this.stage(id, attempt, { phase: "resolving", detail: this.mode === "demo" ? "识别虚构论文" : "查询 Europe PMC 精确标识与 Crossref 元数据" })) return;
 			const request = this.get(id)!.request, signal = attempt.controller.signal;
-			await this.backend!.resolve(request, signal);
-			if (!await this.stage(id, attempt, { phase: "discovering", detail: "查找模拟来源" })) return;
-			const candidates = decodeCandidates(await this.backend!.discover(request, signal));
-			if (!await this.stage(id, attempt, { candidates, phase: candidates.length > 1 ? "awaiting_selection" : candidates.length ? "downloading" : "no_match", selectedId: candidates.length === 1 ? candidates[0].id : undefined, detail: candidates.length > 1 ? "请选择一个模拟来源" : candidates.length ? "演示获取进度" : "本场景没有可用候选" })) return;
-			if (candidates.length === 1) await this.runSelected(id, attempt);
-			else if (!candidates.length) this.attempts.delete(id);
-		} catch { await this.fail(id, attempt); }
+			const resolved = await this.backend!.resolve(request, signal);
+			const identity = this.mode === "production" ? decodeIdentity(resolved) : undefined;
+			if (identity && identity.identifiers[request.input.kind] !== request.input.value) throw new SourceError("identity_mismatch", "解析记录不包含输入标识", "conflict");
+			if (!await this.stage(id, attempt, { phase: "discovering", identity, detail: this.mode === "demo" ? "查找模拟来源" : "查询 PMC 可用版本与文件清单" })) return;
+			const candidates = decodeCandidates(await this.backend!.discover(request, signal, identity));
+			const selection = candidates.length > 0 && (this.mode === "production" || candidates.length > 1);
+			if (!await this.stage(id, attempt, { candidates, phase: selection ? "awaiting_selection" : candidates.length ? "downloading" : "no_match", selectedId: !selection && candidates.length === 1 ? candidates[0].id : undefined, detail: selection ? this.mode === "production" ? "核对论文与版本后，选择获取 PDF" : "请选择一个模拟来源" : candidates.length ? "演示获取进度" : "没有符合本次请求的 PDF 候选" })) return;
+			if (candidates.length === 1 && !selection) await this.runSelected(id, attempt);
+			else if (!candidates.length) this.release(id);
+		} catch (error) { await this.fail(id, attempt, error); }
 	}
 	private async runSelected(id: string, attempt: Attempt): Promise<void> {
 		try {
 			if (!this.current(id, attempt)) return;
 			const job = this.get(id)!, candidate = job.candidates.find(c => c.id === job.selectedId)!;
 			let lastEmit = 0;
-			await this.backend!.download(candidate, attempt.controller.signal, (received, total) => {
+			const artifact = await this.backend!.download(candidate, attempt.controller.signal, (received, total) => {
 				if (!this.current(id, attempt)) return;
 				const latest = this.get(id)!;
 				if (latest.phase !== "downloading" || !Number.isSafeInteger(received) || received < (latest.receivedBytes || 0) || (total !== undefined && (!Number.isSafeInteger(total) || total <= 0 || received > total)) || (latest.totalBytes !== undefined && total !== latest.totalBytes)) return;
 				this.volatile.set(id, { ...latest, receivedBytes: received, totalBytes: total });
-				if (Date.now() - lastEmit >= 250 || received === total) { lastEmit = Date.now(); this.emit(); }
-			});
+				if (Date.now() - lastEmit >= 250 || received === total) { lastEmit = Date.now(); this.emit(true); }
+			}, { jobId: id, attemptId: attempt.id, request: job.request, identity: job.identity });
 			const snapshotId = "s-" + randomUUID();
-			if (!await this.stage(id, attempt, { phase: "verifying", snapshotId, detail: "校验模拟结果并保存演示回执" })) return;
-			const verdict = await this.backend!.verify(job.request, attempt.controller.signal);
-			if (verdict !== "valid") { await this.stage(id, attempt, { phase: "conflict", error: "模拟身份冲突，已停止后续操作", detail: "需要核对论文身份" }); if (this.attempts.get(id) === attempt) this.attempts.delete(id); return; }
+			if (!await this.stage(id, attempt, { phase: "verifying", snapshotId, detail: this.mode === "demo" ? "校验模拟结果并保存演示回执" : "核验 PDF 格式、页面、身份线索和文件哈希" })) return;
+			const verdict = await this.backend!.verify(job.request, attempt.controller.signal, artifact || undefined, job.identity);
+			if (verdict === "conflict") { await this.stage(id, attempt, { phase: "conflict", error: "身份冲突，已停止后续操作", detail: "需要核对论文身份" }); if (this.attempts.get(id) === attempt) this.release(id); return; }
+			const validation = this.mode === "production" ? decodePdfValidation(verdict) : undefined;
 			await this.serial(async () => {
 				if (!this.current(id, attempt)) return;
 				attempt.committing = true;
+				if (attempt.timer) clearTimeout(attempt.timer);
 				const latest = this.get(id)!;
-				try { await this.repository.saveSnapshot({ schemaVersion: 1, id: snapshotId, jobId: id, attemptId: attempt.id, mode: "demo", simulated: true, input: latest.request.input, candidateId: candidate.id, createdAt: new Date().toISOString() }); }
-				catch { await this.persist({ ...latest, phase: "failed", error: "演示快照保存失败，请检查存储后重试", detail: "未完成保存" }); this.attempts.delete(id); return; }
-				await this.persist({ ...latest, phase: "acquired", detail: "演示回执已保存；没有下载 PDF，也未入库", error: "" }); this.attempts.delete(id);
+				const base = { id: snapshotId, jobId: id, attemptId: attempt.id, input: latest.request.input, candidateId: candidate.id, createdAt: new Date().toISOString() };
+				const snapshot: AcquisitionSnapshot = this.mode === "demo" ? { ...base, schemaVersion: 1, mode: "demo", simulated: true } : { ...base, schemaVersion: 2, mode: "production", identity: latest.identity!, candidate, artifact: artifact!, validation: validation! };
+				try { await this.repository.saveSnapshot(snapshot); }
+				catch { await this.persist({ ...latest, phase: "failed", error: this.mode === "demo" ? "演示快照保存失败，请检查存储后重试" : "PDF 快照记录保存失败，请检查存储后重试", detail: "未完成保存" }); this.release(id); return; }
+				await this.persist({ ...latest, phase: "acquired", identityCheck: validation?.identityCheck, detail: this.mode === "demo" ? "演示回执已保存；没有下载 PDF，也未入库" : validation?.identityCheck === "verified" ? "文件已获取，首页身份线索匹配；尚未入库或进行全文深读" : "文件已获取，身份待核对；可预览原文，尚未入库", error: "", errorCode: undefined }); this.release(id);
 			});
-		} catch { await this.fail(id, attempt); }
+		} catch (error) { await this.fail(id, attempt, error); }
+	}
+	async preview(id: string): Promise<{ snapshot: PdfSnapshot; bytes: Uint8Array }> {
+		await this.ready(); const job = this.get(id);
+		if (!job || !this.owned(job) || job.phase !== "acquired" || !job.snapshotId || !this.backend?.readSnapshot) throw new SourceError("not_acquired", "此任务没有可预览的本地 PDF");
+		try { const snapshot = await this.repository.snapshot(job.snapshotId); if (snapshot.mode !== "production" || !this.matches(job, snapshot)) throw new Error("snapshot binding"); return { snapshot, bytes: await this.backend.readSnapshot(snapshot) }; }
+		catch { await this.serial(() => this.persist({ ...job, phase: "interrupted", error: "PDF 快照缺失或已变化，请重新获取", detail: "原文件保留，未打开未经验证的内容" })); throw new SourceError("snapshot_changed", "本地 PDF 校验失败，请重新获取"); }
 	}
 	async settled(): Promise<void> { await this.queue; }
 	async dispose(): Promise<void> {
-		this.disposed = true; for (const attempt of this.attempts.values()) attempt.controller.abort();
+		this.disposed = true; for (const attempt of this.attempts.values()) { if (attempt.timer) clearTimeout(attempt.timer); attempt.controller.abort(); }
 		await this.loading?.catch(() => undefined);
 		await this.serial(async () => {
 			for (const [id] of this.attempts) { const job = this.get(id); if (job && acquisitionActive(job.phase)) await this.persist({ ...job, phase: "interrupted", detail: "插件已关闭，可在重新打开后重试" }); }

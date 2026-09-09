@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fulltext acquisition M2 — 0.45.0
+
+- 正式接入 Europe PMC 精确标识、Crossref 元数据和 PMC 云版本清单。用户核对论文与版本后获取 PDF，支持出版版本及可选的作者接受稿。
+- 下载使用有界 HTTPS 直连与固定来源，校验实际连接地址、字节数、PMC MD5、本地 SHA-256 和 PDF 可解析性；清单变化、身份冲突、断流及超限均停止完成提交。
+- 增加无模型的本地 PDF 翻页预览。区分首页身份线索匹配与身份待核对，正文证据仍未深读。
+- 真实文件与不可变快照独立保存；重载和标识别名复用前核验文件哈希。未完成文件保留，重试创建新尝试，既有入库及演示保持兼容。
+- 增加传输、PMC 与文件存储专项，以及公开样本的原生下载、预览、重载验收。详见 [M2 实现与验收](docs/fulltext-acquisition-m2.md)。
+
 ### Fulltext acquisition M1 — 0.44.0
 
 - 新增不依赖模型配置的全文获取入口，识别 DOI、PMID、PMCID 及对应官方链接；真实来源尚未接入，正式下载按钮保持禁用。

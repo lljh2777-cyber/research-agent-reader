@@ -15,7 +15,9 @@ const fakeFs = {
 		if (flags === "wx") { if (files.has(name)) throw error("EEXIST"); files.set(name, ""); }
 		else if (!files.has(name)) throw error("ENOENT");
 		opened++;
-		return { async stat() { return stat(name); }, async readFile() { return files.get(name); }, async writeFile(bytes) { files.set(name, bytes.toString()); }, async sync() { if (failSync && name.endsWith(failSync)) throw error("EIO"); }, async close() { closed++; } };
+		return { async stat() { return stat(name); }, async readFile(encoding) { return encoding ? files.get(name).toString(encoding) : Buffer.from(files.get(name)); },
+			async read(buffer, offset, length, position) { const bytes=Buffer.from(files.get(name)); const bytesRead=bytes.copy(buffer,offset,position,position+length); return {bytesRead,buffer}; },
+			async writeFile(bytes) { files.set(name, Buffer.concat([Buffer.from(files.get(name)),Buffer.from(bytes)])); }, async sync() { if (failSync && name.endsWith(failSync)) throw error("EIO"); }, async close() { closed++; } };
 	},
 };
 const { FileAcquisitionStorage } = loadReading("fulltext/file-storage.ts", { "node:fs/promises": fakeFs });
@@ -40,6 +42,15 @@ const job = { schemaVersion: 1, id: "a-" + randomUUID(), attemptId: "a-" + rando
 	const snapshot = { schemaVersion: 1, id: "s-" + randomUUID(), jobId: job.id, attemptId: job.attemptId, mode: "demo", simulated: true, input: job.request.input, candidateId: "c-one", createdAt: job.createdAt };
 	await store.writeSnapshot(snapshot); assert.deepEqual(await store.readSnapshot(snapshot.id), snapshot); await assert.rejects(store.writeSnapshot(snapshot), /EEXIST/);
 	const production = new FileAcquisitionStorage(base, "production"); assert.deepEqual(await production.listJobs(), []); assert.equal(dirs.has(path.join(base, "fulltext", "production")), false);
+	const attempt="a-"+randomUUID(), bytes=Buffer.from("%PDF-1.7\nreal storage fixture\n%%EOF\n");
+	const writer=await production.beginArtifact(attempt); await writer.write(bytes.subarray(0,8)); await writer.write(bytes.subarray(8));
+	const artifact=await writer.finish(); await assert.rejects(writer.write(bytes),/关闭/); await writer.close();
+	assert.deepEqual(Buffer.from(await production.readArtifact(artifact)),bytes); await assert.rejects(production.beginArtifact(attempt),/EEXIST/);
+	await assert.rejects(store.beginArtifact("a-"+randomUUID()),/标识/); await assert.rejects(production.beginArtifact("../escape"),/标识/);
+	const pdfPath=path.join(base,"fulltext","production",artifact.filename); links.add(pdfPath); await assert.rejects(production.readArtifact(artifact),/变化/); links.clear();
+	files.set(pdfPath,Buffer.alloc(bytes.length)); await assert.rejects(production.readArtifact(artifact),/校验/);
+	files.set(pdfPath,Buffer.alloc(bytes.length+1)); await assert.rejects(production.readArtifact(artifact),/变化/);
+	const partial=await production.beginArtifact("a-"+randomUUID()); await partial.write(bytes); failSync=".pdf"; await assert.rejects(partial.finish(),/EIO/); failSync=""; await partial.close();
 	assert.equal(opened, closed, "all file handles close after successful and failed operations");
-	console.log("PASS fulltext storage: immutable revisions, torn writes, collision detection, marker validation, bounded reads, path/link rejection, mode isolation and handle cleanup");
+	console.log("PASS fulltext storage: immutable revisions/artifacts, torn writes, collision detection, marker validation, bounded reads, path/link rejection, hash tampering, mode isolation and handle cleanup");
 })().catch(error => { console.error(error); process.exitCode = 1; });

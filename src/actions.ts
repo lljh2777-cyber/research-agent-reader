@@ -43,7 +43,7 @@ export interface DashboardAction {
 export const ACTIONS: readonly DashboardAction[] = [
 	{
 		id: "fulltext-acquisition", label: "获取全文", agent: "fulltext-acquisition-service",
-		description: "按 DOI、PMID 或 PMCID 获取论文全文。当前版本提供标识识别，真实全文来源将在后续版本开放。",
+		description: "按 DOI、PMID 或 PMCID 查找 PMC 可用 PDF，核对版本后获取并在本地预览，无需模型配置。",
 		placeholder: "", requiresInput: false, writes: false, enabled: true, ai: false, localView: true,
 	},
 	{

@@ -1,13 +1,13 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
-import { acquisitionId, type AcquisitionJob, type AcquisitionMode, type AcquisitionSnapshot } from "./contracts";
+import { randomUUID, createHash } from "node:crypto";
+import { acquisitionId, decodeArtifact, PDF_MAX_BYTES, type PdfArtifact, type AcquisitionJob, type AcquisitionMode, type AcquisitionSnapshot } from "./contracts";
 import type { AcquisitionStorage } from "./repository";
 
 /** Immutable journal records; .ready markers exclude torn writes. Never deletes files or directories. */
 export class FileAcquisitionStorage implements AcquisitionStorage {
 	private root: string;
-	constructor(private pluginDirectory: string, mode: AcquisitionMode) { this.root = path.resolve(pluginDirectory, "fulltext", mode); }
+	constructor(private pluginDirectory: string, private mode: AcquisitionMode) { this.root = path.resolve(pluginDirectory, "fulltext", mode); }
 	private async directory(write: boolean): Promise<boolean> {
 		const base = path.resolve(this.pluginDirectory);
 		for (const dir of [base, path.join(base, "fulltext"), this.root]) {
@@ -61,4 +61,34 @@ export class FileAcquisitionStorage implements AcquisitionStorage {
 	async writeSnapshot(snapshot: AcquisitionSnapshot): Promise<void> {
 		if (!acquisitionId(snapshot.id) || snapshot.id[0] !== "s") throw new Error("获取快照标识无效"); await this.write(snapshot.id + ".json", snapshot);
 	}
+	async beginArtifact(attemptId: string): Promise<ArtifactWriter> {
+		if (this.mode !== "production" || !acquisitionId(attemptId) || attemptId[0] !== "a") throw new Error("PDF 尝试标识无效");
+		await this.directory(true);
+		const filename = attemptId + ".pdf", handle = await fs.open(path.join(this.root, filename), "wx", 0o600);
+		let size = 0, closed = false, finished = false;
+		const sha = createHash("sha256"), md5 = createHash("md5");
+		return {
+			write: async bytes => { if (closed || finished || size + bytes.length > PDF_MAX_BYTES) throw new Error("PDF 文件已关闭或超过 64 MiB"); await handle.writeFile(bytes); size += bytes.length; sha.update(bytes); md5.update(bytes); },
+			finish: async () => { if (closed || finished) throw new Error("PDF 文件已经结束写入"); await handle.sync(); finished = true; return decodeArtifact({ filename, byteLength: size, sha256: sha.digest("hex"), md5: md5.digest("hex") }); },
+			close: async () => { if (!closed) { closed = true; await handle.close(); } },
+		};
+	}
+	async readArtifact(raw: PdfArtifact): Promise<Uint8Array> {
+		const artifact = decodeArtifact(raw);
+		if (this.mode !== "production" || !await this.directory(false)) throw new Error("PDF 快照存储不可用");
+		const file = path.join(this.root, artifact.filename), handle = await fs.open(file, "r");
+		try {
+			const stat = await handle.stat(), node = await fs.lstat(file);
+			if (!stat.isFile() || node.isSymbolicLink() || stat.ino !== node.ino || stat.dev !== node.dev || stat.size !== artifact.byteLength || stat.size > PDF_MAX_BYTES) throw new Error("PDF 快照文件已变化");
+			// A file may grow after stat. Bound the read itself, not only the initial size check.
+			const buffer = Buffer.alloc(artifact.byteLength + 1); let received = 0;
+			while (received < buffer.length) { const { bytesRead } = await handle.read(buffer, received, buffer.length - received, received); if (!bytesRead) break; received += bytesRead; }
+			const bytes = buffer.subarray(0, received);
+			if (bytes.length !== artifact.byteLength || createHash("sha256").update(bytes).digest("hex") !== artifact.sha256 || createHash("md5").update(bytes).digest("hex") !== artifact.md5) throw new Error("PDF 快照内容校验失败");
+			return new Uint8Array(bytes);
+		} finally { await handle.close(); }
+	}
 }
+
+export interface ArtifactWriter { write(bytes: Uint8Array): Promise<void>; finish(): Promise<PdfArtifact>; close(): Promise<void>; }
+export interface PdfArtifactStore { beginArtifact(attemptId: string): Promise<ArtifactWriter>; readArtifact(artifact: PdfArtifact): Promise<Uint8Array>; }

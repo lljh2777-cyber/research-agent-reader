@@ -23,9 +23,9 @@ module.exports = async function(app) {
 		await waitFor(() => dashboard.contentEl.querySelector('[data-action-id="fulltext-acquisition"]'));
 		dashboard.contentEl.querySelector('[data-action-id="fulltext-acquisition"]').click(); await production.ready();
 		check(Boolean(modal()), "dashboard opens the acquisition panel");
-		check(element().querySelector('[data-fulltext-action="start"]').disabled, "formal download remains disabled with no real source");
+		check(element().querySelector('[data-fulltext-action="start"]').disabled, "formal query requires a valid identifier");
 		const input = element().querySelector("input"); input.value = "https://pubmed.ncbi.nlm.nih.gov/123/"; input.dispatchEvent(new Event("input", { bubbles: true }));
-		check(element().querySelector(".rar-fulltext-parsed").textContent.includes("PMID · 123"), "formal input normalizes without model configuration"); close();
+		check(element().querySelector(".rar-fulltext-parsed").textContent.includes("PMID · 123") && !element().querySelector('[data-fulltext-action="start"]').disabled, "formal query available after normalization without model configuration"); close();
 		plugin.openFulltextAcquisition("demo"); await service.ready();
 		click("start"); click("start"); await phase("downloading");
 		check(backend.calls === 1 && service.list().length === 1, "double click produces one attempt");

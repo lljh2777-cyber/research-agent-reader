@@ -26,6 +26,6 @@ export class AcquisitionRepository {
 	async save(job: AcquisitionJob): Promise<void> {
 		const copy = decodeJob(job, this.mode); await this.storage.writeJob(copy); this.jobs.set(copy.id, copy);
 	}
-	async snapshot(id: string): Promise<AcquisitionSnapshot> { const result = decodeSnapshot(await this.storage.readSnapshot(id)); if (result.id !== id) throw new Error("快照与文件标识不一致"); return result; }
-	async saveSnapshot(snapshot: AcquisitionSnapshot): Promise<void> { if (this.mode !== "demo") throw new Error("正式存储不接受演示快照"); await this.storage.writeSnapshot(decodeSnapshot(snapshot)); }
+	async snapshot(id: string): Promise<AcquisitionSnapshot> { const result = decodeSnapshot(await this.storage.readSnapshot(id)); if (result.id !== id || result.mode !== this.mode) throw new Error("快照与文件标识或模式不一致"); return result; }
+	async saveSnapshot(snapshot: AcquisitionSnapshot): Promise<void> { const decoded = decodeSnapshot(snapshot); if (decoded.mode !== this.mode) throw new Error("正式与演示快照不能混用"); await this.storage.writeSnapshot(decoded); }
 }
