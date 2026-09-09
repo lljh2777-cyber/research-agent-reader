@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fulltext acquisition M5 — 0.48.0
+
+- 新增 PMC JATS 获取内容选项，XML 与引用图片绑定同一版本和来源清单摘要，逐文件核对 MD5 / SHA-256；沿用原有任务、取消、恢复和缓存机制。
+- 新增受限 XML 解析与确定性正文投影：主文章身份、章节、段落、列表、图形摘要、图注、表格、受支持的 TeX 与参考文献均有源节点映射。复杂表格保留行列跨度，未支持内容明确记录缺口。
+- 新增无需模型或 MinerU 的 JATS 身份确认与原文保存；部分结果单独接受，正式包清单最后提交，保存与索引补登记分开恢复。
+- SourceCatalog 统一发现 PDF / JATS / 旧转换与 Wiki；相同来源版本但清单变化时保留新包。阅读器严格分派包类型，图片只读取已校验字节，不伪造 PDF 页码和版面坐标。
+- 新增四组 JATS 专项与真实 Obsidian 界面 28 项检查；图形摘要、复杂表格、缺口确认、索引失败重试及图片解码均已验证。范围和限制见 [M5 实现与验收](docs/fulltext-acquisition-m5.md)。
+
 ### Fulltext acquisition M4 — 0.47.0
 
 - 新增无需模型或 MinerU 的「仅保存原文」动作，展示真实 PDF 页面并取得 v2 身份确认，保存独立 PDF 包与原文索引。

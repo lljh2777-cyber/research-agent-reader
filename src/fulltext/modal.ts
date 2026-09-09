@@ -9,7 +9,7 @@ export class FulltextAcquisitionModal extends Modal {
 	private closed = false;
 	private busy = false;
 	private unsubscribeRuns?:()=>void;
-	constructor(app: App, readonly service: AcquisitionService, private selectedId?: string, private afterClose?: () => void, private openPdf?: (id: string) => Promise<void>, private intake?:{open(id:string):Promise<void>;save?(id:string):Promise<void>;runs():TaskRun[];subscribe(listener:()=>void):()=>void;openRun(run:TaskRun):void}) { super(app); }
+	constructor(app: App, readonly service: AcquisitionService, private selectedId?: string, private afterClose?: () => void, private openPdf?: (id: string) => Promise<void>, private intake?:{open(id:string):Promise<void>;save?(id:string):Promise<void>;jats?(id:string):Promise<void>;runs():TaskRun[];subscribe(listener:()=>void):()=>void;openRun(run:TaskRun):void}) { super(app); }
 	onOpen(): void {
 		this.closed = false; this.modalEl.addClass("rar-fulltext-modal");
 		this.setTitle(this.service.mode === "demo" ? "全文获取 · 流程演示" : "获取论文全文");
@@ -19,7 +19,7 @@ export class FulltextAcquisitionModal extends Modal {
 		const input = label.createEl("input", { type: "text", attr: { placeholder: "10.xxxx/…、PMID:… 或 PMC…", "aria-label": "论文标识", maxlength: "1024" } });
 		if (this.service.mode === "demo") input.value = "10.0000/fulltext-demo";
 		const parsedEl = this.contentEl.createEl("p", { cls: "rar-fulltext-parsed", attr: { "aria-live": "polite" } });
-		let scenario: DemoScenario = "success", versionPolicy: AcquisitionRequest["versionPolicy"] = "record_only";
+		let scenario: DemoScenario = "success", versionPolicy: AcquisitionRequest["versionPolicy"] = "record_only",goal:AcquisitionRequest["goal"]="pdf",includeFigures=true;
 		if (this.service.mode === "demo") {
 			const selectLabel = this.contentEl.createEl("label", { text: "演示场景", cls: "rar-fulltext-input-label" });
 			const select = selectLabel.createEl("select", { attr: { "aria-label": "演示场景" } });
@@ -30,7 +30,9 @@ export class FulltextAcquisitionModal extends Modal {
 			const select = versionLabel.createEl("select", {attr: {"aria-label":"全文版本范围"}});
 			select.createEl("option", {value:"record_only",text:"仅出版版本"}); select.createEl("option", {value:"record_preferred_allow_manuscript",text:"出版版本或作者接受稿"});
 			select.addEventListener("change", () => { versionPolicy = select.value as AcquisitionRequest["versionPolicy"]; });
-			this.contentEl.createEl("p", { text: "优先查询 PMC PDF。"+(this.service.unpaywallEnabled?"已启用 Unpaywall 开放来源回退。":"Unpaywall 回退未启用，可在插件设置 → 全文来源中配置。")+"标识查询使用 Europe PMC 与 Crossref；仅支持 HTTPS 直连，不继承系统或 Obsidian 代理。", cls: "rar-fulltext-unavailable" });
+			const format=this.contentEl.createEl("label",{text:"获取内容",cls:"rar-fulltext-input-label"}).createEl("select",{attr:{"aria-label":"全文获取内容"}});format.createEl("option",{value:"pdf",text:"PDF 原文"});format.createEl("option",{value:"jats",text:"JATS XML 图文原文（无需 MinerU）"});
+			const images=this.contentEl.createEl("label",{cls:"rar-jats-partial"});images.hidden=true;const box=images.createEl("input",{type:"checkbox"});box.checked=true;images.appendText("同时获取 XML 引用的同版本图片");box.onchange=()=>{includeFigures=box.checked;};format.onchange=()=>{goal=format.value as AcquisitionRequest["goal"];images.hidden=goal!=="jats";};
+			this.contentEl.createEl("p", { text: "PDF 优先查询 PMC"+(this.service.unpaywallEnabled?"并启用 Unpaywall 回退。":"，可在设置中启用 Unpaywall 回退。")+"JATS 仅使用 PMC 的同版本 XML 与媒体清单。标识查询使用 Europe PMC 与 Crossref；仅支持 HTTPS 直连。", cls: "rar-fulltext-unavailable" });
 		}
 		const start = this.contentEl.createEl("button", { text: this.service.mode === "demo" ? "开始演示" : "查找全文", cls: "mod-cta", attr: { "data-fulltext-action": "start" } });
 		const validate = () => {
@@ -40,7 +42,7 @@ export class FulltextAcquisitionModal extends Modal {
 		input.addEventListener("input", validate); validate();
 		start.addEventListener("click", () => {
 			if (this.busy || start.disabled) return; this.busy = true; validate();
-			void this.service.start({ input: parseAcquisitionInput(input.value), goal: "pdf", versionPolicy, ...(this.service.mode === "demo" ? { scenario } : {}) }).then(job => { this.selectedId = job.id; this.renderJobs(); }).catch(() => new Notice("无法创建获取任务，请检查插件存储目录")).finally(() => { this.busy = false; if (!this.closed) validate(); });
+			void this.service.start({ input: parseAcquisitionInput(input.value), goal,versionPolicy,...(goal==="jats"?{includeFigures}:{}), ...(this.service.mode === "demo" ? { scenario } : {}) }).then(job => { this.selectedId = job.id; this.renderJobs(); }).catch(() => new Notice("无法创建获取任务，请检查插件存储目录")).finally(() => { this.busy = false; if (!this.closed) validate(); });
 		});
 		this.jobsEl = this.contentEl.createDiv("rar-fulltext-jobs"); this.jobsEl.setText("正在读取获取记录…");
 		this.unsubscribe = this.service.subscribe(() => this.renderJobs());
@@ -60,6 +62,7 @@ export class FulltextAcquisitionModal extends Modal {
 			const card = this.jobsEl.createDiv({ cls: "rar-fulltext-job", attr: { "data-job-id": job.id, "data-phase": job.phase } });
 			if (job.id === this.selectedId) card.addClass("is-selected");
 			card.createEl("strong", { text: job.identity?.title || job.request.input.value });
+			card.createEl("p",{text:job.request.goal==="jats"?"JATS XML · "+(job.request.includeFigures?"正文与图片":"仅正文"):"PDF 原文"});
 			if (job.identity) {
 				card.createEl("p", {text: [job.identity.authors.slice(0,6).join("; ") + (job.identity.authors.length > 6 ? ` 等 ${job.identity.authors.length} 位作者` : ""), job.identity.year].filter(Boolean).join(" · "), cls:"rar-fulltext-muted"});
 				card.createEl("p", {text: Object.entries(job.identity.identifiers).filter(([,v])=>v).map(([k,v])=>k.toUpperCase()+": "+v).join(" · ")});
@@ -68,7 +71,7 @@ export class FulltextAcquisitionModal extends Modal {
 			card.createEl("span", { text: job.phase === "acquired" && job.mode === "demo" ? "演示完成" : job.phase === "acquired" && job.identityCheck === "needs_confirmation" ? "已获取，身份待核对" : PHASE_LABELS[job.phase], cls: "rar-fulltext-phase" });
 			card.createEl("p", { text: job.detail });
 			if (job.receivedBytes !== undefined) {
-				const progress = card.createEl("progress", { attr: { "aria-label": job.mode === "demo" ? "模拟获取进度" : "PDF 获取进度" } }); if (job.totalBytes) { progress.max = job.totalBytes; progress.value = job.receivedBytes; }
+				const progress = card.createEl("progress", { attr: { "aria-label": job.mode === "demo" ? "模拟获取进度" : "全文获取进度" } }); if (job.totalBytes) { progress.max = job.totalBytes; progress.value = job.receivedBytes; }
 				card.createEl("small", { text: `${job.receivedBytes} / ${job.totalBytes ?? "未知"} 字节${job.mode === "demo" ? "（模拟）" : ""}` });
 			}
 			if (job.error) card.createEl("p", { text: job.error, cls: "rar-fulltext-error" });
@@ -85,12 +88,15 @@ export class FulltextAcquisitionModal extends Modal {
 			if (job.phase === "awaiting_selection") for (const candidate of job.candidates) {
 				if (candidate.pmc) card.createEl("p", {text: `${candidate.pmc.sourceVersionId} · ${candidate.version === "accepted_manuscript" ? "作者接受稿" : "出版版本"} · 许可：${candidate.pmc.license}${candidate.pmc.retracted ? " · 来源标记为已撤稿" : ""}`});
 				if(candidate.oa)card.createEl("p",{text:`${candidate.oa.origin} · ${candidate.version==="accepted_manuscript"?"作者接受稿":"出版版本"} · ${candidate.oa.hostType==="publisher"?"出版社":"开放仓储"} · 许可：${candidate.oa.license}`});
-				button(candidate.pmc ? "获取 PDF · " + candidate.pmc.sourceVersionId : candidate.oa?"获取 PDF · "+new URL(candidate.oa.origin).hostname:"选择 " + candidate.title, candidate.id, () => this.service.choose(job.id, candidate.id));
+				if(candidate.jats)card.createEl("p",{text:`${candidate.jats.sourceVersionId} · 许可：${candidate.jats.license}${candidate.jats.retracted?" · 已撤稿":""}`});
+				button(candidate.jats?"获取 JATS · "+candidate.jats.sourceVersionId:candidate.pmc ? "获取 PDF · " + candidate.pmc.sourceVersionId : candidate.oa?"获取 PDF · "+new URL(candidate.oa.origin).hostname:"选择 " + candidate.title, candidate.id, () => this.service.choose(job.id, candidate.id));
 			}
-			if (job.phase === "acquired" && job.mode === "production" && this.openPdf) button("预览 PDF", "preview", () => this.openPdf!(job.id));
-			if (job.phase === "acquired" && job.mode === "production" && this.intake?.save) button(job.sourcePackages?.length?"查看原文保存与登记":"仅保存原文", "save-source", () => this.intake!.save!(job.id));
-			for(const key of job.sourcePackages||[])card.createEl("p",{text:`原文包：papers/${key}/source.pdf`});
-			if (job.phase === "acquired" && job.mode === "production" && this.intake) button("继续入库", "intake", () => this.intake!.open(job.id));
+			if (job.phase === "acquired" &&job.request.goal==="pdf"&& job.mode === "production" && this.openPdf) button("预览 PDF", "preview", () => this.openPdf!(job.id));
+			if (job.phase === "acquired" &&job.request.goal==="pdf"&& job.mode === "production" && this.intake?.save) button(job.sourcePackages?.length?"查看原文保存与登记":"仅保存原文", "save-source", () => this.intake!.save!(job.id));
+			if(job.phase==="acquired"&&job.request.goal==="jats"&&this.intake?.jats)button(job.sourcePackages?.length?"查看 JATS 保存与登记":"查看 XML 并保存原文","save-jats",()=>this.intake!.jats!(job.id));
+			if(job.phase==="acquired"&&job.request.goal==="jats")button("重新查询 JATS 与图片","refresh-jats",async()=>{const fresh=await this.service.refreshJats(job.id);this.selectedId=fresh.id;this.renderJobs();});
+			for(const key of job.sourcePackages||[])card.createEl("p",{text:`原文包：papers/${key}/${job.request.goal==="pdf"?"source.pdf":"article.md"}`});
+			if (job.phase === "acquired" &&job.request.goal==="pdf"&& job.mode === "production" && this.intake) button("继续入库", "intake", () => this.intake!.open(job.id));
 			if(this.intake && job.mode==="production") {
 				const linked=this.intake.runs().filter(run=>run.acquisitionSource?.jobId===job.id || job.intakeRunIds?.includes(run.id));
 				for(const run of linked) {card.createEl("p",{text:"关联入库："+({running:"进行中",queued:"等待中",done:"已完成",failed:"未完成",interrupted:"已中断"}[run.status]||run.status)});button("查看入库任务", "intake-"+run.id,()=>this.intake!.openRun(run));}

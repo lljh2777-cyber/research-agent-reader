@@ -6714,3 +6714,14 @@ body.agent-dashboard-mineru-resizing {
 .rar-fulltext-page { display: flex; justify-content: center; }
 .rar-fulltext-page canvas { max-width: 100%; height: auto; background: white; }
 .rar-fulltext-modal button:disabled { opacity: .55; cursor: not-allowed; }
+.rar-jats-partial { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0; }
+.rar-jats-partial input[type="checkbox"] { flex: 0 0 auto; width: auto; margin-top: 3px; }
+.rar-jats-save-modal :is(p, code) { overflow-wrap: anywhere; white-space: normal; }
+.rar-jats-save-modal button { white-space: normal; height: auto; min-height: 32px; }
+.rar-jats-xml-evidence { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow-y: auto; font-size: 12px; }
+.rar-jats-block { scroll-margin-top: 16px; overflow-wrap: anywhere; }
+.agent-dashboard-mineru-article .rar-jats-block h1 { font-size: 1.5em; line-height: 1.35; }
+.rar-jats-block:has(table) { overflow-x: auto; }
+.rar-jats-table { border-collapse: collapse; margin-block: 12px; }
+.rar-jats-table :is(th, td) { border: 1px solid var(--background-modifier-border); padding: 6px 10px; vertical-align: top; }
+.rar-jats-figure-link { margin-block: 8px; }

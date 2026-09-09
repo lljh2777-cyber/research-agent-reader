@@ -15,6 +15,25 @@ contact channel without including exploit details.
 
 ## Trust boundaries
 
+M5 adds deterministic PMC JATS acquisition and source packages. XML and media
+must match the same version metadata digest and listed MD5 values. Transport
+retains DNS/peer checks, HTTPS-only redirects and explicit resource budgets.
+The bounded XML reader never resolves external DTDs/entities and rejects internal
+DTDs and undefined entities. Source XML is displayed as text; generated Markdown
+escapes active content, tables use a fixed DOM vocabulary, and TeX accepts a
+limited command set. Unsupported formulas/media and omitted material remain gaps.
+PNG/JPEG/WebP headers are checked before embedding; browser decoding failures are
+shown explicitly. TIFF/SVG originals are retained without embedding or conversion.
+
+JATS uses a separate structured v2 confirmation, binding the main article,
+snapshot, XML hash and displayed metadata. It does not claim PDF visual evidence.
+Partial outcomes need explicit acceptance. Create-only publication, device-bound
+recovery, independent index registration and strict re-projection on load apply
+to the JATS package. A changed source manifest cannot reuse an older package even
+when the PMC version is unchanged. JATS is currently ordinary reading only, with
+no PDF page/box mapping, structured interactive reading or Wiki generation.
+See the [M5 implementation notes](docs/fulltext-acquisition-m5.md).
+
 M4 adds a model-independent PDF source save. The explicit confirmation button is
 enabled only after an authorized PDF raster has decoded in the displayed modal.
 Its separate v2 receipt binds the request, acquisition snapshot, PDF hash,

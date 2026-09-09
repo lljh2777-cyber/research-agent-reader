@@ -1,4 +1,5 @@
 import { oaUrl } from "./url-policy";
+import { decodeJatsLocator,decodeJatsSnapshot,type JatsLocator,type JatsSnapshot } from "../jats/contracts";
 import type { ResolvedIdentity } from "../papers/identity";
 export type { ResolvedIdentity } from "../papers/identity";
 export type AcquisitionMode = "production" | "demo";
@@ -6,12 +7,12 @@ export const ACQUISITION_PHASES = ["queued", "resolving", "discovering", "awaiti
 export type AcquisitionPhase = typeof ACQUISITION_PHASES[number];
 export type DemoScenario = "success" | "selection" | "failure" | "conflict" | "no_match";
 export interface AcquisitionInput { kind: "doi" | "pmid" | "pmcid"; value: string; }
-export interface AcquisitionRequest { input: AcquisitionInput; goal: "pdf"; versionPolicy: "record_only" | "record_preferred_allow_manuscript"; scenario?: DemoScenario; useUnpaywall?: boolean; }
+export interface AcquisitionRequest { input: AcquisitionInput; goal: "pdf"|"jats"; versionPolicy: "record_only" | "record_preferred_allow_manuscript"; scenario?: DemoScenario; useUnpaywall?: boolean; includeFigures?:boolean; }
 export interface PmcLocator {
 	pmcid: string; sourceVersionId: string; pdfKey: string; md5: string; manifestSha256: string; license: string; retracted: boolean; observedAt: string;
 }
 export interface OaLocator { doi: string; origin: string; urlSha256: string; recordSha256: string; license: string; hostType: "publisher" | "repository"; observedAt: string; }
-export interface AcquisitionCandidate { id: string; title: string; providerId: string; version: "version_of_record" | "accepted_manuscript"; pmc?: PmcLocator; oa?: OaLocator; }
+export interface AcquisitionCandidate { id: string; title: string; providerId: string; version: "version_of_record" | "accepted_manuscript"; pmc?: PmcLocator; oa?: OaLocator; jats?:JatsLocator; }
 export interface AcquisitionIntakeRef { jobId: string; snapshotId: string; sha256: string; byteLength: number; }
 export interface AcquisitionJob {
 	schemaVersion: 1; id: string; revision: number; attemptId: string; mode: AcquisitionMode; deviceId: string;
@@ -30,7 +31,7 @@ export interface PdfSnapshot {
 	schemaVersion: 2; id: string; jobId: string; attemptId: string; mode: "production"; input: AcquisitionInput; candidateId: string; createdAt: string;
 	identity: ResolvedIdentity; candidate: AcquisitionCandidate; artifact: PdfArtifact; validation: PdfValidation;
 }
-export type AcquisitionSnapshot = DemoSnapshot | PdfSnapshot;
+export type AcquisitionSnapshot = DemoSnapshot | PdfSnapshot | JatsSnapshot;
 export const acquisitionId = (value: unknown): value is string => typeof value === "string" && /^[as]-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 export const acquisitionActive = (phase: AcquisitionPhase): boolean => ["queued", "resolving", "discovering", "awaiting_selection", "downloading", "verifying"].includes(phase);
 export const acquisitionRetryable = (phase: AcquisitionPhase): boolean => ["failed", "cancelled", "interrupted", "needs_configuration"].includes(phase);
@@ -67,16 +68,17 @@ export function decodeInput(value: unknown): AcquisitionInput {
 	if (parsed.kind !== kind || parsed.value !== text) throw new Error("论文标识尚未规范化"); return parsed;
 }
 export function decodeRequest(value: unknown, mode: AcquisitionMode): AcquisitionRequest {
-	const r = record(value); if (r.goal !== "pdf" || !["record_only", "record_preferred_allow_manuscript"].includes(String(r.versionPolicy)) || (mode === "demo" && r.versionPolicy !== "record_only")) throw new Error("暂不支持这类获取请求");
+	const r = record(value); if (!["pdf","jats"].includes(String(r.goal)) || !["record_only", "record_preferred_allow_manuscript"].includes(String(r.versionPolicy)) || (mode === "demo" && (r.versionPolicy !== "record_only"||r.goal!=="pdf"))) throw new Error("暂不支持这类获取请求");
 	if (r.scenario !== undefined && (mode !== "demo" || !["success", "selection", "failure", "conflict", "no_match"].includes(String(r.scenario)))) throw new Error("演示参数不能用于正式获取");
 	if (r.useUnpaywall !== undefined && (mode === "demo" || typeof r.useUnpaywall !== "boolean")) throw new Error("开放来源配置无效");
-	return { input: decodeInput(r.input), goal: "pdf", versionPolicy: r.versionPolicy as AcquisitionRequest["versionPolicy"], ...(r.useUnpaywall ? {useUnpaywall:true} : {}), ...(mode === "demo" ? { scenario: (r.scenario || "success") as DemoScenario } : {}) };
+	if(r.goal==="jats"&&(r.useUnpaywall||typeof r.includeFigures!=="boolean")||r.goal==="pdf"&&r.includeFigures!==undefined)throw new Error("JATS 请求与图片选项不一致");
+	return { input: decodeInput(r.input), goal: r.goal as AcquisitionRequest["goal"], versionPolicy: r.versionPolicy as AcquisitionRequest["versionPolicy"], ...(r.useUnpaywall ? {useUnpaywall:true} : {}), ...(r.goal==="jats"?{includeFigures:r.includeFigures as boolean}:{}), ...(mode === "demo" ? { scenario: (r.scenario || "success") as DemoScenario } : {}) };
 }
 export function decodeCandidates(value: unknown): AcquisitionCandidate[] {
 	if (!Array.isArray(value) || value.length > 20) throw new Error("全文候选过多或格式无效");
 	const result = value.map(item => { const r = record(item); const candidate: AcquisitionCandidate = { id: string(r.id, 80), title: string(r.title, 2000), providerId: string(r.providerId, 80), version: r.version as AcquisitionCandidate["version"] };
 		if (!/^c-[a-z0-9-]+$/.test(candidate.id) || !candidate.title.trim() || !/^[a-z0-9-]+$/.test(candidate.providerId) || !["version_of_record", "accepted_manuscript"].includes(candidate.version)) throw new Error("全文候选字段无效");
-		if (r.pmc !== undefined) candidate.pmc = decodePmcLocator(r.pmc); if (r.oa !== undefined) candidate.oa = decodeOaLocator(r.oa); if (candidate.pmc && candidate.oa) throw new Error("全文候选来源混用"); return candidate; });
+		if (r.pmc !== undefined) candidate.pmc = decodePmcLocator(r.pmc); if (r.oa !== undefined) candidate.oa = decodeOaLocator(r.oa); if(r.jats!==undefined)candidate.jats=decodeJatsLocator(r.jats); if ([candidate.pmc,candidate.oa,candidate.jats].filter(Boolean).length>1) throw new Error("全文候选来源混用"); return candidate; });
 	if (new Set(result.map(c => c.id)).size !== result.length) throw new Error("全文候选标识重复"); return result;
 }
 export function decodeJob(value: unknown, mode: AcquisitionMode): AcquisitionJob {
@@ -95,12 +97,13 @@ export function decodeJob(value: unknown, mode: AcquisitionMode): AcquisitionJob
 	if (r.identityCheck !== undefined) { if (!["verified", "needs_confirmation"].includes(String(r.identityCheck))) throw new Error("身份校验状态无效"); job.identityCheck = r.identityCheck as AcquisitionJob["identityCheck"]; }
 	if (r.errorCode !== undefined) job.errorCode = string(r.errorCode, 80);
 	if (r.intakeRunIds !== undefined) { job.intakeRunIds = strings(r.intakeRunIds, 100, 200); if (job.intakeRunIds.some(v=>!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(v)) || new Set(job.intakeRunIds).size !== job.intakeRunIds.length || mode !== "production") throw new Error("入库任务关联无效"); }
-	if(r.sourcePackages!==undefined){job.sourcePackages=strings(r.sourcePackages,100,180);if(mode!=="production"||job.sourcePackages.some(s=>!/^\w[A-Za-z0-9._-]*--pdf--[A-Za-z0-9._-]+$/.test(s))||new Set(job.sourcePackages).size!==job.sourcePackages.length)throw new Error("原文包关联无效");}
-	if (mode === "production" && job.candidates.some(c => !(c.providerId === "pmc-cloud" && c.pmc) && !(c.providerId === "unpaywall" && c.oa && job.request.useUnpaywall) || (job.request.versionPolicy === "record_only" && c.version !== "version_of_record"))) throw new Error("正式获取候选与来源策略不一致");
-	if (mode === "demo" && job.candidates.some(c => c.providerId !== "demo" || c.pmc || c.oa)) throw new Error("演示候选混入真实来源");
+	if(r.sourcePackages!==undefined){job.sourcePackages=strings(r.sourcePackages,100,180);if(mode!=="production"||job.sourcePackages.some(s=>!new RegExp(`^\\w[A-Za-z0-9._-]*--${job.request.goal}--[A-Za-z0-9._-]+$`).test(s))||new Set(job.sourcePackages).size!==job.sourcePackages.length)throw new Error("原文包关联无效");}
+	if (mode === "production" && job.candidates.some(c => (job.request.goal==="jats"?!(c.providerId==="pmc-jats"&&c.jats):!(c.providerId === "pmc-cloud" && c.pmc) && !(c.providerId === "unpaywall" && c.oa && job.request.useUnpaywall)) || (job.request.versionPolicy === "record_only" && c.version !== "version_of_record"))) throw new Error("正式获取候选与来源策略不一致");
+	if (mode === "demo" && job.candidates.some(c => c.providerId !== "demo" || c.pmc || c.oa || c.jats)) throw new Error("演示候选混入真实来源");
 	return job;
 }
 export function decodeSnapshot(value: unknown): AcquisitionSnapshot {
+	if (record(value).schemaVersion === 3) return decodeJatsSnapshot(value);
 	if (record(value).schemaVersion === 2) return decodePdfSnapshot(value);
 	const r = record(value); if (r.schemaVersion !== 1 || r.mode !== "demo" || r.simulated !== true) throw new Error("M1 仅支持明确标记的模拟快照");
 	const result: DemoSnapshot = { schemaVersion: 1, id: id(r.id), jobId: id(r.jobId), attemptId: id(r.attemptId), mode: "demo", simulated: true, input: decodeInput(r.input), candidateId: string(r.candidateId, 80), createdAt: date(r.createdAt) };

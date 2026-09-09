@@ -7,15 +7,20 @@ import { SourceError } from "./errors";
 import { validatePdf, type PdfLoader, defaultPdfLoader } from "./file-validator";
 import type { SourceTransport } from "./transport";
 import { UnpaywallProvider, type UnpaywallConfig } from "./unpaywall-provider";
+import { JatsProvider } from "../jats/provider";
+import type { JatsSnapshot } from "../jats/contracts";
+import type { SourceStorage } from "../sources/storage";
 
 export class PmcAcquisitionBackend implements AcquisitionBackend {
 	readonly mode = "production" as const;
 	private resolver: IdentityResolver; private provider: PmcProvider; private unpaywall: UnpaywallProvider;
-	constructor(private transport: SourceTransport, readonly files: PdfArtifactStore, private pdfLoader: PdfLoader = defaultPdfLoader, private config:()=>UnpaywallConfig = ()=>({enabled:false,email:""})) { this.resolver = new IdentityResolver(transport); this.provider = new PmcProvider(transport); this.unpaywall=new UnpaywallProvider(transport,config); }
+	readonly jats?:JatsProvider;
+	constructor(private transport: SourceTransport, readonly files: PdfArtifactStore, private pdfLoader: PdfLoader = defaultPdfLoader, private config:()=>UnpaywallConfig = ()=>({enabled:false,email:""}), jatsStorage?:SourceStorage) { this.resolver = new IdentityResolver(transport); this.provider = new PmcProvider(transport); this.unpaywall=new UnpaywallProvider(transport,config);if(jatsStorage)this.jats=new JatsProvider(transport,jatsStorage); }
 	get unpaywallEnabled():boolean { return this.config().enabled; }
 	resolve(request: AcquisitionRequest, signal: AbortSignal) { return this.resolver.resolve(request.input, signal); }
 	async discover(request: AcquisitionRequest, signal: AbortSignal, identity?: ResolvedIdentity) {
 		if (!identity) throw new SourceError("missing_identity", "获取缺少论文身份");
+		if(request.goal==="jats"){if(!this.jats)throw new SourceError("not_supported","JATS 存储不可用");return this.jats.discover(request,identity,signal);}
 		try { return await this.provider.discover(request, identity, signal); }
 		catch(error) { signal.throwIfAborted(); if(!(error instanceof SourceError) || error.outcome==="conflict" || error.code==="unsupported_version")throw error;
 			if(!request.useUnpaywall)throw new SourceError(error.code,error.message+"；Unpaywall 回退未启用",error.outcome);
@@ -35,6 +40,8 @@ export class PmcAcquisitionBackend implements AcquisitionBackend {
 		return validatePdf(await this.files.readArtifact(artifact), identity, signal, this.pdfLoader);
 	}
 	async validateSnapshot(snapshot: PdfSnapshot): Promise<void> { await this.files.readArtifact(snapshot.artifact); }
+	async downloadJats(candidate:AcquisitionCandidate,signal:AbortSignal,progress:(n:number)=>void,context:DownloadContext){if(!this.jats||!context.identity||!context.budget)throw new Error("JATS 获取服务不可用");return this.jats.download(candidate,context.request,context.identity,context.attemptId,signal,progress,context.budget);}
+	async readJatsSnapshot(snapshot:JatsSnapshot){if(!this.jats)throw new Error("JATS 获取服务不可用");return this.jats.read(snapshot);}
 	readSnapshot(snapshot: PdfSnapshot): Promise<Uint8Array> { return this.files.readArtifact(snapshot.artifact); }
 	async pathSnapshot(snapshot:PdfSnapshot):Promise<string> { if(!this.files.artifactPath)throw new Error("此存储不提供入库文件路径");return this.files.artifactPath(snapshot.artifact); }
 }

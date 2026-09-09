@@ -31,6 +31,8 @@ import { SourceIntakeService } from "./papers/source-intake";
 import { createVaultCatalog, sourceIndexIO } from "./papers/vault-catalog";
 import { FileSourceStorage } from "./sources/storage";
 import { openSourceSave } from "./papers/source-save-modal";
+import { JatsIntakeService } from "./jats/intake";
+import { openJatsSave } from "./jats/modal";
 import { renderAuthorizedPdfIdentityPage } from "./agent/pdf-identity";
 import { catalogIntake, legacyCatalogAssociation } from "./papers/agent-intake";
 import type { AcquisitionMode } from "./fulltext/contracts";
@@ -553,6 +555,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.acquisitionClosing = true; for (const modal of this.fulltextPreviews) modal.close();
 		for(const modal of [...this.acquisitionDialogs])modal.close();
 		await this.sourceIntakeService?.dispose();
+		await this.jatsIntakeService?.dispose();
 		for (const modal of [...this.acquisitionModals]) modal.close();
 		await Promise.all([...this.acquisitionServices.values()].map(service => service.dispose()));
 		for (const modal of [...this.curationModals]) modal.close();
@@ -2055,7 +2058,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const directory = this.readingPluginDirectory();
 			const deviceId = createHash("sha256").update(hostname() + "\n" + path.resolve(directory).toLowerCase()).digest("hex");
 			const storage = new FileAcquisitionStorage(directory, mode);
-			service = new AcquisitionService(new AcquisitionRepository(storage, mode), deviceId, mode === "demo" ? new DemoAcquisitionBackend() : new PmcAcquisitionBackend(new HttpsSourceTransport(), storage,undefined,()=>({enabled:this.settings.fulltextUnpaywallEnabled,email:this.settings.fulltextUnpaywallEmail})));
+			service = new AcquisitionService(new AcquisitionRepository(storage, mode), deviceId, mode === "demo" ? new DemoAcquisitionBackend() : new PmcAcquisitionBackend(new HttpsSourceTransport(), storage,undefined,()=>({enabled:this.settings.fulltextUnpaywallEnabled,email:this.settings.fulltextUnpaywallEmail}),new FileSourceStorage(directory)));
 			if (mode === "production") service.subscribe(progressOnly => { if (!progressOnly) this.notifyTaskRuns(); });
 			this.acquisitionServices.set(mode, service);
 		}
@@ -2064,11 +2067,15 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	openFulltextAcquisition(mode: AcquisitionMode = "production", jobId?: string): void {
 		try {
-			const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id), {open:id=>openAcquiredIntake(this,id),save:id=>openSourceSave(this,id),runs:()=>this.getTaskRuns(),subscribe:listener=>this.subscribeTaskRuns(listener),openRun:run=>new TaskResultModal(this.app,this,run,null).open()});
+			const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id), {open:id=>openAcquiredIntake(this,id),save:id=>openSourceSave(this,id),jats:id=>openJatsSave(this,id),runs:()=>this.getTaskRuns(),subscribe:listener=>this.subscribeTaskRuns(listener),openRun:run=>new TaskResultModal(this.app,this,run,null).open()});
 			this.acquisitionModals.add(modal); modal.open();
 		} catch { new Notice("全文获取需要可读写的桌面插件目录"); }
 	}
 	private sourceIntakeService?:SourceIntakeService;
+	private jatsIntakeService?:JatsIntakeService;
+	getJatsIntakeService():JatsIntakeService {
+		if(this.acquisitionClosing)throw new Error("插件已关闭");return this.jatsIntakeService ||= new JatsIntakeService({deviceId:this.getAcquisitionService().deviceId,catalog:this.getSourceCatalog(),journal:new FileSourceStorage(this.readingPluginDirectory()),index:sourceIndexIO(this.app,this.getActiveVaultRoot()),read:id=>this.getAcquisitionService().previewJats(id),link:async(id,key)=>{await this.getAcquisitionService().linkSourcePackage(id,key);const adapter=this.app.vault.adapter as typeof this.app.vault.adapter&{reconcileInternalFile?(path:string):void|Promise<void>};await adapter.reconcileInternalFile?.(`papers/${key}/article.md`);}});
+	}
 	getSourceCatalog() { return createVaultCatalog(this.app,this.getActiveVaultRoot()); }
 	getSourceIntakeService():SourceIntakeService {
 		if(this.acquisitionClosing)throw new Error("插件已关闭");

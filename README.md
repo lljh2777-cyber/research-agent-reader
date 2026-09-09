@@ -8,11 +8,16 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.47.0`; the beta
+The `codex/research-learning-map` development branch is at `0.48.0`; the beta
 release link above remains the published release.
 
 全文获取与多来源入库的后续设计见[架构与开发流程](docs/fulltext-acquisition-design.md)。
 总体设计基于 `0.43.2`，各阶段按实现说明验收。
+`0.48.0` 已完成 M5：在「获取全文 → 获取内容」选择 JATS XML，可获取 PMC 的正文与同版本图片。
+核对主文章信息后可无模型、无 MinerU 保存图文原文，支持章节、图表与参考文献跳转。
+缺图、公式降级或未展开内容会列出缺口；部分结果需明确接受后保存，也可重新查询。
+原文包保留 XML、来源清单、原始媒体与确定性投影；JATS 暂不提供 PDF 页码同步、交互深读或 Wiki 生成。
+使用流程与验收范围见[全文获取 M5](docs/fulltext-acquisition-m5.md)。
 `0.47.0` 已完成 M4：已获取的 PDF 可通过「仅保存原文」在标题页确认后保存，无需配置模型或 MinerU。
 正式原文包按论文、版本和文件内容区分，并独立登记 `papers/index.md`；保存 PDF 不代表已转换正文或生成 Wiki。
 索引登记失败可单独补登记，中断恢复先核对已写文件，保留用户修改。

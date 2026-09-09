@@ -56,7 +56,7 @@ class Gate {
 }
 export interface ByteSink { write(bytes: Uint8Array): Promise<void>; }
 export interface ByteResponse { status: number; headers: Record<string, string>; bytes: Uint8Array; }
-export interface DownloadPolicy { dynamic?: boolean; budget?: { received: number; limit: number }; }
+export interface DownloadPolicy { dynamic?: boolean; resource?:"xml"|"media"; budget?: { received: number; limit: number }; }
 export interface SourceTransport {
 	metadata(url: string, signal: AbortSignal): Promise<ByteResponse>;
 	download(url: string, signal: AbortSignal, sink: ByteSink, progress: (received: number, total?: number) => void, policy?: DownloadPolicy): Promise<void>;
@@ -84,7 +84,8 @@ export class HttpsSourceTransport implements SourceTransport {
 		});
 	}
 	async download(url: string, signal: AbortSignal, sink: ByteSink, progress: (received: number, total?: number) => void, policy?: DownloadPolicy): Promise<void> {
-		await this.fileGate.run(signal, async () => { await this.transfer(url, signal, sink, 64 * 1024 * 1024, 120000, progress, policy); });
+		if(policy?.resource&&policy.dynamic)throw new SourceError("blocked_url","结构化资源只接受固定 PMC 来源");
+		await this.fileGate.run(signal, async () => { await this.transfer(url, signal, sink, (policy?.resource==="xml"?8:policy?.resource==="media"?16:64) * 1024 * 1024, 120000, progress, policy); });
 	}
 	private async transfer(raw: string, parent: AbortSignal, sink: ByteSink, limit: number, timeout: number, progress?: (received: number, total?: number) => void, policy?: DownloadPolicy): Promise<{status: number; headers: Record<string,string>}> {
 		const controller = new AbortController(), relay = () => controller.abort(parent.reason);
@@ -102,7 +103,7 @@ export class HttpsSourceTransport implements SourceTransport {
 				const response = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
 					const request = this.deps.request(url, { agent: false, family: selected.family, servername: url.hostname, signal: controller.signal,
 						lookup: (_host, _options, callback) => callback(null, selected.address, selected.family),
-						headers: { "User-Agent": "Research-Agent-Reader/0.47.0", Accept: progress ? "application/pdf, application/octet-stream" : "application/json, application/xml, text/xml", "Accept-Encoding": "identity" },
+						headers: { "User-Agent": "Research-Agent-Reader/0.48.0", Accept: policy?.resource==="xml"?"application/xml, text/xml, application/octet-stream":policy?.resource==="media"?"image/png, image/jpeg, image/webp, application/octet-stream":progress ? "application/pdf, application/octet-stream" : "application/json, application/xml, text/xml", "Accept-Encoding": "identity" },
 					}, resolve);
 					const connectTimer = setTimeout(() => request.destroy(new SourceError("connect_timeout", "来源连接超时")), 15000);
 					request.once("socket", socket => { socket.once("secureConnect", () => { clearTimeout(connectTimer); if (!sameAddress(socket.remoteAddress, selected.address)) request.destroy(new SourceError("address_changed", "实际连接地址与已验证地址不一致")); }); });
@@ -118,7 +119,8 @@ export class HttpsSourceTransport implements SourceTransport {
 				try {
 					if (headers["content-encoding"] && headers["content-encoding"] !== "identity") throw new SourceError("encoded_response", "来源返回压缩响应，本版本仅接收原始字节");
 					if (progress && status !== 200) throw new SourceError("http_" + status, `PDF 来源返回 HTTP ${status}；请重新查询来源`);
-					if (progress && !/^(application\/(pdf|octet-stream|x-pdf|binary)|binary\/octet-stream)(;|$)/i.test(headers["content-type"] || "")) throw new SourceError("not_pdf", "来源返回的不是 PDF 文件类型");
+						const mime=policy?.resource==="xml"?/^(?:application\/(?:xml|jats\+xml|octet-stream)|text\/xml|binary\/octet-stream)(;|$)/i:policy?.resource==="media"?/^(?:image\/(?:png|jpeg|webp|tiff|svg\+xml)|application\/octet-stream|binary\/octet-stream)(;|$)/i:/^(application\/(pdf|octet-stream|x-pdf|binary)|binary\/octet-stream)(;|$)/i;
+						if (progress && !mime.test(headers["content-type"] || "")) throw new SourceError(policy?.resource?"wrong_media":"not_pdf", "来源返回的文件类型不符合所选内容");
 					const length = headers["content-length"];
 					if (length !== undefined && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > limit)) throw new SourceError("size_limit", "来源响应大小无效或超过上限");
 					const total = length === undefined ? undefined : Number(length);

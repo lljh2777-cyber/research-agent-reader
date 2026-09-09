@@ -10,6 +10,7 @@ import { validateSourceConfirmation, type SourceConfirmation } from "./confirmat
 import { SourceCatalog } from "./catalog";
 import { identityRelation, objectDigest, safeCitekey } from "./identity";
 import { loadPdfSource } from "../sources/pdf-package";
+import { loadSourcePackage } from "../sources/package";
 
 export interface DeterministicIntake {identity:PaperIngestIdentity;sourcePath:string;analysisPath:string;extractionPackageKey:string;confirmation:SourceConfirmation;}
 export function conversionOptions(options:PaperIngestFlowOptions) {
@@ -32,7 +33,7 @@ export async function catalogIntake(app:App,catalog:SourceCatalog,acquisition:Ac
 	signal.throwIfAborted();const requestId="r-"+randomUUID(),confirmation=await confirmSourceIdentity(app,requestId,snapshot,signal,page=>renderAuthorizedPdfIdentityPage(authorized,page,{signal,bytes}));
 	if(!confirmation)throw new Error("原文身份确认已停止");validateSourceConfirmation(confirmation,requestId,snapshot);signal.throwIfAborted();
 	const fresh=await catalog.prepare(snapshot);if(fresh.citekey!==plan.citekey || objectDigest(fresh.legacy)!==objectDigest(plan.legacy) || objectDigest(fresh.packages)!==objectDigest(plan.packages))throw new Error("确认期间文献目录发生变化，请重新核对");
-	const duplicates=[...plan.packages.map(p=>`papers/${p.packageKey}/source.pdf`),...plan.legacy.map(p=>p.path)];
+	const duplicates=[...plan.packages.map(p=>`papers/${p.packageKey}/${p.packageKind==="pdf-source"?"source.pdf":"article.md"}`),...plan.legacy.map(p=>p.path)];
 	return {identity:{status:"verified",duplicateStatus:duplicates.length?"exact":"none",citekey:plan.citekey,title:snapshot.identity.title,title_zh:"",authors:snapshot.identity.authors.join("; "),year:snapshot.identity.year,doi:snapshot.identity.identifiers.doi||"",duplicates,conflicts:[],notes:["身份与分层去重由来源目录确定；已完成 v2 标题页确认",...plan.warnings]},sourcePath,analysisPath:analysis[0]?.path||"",extractionPackageKey:`${plan.citekey.slice(0,50)}--mineru--${objectDigest({sha256:authorized.sha256,options:projectionOptions}).slice(0,32)}`,confirmation};
 }
 
@@ -40,7 +41,7 @@ export async function catalogIntake(app:App,catalog:SourceCatalog,acquisition:Ac
 export async function legacyCatalogAssociation(catalog:SourceCatalog,identity:PaperIngestIdentity):Promise<{citekey?:string;notes:string[]}> {
 	if(!identity.doi)return {notes:[]};const found=(await catalog.list()).packages.filter(p=>identityRelation({doi:identity.doi},p.identity.identifiers)==="same");
 	if(!found.length)return {notes:[]};if(found.length>40)throw new Error("论文来源版本过多，请先核对");
-	for(const p of found)await loadPdfSource(catalog.storage,p.packageKey);
+	for(const p of found)await loadSourcePackage(catalog.storage,p.packageKey);
 	const keys=new Set(found.map(p=>p.citekey));if(keys.size!==1 || !safeCitekey([...keys][0]))throw new Error("正式原文目录的书目关联冲突");
-	return {citekey:[...keys][0],notes:[`确定性来源目录发现 ${found.length} 个 PDF 原文包；模型查重建议为 ${identity.duplicateStatus}。PDF 包不代表已存在正文 Markdown 或 Wiki。`]};
+	return {citekey:[...keys][0],notes:[`确定性来源目录发现 ${found.length} 个原文包；模型查重建议为 ${identity.duplicateStatus}。原文包不代表已存在 Wiki；可用格式以各包清单为准。`]};
 }
