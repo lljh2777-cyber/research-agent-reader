@@ -17,6 +17,7 @@ import { resolvePackageAssetPath } from "../mineru/package-loader";
 import { MineruPdfRenderer } from "../mineru/pdf-renderer";
 import { PdfPageWindow } from "../mineru/pdf-page-window";
 import { ReaderDocumentLoader } from "../reader/document-loader";
+import { renderJatsBody } from "../reader/jats-renderer";
 import {
 	applyPdfCaptionContinuationRecovery,
 	alignedReaderScrollTop,
@@ -253,7 +254,7 @@ export class MineruReaderView extends ItemView {
 			const loaded = await this.loader.load(this.readerState.articlePath);
 			if (!this.opened || generation !== this.loadGeneration) return;
 			this.readerPackage = loaded;
-			if (loaded.sourceKind === "markdown") this.readerState.mode = "visuals";
+			if (loaded.sourceKind !== "mineru") {this.readerState.mode = "visuals";this.readerState.showLayoutBoxes=false;}
 			if (loaded.pdfPath && loaded.verifiedPdfBytes) {
 				try {
 					await this.pdfRenderer.loadBytes(loaded.verifiedPdfBytes);
@@ -446,13 +447,14 @@ export class MineruReaderView extends ItemView {
 			readerPackage.viewerIndex,
 			{
 				removeUnmappedImages: readerPackage.sourceKind === "mineru",
-				standaloneImagesOnly: readerPackage.sourceKind === "markdown",
+				standaloneImagesOnly: readerPackage.sourceKind !== "mineru",
 			},
 		);
 		this.markdownComponent?.unload();
 		this.markdownComponent = new Component();
 		this.markdownComponent.load();
-		await MarkdownRenderer.render(
+		if(readerPackage.sourceKind==="jats")await renderJatsBody(this.app,readerPackage,article,this.markdownComponent,()=>this.opened&&this.readerPackage===readerPackage&&article.isConnected);
+		else await MarkdownRenderer.render(
 			this.app,
 			prepared,
 			article,
@@ -585,6 +587,7 @@ export class MineruReaderView extends ItemView {
 
 	private updateMarkdownPageStatus(): void {
 		if (!this.markdownPageStatus) return;
+		if(this.readerPackage?.sourceKind==="jats"){this.markdownPageStatus.setText("JATS · 章节与图表");this.markdownPageStatus.setAttribute("title","XML 正文没有 PDF 页码或布局框映射");return;}
 		if (this.readerPackage?.sourceKind === "markdown") {
 			this.markdownPageStatus.setText("Markdown · 网页全文");
 			this.markdownPageStatus.setAttribute("title", "普通 Markdown 图文阅读模式");
@@ -1181,7 +1184,7 @@ export class MineruReaderView extends ItemView {
 			state.createEl("p", {
 				text: readerPackage.sourceKind === "markdown"
 					? "正文仍可正常阅读；当前 Markdown 中没有识别到独立图片块。"
-					: "正文仍可正常阅读；当前 MinerU JSON 没有可解析的视觉资源。",
+					: readerPackage.sourceKind==="jats"?"正文与结构表格仍可阅读；图片未请求、缺失或尚不能显示，详见原文缺口记录。":"正文仍可正常阅读；当前 MinerU JSON 没有可解析的视觉资源。",
 			});
 			return;
 		}
@@ -1190,7 +1193,7 @@ export class MineruReaderView extends ItemView {
 		const toolbar = parent.createDiv({ cls: "agent-dashboard-mineru-visual-toolbar" });
 		const title = toolbar.createDiv();
 		title.createEl("strong", { text: visual.label });
-		const pageLabel = readerPackage.sourceKind === "markdown"
+		const pageLabel = readerPackage.sourceKind !== "mineru"
 			? `文中第 ${index + 1} 幅`
 			: visual.captionPageIdx !== undefined && visual.captionPageIdx !== visual.pageIdx
 				? `图第 ${visual.pageIdx + 1} 页 · 图注第 ${visual.captionPageIdx + 1} 页`
@@ -1243,6 +1246,11 @@ export class MineruReaderView extends ItemView {
 			const image = parent.createEl("img", {
 				attr: { alt: visual.label, loading: "eager" },
 			});
+			if(readerPackage.sourceKind==="jats"){
+				const fail=()=>{if(generation!==this.referenceGeneration||image.hidden)return;image.hidden=true;parent.createEl("p",{text:"此图片未能解码显示，已保留原始资源；文件校验通过不等于图像可读。",cls:"rar-fulltext-error"});};
+				this.onReferenceEvent(image,"error",fail);
+				this.onReferenceEvent(image,"load",()=>{if(!image.naturalWidth||!image.naturalHeight||image.naturalWidth>16000||image.naturalHeight>16000||image.naturalWidth*image.naturalHeight>40000000)fail();});
+			}
 			image.src = this.resourceUrl(visual.display.assetPath);
 			return;
 		}
@@ -1304,7 +1312,8 @@ export class MineruReaderView extends ItemView {
 		if (!readerPackage) return;
 		const status = parent.createDiv({ cls: "agent-dashboard-mineru-reference-status" });
 		const visual = this.currentVisual();
-		if (readerPackage.sourceKind === "markdown") {
+		if(readerPackage.sourceKind==="jats"){setIcon(status.createSpan(),"file-code");status.createSpan({text:"正文与图像来自同一 PMC XML 版本；按图号导航，没有 PDF 页面坐标。"});}
+		else if (readerPackage.sourceKind === "markdown") {
 			setIcon(status.createSpan(), "link");
 			status.createSpan({ text: "图片与紧邻图注来自原始 Markdown；Figure 编号仅补在阅读显示层。" });
 		} else if (visual?.captionStatus === "partial" && visual.captionPageIdx !== undefined) {
@@ -1583,7 +1592,7 @@ export class MineruReaderView extends ItemView {
 	private async openAsset(assetPath: string): Promise<void> {
 		const readerPackage = this.readerPackage;
 		if (!readerPackage || !assetPath) return;
-		if (readerPackage.sourceKind === "mineru") {
+		if (readerPackage.sourceKind !== "markdown") {
 			const verifiedUrl = this.resourceUrl(assetPath);
 			if (!verifiedUrl) {
 				new Notice("未找到已验证的原始图片字节");
@@ -1607,8 +1616,8 @@ export class MineruReaderView extends ItemView {
 	private resourceUrl(assetPath: string): string {
 		const readerPackage = this.readerPackage;
 		if (!readerPackage) return "";
-		if (/^https?:\/\//i.test(assetPath)) return assetPath;
-		if (readerPackage.sourceKind === "mineru") {
+		if (/^https?:\/\//i.test(assetPath)) return readerPackage.sourceKind==="jats"?"":assetPath;
+		if (readerPackage.sourceKind !== "markdown") {
 			const normalized = assetPath.replace(/\\/g, "/").replace(/^\.\//, "");
 			const blob = readerPackage.verifiedAssetBlobs.get(normalized);
 			if (!blob) return "";
