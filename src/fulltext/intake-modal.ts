@@ -13,7 +13,7 @@ export async function openAcquiredIntake(plugin:AgentDashboardPlugin,id:string,p
 	let closed=false,busy=false;modal.onClose=()=>{closed=true;};if(!plugin.trackAcquisitionDialog(modal))throw new Error("插件已关闭，请重新打开入库");
 	modal.modalEl.addClass("rar-fulltext-modal");modal.setTitle("继续入库");
 	modal.contentEl.createEl("h3",{text:source.snapshot.identity.title});
-	modal.contentEl.createEl("p",{text:"复用已获取的 PDF，不重新下载。入库会将论文片段和身份核验图片发送至所选模型，重新核对标题页；取得 PDF 或首页线索匹配都不代替这一步。"});
+	modal.contentEl.createEl("p",{text:"复用已获取的 PDF，不重新下载。插件先核对来源身份与已有文件，并展示标题页供你确认；生成 Wiki 时才会将所需论文片段或页面发送至所选模型。"});
 	const select=modal.contentEl.createEl("select",{attr:{"aria-label":"入库模型"}});
 	for(const profile of plugin.getVerifiedProviderProfiles())select.createEl("option",{value:profile.id,text:profile.name+" · "+profile.model});
 	if([...select.options].some(o=>o.value===(previous?.profileId||plugin.settings.activeProviderId)))select.value=previous?.profileId||plugin.settings.activeProviderId;
@@ -35,7 +35,7 @@ export async function openAcquiredIntake(plugin:AgentDashboardPlugin,id:string,p
 		if(article.checked&&!consent.checked){status.setText("请确认 PDF 的远程转换");return;}
 		busy=true;start.disabled=true;let run:TaskRun|undefined;
 		try {
-			const options:PaperIngestFlowOptions={...conversion,sourcePdfPath:source.path,acquisitionSource:source.reference,requestNotes:notes.value.slice(0,4000),identityCandidateTitle:source.snapshot.identity.title,identityCandidateDoi:source.snapshot.identity.identifiers.doi||"",createArticleMarkdown:article.checked,createArticleWiki:wiki.checked,articleWikiSource:article.checked?(saved?.articleWikiSource??"article"):"pdf",remoteUploadConfirmed:article.checked&&consent.checked};
+			const options:PaperIngestFlowOptions={...conversion,identityMode:"source-v2",sourcePdfPath:source.path,acquisitionSource:source.reference,requestNotes:notes.value.slice(0,4000),identityCandidateTitle:source.snapshot.identity.title,identityCandidateDoi:source.snapshot.identity.identifiers.doi||"",createArticleMarkdown:article.checked,createArticleWiki:wiki.checked,articleWikiSource:article.checked?(saved?.articleWikiSource??"article"):"pdf",remoteUploadConfirmed:article.checked&&consent.checked};
 			await validateAcquiredIntake(service,options);
 			if(closed)return;
 			run=await plugin.startTaskRun(ACTION_BY_ID.get("paper-ingest")!,"获取后入库："+source.snapshot.identity.title,{backend:"direct-api",providerId:profile.id,providerName:profile.name,model:profile.model,reasoningEffort:null,serviceTier:null},source.reference);

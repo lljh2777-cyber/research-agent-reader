@@ -1039,6 +1039,7 @@ export class MineruPackageLoader {
 	async load(rawArticlePath: string): Promise<MineruReaderPackage> {
 		const articlePath = normalizePackageArticlePath(rawArticlePath);
 		const packagePath = packagePathFromArticle(articlePath);
+		if(await this.app.vault.adapter.exists(`${packagePath}/_source`,true))throw new Error("此目录使用独立原文包清单，不能作为 MinerU 或普通 Markdown 打开");
 		const article = await readRequiredBinary(this.app, articlePath, "article.md", MAX_ARTICLE_BYTES, packagePath);
 		const mineru = await readRequiredBinary(
 			this.app,

@@ -14,6 +14,7 @@ export function validateIngestRequest(value: unknown, runId: string): IngestRequ
 		if (typeof o[field] !== "boolean") throw new Error("入库选项无效");
 	if (!/\.pdf$/i.test(o.sourcePdfPath) || !["auto", "pdf", "article"].includes(o.articleWikiSource) || !["auto", "vlm", "pipeline", "html"].includes(o.mineruModel)
 		|| !Number.isFinite(o.mineruTimeoutSeconds) || o.mineruTimeoutSeconds < 60 || o.mineruTimeoutSeconds > 1800) throw new Error("入库来源或解析参数无效");
+	if(o.identityMode!==undefined && (o.identityMode!=="source-v2" || !o.acquisitionSource))throw new Error("来源身份模式与快照不一致");
 	const copy=structuredClone(r); if(o.acquisitionSource!==undefined)copy.options.acquisitionSource=decodeIntakeRef(o.acquisitionSource); return copy;
 }
 

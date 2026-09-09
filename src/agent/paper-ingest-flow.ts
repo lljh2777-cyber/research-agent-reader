@@ -42,6 +42,7 @@ import {
 export type PaperIngestPhase = "identity" | "draft";
 
 export interface PaperIngestFlowOptions {
+	identityMode?: "source-v2";
 	acquisitionSource?: import("../fulltext/contracts").AcquisitionIntakeRef;
 	sourcePdfPath: string;
 	requestNotes: string;

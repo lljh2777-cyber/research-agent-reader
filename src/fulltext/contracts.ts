@@ -1,15 +1,12 @@
 import { oaUrl } from "./url-policy";
+import type { ResolvedIdentity } from "../papers/identity";
+export type { ResolvedIdentity } from "../papers/identity";
 export type AcquisitionMode = "production" | "demo";
 export const ACQUISITION_PHASES = ["queued", "resolving", "discovering", "awaiting_selection", "downloading", "verifying", "acquired", "no_match", "needs_configuration", "conflict", "failed", "cancelled", "interrupted"] as const;
 export type AcquisitionPhase = typeof ACQUISITION_PHASES[number];
 export type DemoScenario = "success" | "selection" | "failure" | "conflict" | "no_match";
 export interface AcquisitionInput { kind: "doi" | "pmid" | "pmcid"; value: string; }
 export interface AcquisitionRequest { input: AcquisitionInput; goal: "pdf"; versionPolicy: "record_only" | "record_preferred_allow_manuscript"; scenario?: DemoScenario; useUnpaywall?: boolean; }
-export interface ResolvedIdentity {
-	title: string; authors: string[]; year: string; identifiers: { doi?: string; pmid?: string; pmcid?: string };
-	publicationTypes: string[]; evidence: Array<{ provider: "europe-pmc" | "crossref"; recordId: string; observedAt: string; fields: string[] }>;
-	warnings: string[];
-}
 export interface PmcLocator {
 	pmcid: string; sourceVersionId: string; pdfKey: string; md5: string; manifestSha256: string; license: string; retracted: boolean; observedAt: string;
 }
@@ -23,6 +20,7 @@ export interface AcquisitionJob {
 	receivedBytes?: number; totalBytes?: number; snapshotId?: string; storageWarning?: string;
 	identity?: ResolvedIdentity; identityCheck?: "verified" | "needs_confirmation"; errorCode?: string;
 	intakeRunIds?: string[];
+	sourcePackages?: string[];
 }
 /** A demo receipt cannot be read or imported as a real source file. M2 adds real artifact contracts. */
 export interface DemoSnapshot { schemaVersion: 1; id: string; jobId: string; attemptId: string; mode: "demo"; simulated: true; input: AcquisitionInput; candidateId: string; createdAt: string; }
@@ -97,6 +95,7 @@ export function decodeJob(value: unknown, mode: AcquisitionMode): AcquisitionJob
 	if (r.identityCheck !== undefined) { if (!["verified", "needs_confirmation"].includes(String(r.identityCheck))) throw new Error("身份校验状态无效"); job.identityCheck = r.identityCheck as AcquisitionJob["identityCheck"]; }
 	if (r.errorCode !== undefined) job.errorCode = string(r.errorCode, 80);
 	if (r.intakeRunIds !== undefined) { job.intakeRunIds = strings(r.intakeRunIds, 100, 200); if (job.intakeRunIds.some(v=>!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(v)) || new Set(job.intakeRunIds).size !== job.intakeRunIds.length || mode !== "production") throw new Error("入库任务关联无效"); }
+	if(r.sourcePackages!==undefined){job.sourcePackages=strings(r.sourcePackages,100,180);if(mode!=="production"||job.sourcePackages.some(s=>!/^\w[A-Za-z0-9._-]*--pdf--[A-Za-z0-9._-]+$/.test(s))||new Set(job.sourcePackages).size!==job.sourcePackages.length)throw new Error("原文包关联无效");}
 	if (mode === "production" && job.candidates.some(c => !(c.providerId === "pmc-cloud" && c.pmc) && !(c.providerId === "unpaywall" && c.oa && job.request.useUnpaywall) || (job.request.versionPolicy === "record_only" && c.version !== "version_of_record"))) throw new Error("正式获取候选与来源策略不一致");
 	if (mode === "demo" && job.candidates.some(c => c.providerId !== "demo" || c.pmc || c.oa)) throw new Error("演示候选混入真实来源");
 	return job;

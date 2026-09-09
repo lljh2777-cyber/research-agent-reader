@@ -485,7 +485,7 @@ export async function disposeAuthorizedPdfSnapshot(snapshot: AuthorizedPdfSnapsh
 export async function renderAuthorizedPdfIdentityPage(
 	snapshot: AuthorizedPdfSnapshot,
 	pageNumber: number,
-	options: { signal?: AbortSignal } = {},
+	options: { signal?: AbortSignal; bytes?: Uint8Array } = {},
 ): Promise<AuthorizedPdfPageRaster> {
 	if (typeof document === "undefined") throw new Error("当前环境不能渲染 PDF 身份确认页面");
 	if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > 3) {
@@ -506,7 +506,7 @@ export async function renderAuthorizedPdfIdentityPage(
 	let canvas: HTMLCanvasElement | null = null;
 	try {
 		const bytes = await waitForAbortable(
-			fs.promises.readFile(snapshot.path, { signal: renderController.signal }),
+			options.bytes ? Promise.resolve(new Uint8Array(options.bytes)) : fs.promises.readFile(snapshot.path, { signal: renderController.signal }),
 			renderController.signal,
 			"PDF 身份确认渲染已取消",
 		);

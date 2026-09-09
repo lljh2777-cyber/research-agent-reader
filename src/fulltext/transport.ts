@@ -102,7 +102,7 @@ export class HttpsSourceTransport implements SourceTransport {
 				const response = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
 					const request = this.deps.request(url, { agent: false, family: selected.family, servername: url.hostname, signal: controller.signal,
 						lookup: (_host, _options, callback) => callback(null, selected.address, selected.family),
-						headers: { "User-Agent": "Research-Agent-Reader/0.46.0", Accept: progress ? "application/pdf, application/octet-stream" : "application/json, application/xml, text/xml", "Accept-Encoding": "identity" },
+						headers: { "User-Agent": "Research-Agent-Reader/0.47.0", Accept: progress ? "application/pdf, application/octet-stream" : "application/json, application/xml, text/xml", "Accept-Encoding": "identity" },
 					}, resolve);
 					const connectTimer = setTimeout(() => request.destroy(new SourceError("connect_timeout", "来源连接超时")), 15000);
 					request.once("socket", socket => { socket.once("secureConnect", () => { clearTimeout(connectTimer); if (!sameAddress(socket.remoteAddress, selected.address)) request.destroy(new SourceError("address_changed", "实际连接地址与已验证地址不一致")); }); });

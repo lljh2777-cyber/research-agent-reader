@@ -15,6 +15,30 @@ contact channel without including exploit details.
 
 ## Trust boundaries
 
+M4 adds a model-independent PDF source save. The explicit confirmation button is
+enabled only after an authorized PDF raster has decoded in the displayed modal.
+Its separate v2 receipt binds the request, acquisition snapshot, PDF hash,
+source identity and displayed evidence, including PNG/pixel hashes and render
+parameters. The existing v1 Crossref-bound receipt validator remains unchanged.
+New acquired intake uses deterministic catalog identity; models only draft prose.
+
+PDF source publication is create-only under a fixed Vault root. A private,
+device-bound plan precedes writes; an ownership transaction precedes the PDF;
+the immutable manifest is the final commit marker. Recovery accepts only exact
+owned files, rejects links, unknown paths and modified content, and never deletes
+or overwrites source files. Incomplete or unknown `_source` packages cannot fall
+back to ordinary Markdown or MinerU. PDF reading verifies the committed package.
+Index registration has a separate retry with content comparison before applying
+changes. Concurrent edits stop that attempt. PDF, image, metadata and catalog
+reads have explicit size/count budgets. These contracts detect integrity and
+ownership mistakes; they do not authenticate files against a hostile process
+with the same local user's filesystem privileges.
+
+Source-only saving does not invoke a model or upload a document. It does not
+write scientific conclusions, Wiki notes, CSV or BibTeX. Confirmed page evidence
+and acquisition provenance remain in the local source package; the Unpaywall
+contact email remains outside these records. See the [M4 implementation notes](docs/fulltext-acquisition-m4.md).
+
 Research Agent Reader is a desktop plugin and inherits the filesystem and network
 permissions of Obsidian. It can launch only explicitly supported local programs,
 using argument arrays rather than shell command strings. Optional workflow
@@ -106,10 +130,11 @@ annotation/action layer. Completed artifacts are bound to immutable snapshots
 and rehashed before reuse or preview. Partial files remain in plugin-local
 storage and are never silently promoted, overwritten or automatically removed.
 
-The M3 intake adapter revalidates the source path, snapshot ID, byte length and
-SHA-256 before invoking the existing intake workflow. Its authorized copy must
-match those bytes, and the existing user visual-confirmation receipt is still
-required. Each continuation selects a model and resets remote-upload consent.
+The acquired intake adapter revalidates the source path, snapshot ID, byte length
+and SHA-256 before invoking intake. Its authorized copy must match those bytes.
+M4 uses the separate v2 visual confirmation for new acquired intake; legacy local
+PDF intake retains its existing v1 receipt requirements. Each continuation
+selects a model and resets remote-upload consent.
 Acquisition and intake have separate completion states and persisted links.
 Intake runs carrying an acquisition reference are protected from automatic
 history eviction. Their authorization copies and MinerU staging directories

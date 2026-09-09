@@ -203,6 +203,10 @@ export class AcquisitionService {
 			await this.repository.save({...job,revision:job.revision+1,updatedAt:new Date().toISOString(),intakeRunIds:[...(job.intakeRunIds||[]),runId]});this.volatile.delete(id);this.emit();
 		});
 	}
+	async linkSourcePackage(id:string,packageKey:string):Promise<void> {
+		await this.ready();await this.serial(async()=>{const job=this.get(id);if(!job||!this.owned(job)||job.phase!=="acquired")throw new Error("获取记录不可关联原文包");if(job.sourcePackages?.includes(packageKey))return;
+			await this.repository.save({...job,revision:job.revision+1,updatedAt:new Date().toISOString(),sourcePackages:[...(job.sourcePackages||[]),packageKey]});this.volatile.delete(id);this.emit();});
+	}
 	async preview(id: string): Promise<{ snapshot: PdfSnapshot; bytes: Uint8Array }> {
 		await this.ready(); const job = this.get(id);
 		if (!job || !this.owned(job) || job.phase !== "acquired" || !job.snapshotId || !this.backend?.readSnapshot) throw new SourceError("not_acquired", "此任务没有可预览的本地 PDF");

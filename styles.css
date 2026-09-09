@@ -6692,6 +6692,8 @@ body.agent-dashboard-mineru-resizing {
 .rar-fulltext-choice { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0; }
 .rar-fulltext-choice input[type="checkbox"] { flex: 0 0 auto; margin-top: 3px; }
 .rar-fulltext-notes { display: block; width: 100%; min-height: 80px; resize: vertical; }
+.rar-source-save-modal .rar-source-identity-page { display: block; width: 100%; height: auto; margin: 16px 0; background: white; }
+.rar-source-save-modal code { display: block; overflow-wrap: anywhere; white-space: normal; }
 .rar-fulltext-input-label { display: flex; flex-direction: column; gap: 8px; margin: 16px 0 8px; font-weight: 600; }
 .rar-fulltext-input-label input { width: 100%; }
 .rar-fulltext-input-label select { align-self: flex-start; }

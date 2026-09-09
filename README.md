@@ -8,14 +8,19 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.46.0`; the beta
+The `codex/research-learning-map` development branch is at `0.47.0`; the beta
 release link above remains the published release.
 
 全文获取与多来源入库的后续设计见[架构与开发流程](docs/fulltext-acquisition-design.md)。
 总体设计基于 `0.43.2`，各阶段按实现说明验收。
-`0.46.0` 已完成 M3：PMC 无可用 PDF 时可查询 Unpaywall，并按稿件策略尝试开放 PDF 候选。
+`0.47.0` 已完成 M4：已获取的 PDF 可通过「仅保存原文」在标题页确认后保存，无需配置模型或 MinerU。
+正式原文包按论文、版本和文件内容区分，并独立登记 `papers/index.md`；保存 PDF 不代表已转换正文或生成 Wiki。
+索引登记失败可单独补登记，中断恢复先核对已写文件，保留用户修改。
+新获取入口的身份与去重由来源目录确定，模型负责后续正文生成；旧本地 PDF 入库仍保留原有确认流程。
+使用流程与验收范围见[全文获取 M4](docs/fulltext-acquisition-m4.md)。
+此前 M3 已实现：PMC 无可用 PDF 时可查询 Unpaywall，并按稿件策略尝试开放 PDF 候选。
 在「设置 → 全文来源」中填写联系邮箱并启用回退；查询会将 DOI 和邮箱发送给 Unpaywall。
-获取结果可无模型预览，也可通过「继续入库」选择模型和输出，复用已校验 PDF 接入现有身份核对、MinerU 和 Wiki 流程。
+获取结果可无模型预览，也可通过「继续入库」选择模型和输出，复用已校验 PDF 完成身份核对、MinerU 和 Wiki 流程。
 获取与入库分别保存状态，入库失败后可用同一 PDF 重新续办。
 使用流程和验收范围见[全文获取 M3](docs/fulltext-acquisition-m3.md)；PMC 基础能力见 [M2](docs/fulltext-acquisition-m2.md)，开发演示见 [M1](docs/fulltext-acquisition-m1.md)。
 

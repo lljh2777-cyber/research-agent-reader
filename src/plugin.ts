@@ -27,6 +27,12 @@ import { openAcquiredIntake } from "./fulltext/intake-modal";
 import { TaskResultModal } from "./modals/task-result";
 import { validateAcquiredIntake } from "./fulltext/intake-adapter";
 import { decodeIntakeRef, type AcquisitionIntakeRef } from "./fulltext/contracts";
+import { SourceIntakeService } from "./papers/source-intake";
+import { createVaultCatalog, sourceIndexIO } from "./papers/vault-catalog";
+import { FileSourceStorage } from "./sources/storage";
+import { openSourceSave } from "./papers/source-save-modal";
+import { renderAuthorizedPdfIdentityPage } from "./agent/pdf-identity";
+import { catalogIntake, legacyCatalogAssociation } from "./papers/agent-intake";
 import type { AcquisitionMode } from "./fulltext/contracts";
 import { IngestRecords, validateIngestRequest } from "./agent/ingest-records";
 import { openIngestContinuation } from "./views/ingest-continuation";
@@ -289,6 +295,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		getVaultRoot: () => this.getActiveVaultRoot(),
 		runMineruCommand: (request) => this.runMineruProcess(request),
 		confirmPaperIdentity: (request) => requestHumanIdentityConfirmation(this.app, request),
+		prepareSourceIntake:(options,authorized,signal)=>catalogIntake(this.app,this.getSourceCatalog(),this.getAcquisitionService(),options,authorized,signal),
+		legacySourceAssociation:identity=>legacyCatalogAssociation(this.getSourceCatalog(),identity),
 	});
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;
@@ -544,6 +552,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	async onunload(): Promise<void> {
 		this.acquisitionClosing = true; for (const modal of this.fulltextPreviews) modal.close();
 		for(const modal of [...this.acquisitionDialogs])modal.close();
+		await this.sourceIntakeService?.dispose();
 		for (const modal of [...this.acquisitionModals]) modal.close();
 		await Promise.all([...this.acquisitionServices.values()].map(service => service.dispose()));
 		for (const modal of [...this.curationModals]) modal.close();
@@ -2055,9 +2064,19 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	openFulltextAcquisition(mode: AcquisitionMode = "production", jobId?: string): void {
 		try {
-			const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id), {open:id=>openAcquiredIntake(this,id),runs:()=>this.getTaskRuns(),subscribe:listener=>this.subscribeTaskRuns(listener),openRun:run=>new TaskResultModal(this.app,this,run,null).open()});
+			const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id), {open:id=>openAcquiredIntake(this,id),save:id=>openSourceSave(this,id),runs:()=>this.getTaskRuns(),subscribe:listener=>this.subscribeTaskRuns(listener),openRun:run=>new TaskResultModal(this.app,this,run,null).open()});
 			this.acquisitionModals.add(modal); modal.open();
 		} catch { new Notice("全文获取需要可读写的桌面插件目录"); }
+	}
+	private sourceIntakeService?:SourceIntakeService;
+	getSourceCatalog() { return createVaultCatalog(this.app,this.getActiveVaultRoot()); }
+	getSourceIntakeService():SourceIntakeService {
+		if(this.acquisitionClosing)throw new Error("插件已关闭");
+		return this.sourceIntakeService ||= new SourceIntakeService({deviceId:this.getAcquisitionService().deviceId,catalog:this.getSourceCatalog(),journal:new FileSourceStorage(this.readingPluginDirectory()),index:sourceIndexIO(this.app,this.getActiveVaultRoot()),
+			readSource:async id=>{const service=this.getAcquisitionService(),source=await service.intakeSource(id),preview=await service.preview(id);return {...source,bytes:preview.bytes};},
+			render:(source,page,signal)=>renderAuthorizedPdfIdentityPage({path:source.path,directory:path.dirname(source.path),originalFileName:path.basename(source.path),size:source.snapshot.artifact.byteLength,sha256:source.snapshot.artifact.sha256,retainFiles:true},page,{signal,bytes:source.bytes}),
+			link:async(id,key)=>{await this.getAcquisitionService().linkSourcePackage(id,key);const adapter=this.app.vault.adapter as typeof this.app.vault.adapter&{reconcileInternalFile?(path:string):void|Promise<void>};await adapter.reconcileInternalFile?.("papers/"+key+"/source.pdf");},
+		});
 	}
 
 	async openAcquiredPdf(jobId: string): Promise<void> {

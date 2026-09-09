@@ -56,6 +56,7 @@ import type { AgentLoopResult, AgentLoopStep } from "./types";
 import { MineruPackageLoader } from "../mineru/package-loader";
 import { createBoundPdfReadTool, pdfDraftKey } from "./pdf-draft";
 import { readTrustedVaultFile, type VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
+import type { DeterministicIntake } from "../papers/agent-intake";
 
 export interface AgentLoopServiceDeps {
 	app: App;
@@ -86,6 +87,8 @@ export interface AgentLoopServiceDeps {
 		signal: AbortSignal;
 	}): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 	confirmPaperIdentity(request: HumanIdentityConfirmationRequest): Promise<HumanIdentityConfirmationReceipt | null>;
+	prepareSourceIntake?(options:PaperIngestFlowOptions,authorized:AuthorizedPdfSnapshot,signal:AbortSignal):Promise<DeterministicIntake>;
+	legacySourceAssociation?(identity:PaperIngestIdentity):Promise<{citekey?:string;notes:string[]}>;
 }
 
 export interface HumanIdentityConfirmationRequest {
@@ -111,6 +114,7 @@ interface ActiveAgentRun {
 
 /** Final structured result; paths come from plugin receipts, not model claims. */
 export interface PaperIngestFinalResult {
+	sourceConfirmation?:import("../papers/confirmation").SourceConfirmation;
 	status: "completed" | "conflict" | "failed";
 	citekey: string;
 	title: string;
@@ -155,6 +159,7 @@ const STEP_TITLES: Record<AgentLoopStep["kind"], string> = {
 
 /** Mutable per-run state threaded through the phase pipeline. */
 interface IngestState {
+	sourceConfirmation?:import("../papers/confirmation").SourceConfirmation;
 	traces: string[];
 	notes: string[];
 	conflicts: string[];
@@ -328,6 +333,18 @@ export class AgentLoopService {
 				state.notes.push(localPdfEvidence.warning);
 			}
 			advanceStage("identity", "running", "正在核对书目信息，并检索已有原文与笔记");
+			let identity:PaperIngestIdentity,extractionPackageKey:string|undefined;
+			if(options.identityMode==="source-v2") {
+				if(!authorizedPdfSnapshot || !this.deps.prepareSourceIntake)throw new Error("来源中立入库服务不可用");
+				advanceStage("confirm","waiting","插件正在核对来源目录；请在标题页窗口确认身份");
+				const decision=await this.deps.prepareSourceIntake(options,authorizedPdfSnapshot,abortController.signal);
+				if(decision.identity.status!=="verified"||decision.identity.conflicts.length)throw new Error("确定性来源身份尚未通过核验");
+				state.sourceConfirmation=decision.confirmation;
+				identity=state.identity=decision.identity;state.existingSourcePath=decision.sourcePath;state.existingAnalysisPath=decision.analysisPath;extractionPackageKey=decision.extractionPackageKey;
+				state.notes.push(...identity.notes);state.duplicates.push(...identity.duplicates);
+				if(planExactDuplicateOutputs(options,decision).noOp){state.duplicateNoOp=true;return this.finish(state,options,profileId,resolved,emitStatus);}
+				emitStatus("running",`来源身份与目录核对完成 · citekey ${identity.citekey}`);
+			} else {
 			const identityLoop = await runBoundedAgentLoop({
 				system: buildIdentitySystemPrompt(options),
 				user: buildIdentityUserMessage(options, localPdfEvidence),
@@ -361,7 +378,7 @@ export class AgentLoopService {
 				state.errors.push("阶段一未返回可解析的身份结果");
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
-			const identity = state.identity;
+			identity = state.identity;
 			state.conflicts.push(...identity.conflicts);
 			state.duplicates.push(...identity.duplicates);
 
@@ -392,6 +409,8 @@ export class AgentLoopService {
 				state.conflicts.push("没有授权 PDF 快照，无法完成人工视觉身份确认");
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
+			const catalogAssociation=await this.deps.legacySourceAssociation?.(identity);
+			if(catalogAssociation){state.notes.push(...catalogAssociation.notes);if(catalogAssociation.citekey)identity.citekey=catalogAssociation.citekey;}
 			advanceStage("confirm", "waiting", "请在确认窗口核对 PDF 页面与书目记录；确认后自动继续");
 			const confirmation = await this.deps.confirmPaperIdentity({
 				taskId: runId,
@@ -455,12 +474,14 @@ export class AgentLoopService {
 			emitStatus("running", `阶段一完成 · citekey ${identity.citekey}`);
 
 			// Deterministic citekey uniqueness inside the active Vault.
-			if (identity.duplicateStatus === "none") {
+			if(catalogAssociation?.citekey && identity.citekey!==catalogAssociation.citekey)throw new Error("旧入库与正式原文的 citekey 关联冲突");
+			if (identity.duplicateStatus === "none" && !catalogAssociation?.citekey) {
 				const citekeyCheck = await this.resolveCitekeyUniqueness(identity.citekey);
 				if (citekeyCheck.renamed) {
 					identity.citekey = citekeyCheck.citekey;
 					state.notes.push(`citekey 已被占用，自动改为 ${citekeyCheck.citekey}`);
 				}
+			}
 			}
 
 			// ---- Phase 2: MinerU extraction (deterministic, authorized PDF only) ----
@@ -486,6 +507,7 @@ export class AgentLoopService {
 							deadline,
 							state,
 							authorizedPdfSnapshot,
+							extractionPackageKey,
 						);
 					}
 				}
@@ -625,6 +647,7 @@ export class AgentLoopService {
 		deadline: number,
 		state: IngestState,
 		authorizedPdfSnapshot: AuthorizedPdfSnapshot | null,
+		extractionPackageKey?: string,
 	): Promise<void> {
 		const remaining = deadline - Date.now();
 		if (remaining < 60_000) {
@@ -646,7 +669,7 @@ export class AgentLoopService {
 					source: authorizedPdfSnapshot.path,
 					sourceName: authorizedPdfSnapshot.originalFileName,
 					expectedSourceSha256: authorizedPdfSnapshot.sha256,
-					citekey: identity.citekey,
+					citekey: extractionPackageKey || identity.citekey,
 					model: options.mineruModel,
 					language: options.mineruLanguage,
 					ocr: options.mineruOcr,
@@ -863,6 +886,7 @@ export class AgentLoopService {
 			...state.journal.paths(),
 		];
 		const result: PaperIngestFinalResult = {
+			...(state.sourceConfirmation?{sourceConfirmation:state.sourceConfirmation}:{}),
 			status,
 			citekey: state.identity?.citekey || "",
 			title: state.identity?.title || state.draft?.title || "",
@@ -1035,5 +1059,6 @@ function formatStructuredResult(result: PaperIngestFinalResult): string {
 	if (result.conflicts.length) lines.push(`- conflicts: ${result.conflicts.join("；")}`);
 	if (result.errors.length) lines.push(`- errors: ${result.errors.join("；")}`);
 	if (result.notes.length) lines.push(`- notes: ${result.notes.join("；")}`);
+	if (result.sourceConfirmation) lines.push("", "来源身份确认回执（v2）：", "```json", JSON.stringify(result.sourceConfirmation, null, 2), "```");
 	return lines.filter(Boolean).join("\n");
 }

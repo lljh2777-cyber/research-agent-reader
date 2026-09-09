@@ -15,6 +15,8 @@ export class ReaderDocumentLoader {
 
 	async load(rawArticlePath: string): Promise<MineruReaderPackage> {
 		const articlePath = normalizePath(rawArticlePath.trim());
+		const sourceRoot=/^(papers\/[^/]+)\//i.exec(articlePath)?.[1];
+		if(sourceRoot&&await this.app.vault.adapter.exists(sourceRoot+"/_source",true))throw new Error("PDF 原文包尚无 Markdown 投影，请选择 source.pdf");
 		if (/^papers\/[^/]+\/article\.md$/i.test(articlePath)) {
 			return this.mineruLoader.load(articlePath);
 		}

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fulltext acquisition M4 — 0.47.0
+
+- 新增无需模型或 MinerU 的「仅保存原文」动作，展示真实 PDF 页面并取得 v2 身份确认，保存独立 PDF 包与原文索引。
+- 新增共享身份、SourceCatalog 与来源保存服务。论文标识、书目 citekey 和包目录分别处理；同 DOI 的不同稿件类型、来源版本或 PDF 内容分别保留，PDF、转换正文和 Wiki 分层查重。
+- 正式 PDF 包采用固定文件清单、逐文件校验和清单末尾提交；缺失、损坏或未知 `_source` 包不能降级为普通 Markdown / MinerU。PDF 阅读入口核验包内容与清单。
+- 保存计划绑定设备和快照；中断后只复用本事务的完整文件，拒绝接管未知目录或覆盖用户修改。原文提交与索引登记分别记录，索引失败可单独补登记。
+- 新获取入库使用确定性身份和 v2 页面确认，模型仅生成正文。转换复用核对源 PDF 与解析参数；旧 v1 仍执行原有凭据校验，并读取新 PDF 包的书目关联。
+- 新增来源保存、实际文件系统、来源入库三组专项与原生界面 21 项检查；详见 [M4 实现与验收](docs/fulltext-acquisition-m4.md)。
+
 ### Fulltext acquisition M3 — 0.46.0
 
 - 新增可选 Unpaywall 回退和独立「全文来源」设置。联系邮箱由用户填写，查询时发送至 Unpaywall，不进入获取记录；遍历 OA locations，只接收符合稿件策略的直接 PDF。

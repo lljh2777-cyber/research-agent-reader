@@ -9,7 +9,7 @@ export class FulltextAcquisitionModal extends Modal {
 	private closed = false;
 	private busy = false;
 	private unsubscribeRuns?:()=>void;
-	constructor(app: App, readonly service: AcquisitionService, private selectedId?: string, private afterClose?: () => void, private openPdf?: (id: string) => Promise<void>, private intake?:{open(id:string):Promise<void>;runs():TaskRun[];subscribe(listener:()=>void):()=>void;openRun(run:TaskRun):void}) { super(app); }
+	constructor(app: App, readonly service: AcquisitionService, private selectedId?: string, private afterClose?: () => void, private openPdf?: (id: string) => Promise<void>, private intake?:{open(id:string):Promise<void>;save?(id:string):Promise<void>;runs():TaskRun[];subscribe(listener:()=>void):()=>void;openRun(run:TaskRun):void}) { super(app); }
 	onOpen(): void {
 		this.closed = false; this.modalEl.addClass("rar-fulltext-modal");
 		this.setTitle(this.service.mode === "demo" ? "全文获取 · 流程演示" : "获取论文全文");
@@ -88,6 +88,8 @@ export class FulltextAcquisitionModal extends Modal {
 				button(candidate.pmc ? "获取 PDF · " + candidate.pmc.sourceVersionId : candidate.oa?"获取 PDF · "+new URL(candidate.oa.origin).hostname:"选择 " + candidate.title, candidate.id, () => this.service.choose(job.id, candidate.id));
 			}
 			if (job.phase === "acquired" && job.mode === "production" && this.openPdf) button("预览 PDF", "preview", () => this.openPdf!(job.id));
+			if (job.phase === "acquired" && job.mode === "production" && this.intake?.save) button(job.sourcePackages?.length?"查看原文保存与登记":"仅保存原文", "save-source", () => this.intake!.save!(job.id));
+			for(const key of job.sourcePackages||[])card.createEl("p",{text:`原文包：papers/${key}/source.pdf`});
 			if (job.phase === "acquired" && job.mode === "production" && this.intake) button("继续入库", "intake", () => this.intake!.open(job.id));
 			if(this.intake && job.mode==="production") {
 				const linked=this.intake.runs().filter(run=>run.acquisitionSource?.jobId===job.id || job.intakeRunIds?.includes(run.id));

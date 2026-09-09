@@ -7,6 +7,7 @@ import { MINERU_RESOURCE_LIMITS } from "../mineru/resource-limits";
 import { tokenizeForLexicalRetrieval } from "../query/lexical-retrieval";
 import { openCodeProject } from "../code-reading/source";
 import type { ReadingEvidence, ReadingImage, ReadingSource } from "./types";
+import { validateSourcePackageFile } from "../sources/reading-guard";
 
 interface PdfPage {
 	getTextContent(): Promise<{ items: Array<{ str?: string; hasEOL?: boolean }> }>;
@@ -90,7 +91,9 @@ export class ReadingDocumentLoader {
 	private async pdf(rawPath: string): Promise<ReadingDocument> {
 		const filename = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(this.vaultRoot, rawPath);
 		if (!/\.pdf$/i.test(filename)) throw new Error("请选择 PDF 文件");
+		const sourceManifest=await validateSourcePackageFile(this.vaultRoot,filename);
 		const read = async (): Promise<Uint8Array> => {
+			if(sourceManifest){const current=await validateSourcePackageFile(this.vaultRoot,filename);if(current?.digest!==sourceManifest.digest)throw new Error("正式原文清单已变化，请重新选择来源");}
 			const handle = await fs.open(filename, "r");
 			try {
 				const stat = await handle.stat();
@@ -115,7 +118,7 @@ export class ReadingDocumentLoader {
 				evidence.push({ id: "page-" + number, kind: "paper", path: filename, label: "PDF 第 " + number + " 页图像",
 					page: number, text: text.trim() ? text.slice(0, 1200) : "此页无可用文本层，需要视觉读取。", asset: "pdf-page" });
 			}
-			const source: ReadingSource = { kind: "pdf", path: filename, fingerprint, title: path.basename(filename, path.extname(filename)) };
+			const source: ReadingSource = { kind: "pdf", path: filename, fingerprint, title: sourceManifest?.identity.title || path.basename(filename, path.extname(filename)) };
 			return { source, evidence, catalog: readingCatalog(evidence),
 				verify: async () => { if (readingHash(await read()) !== fingerprint) throw new Error("原始 PDF 已变化，请保留旧会话并重新选择来源创建会话"); },
 				destroy: () => pdf.destroy(), image: async (item, signal) => {
