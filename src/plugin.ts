@@ -12,6 +12,15 @@ import {
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { hostname } from "node:os";
+import { AcquisitionService } from "./fulltext/service";
+import { AcquisitionRepository } from "./fulltext/repository";
+import { FileAcquisitionStorage } from "./fulltext/file-storage";
+import { DemoAcquisitionBackend } from "./fulltext/demo-backend";
+import { FulltextAcquisitionModal } from "./fulltext/modal";
+import { acquisitionTaskRun } from "./fulltext/task-run";
+import type { AcquisitionMode } from "./fulltext/contracts";
 import { IngestRecords, validateIngestRequest } from "./agent/ingest-records";
 import { openIngestContinuation } from "./views/ingest-continuation";
 import { IngestRegistrationController } from "./views/ingest-registration";
@@ -303,6 +312,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	private readonly readerAutoOpenBypass = new Set<string>();
 	private readonly finishingTaskRunIds = new Set<string>();
 	private readonly taskRunListeners = new Set<(progressOnly?: boolean) => void>();
+	private readonly acquisitionServices = new Map<AcquisitionMode, AcquisitionService>();
+	private readonly acquisitionModals = new Set<FulltextAcquisitionModal>();
 	private taskRunMutationQueue: Promise<void> = Promise.resolve();
 	obsidianCliProbeState: ObsidianCliProbeState = { status: "idle" };
 
@@ -402,6 +413,9 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
 		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ domain: "code" }); } });
 		this.addCommand({ id: "open-knowledge-maintenance", name: "打开知识库维护", callback: () => this.openKnowledgeMaintenance() });
+		this.addCommand({ id: "open-fulltext-acquisition", name: "按标识获取论文全文", callback: () => this.openFulltextAcquisition() });
+		this.addCommand({ id: "demo-fulltext-acquisition", name: "全文获取流程演示（开发）", callback: () => this.openFulltextAcquisition("demo") });
+		void Promise.resolve().then(() => this.getAcquisitionService().ready()).catch(() => new Notice("全文获取记录读取失败，其他功能仍可使用"));
 		this.registerEvent(this.app.vault.on("modify", file => this.curationService?.noteChange(file.path)));
 		this.registerEvent(this.app.vault.on("delete", file => this.curationService?.noteChange(file.path)));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { this.curationService?.noteChange(oldPath); this.curationService?.noteChange(file.path); }));
@@ -516,6 +530,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		for (const modal of [...this.acquisitionModals]) modal.close();
+		await Promise.all([...this.acquisitionServices.values()].map(service => service.dispose()));
 		for (const modal of [...this.curationModals]) modal.close();
 		await this.readingAssistant?.dispose();
 		await this.curationService?.dispose();
@@ -1971,7 +1987,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	getTaskRuns(): TaskRun[] {
-		return [...this.taskRuns].sort((a, b) => {
+		const acquisitionRuns = this.acquisitionServices.get("production")?.list().map(acquisitionTaskRun) || [];
+		return [...this.taskRuns, ...acquisitionRuns].sort((a, b) => {
 			return new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime();
 		});
 	}
@@ -2003,7 +2020,27 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	getTaskRun(runId: string): TaskRun | null {
-		return this.taskRuns.find((run) => run.id === runId) || null;
+		const acquisition = this.acquisitionServices.get("production")?.get(runId);
+		return acquisition ? acquisitionTaskRun(acquisition) : this.taskRuns.find((run) => run.id === runId) || null;
+	}
+
+	getAcquisitionService(mode: AcquisitionMode = "production"): AcquisitionService {
+		let service = this.acquisitionServices.get(mode);
+		if (!service) {
+			const directory = this.readingPluginDirectory();
+			const deviceId = createHash("sha256").update(hostname() + "\n" + path.resolve(directory).toLowerCase()).digest("hex");
+			service = new AcquisitionService(new AcquisitionRepository(new FileAcquisitionStorage(directory, mode), mode), deviceId, mode === "demo" ? new DemoAcquisitionBackend() : undefined);
+			if (mode === "production") service.subscribe(() => this.notifyTaskRuns());
+			this.acquisitionServices.set(mode, service);
+		}
+		return service;
+	}
+
+	openFulltextAcquisition(mode: AcquisitionMode = "production", jobId?: string): void {
+		try {
+			const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal));
+			this.acquisitionModals.add(modal); modal.open();
+		} catch { new Notice("全文获取需要可读写的桌面插件目录"); }
 	}
 
 	getRunningTaskRun(actionId: string): TaskRun | null {
@@ -2013,6 +2050,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.getTaskRuns().find((run) => (
 			actionIds.has(run.actionId)
 			&& (run.status === "running" || run.status === "queued")
+			&& (run.actionId !== "fulltext-acquisition" || this.acquisitionServices.get("production")?.owned(this.acquisitionServices.get("production")!.get(run.id)!))
 		)) || null;
 	}
 
@@ -2037,10 +2075,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	isActionRunning(actionId: string): boolean {
-		const actionIds = ["vault-lint", "vault-lint-fix"].includes(actionId)
-			? new Set(["vault-lint", "vault-lint-fix"])
-			: new Set([actionId]);
-		return this.taskRuns.some((run) => actionIds.has(run.actionId) && (run.status === "running" || run.status === "queued"));
+		return this.getRunningTaskRun(actionId) !== null;
 	}
 
 	getModelLabel(model: string): string {
@@ -3340,6 +3375,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	 * executor in turn instead of inferring from executionConfig.backend.
 	 */
 	stopTaskRun(runId: string): boolean {
+		if (this.acquisitionServices.get("production")?.get(runId)) return this.acquisitionServices.get("production")!.stop(runId);
 		if (this.agentLoopService.stop(runId)) return true;
 		if (this.directQueryService.stop(runId)) return true;
 		return this.processExecution.stopVaultAction(runId);

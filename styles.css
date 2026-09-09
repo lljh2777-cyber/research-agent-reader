@@ -6684,3 +6684,18 @@ body.agent-dashboard-mineru-resizing {
 .ingest-progress-steps .is-current { color: var(--ingest-accent); font-weight: 600; }
 .ingest-progress .ingest-progress-detail { color: var(--text-muted); font-size: 12px; line-height: 1.6; margin: 10px 0 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 @media (prefers-reduced-motion: reduce) { .ingest-progress progress::-webkit-progress-value { transition: none; } }
+.rar-fulltext-modal { width: min(720px, 94vw); }
+.rar-fulltext-modal .modal-content { overflow-y: auto; }
+.rar-fulltext-input-label { display: flex; flex-direction: column; gap: 8px; margin: 16px 0 8px; font-weight: 600; }
+.rar-fulltext-input-label input { width: 100%; }
+.rar-fulltext-input-label select { align-self: flex-start; }
+.rar-fulltext-intro, .rar-fulltext-muted, .rar-fulltext-parsed { color: var(--text-muted); }
+.rar-fulltext-parsed { overflow-wrap: anywhere; min-height: 1.5em; }
+.rar-fulltext-unavailable { padding: 12px; border-radius: 8px; background: var(--background-secondary); }
+.rar-fulltext-jobs { margin-top: 24px; }
+.rar-fulltext-job { padding: 16px; margin: 12px 0; border: 1px solid var(--background-modifier-border); border-radius: 10px; overflow-wrap: anywhere; }
+.rar-fulltext-job.is-selected { border-color: var(--interactive-accent); }
+.rar-fulltext-phase { display: block; color: var(--text-accent); margin-top: 6px; }
+.rar-fulltext-job progress { display: block; width: 100%; margin: 8px 0; }
+.rar-fulltext-job button { margin: 8px 8px 0 0; white-space: normal; height: auto; min-height: 32px; }
+.rar-fulltext-error { color: var(--text-error); }

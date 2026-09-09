@@ -49,6 +49,7 @@ type RunsFilter = "all" | "done" | "open";
 type GapsFilter = "all" | "high" | "medium" | "low";
 
 const ACTION_ICONS: Record<string, string> = {
+	"fulltext-acquisition": "download",
 	"paper-ingest": "file-down",
 	"pdf-xray": "scan-search",
 	"code-analysis": "code-xml",
@@ -71,6 +72,7 @@ interface DashboardHost extends PluginHost {
 	stopVaultAction(runId: string): boolean;
 	activateQueryWikiView(initialInput?: string): Promise<void>;
 	activateCodePracticeView(): Promise<void>;
+	openFulltextAcquisition(mode?: "production" | "demo", jobId?: string): void;
 	activateReadingWorkspace(entry?: ReadingEntry): Promise<void>;
 	getReadingWorkspace?(): ReadingWorkspaceService;
 	supportsFast(model: string): boolean;
@@ -690,6 +692,7 @@ export class DashboardView extends ItemView {
 			void this.plugin.activateQueryWikiView(options.initialInput || "");
 			return;
 		}
+		if (action.id === "fulltext-acquisition") { this.plugin.openFulltextAcquisition(); return; }
 		if (action.id === "pdf-xray" || action.id === "code-analysis") {
 			const code = action.id === "code-analysis";
 			void this.plugin.activateReadingWorkspace({ domain: code ? "code" : "paper" }).catch(error => new Notice(String(error)));
@@ -915,6 +918,7 @@ export class DashboardView extends ItemView {
 	}
 
 	openTaskResult(run: TaskRun): void {
+		if (run.actionId === "fulltext-acquisition") { this.plugin.openFulltextAcquisition("production", run.id); return; }
 		const onRepair = run.actionId === "vault-lint"
 			? () => {
 				const repairAction = ACTION_BY_ID.get("vault-lint-fix");

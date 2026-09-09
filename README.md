@@ -8,11 +8,13 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.43.2`; the beta
+The `codex/research-learning-map` development branch is at `0.44.0`; the beta
 release link above remains the published release.
 
 全文获取与多来源入库的后续设计见[架构与开发流程](docs/fulltext-acquisition-design.md)。
 该文档基于 `0.43.2`，描述规划中的能力，不代表这些功能已经实现。
+`0.44.0` 已完成 M1：标识输入、独立获取记录与开发流程演示；真实全文来源尚未接入。
+入口、存储约定与验收范围见[全文获取 M1](docs/fulltext-acquisition-m1.md)。
 
 ## Features
 
