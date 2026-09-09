@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fulltext acquisition M3 — 0.46.0
+
+- 新增可选 Unpaywall 回退和独立「全文来源」设置。联系邮箱由用户填写，查询时发送至 Unpaywall，不进入获取记录；遍历 OA locations，只接收符合稿件策略的直接 PDF。
+- 首个候选失败后按列表尝试后续候选；PMC 文件失败后发现的新 OA 候选需再次选择。动态 HTTPS 目标及每次重定向均核对公网 DNS 和实际连接，拒绝私网、认证或签名地址；单文件 64 MiB，累计接收上限 128 MiB，总活动预算 5 分钟。
+- 已获取 PDF 可「继续入库」，独立选择模型、输出及 MinerU 上传授权。绑定快照哈希和任务引用，仍执行原有视觉身份确认与去重；失败续办复用 PDF，保留参数但重新取得授权。
+- 获取和入库任务分别保存状态与双向关联。新入口触达的授权副本、MinerU 暂存目录及任务输出保留，避免通过旧清理路径删除文件。
+- 新增 OA、入库文件保留与原生续办专项；完成公开 JOSS PDF 的真实下载、预览和重载后零网络复用。详见 [M3 实现与验收](docs/fulltext-acquisition-m3.md)。
+
 ### Fulltext acquisition M2 — 0.45.0
 
 - 正式接入 Europe PMC 精确标识、Crossref 元数据和 PMC 云版本清单。用户核对论文与版本后获取 PDF，支持出版版本及可选的作者接受稿。

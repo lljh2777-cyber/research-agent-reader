@@ -312,6 +312,8 @@ export class AgentLoopService {
 			if (options.sourcePdfPath) {
 				authorizedPdfSnapshot = await createAuthorizedPdfSnapshot(options.sourcePdfPath, {
 					signal: abortController.signal,
+					expected: options.acquisitionSource,
+					retainFiles: !!options.acquisitionSource,
 				});
 			}
 			const localPdfEvidence = await extractLocalPdfIdentityEvidence(authorizedPdfSnapshot?.path || "", {
@@ -664,6 +666,7 @@ export class AgentLoopService {
 							);
 						}
 					},
+					retainStaging: !!options.acquisitionSource,
 				},
 			);
 			const vaultRoot = this.deps.getVaultRoot();
@@ -692,9 +695,9 @@ export class AgentLoopService {
 			if (mineruError instanceof MineruPreCommitValidationError) {
 				state.titleConflict = true;
 				state.conflicts.push(mineruError.message);
-				if (mineruError.cleanupFailed) {
+				if (mineruError.stagingBasename) {
 					state.errors.push(
-						`MinerU 标题冲突后 staging 清理失败并保留：${mineruError.stagingBasename}`,
+						`MinerU 标题冲突后暂存目录已保留：${mineruError.stagingBasename}`,
 					);
 				}
 				return;

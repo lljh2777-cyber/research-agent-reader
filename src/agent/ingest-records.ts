@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import type { PaperIngestFlowOptions } from "./paper-ingest-flow";
+import { decodeIntakeRef } from "../fulltext/contracts";
 
 export interface IngestRequest { version: 1; runId: string; profileId: string; options: PaperIngestFlowOptions; }
 export function validateIngestRequest(value: unknown, runId: string): IngestRequest {
@@ -13,7 +14,7 @@ export function validateIngestRequest(value: unknown, runId: string): IngestRequ
 		if (typeof o[field] !== "boolean") throw new Error("入库选项无效");
 	if (!/\.pdf$/i.test(o.sourcePdfPath) || !["auto", "pdf", "article"].includes(o.articleWikiSource) || !["auto", "vlm", "pipeline", "html"].includes(o.mineruModel)
 		|| !Number.isFinite(o.mineruTimeoutSeconds) || o.mineruTimeoutSeconds < 60 || o.mineruTimeoutSeconds > 1800) throw new Error("入库来源或解析参数无效");
-	return structuredClone(r);
+	const copy=structuredClone(r); if(o.acquisitionSource!==undefined)copy.options.acquisitionSource=decodeIntakeRef(o.acquisitionSource); return copy;
 }
 
 /** Private request and write journals; neither credentials nor model-supplied paths. */

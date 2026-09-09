@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { ROLE_LABELS, type RetrievalMode } from "../retrieval/types";
 import type { KnowledgeRetrievalService } from "../retrieval/service";
 import type { WebSearchBackendResolution } from "../services/web-search";
+import { contactEmail } from "../fulltext/url-policy";
 
 import {
 	App,
@@ -118,6 +119,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		containerEl.dataset.settingsPage = this.activePage;
 		const content = containerEl.createDiv({ cls: "rar-settings-content" });
 		switch (this.activePage) {
+			case "fulltext": this.renderFulltextSettings(content); break;
 			case "retrieval": this.renderKnowledgeRetrieval(content); break;
 			case "runtime":
 				this.renderRuntimeSettings(content);
@@ -162,6 +164,16 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		}
 	}
 
+	private renderFulltextSettings(container:HTMLElement):void {
+		this.createSettingsPageHeader(container,"全文来源","按论文标识获取可用 PDF，来源配置与模型配置分开。");
+		container.createEl("p",{text:"PMC PDF 默认可用，无需模型。启用 Unpaywall 后，在 PMC 无可用 PDF 时查询其他开放来源。请求使用 HTTPS 直连，不继承系统或 Obsidian 代理。"});
+		new Setting(container).setName("启用 Unpaywall 回退").setDesc("查询将发送论文 DOI 和下方联系邮箱至 Unpaywall；邮箱保存在本地插件设置中，不写入获取任务日志。").addToggle(toggle=>toggle.setValue(this.plugin.settings.fulltextUnpaywallEnabled).onChange(async value=>{this.plugin.settings.fulltextUnpaywallEnabled=value;await this.plugin.saveSettings();}));
+		let email=this.plugin.settings.fulltextUnpaywallEmail;
+		const status=container.createEl("p",{attr:{"aria-live":"polite"}});
+		new Setting(container).setName("Unpaywall 联系邮箱").setDesc("由你明确填写，不从其他账户推断。清空邮箱后，回退查询会提示需要配置。").addText(text=>text.setPlaceholder("name@example.org").setValue(email).onChange(value=>{email=value;})).addButton(button=>button.setButtonText("保存邮箱").onClick(async()=>{
+			try {const value=email.trim()?contactEmail(email):"";this.plugin.settings.fulltextUnpaywallEmail=value;await this.plugin.saveSettings();status.setText("联系邮箱已保存，新查询将使用此配置");}catch{status.setText("邮箱格式无效或保存失败，请检查后重试");}
+		}));
+	}
 	private navigateSettings(page: SettingsPage): void {
 		const previous = this.activePage;
 		this.activePage = page;

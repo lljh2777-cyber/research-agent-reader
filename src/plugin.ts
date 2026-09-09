@@ -23,6 +23,10 @@ import { acquisitionTaskRun } from "./fulltext/task-run";
 import { HttpsSourceTransport } from "./fulltext/transport";
 import { PmcAcquisitionBackend } from "./fulltext/pmc-backend";
 import { AcquiredPdfPreview } from "./fulltext/pdf-preview";
+import { openAcquiredIntake } from "./fulltext/intake-modal";
+import { TaskResultModal } from "./modals/task-result";
+import { validateAcquiredIntake } from "./fulltext/intake-adapter";
+import { decodeIntakeRef, type AcquisitionIntakeRef } from "./fulltext/contracts";
 import type { AcquisitionMode } from "./fulltext/contracts";
 import { IngestRecords, validateIngestRequest } from "./agent/ingest-records";
 import { openIngestContinuation } from "./views/ingest-continuation";
@@ -319,6 +323,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	private readonly acquisitionModals = new Set<FulltextAcquisitionModal>();
 	private readonly fulltextPreviews = new Set<Modal>();
 	private acquisitionClosing = false;
+	private readonly acquisitionDialogs=new Set<Modal>();
+	trackAcquisitionDialog(modal:Modal):boolean { if(this.acquisitionClosing)return false;this.acquisitionDialogs.add(modal);const close=modal.onClose.bind(modal);modal.onClose=()=>{this.acquisitionDialogs.delete(modal);close();};return true; }
 	private taskRunMutationQueue: Promise<void> = Promise.resolve();
 	obsidianCliProbeState: ObsidianCliProbeState = { status: "idle" };
 
@@ -366,6 +372,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			oldRun.status !== "running"
 			&& oldRun.status !== "queued"
 			&& !oldRun.cleanupPending
+			&& !oldRun.acquisitionSource
 		));
 		const protectedOverflow = overflow.filter((oldRun) => !evictable.includes(oldRun));
 		if (!evictable.length) {
@@ -536,6 +543,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	async onunload(): Promise<void> {
 		this.acquisitionClosing = true; for (const modal of this.fulltextPreviews) modal.close();
+		for(const modal of [...this.acquisitionDialogs])modal.close();
 		for (const modal of [...this.acquisitionModals]) modal.close();
 		await Promise.all([...this.acquisitionServices.values()].map(service => service.dispose()));
 		for (const modal of [...this.curationModals]) modal.close();
@@ -995,6 +1003,8 @@ export default class AgentDashboardPlugin extends Plugin {
 			asRecord(rawStoredSettings),
 		);
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings) as DashboardSettings;
+		this.settings.fulltextUnpaywallEnabled=storedSettings.fulltextUnpaywallEnabled===true;
+		this.settings.fulltextUnpaywallEmail=typeof storedSettings.fulltextUnpaywallEmail==="string"?storedSettings.fulltextUnpaywallEmail.slice(0,254):"";
 		this.settings.knowledgeRetrievalMode = storedSettings.knowledgeRetrievalMode === "hybrid" || storedSettings.knowledgeRetrievalMode === "rerank" ? storedSettings.knowledgeRetrievalMode : "lexical";
 		this.settings.knowledgeSecretId = String(storedSettings.knowledgeSecretId || "siliconflow").trim().slice(0, 200);
 		const normalizedProfiles = Array.isArray(storedSettings.providerProfiles)
@@ -2036,7 +2046,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const directory = this.readingPluginDirectory();
 			const deviceId = createHash("sha256").update(hostname() + "\n" + path.resolve(directory).toLowerCase()).digest("hex");
 			const storage = new FileAcquisitionStorage(directory, mode);
-			service = new AcquisitionService(new AcquisitionRepository(storage, mode), deviceId, mode === "demo" ? new DemoAcquisitionBackend() : new PmcAcquisitionBackend(new HttpsSourceTransport(), storage));
+			service = new AcquisitionService(new AcquisitionRepository(storage, mode), deviceId, mode === "demo" ? new DemoAcquisitionBackend() : new PmcAcquisitionBackend(new HttpsSourceTransport(), storage,undefined,()=>({enabled:this.settings.fulltextUnpaywallEnabled,email:this.settings.fulltextUnpaywallEmail})));
 			if (mode === "production") service.subscribe(progressOnly => { if (!progressOnly) this.notifyTaskRuns(); });
 			this.acquisitionServices.set(mode, service);
 		}
@@ -2045,7 +2055,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	openFulltextAcquisition(mode: AcquisitionMode = "production", jobId?: string): void {
 		try {
-			const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id));
+			const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id), {open:id=>openAcquiredIntake(this,id),runs:()=>this.getTaskRuns(),subscribe:listener=>this.subscribeTaskRuns(listener),openRun:run=>new TaskResultModal(this.app,this,run,null).open()});
 			this.acquisitionModals.add(modal); modal.open();
 		} catch { new Notice("全文获取需要可读写的桌面插件目录"); }
 	}
@@ -2231,14 +2241,17 @@ export default class AgentDashboardPlugin extends Plugin {
 		action: DashboardAction,
 		summary: string,
 		executionConfig: ExecutionConfig | null = null,
+		acquisitionSource?: AcquisitionIntakeRef,
 	): Promise<TaskRun> {
 		return this.withTaskRunMutation(async () => {
+			if (acquisitionSource && action.id !== "paper-ingest") throw new Error("获取快照只能绑定文献入库任务");
 			// Check inside the save queue: two open intake dialogs must not both start.
 			if (action.id === "paper-ingest" && this.isActionRunning(action.id)) {
 				throw new Error("文献入库正在运行，请在控制台查看或停止当前任务");
 			}
 			const now = new Date().toISOString();
 			const run: TaskRun = {
+				...(acquisitionSource?{acquisitionSource:decodeIntakeRef(acquisitionSource)}:{}),
 				id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
 				actionId: action.id,
 				label: action.label,
@@ -2261,7 +2274,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			// Commit the new history before reclaiming any old sidecar. A failed
 			// start save restores the previous history and leaves every old output.
 			try {
-				await this.persistTaskRunRetention(candidates, limit);
+				await this.persistTaskRunRetention(candidates, acquisitionSource?Math.max(limit,candidates.length):limit);
 			} catch (error) {
 				this.taskRuns = originalRuns;
 				throw error;
@@ -2335,7 +2348,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				try {
 					await this.persistTaskRunRetention(
 						beforeRetention,
-						this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit,
+						completedRun.acquisitionSource?Math.max(this.settings.taskHistoryLimit,beforeRetention.length):this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit,
 					);
 				} catch (error) {
 					// The sidecar is already durable. Restore the in-memory completion;
@@ -2840,6 +2853,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	getIngestRecords(): IngestRecords { return this.ingestRecords ||= new IngestRecords(this.readingPluginDirectory()); }
 	async readIngestPdf(run: TaskRun): Promise<void> {
 		const request = validateIngestRequest(await this.getIngestRecords().read("request", run.id), run.id);
+		if (request.options.acquisitionSource) await validateAcquiredIntake(this.getAcquisitionService(), request.options);
 		await this.activateReadingWorkspace({ source: { kind: "pdf", path: request.options.sourcePdfPath }, backend: request.profileId });
 	}
 	async continuePaperIngest(run: TaskRun): Promise<void> { await openIngestContinuation(this, run); }
@@ -2850,6 +2864,9 @@ export default class AgentDashboardPlugin extends Plugin {
 		hooks: { onEvent?: (event: DashboardProcessEvent) => void } = {},
 	): Promise<AgentLoopRunOutcome> {
 		const steps = ingestSteps(options);
+		const boundSource = this.taskRuns.find(run => run.id === runId)?.acquisitionSource;
+		if (boundSource && (!options.acquisitionSource || JSON.stringify(decodeIntakeRef(boundSource)) !== JSON.stringify(decodeIntakeRef(options.acquisitionSource)))) throw new Error("入库请求与任务绑定的获取快照不一致");
+		if(options.acquisitionSource){if(this.acquisitionClosing)throw new Error("插件已关闭，入库未启动");await validateAcquiredIntake(this.getAcquisitionService(),options);if(this.acquisitionClosing)throw new Error("插件已关闭，入库未启动");}
 		this.updateIngestProgress(runId, { steps, stage: "prepare", detail: "正在准备授权 PDF 与入库参数", waiting: false });
 		this.lightAgentResults.delete(runId);
 		await this.getIngestRecords().write("request", runId, { version: 1, runId, profileId, options: structuredClone(options) });

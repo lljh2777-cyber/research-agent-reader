@@ -10,6 +10,7 @@ import type {
 import { normalizeProviderProfile } from "../providers/profile";
 import { isCliBackendId } from "../config";
 import { normalizeIngestProgress } from "../agent/ingest-progress";
+import { decodeIntakeRef } from "../fulltext/contracts";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -124,6 +125,7 @@ export function normalizeTaskRunArtifacts(value: unknown): TaskRunArtifacts | un
 	return { articlePath, wikiPath, filesWritten };
 }
 
+function acquisitionReference(value:unknown):TaskRun["acquisitionSource"] {try{return decodeIntakeRef(value);}catch{return undefined;}}
 export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 	if (!Array.isArray(value)) return [];
 	const boundedLimit = Math.max(5, Math.min(100, limit));
@@ -146,6 +148,7 @@ export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 			cleanupPending: source.cleanupPending === true || undefined,
 			completionPending: source.completionPending === true || undefined,
 			artifacts: normalizeTaskRunArtifacts(source.artifacts),
+			acquisitionSource: source.actionId==="paper-ingest"?acquisitionReference(source.acquisitionSource):undefined,
 			ingestProgress: normalizeIngestProgress(source.ingestProgress),
 		};
 	});
@@ -159,6 +162,7 @@ function selectTaskRunsForPersistence(taskRuns: TaskRun[], limit: number): TaskR
 		|| run.status === "queued"
 		|| run.cleanupPending === true
 		|| run.completionPending === true
+		|| !!run.acquisitionSource
 	));
 	return [...primary, ...exceptional].slice(0, 300);
 }

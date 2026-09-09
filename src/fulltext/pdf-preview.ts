@@ -17,7 +17,8 @@ export class AcquiredPdfPreview extends Modal {
 	onOpen(): void {
 		this.modalEl.addClass("rar-fulltext-preview"); this.setTitle("PDF 原文预览");
 		this.contentEl.createEl("h3", { text: this.snapshot.identity.title });
-		this.contentEl.createEl("p", { text: (this.snapshot.validation.identityCheck === "verified" ? "首页身份线索匹配" : "身份待核对，请对照标题与标识") + " · " + this.snapshot.candidate.pmc!.sourceVersionId + " · 来源：NLM / PMC", cls: "rar-fulltext-muted" });
+		const candidate=this.snapshot.candidate;
+		this.contentEl.createEl("p", { text: (this.snapshot.validation.identityCheck === "verified" ? "首页身份线索匹配" : "身份待核对，请对照标题与标识") + " · " + (candidate.pmc?candidate.pmc.sourceVersionId+" · 来源：NLM / PMC":(candidate.version==="accepted_manuscript"?"作者接受稿":"出版版本")+" · 来源："+candidate.oa!.origin), cls: "rar-fulltext-muted" });
 		const nav = this.contentEl.createDiv("rar-fulltext-pager");
 		const previous = nav.createEl("button", { text: "上一页", attr: { "aria-label": "PDF 上一页" } });
 		this.status = nav.createEl("span", {text: "正在打开本地 PDF…", attr: {"aria-live":"polite"}});

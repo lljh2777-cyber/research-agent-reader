@@ -1,9 +1,10 @@
+import { oaUrl } from "./url-policy";
 export type AcquisitionMode = "production" | "demo";
 export const ACQUISITION_PHASES = ["queued", "resolving", "discovering", "awaiting_selection", "downloading", "verifying", "acquired", "no_match", "needs_configuration", "conflict", "failed", "cancelled", "interrupted"] as const;
 export type AcquisitionPhase = typeof ACQUISITION_PHASES[number];
 export type DemoScenario = "success" | "selection" | "failure" | "conflict" | "no_match";
 export interface AcquisitionInput { kind: "doi" | "pmid" | "pmcid"; value: string; }
-export interface AcquisitionRequest { input: AcquisitionInput; goal: "pdf"; versionPolicy: "record_only" | "record_preferred_allow_manuscript"; scenario?: DemoScenario; }
+export interface AcquisitionRequest { input: AcquisitionInput; goal: "pdf"; versionPolicy: "record_only" | "record_preferred_allow_manuscript"; scenario?: DemoScenario; useUnpaywall?: boolean; }
 export interface ResolvedIdentity {
 	title: string; authors: string[]; year: string; identifiers: { doi?: string; pmid?: string; pmcid?: string };
 	publicationTypes: string[]; evidence: Array<{ provider: "europe-pmc" | "crossref"; recordId: string; observedAt: string; fields: string[] }>;
@@ -12,13 +13,16 @@ export interface ResolvedIdentity {
 export interface PmcLocator {
 	pmcid: string; sourceVersionId: string; pdfKey: string; md5: string; manifestSha256: string; license: string; retracted: boolean; observedAt: string;
 }
-export interface AcquisitionCandidate { id: string; title: string; providerId: string; version: "version_of_record" | "accepted_manuscript"; pmc?: PmcLocator; }
+export interface OaLocator { doi: string; origin: string; urlSha256: string; recordSha256: string; license: string; hostType: "publisher" | "repository"; observedAt: string; }
+export interface AcquisitionCandidate { id: string; title: string; providerId: string; version: "version_of_record" | "accepted_manuscript"; pmc?: PmcLocator; oa?: OaLocator; }
+export interface AcquisitionIntakeRef { jobId: string; snapshotId: string; sha256: string; byteLength: number; }
 export interface AcquisitionJob {
 	schemaVersion: 1; id: string; revision: number; attemptId: string; mode: AcquisitionMode; deviceId: string;
 	request: AcquisitionRequest; phase: AcquisitionPhase; createdAt: string; updatedAt: string;
 	detail: string; error: string; candidates: AcquisitionCandidate[]; selectedId?: string;
 	receivedBytes?: number; totalBytes?: number; snapshotId?: string; storageWarning?: string;
 	identity?: ResolvedIdentity; identityCheck?: "verified" | "needs_confirmation"; errorCode?: string;
+	intakeRunIds?: string[];
 }
 /** A demo receipt cannot be read or imported as a real source file. M2 adds real artifact contracts. */
 export interface DemoSnapshot { schemaVersion: 1; id: string; jobId: string; attemptId: string; mode: "demo"; simulated: true; input: AcquisitionInput; candidateId: string; createdAt: string; }
@@ -31,7 +35,7 @@ export interface PdfSnapshot {
 export type AcquisitionSnapshot = DemoSnapshot | PdfSnapshot;
 export const acquisitionId = (value: unknown): value is string => typeof value === "string" && /^[as]-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(value);
 export const acquisitionActive = (phase: AcquisitionPhase): boolean => ["queued", "resolving", "discovering", "awaiting_selection", "downloading", "verifying"].includes(phase);
-export const acquisitionRetryable = (phase: AcquisitionPhase): boolean => ["failed", "cancelled", "interrupted"].includes(phase);
+export const acquisitionRetryable = (phase: AcquisitionPhase): boolean => ["failed", "cancelled", "interrupted", "needs_configuration"].includes(phase);
 const record = (value: unknown): Record<string, unknown> => {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("全文获取记录格式无效");
 	return value as Record<string, unknown>;
@@ -67,13 +71,14 @@ export function decodeInput(value: unknown): AcquisitionInput {
 export function decodeRequest(value: unknown, mode: AcquisitionMode): AcquisitionRequest {
 	const r = record(value); if (r.goal !== "pdf" || !["record_only", "record_preferred_allow_manuscript"].includes(String(r.versionPolicy)) || (mode === "demo" && r.versionPolicy !== "record_only")) throw new Error("暂不支持这类获取请求");
 	if (r.scenario !== undefined && (mode !== "demo" || !["success", "selection", "failure", "conflict", "no_match"].includes(String(r.scenario)))) throw new Error("演示参数不能用于正式获取");
-	return { input: decodeInput(r.input), goal: "pdf", versionPolicy: r.versionPolicy as AcquisitionRequest["versionPolicy"], ...(mode === "demo" ? { scenario: (r.scenario || "success") as DemoScenario } : {}) };
+	if (r.useUnpaywall !== undefined && (mode === "demo" || typeof r.useUnpaywall !== "boolean")) throw new Error("开放来源配置无效");
+	return { input: decodeInput(r.input), goal: "pdf", versionPolicy: r.versionPolicy as AcquisitionRequest["versionPolicy"], ...(r.useUnpaywall ? {useUnpaywall:true} : {}), ...(mode === "demo" ? { scenario: (r.scenario || "success") as DemoScenario } : {}) };
 }
 export function decodeCandidates(value: unknown): AcquisitionCandidate[] {
 	if (!Array.isArray(value) || value.length > 20) throw new Error("全文候选过多或格式无效");
 	const result = value.map(item => { const r = record(item); const candidate: AcquisitionCandidate = { id: string(r.id, 80), title: string(r.title, 2000), providerId: string(r.providerId, 80), version: r.version as AcquisitionCandidate["version"] };
 		if (!/^c-[a-z0-9-]+$/.test(candidate.id) || !candidate.title.trim() || !/^[a-z0-9-]+$/.test(candidate.providerId) || !["version_of_record", "accepted_manuscript"].includes(candidate.version)) throw new Error("全文候选字段无效");
-		if (r.pmc !== undefined) candidate.pmc = decodePmcLocator(r.pmc); return candidate; });
+		if (r.pmc !== undefined) candidate.pmc = decodePmcLocator(r.pmc); if (r.oa !== undefined) candidate.oa = decodeOaLocator(r.oa); if (candidate.pmc && candidate.oa) throw new Error("全文候选来源混用"); return candidate; });
 	if (new Set(result.map(c => c.id)).size !== result.length) throw new Error("全文候选标识重复"); return result;
 }
 export function decodeJob(value: unknown, mode: AcquisitionMode): AcquisitionJob {
@@ -91,8 +96,9 @@ export function decodeJob(value: unknown, mode: AcquisitionMode): AcquisitionJob
 	if (r.identity !== undefined) { if (mode !== "production") throw new Error("演示不能携带真实身份"); job.identity = decodeIdentity(r.identity); }
 	if (r.identityCheck !== undefined) { if (!["verified", "needs_confirmation"].includes(String(r.identityCheck))) throw new Error("身份校验状态无效"); job.identityCheck = r.identityCheck as AcquisitionJob["identityCheck"]; }
 	if (r.errorCode !== undefined) job.errorCode = string(r.errorCode, 80);
-	if (mode === "production" && job.candidates.some(c => c.providerId !== "pmc-cloud" || !c.pmc || (job.request.versionPolicy === "record_only" && c.version !== "version_of_record"))) throw new Error("正式获取候选与来源策略不一致");
-	if (mode === "demo" && job.candidates.some(c => c.providerId !== "demo" || c.pmc)) throw new Error("演示候选混入真实来源");
+	if (r.intakeRunIds !== undefined) { job.intakeRunIds = strings(r.intakeRunIds, 100, 200); if (job.intakeRunIds.some(v=>!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(v)) || new Set(job.intakeRunIds).size !== job.intakeRunIds.length || mode !== "production") throw new Error("入库任务关联无效"); }
+	if (mode === "production" && job.candidates.some(c => !(c.providerId === "pmc-cloud" && c.pmc) && !(c.providerId === "unpaywall" && c.oa && job.request.useUnpaywall) || (job.request.versionPolicy === "record_only" && c.version !== "version_of_record"))) throw new Error("正式获取候选与来源策略不一致");
+	if (mode === "demo" && job.candidates.some(c => c.providerId !== "demo" || c.pmc || c.oa)) throw new Error("演示候选混入真实来源");
 	return job;
 }
 export function decodeSnapshot(value: unknown): AcquisitionSnapshot {
@@ -105,7 +111,7 @@ export function requestKey(request: AcquisitionRequest): string { return JSON.st
 
 export const PHASE_LABELS: Record<AcquisitionPhase, string> = {
 	queued: "等待开始", resolving: "识别论文", discovering: "寻找全文", awaiting_selection: "等待选择来源", downloading: "获取文件", verifying: "校验与保存",
-	acquired: "文件已获取", no_match: "未找到合适全文", needs_configuration: "来源尚未接入", conflict: "身份存在冲突", failed: "获取未完成", cancelled: "已停止", interrupted: "上次获取已中断",
+	acquired: "文件已获取", no_match: "未找到合适全文", needs_configuration: "需要配置来源", conflict: "身份存在冲突", failed: "获取未完成", cancelled: "已停止", interrupted: "上次获取已中断",
 };
 
 export const PDF_MAX_BYTES = 64 * 1024 * 1024;
@@ -140,6 +146,19 @@ export function decodePdfValidation(value: unknown): PdfValidation {
 export function decodePdfSnapshot(value: unknown): PdfSnapshot {
 	const r = record(value); if (r.schemaVersion !== 2 || r.mode !== "production" || r.simulated !== undefined) throw new Error("真实快照格式无效");
 	const result: PdfSnapshot = { schemaVersion: 2, id: id(r.id), jobId: id(r.jobId), attemptId: id(r.attemptId), mode: "production", input: decodeInput(r.input), candidateId: string(r.candidateId, 80), createdAt: date(r.createdAt), identity: decodeIdentity(r.identity), candidate: decodeCandidates([r.candidate])[0], artifact: decodeArtifact(r.artifact), validation: decodePdfValidation(r.validation) };
-	if (result.id[0] !== "s" || result.jobId[0] !== "a" || result.attemptId[0] !== "a" || result.artifact.filename !== result.attemptId + ".pdf" || result.candidateId !== result.candidate.id || result.candidate.providerId !== "pmc-cloud" || !result.candidate.pmc || result.identity.identifiers.pmcid !== result.candidate.pmc.pmcid || result.artifact.md5 !== result.candidate.pmc.md5 || result.identity.identifiers[result.input.kind] !== result.input.value) throw new Error("真实快照与任务/身份/文件不匹配");
+	const sourceMatches = result.candidate.providerId === "pmc-cloud" && result.candidate.pmc && result.identity.identifiers.pmcid === result.candidate.pmc.pmcid && result.artifact.md5 === result.candidate.pmc.md5
+		|| result.candidate.providerId === "unpaywall" && result.candidate.oa && result.identity.identifiers.doi === result.candidate.oa.doi;
+	if (result.id[0] !== "s" || result.jobId[0] !== "a" || result.attemptId[0] !== "a" || result.artifact.filename !== result.attemptId + ".pdf" || result.candidateId !== result.candidate.id || !sourceMatches || result.identity.identifiers[result.input.kind] !== result.input.value) throw new Error("真实快照与任务/身份/文件不匹配");
 	return result;
+}
+
+export function decodeOaLocator(value: unknown): OaLocator {
+	const r=record(value), origin=string(r.origin,300), url=oaUrl(origin);
+	if (url.origin !== origin || !["publisher","repository"].includes(String(r.hostType))) throw new Error("开放来源定位无效");
+	return {doi:decodeInput({kind:"doi",value:r.doi}).value,origin,urlSha256:digest(r.urlSha256,64),recordSha256:digest(r.recordSha256,64),license:string(r.license,300),hostType:r.hostType as OaLocator["hostType"],observedAt:date(r.observedAt)};
+}
+export function decodeIntakeRef(value: unknown): AcquisitionIntakeRef {
+	const r=record(value), jobId=id(r.jobId), snapshotId=id(r.snapshotId), byteLength=count(r.byteLength);
+	if(jobId[0]!=="a" || snapshotId[0]!=="s" || byteLength<16 || byteLength>PDF_MAX_BYTES) throw new Error("入库来源绑定无效");
+	return {jobId,snapshotId,byteLength,sha256:digest(r.sha256,64)};
 }

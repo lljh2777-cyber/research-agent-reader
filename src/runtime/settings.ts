@@ -201,6 +201,8 @@ export interface DashboardSettings {
 	webSearchMaxResults: number;
 	webSearchTimeoutSeconds: number;
 	lightAgentMaxSteps: number;
+	fulltextUnpaywallEnabled: boolean;
+	fulltextUnpaywallEmail: string;
 	lightAgentMaxOutputTokens: number;
 }
 
@@ -683,5 +685,7 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	webSearchMaxResults: 5,
 	webSearchTimeoutSeconds: 20,
 	lightAgentMaxSteps: 10,
+	fulltextUnpaywallEnabled: false,
+	fulltextUnpaywallEmail: "",
 	lightAgentMaxOutputTokens: 4096,
 };

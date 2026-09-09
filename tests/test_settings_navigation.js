@@ -5,7 +5,7 @@ const pages = (filter, query = "") => filterSettingsEntries(filter, query).map(e
 
 // Discover common settings, and reach every optional page through categories or search.
 assert.equal(pages("common").length, 6);
-assert.equal(new Set(SETTINGS_ENTRIES.map(e => e.page)).size, 12);
+assert.equal(new Set(SETTINGS_ENTRIES.map(e => e.page)).size, 13);
 assert.deepEqual(new Set(SETTINGS_CATEGORIES.flatMap(c => pages(c.id))), new Set(pages("all")));
 assert.ok(pages("connections").includes("codex"));
 assert.ok(!pages("reading").includes("codex"));
@@ -13,6 +13,7 @@ for (const [question, expected] of [
 	["API key", "direct-api"], ["ＳｉｌｉｃｏｎＦｌｏｗ", "retrieval"],
 	["embedding", "retrieval"], ["PDF OCR", "mineru"], ["导出", "data"],
 	["Codex 路径", "runtime"], ["  cLaUdE  ", "claude"], ["划选", "annotations"],
+	["Unpaywall 邮箱", "fulltext"],
 ]) {
 	assert.ok(pages("common", question).includes(expected), `${question} should find ${expected}`);
 	assert.deepEqual(pages("reading", question), pages("all", question), "search must cover hidden categories");

@@ -5,9 +5,11 @@ import { validateIngestRequest } from "../agent/ingest-records";
 import { TaskResultModal } from "../modals/task-result";
 import { ingestTaskResult } from "../agent/ingest-task-result";
 import type { TaskRun } from "../types/contracts";
+import { openAcquiredIntake } from "../fulltext/intake-modal";
 
 export async function openIngestContinuation(plugin: AgentDashboardPlugin, previous: TaskRun): Promise<void> {
 	const request = validateIngestRequest(await plugin.getIngestRecords().read("request", previous.id), previous.id);
+	if(request.options.acquisitionSource){await openAcquiredIntake(plugin,request.options.acquisitionSource.jobId,request);return;}
 	const modal = new Modal(plugin.app); modal.setTitle("继续完成入库");
 	modal.contentEl.createEl("p", { text: "重新核对原文身份，并复用已存在且校验通过的原文与 Wiki，只生成缺失的输出。身份核验仍需确认，已存在的文件不会覆盖。" });
 	modal.contentEl.createEl("pre", { text: request.options.sourcePdfPath + "\n所需输出：" + [request.options.createArticleMarkdown ? "原文 Markdown" : "", request.options.createArticleWiki ? "文章 Wiki" : ""].filter(Boolean).join("、") });

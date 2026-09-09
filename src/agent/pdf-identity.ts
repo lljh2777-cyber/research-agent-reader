@@ -75,6 +75,7 @@ export interface LocalPdfIdentityDeps {
 }
 
 export interface AuthorizedPdfSnapshot {
+	retainFiles?: boolean;
 	path: string;
 	directory: string;
 	originalFileName: string;
@@ -391,7 +392,7 @@ function sameOpenedFile(before: fs.BigIntStats, after: fs.BigIntStats): boolean 
  */
 export async function createAuthorizedPdfSnapshot(
 	sourcePath: string,
-	options: { signal?: AbortSignal; stageRoot?: string } = {},
+	options: { signal?: AbortSignal; stageRoot?: string; expected?: {sha256:string;byteLength:number}; retainFiles?:boolean } = {},
 ): Promise<AuthorizedPdfSnapshot> {
 	if (!sourcePath || !/\.pdf$/i.test(sourcePath)) throw new Error("未提供可读取的 PDF");
 	if (options.signal?.aborted) throw abortError("PDF 授权快照已取消");
@@ -406,6 +407,7 @@ export async function createAuthorizedPdfSnapshot(
 		throw new Error("来源 PDF 在路径解析期间发生变化");
 	}
 	if (initial.size <= 0n) throw new Error("来源 PDF 为空");
+	if(options.expected && initial.size!==BigInt(options.expected.byteLength))throw new Error("来源 PDF 大小与获取快照不一致");
 	if (initial.size > BigInt(MAX_LOCAL_PDF_BYTES)) {
 		throw new Error("来源 PDF 超过 128 MiB 安全上限，未读取或上传");
 	}
@@ -434,27 +436,32 @@ export async function createAuthorizedPdfSnapshot(
 			}
 			const chunk = buffer.subarray(0, bytesRead);
 			hash.update(chunk);
-			await destination.write(chunk);
+			let written=0;while(written<chunk.length){const result=await destination.write(chunk.subarray(written));if(!result.bytesWritten)throw new Error("PDF 授权快照写入未前进");written+=result.bytesWritten;}
 		}
 		await destination.sync();
 		const openedAfter = await source.stat({ bigint: true });
 		if (!sameOpenedFile(openedBefore, openedAfter) || BigInt(position) !== openedAfter.size) {
 			throw new Error("来源 PDF 在授权快照复制期间发生变化");
 		}
+		const sha256=hash.digest("hex");
+		if(options.expected && (options.expected.sha256!==sha256 || options.expected.byteLength!==position))throw new Error("授权 PDF 与获取快照不一致，未读取论文内容或上传");
 		return {
 			path: snapshotPath,
 			directory,
 			originalFileName: safeFileName(sourcePath),
 			size: position,
-			sha256: hash.digest("hex"),
+			sha256,
+			...(options.retainFiles?{retainFiles:true}:{}),
 		};
 	} catch (error) {
 		try { await destination?.close(); } catch { /* Best effort. */ }
 		destination = null;
 		try { await source?.close(); } catch { /* Best effort. */ }
 		source = null;
-		try { await fs.promises.unlink(snapshotPath); } catch { /* File may not exist. */ }
-		try { await fs.promises.rmdir(directory); } catch { /* Keep unexpected contents for inspection. */ }
+		if(!options.retainFiles) {
+			try { await fs.promises.unlink(snapshotPath); } catch { /* File may not exist. */ }
+			try { await fs.promises.rmdir(directory); } catch { /* Keep unexpected contents for inspection. */ }
+		}
 		throw error;
 	} finally {
 		try { await destination?.close(); } catch { /* Best effort. */ }
@@ -463,7 +470,7 @@ export async function createAuthorizedPdfSnapshot(
 }
 
 export async function disposeAuthorizedPdfSnapshot(snapshot: AuthorizedPdfSnapshot | null): Promise<void> {
-	if (!snapshot) return;
+	if (!snapshot || snapshot.retainFiles) return;
 	try { await fs.promises.unlink(snapshot.path); } catch { /* Best effort. */ }
 	try { await fs.promises.rmdir(snapshot.directory); } catch (error) {
 		console.warn("Could not remove authorized PDF snapshot directory", error);

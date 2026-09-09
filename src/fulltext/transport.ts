@@ -3,8 +3,9 @@ import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { setTimeout, clearTimeout } from "node:timers";
 import { SourceError } from "./errors";
+import { oaUrl } from "./url-policy";
 
-const HOSTS = new Set(["www.ebi.ac.uk", "api.crossref.org", "pmc-oa-opendata.s3.amazonaws.com"]);
+const HOSTS = new Set(["www.ebi.ac.uk", "api.crossref.org", "pmc-oa-opendata.s3.amazonaws.com", "api.unpaywall.org"]);
 export function sourceUrl(raw: string): URL {
 	let url: URL; try { url = new URL(raw); } catch { throw new SourceError("invalid_url", "来源地址格式无效"); }
 	if (url.protocol !== "https:" || url.port || url.username || url.password || url.hash || !HOSTS.has(url.hostname) || raw.length > 4096) throw new SourceError("blocked_url", "该地址不属于受支持的 HTTPS 来源");
@@ -55,9 +56,10 @@ class Gate {
 }
 export interface ByteSink { write(bytes: Uint8Array): Promise<void>; }
 export interface ByteResponse { status: number; headers: Record<string, string>; bytes: Uint8Array; }
+export interface DownloadPolicy { dynamic?: boolean; budget?: { received: number; limit: number }; }
 export interface SourceTransport {
 	metadata(url: string, signal: AbortSignal): Promise<ByteResponse>;
-	download(url: string, signal: AbortSignal, sink: ByteSink, progress: (received: number, total?: number) => void): Promise<void>;
+	download(url: string, signal: AbortSignal, sink: ByteSink, progress: (received: number, total?: number) => void, policy?: DownloadPolicy): Promise<void>;
 }
 export interface TransportDeps { lookup: typeof lookup; request: typeof https.request; }
 /** Direct HTTPS only. No ambient proxy, browser cookies, credentials or shared socket agent. */
@@ -81,16 +83,17 @@ export class HttpsSourceTransport implements SourceTransport {
 			}
 		});
 	}
-	async download(url: string, signal: AbortSignal, sink: ByteSink, progress: (received: number, total?: number) => void): Promise<void> {
-		await this.fileGate.run(signal, async () => { await this.transfer(url, signal, sink, 64 * 1024 * 1024, 120000, progress); });
+	async download(url: string, signal: AbortSignal, sink: ByteSink, progress: (received: number, total?: number) => void, policy?: DownloadPolicy): Promise<void> {
+		await this.fileGate.run(signal, async () => { await this.transfer(url, signal, sink, 64 * 1024 * 1024, 120000, progress, policy); });
 	}
-	private async transfer(raw: string, parent: AbortSignal, sink: ByteSink, limit: number, timeout: number, progress?: (received: number, total?: number) => void): Promise<{status: number; headers: Record<string,string>}> {
+	private async transfer(raw: string, parent: AbortSignal, sink: ByteSink, limit: number, timeout: number, progress?: (received: number, total?: number) => void, policy?: DownloadPolicy): Promise<{status: number; headers: Record<string,string>}> {
 		const controller = new AbortController(), relay = () => controller.abort(parent.reason);
 		parent.addEventListener("abort", relay, { once: true }); if (parent.aborted) relay();
 		const timer = setTimeout(() => controller.abort(new SourceError("timeout", "来源请求超时，请检查直连网络后重试")), timeout);
 		let bytes = 0;
 		try {
-			let url = sourceUrl(raw);
+			const validateUrl = policy?.dynamic ? oaUrl : sourceUrl;
+			let url = validateUrl(raw);
 			for (let redirects = 0; ; redirects++) {
 				await this.pace(url.hostname, controller.signal);
 				const answers = await abortable(this.deps.lookup(url.hostname, { all: true }), controller.signal);
@@ -99,7 +102,7 @@ export class HttpsSourceTransport implements SourceTransport {
 				const response = await new Promise<import("node:http").IncomingMessage>((resolve, reject) => {
 					const request = this.deps.request(url, { agent: false, family: selected.family, servername: url.hostname, signal: controller.signal,
 						lookup: (_host, _options, callback) => callback(null, selected.address, selected.family),
-						headers: { "User-Agent": "Research-Agent-Reader/0.45.0", Accept: progress ? "application/pdf, application/octet-stream" : "application/json, application/xml, text/xml", "Accept-Encoding": "identity" },
+						headers: { "User-Agent": "Research-Agent-Reader/0.46.0", Accept: progress ? "application/pdf, application/octet-stream" : "application/json, application/xml, text/xml", "Accept-Encoding": "identity" },
 					}, resolve);
 					const connectTimer = setTimeout(() => request.destroy(new SourceError("connect_timeout", "来源连接超时")), 15000);
 					request.once("socket", socket => { socket.once("secureConnect", () => { clearTimeout(connectTimer); if (!sameAddress(socket.remoteAddress, selected.address)) request.destroy(new SourceError("address_changed", "实际连接地址与已验证地址不一致")); }); });
@@ -110,7 +113,7 @@ export class HttpsSourceTransport implements SourceTransport {
 				for (const [key, value] of Object.entries(response.headers)) if (typeof value === "string") headers[key.toLowerCase()] = value;
 				if ([301,302,303,307,308].includes(status)) {
 					response.destroy(); if (redirects >= 3 || !headers.location) throw new SourceError("redirect_limit", "来源重定向次数超限");
-					const next = sourceUrl(new URL(headers.location, url).href); if (next.origin !== url.origin) throw new SourceError("cross_origin_redirect", "来源跳转到其他站点，本版本停止此请求"); url = next; continue;
+					const next = validateUrl(new URL(headers.location, url).href); if (!policy?.dynamic && next.origin !== url.origin) throw new SourceError("cross_origin_redirect", "来源跳转到其他站点，本版本停止此请求"); url = next; continue;
 				}
 				try {
 					if (headers["content-encoding"] && headers["content-encoding"] !== "identity") throw new SourceError("encoded_response", "来源返回压缩响应，本版本仅接收原始字节");
@@ -120,6 +123,7 @@ export class HttpsSourceTransport implements SourceTransport {
 					if (length !== undefined && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > limit)) throw new SourceError("size_limit", "来源响应大小无效或超过上限");
 					const total = length === undefined ? undefined : Number(length);
 					for await (const rawChunk of response) { controller.signal.throwIfAborted(); const chunk = Buffer.from(rawChunk); bytes += chunk.length;
+						if (policy?.budget) { policy.budget.received += chunk.length; if (policy.budget.received > policy.budget.limit) throw new SourceError("total_size_limit", "本次候选获取累计超过 128 MiB，已停止"); }
 						if (bytes > limit) throw new SourceError("size_limit", "实际接收字节超过上限，已停止传输");
 						await abortable(sink.write(chunk), controller.signal); progress?.(bytes, total || undefined);
 					}

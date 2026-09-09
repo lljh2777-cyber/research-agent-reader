@@ -2,7 +2,7 @@
 export type SettingsCategory = "reading" | "connections" | "knowledge" | "system";
 export type SettingsFilter = SettingsCategory | "common" | "all";
 export type SettingsPage = "home" | "reader" | "annotations" | "tasks" | "direct-api"
-	| "codex" | "claude" | "opencode" | "retrieval" | "mineru" | "runtime" | "data" | "obsidian-cli";
+	| "codex" | "claude" | "opencode" | "retrieval" | "mineru" | "runtime" | "data" | "obsidian-cli" | "fulltext";
 
 export interface SettingsEntry {
 	page: Exclude<SettingsPage, "home">;
@@ -22,6 +22,7 @@ export const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string }>
 ];
 
 export const SETTINGS_ENTRIES: SettingsEntry[] = [
+	{ page:"fulltext",category:"knowledge",title:"全文来源",icon:"download",description:"PMC PDF、Unpaywall 开放来源回退与联系邮箱。",keywords:"DOI PMID PMCID PDF 全文 获取 下载 邮箱 email OA Unpaywall PMC" },
 	{ page: "reader", category: "reading", title: "文献阅读器", icon: "book-open-text", common: true,
 		description: "接管目录、图文双栏与阅读版式。", keywords: "PDF Markdown MinerU article.md 缩放 栏宽 跟随 版面框" },
 	{ page: "direct-api", category: "connections", title: "Direct API", icon: "plug-zap", common: true,

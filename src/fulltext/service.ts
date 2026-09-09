@@ -4,17 +4,20 @@ import { acquisitionActive, acquisitionRetryable, decodeCandidates, decodeIdenti
 import { AcquisitionRepository } from "./repository";
 import { sourceFailure, SourceError } from "./errors";
 
-export interface DownloadContext { jobId: string; attemptId: string; request: AcquisitionRequest; identity?: ResolvedIdentity; }
+export interface DownloadContext { jobId: string; attemptId: string; request: AcquisitionRequest; identity?: ResolvedIdentity; budget?: {received:number;limit:number}; }
 export interface AcquisitionBackend {
 	readonly mode: AcquisitionMode;
+	readonly unpaywallEnabled?: boolean;
 	resolve(request: AcquisitionRequest, signal: AbortSignal): Promise<void | ResolvedIdentity>;
 	discover(request: AcquisitionRequest, signal: AbortSignal, identity?: ResolvedIdentity): Promise<AcquisitionCandidate[]>;
 	download(candidate: AcquisitionCandidate, signal: AbortSignal, progress: (received: number, total?: number) => void, context?: DownloadContext): Promise<void | PdfArtifact>;
 	verify(request: AcquisitionRequest, signal: AbortSignal, artifact?: PdfArtifact, identity?: ResolvedIdentity): Promise<"valid" | "conflict" | PdfValidation>;
 	validateSnapshot?(snapshot: PdfSnapshot): Promise<void>;
 	readSnapshot?(snapshot: PdfSnapshot): Promise<Uint8Array>;
+	pathSnapshot?(snapshot:PdfSnapshot):Promise<string>;
+	discoverFallback?(request:AcquisitionRequest,signal:AbortSignal,identity:ResolvedIdentity):Promise<AcquisitionCandidate[]>;
 }
-interface Attempt { id: string; controller: AbortController; committing: boolean; timer?: ReturnType<typeof setTimeout>; }
+interface Attempt { id: string; controller: AbortController; committing: boolean; timer?: ReturnType<typeof setTimeout>; budget:{received:number;limit:number}; remainingMs:number; timedAt?:number; }
 export class AcquisitionService {
 	private readonly attempts = new Map<string, Attempt>();
 	private readonly volatile = new Map<string, AcquisitionJob>();
@@ -27,6 +30,7 @@ export class AcquisitionService {
 	}
 	get mode(): AcquisitionMode { return this.repository.mode; }
 	get available(): boolean { return !!this.backend; }
+	get unpaywallEnabled():boolean {return this.backend?.unpaywallEnabled===true;}
 	get diagnostics(): readonly string[] { return this.repository.errors; }
 	list(): AcquisitionJob[] { return [...this.repository.jobs.keys()].map(id => this.get(id)!).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
 	get(id: string): AcquisitionJob | undefined { const job = this.volatile.get(id) || this.repository.jobs.get(id); return job && structuredClone(job); }
@@ -34,14 +38,16 @@ export class AcquisitionService {
 	subscribe(listener: (progressOnly?: boolean) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	private emit(progressOnly = false): void { for (const listener of this.listeners) { try { listener(progressOnly); } catch { /* A closed view must not break task persistence. */ } } }
 	private release(id: string): void { const attempt = this.attempts.get(id); if (attempt?.timer) clearTimeout(attempt.timer); this.attempts.delete(id); }
+	private pauseDeadline(attempt:Attempt):void { if(attempt.timer)clearTimeout(attempt.timer); if(attempt.timedAt!==undefined)attempt.remainingMs-=Math.max(0,Date.now()-attempt.timedAt);attempt.timedAt=undefined; }
 	private deadline(id: string, attempt: Attempt, ms: number): void {
-		if (attempt.timer) clearTimeout(attempt.timer);
+		this.pauseDeadline(attempt);
 		if (this.mode !== "production") return;
+		attempt.timedAt=Date.now();
 		attempt.timer = setTimeout(() => {
 			if (!this.current(id, attempt) || attempt.committing) return;
 			attempt.controller.abort(new SourceError("timeout", "获取阶段超时"));
 			void this.serial(async () => { if (this.attempts.get(id) !== attempt) return; this.release(id); await this.persist({ ...this.get(id)!, phase: "failed", errorCode: "timeout", error: "获取阶段超时，请检查直连网络或存储后重试", detail: "未完成文件保留在插件的 fulltext/production/ 目录" }); });
-		}, ms);
+		}, Math.max(0,Math.min(ms,attempt.remainingMs)));
 	}
 	private serial<T>(work: () => Promise<T>): Promise<T> { const result = this.queue.then(work); this.queue = result.catch(() => undefined); return result; }
 	ready(): Promise<void> { return this.loading ||= this.recover(); }
@@ -74,7 +80,7 @@ export class AcquisitionService {
 		await this.ready();
 		return this.serial(async () => {
 			if (this.disposed) throw new Error("全文获取服务已关闭");
-			const normalized = decodeRequest(request, this.mode);
+			const normalized = decodeRequest(this.mode==="production"?{...request,useUnpaywall:request.useUnpaywall ?? this.unpaywallEnabled}:request, this.mode);
 			const duplicate = this.list().find(job => this.owned(job) && acquisitionActive(job.phase) && requestKey(job.request) === requestKey(normalized));
 			if (duplicate) return duplicate;
 			if (this.mode === "production" && this.backend?.validateSnapshot) {
@@ -101,7 +107,7 @@ export class AcquisitionService {
 		await this.ready(); await this.serial(async () => {
 			const job = this.get(id), attempt = this.attempts.get(id);
 			if (!job || !attempt || !this.current(id, attempt) || !this.owned(job) || job.phase !== "awaiting_selection" || !job.candidates.some(c => c.id === candidateId)) throw new Error("候选已失效，请重新查看任务");
-			if (await this.persist({ ...job, phase: "downloading", selectedId: candidateId, detail: this.mode === "demo" ? "演示获取进度" : "重新核验来源清单并获取 PDF" })) { this.deadline(id, attempt, 180000); void this.runSelected(id, attempt); }
+			if (await this.persist({ ...job, phase: "downloading", selectedId: candidateId, detail: this.mode === "demo" ? "演示获取进度" : "重新核验来源清单并获取 PDF" })) { this.deadline(id, attempt, job.request.useUnpaywall?300000:180000); void this.runSelected(id, attempt); }
 		});
 	}
 	stop(id: string): boolean {
@@ -115,11 +121,11 @@ export class AcquisitionService {
 	}
 	private current(id: string, attempt: Attempt): boolean { return !this.disposed && this.attempts.get(id) === attempt && !attempt.controller.signal.aborted; }
 	private launch(job: AcquisitionJob): void {
-		const attempt: Attempt = { id: job.attemptId, controller: new AbortController(), committing: false };
+		const attempt: Attempt = { id: job.attemptId, controller: new AbortController(), committing: false, budget:{received:0,limit:128*1024*1024}, remainingMs:300000 };
 		this.attempts.set(job.id, attempt); this.deadline(job.id, attempt, 20000); void this.run(job.id, attempt);
 	}
 	private async stage(id: string, attempt: Attempt, changes: Partial<AcquisitionJob>): Promise<boolean> {
-		return this.serial(async () => { if (!this.current(id, attempt)) return false; if (changes.phase && (changes.phase === "awaiting_selection" || !acquisitionActive(changes.phase)) && attempt.timer) clearTimeout(attempt.timer); return this.persist({ ...this.get(id)!, ...changes }); });
+		return this.serial(async () => { if (!this.current(id, attempt)) return false; if (changes.phase && (changes.phase === "awaiting_selection" || !acquisitionActive(changes.phase))) this.pauseDeadline(attempt); return this.persist({ ...this.get(id)!, ...changes }); });
 	}
 	private async fail(id: string, attempt: Attempt, error?: unknown): Promise<void> {
 		const failure = sourceFailure(error);
@@ -142,17 +148,18 @@ export class AcquisitionService {
 		} catch (error) { await this.fail(id, attempt, error); }
 	}
 	private async runSelected(id: string, attempt: Attempt): Promise<void> {
+		const fileAttemptId=attempt.id;
 		try {
 			if (!this.current(id, attempt)) return;
 			const job = this.get(id)!, candidate = job.candidates.find(c => c.id === job.selectedId)!;
 			let lastEmit = 0;
 			const artifact = await this.backend!.download(candidate, attempt.controller.signal, (received, total) => {
-				if (!this.current(id, attempt)) return;
+				if (!this.current(id, attempt) || attempt.id!==fileAttemptId) return;
 				const latest = this.get(id)!;
 				if (latest.phase !== "downloading" || !Number.isSafeInteger(received) || received < (latest.receivedBytes || 0) || (total !== undefined && (!Number.isSafeInteger(total) || total <= 0 || received > total)) || (latest.totalBytes !== undefined && total !== latest.totalBytes)) return;
 				this.volatile.set(id, { ...latest, receivedBytes: received, totalBytes: total });
 				if (Date.now() - lastEmit >= 250 || received === total) { lastEmit = Date.now(); this.emit(true); }
-			}, { jobId: id, attemptId: attempt.id, request: job.request, identity: job.identity });
+			}, { jobId: id, attemptId: fileAttemptId, request: job.request, identity: job.identity, budget:attempt.budget });
 			const snapshotId = "s-" + randomUUID();
 			if (!await this.stage(id, attempt, { phase: "verifying", snapshotId, detail: this.mode === "demo" ? "校验模拟结果并保存演示回执" : "核验 PDF 格式、页面、身份线索和文件哈希" })) return;
 			const verdict = await this.backend!.verify(job.request, attempt.controller.signal, artifact || undefined, job.identity);
@@ -169,7 +176,32 @@ export class AcquisitionService {
 				catch { await this.persist({ ...latest, phase: "failed", error: this.mode === "demo" ? "演示快照保存失败，请检查存储后重试" : "PDF 快照记录保存失败，请检查存储后重试", detail: "未完成保存" }); this.release(id); return; }
 				await this.persist({ ...latest, phase: "acquired", identityCheck: validation?.identityCheck, detail: this.mode === "demo" ? "演示回执已保存；没有下载 PDF，也未入库" : validation?.identityCheck === "verified" ? "文件已获取，首页身份线索匹配；尚未入库或进行全文深读" : "文件已获取，身份待核对；可预览原文，尚未入库", error: "", errorCode: undefined }); this.release(id);
 			});
-		} catch (error) { await this.fail(id, attempt, error); }
+		} catch (error) {
+			if (this.mode==="production" && this.current(id,attempt) && error instanceof SourceError && error.outcome==="failed" && !["total_size_limit","timeout"].includes(error.code)) {
+				const job=this.get(id)!, index=job.candidates.findIndex(c=>c.id===job.selectedId), next=job.candidates[index+1];
+				if(next) { attempt.id="a-"+randomUUID(); if(await this.stage(id,attempt,{attemptId:attempt.id,selectedId:next.id,snapshotId:undefined,receivedBytes:undefined,totalBytes:undefined,phase:"downloading",detail:`上一候选未完成（${error.code}），正在尝试下一 PDF 来源`,error:"",errorCode:undefined})) await this.runSelected(id,attempt); return; }
+				if(job.request.useUnpaywall && job.candidates.every(c=>!!c.pmc) && this.backend?.discoverFallback) {
+					try { if(!await this.stage(id,attempt,{phase:"discovering",detail:"PMC 候选未能完成，正在查询开放 PDF 回退"}))return;
+						const candidates=decodeCandidates(await this.backend.discoverFallback(job.request,attempt.controller.signal,job.identity!));
+						attempt.id="a-"+randomUUID();
+						await this.stage(id,attempt,{attemptId:attempt.id,candidates,selectedId:undefined,snapshotId:undefined,receivedBytes:undefined,totalBytes:undefined,phase:"awaiting_selection",detail:"已找到新的开放来源，请核对稿件类型后选择 PDF"}); return;
+					} catch(fallbackError) { await this.fail(id,attempt,fallbackError);return; }
+				}
+			}
+			await this.fail(id, attempt, error);
+		}
+	}
+	async intakeSource(id:string):Promise<{snapshot:PdfSnapshot;path:string}> {
+		const {snapshot}=await this.preview(id); if(!this.backend?.pathSnapshot)throw new Error("此来源没有可用于入库的本地文件");
+		return {snapshot,path:await this.backend.pathSnapshot(snapshot)};
+	}
+	async linkIntake(id:string,snapshotId:string,runId:string):Promise<void> {
+		await this.ready(); await this.serial(async()=>{
+			const job=this.get(id);if(!job || !this.owned(job) || job.phase!=="acquired" || job.snapshotId!==snapshotId)throw new Error("获取快照已变化，请重新打开入库");
+			if(job.intakeRunIds?.includes(runId))return;
+			// Association failure must not invalidate the completed acquisition.
+			await this.repository.save({...job,revision:job.revision+1,updatedAt:new Date().toISOString(),intakeRunIds:[...(job.intakeRunIds||[]),runId]});this.volatile.delete(id);this.emit();
+		});
 	}
 	async preview(id: string): Promise<{ snapshot: PdfSnapshot; bytes: Uint8Array }> {
 		await this.ready(); const job = this.get(id);

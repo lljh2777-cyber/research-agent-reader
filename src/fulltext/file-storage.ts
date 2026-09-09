@@ -88,7 +88,8 @@ export class FileAcquisitionStorage implements AcquisitionStorage {
 			return new Uint8Array(bytes);
 		} finally { await handle.close(); }
 	}
+	async artifactPath(artifact:PdfArtifact):Promise<string> { await this.readArtifact(artifact); return path.join(this.root,artifact.filename); }
 }
 
 export interface ArtifactWriter { write(bytes: Uint8Array): Promise<void>; finish(): Promise<PdfArtifact>; close(): Promise<void>; }
-export interface PdfArtifactStore { beginArtifact(attemptId: string): Promise<ArtifactWriter>; readArtifact(artifact: PdfArtifact): Promise<Uint8Array>; }
+export interface PdfArtifactStore { beginArtifact(attemptId: string): Promise<ArtifactWriter>; readArtifact(artifact: PdfArtifact): Promise<Uint8Array>; artifactPath?(artifact:PdfArtifact):Promise<string>; }

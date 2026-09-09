@@ -1,13 +1,15 @@
 import { Modal, Notice, type App } from "obsidian";
 import { acquisitionActive, acquisitionRetryable, parseAcquisitionInput, PHASE_LABELS, type AcquisitionRequest, type DemoScenario } from "./contracts";
 import type { AcquisitionService } from "./service";
+import type { TaskRun } from "../types/contracts";
 
 export class FulltextAcquisitionModal extends Modal {
 	private unsubscribe?: () => void;
 	private jobsEl?: HTMLElement;
 	private closed = false;
 	private busy = false;
-	constructor(app: App, readonly service: AcquisitionService, private selectedId?: string, private afterClose?: () => void, private openPdf?: (id: string) => Promise<void>) { super(app); }
+	private unsubscribeRuns?:()=>void;
+	constructor(app: App, readonly service: AcquisitionService, private selectedId?: string, private afterClose?: () => void, private openPdf?: (id: string) => Promise<void>, private intake?:{open(id:string):Promise<void>;runs():TaskRun[];subscribe(listener:()=>void):()=>void;openRun(run:TaskRun):void}) { super(app); }
 	onOpen(): void {
 		this.closed = false; this.modalEl.addClass("rar-fulltext-modal");
 		this.setTitle(this.service.mode === "demo" ? "全文获取 · 流程演示" : "获取论文全文");
@@ -28,7 +30,7 @@ export class FulltextAcquisitionModal extends Modal {
 			const select = versionLabel.createEl("select", {attr: {"aria-label":"全文版本范围"}});
 			select.createEl("option", {value:"record_only",text:"仅出版版本"}); select.createEl("option", {value:"record_preferred_allow_manuscript",text:"出版版本或作者接受稿"});
 			select.addEventListener("change", () => { versionPolicy = select.value as AcquisitionRequest["versionPolicy"]; });
-			this.contentEl.createEl("p", { text: "来源：NLM / PMC 云数据。标识查询使用 Europe PMC 与 Crossref；本版本仅支持 HTTPS 直连，不继承系统或 Obsidian 代理。", cls: "rar-fulltext-unavailable" });
+			this.contentEl.createEl("p", { text: "优先查询 PMC PDF。"+(this.service.unpaywallEnabled?"已启用 Unpaywall 开放来源回退。":"Unpaywall 回退未启用，可在插件设置 → 全文来源中配置。")+"标识查询使用 Europe PMC 与 Crossref；仅支持 HTTPS 直连，不继承系统或 Obsidian 代理。", cls: "rar-fulltext-unavailable" });
 		}
 		const start = this.contentEl.createEl("button", { text: this.service.mode === "demo" ? "开始演示" : "查找全文", cls: "mod-cta", attr: { "data-fulltext-action": "start" } });
 		const validate = () => {
@@ -42,6 +44,7 @@ export class FulltextAcquisitionModal extends Modal {
 		});
 		this.jobsEl = this.contentEl.createDiv("rar-fulltext-jobs"); this.jobsEl.setText("正在读取获取记录…");
 		this.unsubscribe = this.service.subscribe(() => this.renderJobs());
+		this.unsubscribeRuns=this.intake?.subscribe(()=>this.renderJobs());
 		void this.service.ready().then(() => this.renderJobs()).catch(() => { if (!this.closed) this.jobsEl?.setText("获取记录读取失败，请检查插件存储目录后重新打开插件"); start.disabled = true; });
 	}
 	private renderJobs(): void {
@@ -78,16 +81,23 @@ export class FulltextAcquisitionModal extends Modal {
 				const el = card.createEl("button", { text, attr: { "data-fulltext-action": key, "data-fulltext-key": job.id + ":" + key } });
 				el.addEventListener("click", () => { el.disabled = true; void Promise.resolve().then(work).catch(() => new Notice("操作未完成，请检查任务状态")).finally(() => { el.disabled = false; }); });
 			};
+			if(job.phase==="awaiting_selection" && job.mode==="production")card.createEl("p",{text:"从所选来源开始，获取失败会依次尝试下方符合版本范围的候选；身份冲突会停止。",cls:"rar-fulltext-muted"});
 			if (job.phase === "awaiting_selection") for (const candidate of job.candidates) {
 				if (candidate.pmc) card.createEl("p", {text: `${candidate.pmc.sourceVersionId} · ${candidate.version === "accepted_manuscript" ? "作者接受稿" : "出版版本"} · 许可：${candidate.pmc.license}${candidate.pmc.retracted ? " · 来源标记为已撤稿" : ""}`});
-				button(candidate.pmc ? "获取 PDF · " + candidate.pmc.sourceVersionId : "选择 " + candidate.title, candidate.id, () => this.service.choose(job.id, candidate.id));
+				if(candidate.oa)card.createEl("p",{text:`${candidate.oa.origin} · ${candidate.version==="accepted_manuscript"?"作者接受稿":"出版版本"} · ${candidate.oa.hostType==="publisher"?"出版社":"开放仓储"} · 许可：${candidate.oa.license}`});
+				button(candidate.pmc ? "获取 PDF · " + candidate.pmc.sourceVersionId : candidate.oa?"获取 PDF · "+new URL(candidate.oa.origin).hostname:"选择 " + candidate.title, candidate.id, () => this.service.choose(job.id, candidate.id));
 			}
 			if (job.phase === "acquired" && job.mode === "production" && this.openPdf) button("预览 PDF", "preview", () => this.openPdf!(job.id));
+			if (job.phase === "acquired" && job.mode === "production" && this.intake) button("继续入库", "intake", () => this.intake!.open(job.id));
+			if(this.intake && job.mode==="production") {
+				const linked=this.intake.runs().filter(run=>run.acquisitionSource?.jobId===job.id || job.intakeRunIds?.includes(run.id));
+				for(const run of linked) {card.createEl("p",{text:"关联入库："+({running:"进行中",queued:"等待中",done:"已完成",failed:"未完成",interrupted:"已中断"}[run.status]||run.status)});button("查看入库任务", "intake-"+run.id,()=>this.intake!.openRun(run));}
+			}
 			if (acquisitionActive(job.phase)) button("停止", "stop", () => { if (!this.service.stop(job.id)) new Notice("结果正在保存，稍后可查看完成状态"); });
 			if (acquisitionRetryable(job.phase)) button("重试", "retry", () => this.service.retry(job.id));
 		}
 		if (jobs.length > 50) this.jobsEl.createEl("p", { text: "显示最近 50 条记录，完整记录仍保存在插件目录。" });
 		if (focus) [...this.jobsEl.querySelectorAll<HTMLElement>("[data-fulltext-key]")].find(el => el.dataset.fulltextKey === focus)?.focus({ preventScroll: true });
 	}
-	onClose(): void { this.closed = true; this.unsubscribe?.(); this.unsubscribe = undefined; this.contentEl.empty(); this.afterClose?.(); }
+	onClose(): void { this.closed = true; this.unsubscribe?.(); this.unsubscribeRuns?.(); this.unsubscribe = undefined; this.unsubscribeRuns=undefined; this.contentEl.empty(); this.afterClose?.(); }
 }

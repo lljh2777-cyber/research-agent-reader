@@ -8,14 +8,16 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.45.0`; the beta
+The `codex/research-learning-map` development branch is at `0.46.0`; the beta
 release link above remains the published release.
 
 全文获取与多来源入库的后续设计见[架构与开发流程](docs/fulltext-acquisition-design.md)。
 总体设计基于 `0.43.2`，各阶段按实现说明验收。
-`0.45.0` 已完成 M2：输入标识、核对 PMC 版本、下载并校验 PDF、无模型预览与本地快照复用。
-当前仅支持 PMC 提供的 PDF，使用 HTTPS 直连；获取结果暂未接入 MinerU、Wiki 或交互深读。
-使用入口、存储约定和验收范围见[全文获取 M2](docs/fulltext-acquisition-m2.md)；开发演示见 [M1](docs/fulltext-acquisition-m1.md)。
+`0.46.0` 已完成 M3：PMC 无可用 PDF 时可查询 Unpaywall，并按稿件策略尝试开放 PDF 候选。
+在「设置 → 全文来源」中填写联系邮箱并启用回退；查询会将 DOI 和邮箱发送给 Unpaywall。
+获取结果可无模型预览，也可通过「继续入库」选择模型和输出，复用已校验 PDF 接入现有身份核对、MinerU 和 Wiki 流程。
+获取与入库分别保存状态，入库失败后可用同一 PDF 重新续办。
+使用流程和验收范围见[全文获取 M3](docs/fulltext-acquisition-m3.md)；PMC 基础能力见 [M2](docs/fulltext-acquisition-m2.md)，开发演示见 [M1](docs/fulltext-acquisition-m1.md)。
 
 ## Features
 
@@ -179,10 +181,14 @@ Depending on features the user explicitly configures or starts, the plugin can:
   never sends the absolute source path;
 - upload a selected document to the configured MinerU service after confirmation;
 - query public Europe PMC/Crossref metadata by paper identifier and, after
-  source selection, download a PMC PDF into the plugin's `fulltext/production/`
-  storage. This path uses direct HTTPS without model calls, cookies, API keys,
-  or system/Obsidian proxy settings; cached PDFs, metadata and partial attempts
-  are retained and are separate from the existing task-output cleanup;
+  source selection, download a PMC or Unpaywall-discovered PDF into the plugin's
+  `fulltext/production/` storage. Optional Unpaywall lookup sends the DOI and an
+  explicitly configured contact email to its API; the email stays in local
+  settings and is excluded from acquisition records. Acquisition uses direct
+  HTTPS without model calls, cookies, API keys, or system/Obsidian proxy settings.
+  Each PDF target and redirect must pass public-address checks. Cached PDFs,
+  metadata and partial attempts are retained. Continuing into intake requires
+  selecting a model and, for MinerU conversion, a new upload confirmation;
 - save bounded task and query records in the plugin's local `data.json` file;
 - save completed-task full output, including any model/tool trace or Vault
   excerpts present in that run, in plugin-local sidecars under

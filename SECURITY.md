@@ -75,23 +75,46 @@ loop inside the plugin. Its boundaries are enforced in code, not by prompt:
 
 ## Identifier-based fulltext acquisition
 
-The M2 acquisition service is independent of the light agent. It constructs
-exact Europe PMC/Crossref metadata queries and selects PDFs from scoped PMC
-version manifests. Only HTTPS to the three fixed provider hosts is allowed;
-each connection pins a validated public DNS answer and verifies the connected
-peer. Redirects must remain on the same origin. Requests use no ambient proxy,
-credentials, cookies or model-controlled URLs.
+The acquisition service is independent of the light agent. It constructs exact
+Europe PMC/Crossref metadata queries and selects PDFs from scoped PMC version
+manifests. M3 optionally falls back to Unpaywall's explicit PDF locations. Its
+API receives the DOI and a user-configured contact email. The email is stored
+in local settings; acquisition journals retain location origins and digests,
+not full PDF URLs or email-bearing API URLs.
+
+Metadata and PMC requests allow HTTPS to four fixed provider hosts. Unpaywall
+PDF locations may use other public HTTPS hosts. Every connection pins a
+validated public DNS answer and verifies the connected peer. Metadata and PMC
+redirects remain on the same origin; OA PDF redirects may cross origins only
+after the same URL and public-address checks. Dynamic URLs reject literal IPs,
+local hostnames, credentials, fragments, non-default ports and recognized
+credential/signature query fields. Requests use no ambient proxy, credentials,
+cookies, Referer or model-controlled URLs.
 
 Metadata is capped at 2 MiB and PDFs at 64 MiB, with bounded concurrency,
-timeouts, retries and streaming backpressure. A PMC manifest is rechecked before
-download; PDF MD5, SHA-256, format, page count and first-page identity clues are
-validated separately. A missing identity match remains explicitly unconfirmed.
-This status does not authorize MinerU, Wiki writing or scientific conclusions.
+timeouts, retries and streaming backpressure. One attempt sequence has a
+128 MiB received-PDF budget including failed candidates, and five minutes of
+active time; waiting for source selection pauses that timer. The discovery
+stage also has a 20-second deadline. PMC manifests or Unpaywall records are
+rechecked before download. PMC additionally requires the manifest PDF MD5;
+both paths validate SHA-256, format, page count and first-page identity clues.
+A missing identity match remains explicitly unconfirmed. This status does not
+authorize MinerU, Wiki writing or scientific conclusions.
 
 The passive preview uses local PDF.js canvases with evaluation disabled and no
 annotation/action layer. Completed artifacts are bound to immutable snapshots
 and rehashed before reuse or preview. Partial files remain in plugin-local
 storage and are never silently promoted, overwritten or automatically removed.
+
+The M3 intake adapter revalidates the source path, snapshot ID, byte length and
+SHA-256 before invoking the existing intake workflow. Its authorized copy must
+match those bytes, and the existing user visual-confirmation receipt is still
+required. Each continuation selects a model and resets remote-upload consent.
+Acquisition and intake have separate completion states and persisted links.
+Intake runs carrying an acquisition reference are protected from automatic
+history eviction. Their authorization copies and MinerU staging directories
+are retained on success, failure or cancellation; this policy is scoped to the
+new acquisition path, rather than a rewrite of all legacy cleanup behavior.
 
 ## Environmental trust assumption
 

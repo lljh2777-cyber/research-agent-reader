@@ -28,7 +28,7 @@
 		check(query('[data-filter="reading"]').getAttribute("aria-pressed") === "true", "clearing search restores selected category");
 		query('[data-filter="all"]').click();
 		const pages = [...el.querySelectorAll("[data-settings-target]")].map(e => e.dataset.settingsTarget);
-		check(pages.length === 12, "all twelve settings pages discoverable");
+		check(pages.length === 13, "all thirteen settings pages discoverable");
 		el.style.height = "480px"; el.style.flex = "none"; el.scrollTop = 180; const homeScroll = el.scrollTop;
 		query('[data-settings-target="direct-api"]').click();
 		check(el.scrollTop === 0, "new detail page starts at top");

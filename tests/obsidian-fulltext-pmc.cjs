@@ -9,7 +9,7 @@ module.exports = async function(app, mode = "acquire") {
 	let metadataCalls = 0, pdfTransfers = 0; const checks = [];
 	transport.metadata = function(...args) { metadataCalls++; return originalMetadata.apply(this,args); };
 	transport.download = function(...args) { pdfTransfers++; return originalDownload.apply(this,args); };
-	const wait = async (predicate, timeout = 30000) => { const deadline = Date.now() + timeout; while (!predicate()) { if (Date.now() > deadline) throw new Error("Native PMC check timed out"); await new Promise(resolve => setTimeout(resolve,40)); } };
+	const wait = async (predicate, timeout = 30000) => { const deadline = Date.now() + timeout; while (!predicate()) { if (Date.now() > deadline) throw new Error("Native PMC check timed out: "+JSON.stringify({completed:checks,preview:[...plugin.fulltextPreviews].map(p=>p.contentEl.querySelector('.rar-fulltext-pager span')?.textContent)})); await new Promise(resolve => setTimeout(resolve,40)); } };
 	const check = (condition,label) => { assert.ok(condition,label); checks.push(label); };
 	const initialPreviews = new Set(plugin.fulltextPreviews), initialModals = new Set(plugin.acquisitionModals);
 	try {
@@ -38,10 +38,11 @@ module.exports = async function(app, mode = "acquire") {
 		if(mode === "resume") check(metadataCalls === 0 && pdfTransfers === 0,"reload and preview require no provider calls");
 		plugin.openFulltextAcquisition("production",job.id);
 		const modal = [...plugin.acquisitionModals].find(m=>!initialModals.has(m));
-		await wait(()=>modal.contentEl.querySelector('[data-fulltext-action="preview"]'));
+		const card=()=>modal.contentEl.querySelector(`[data-job-id="${job.id}"]`);
+		await wait(()=>card()?.querySelector('[data-fulltext-action="preview"]'));
 		check(modal.contentEl.textContent.includes(snapshot.identity.title),"production panel shows resolved identity");
 		for(const width of [360,680]) { modal.modalEl.style.width=width+"px"; await new Promise(r=>setTimeout(r,50)); check(modal.contentEl.scrollWidth <= modal.contentEl.clientWidth+2,"production panel fits width "+width); }
-		modal.contentEl.querySelector('[data-fulltext-action="preview"]').click();
+		card().querySelector('[data-fulltext-action="preview"]').click();
 		await wait(()=>[...plugin.fulltextPreviews].some(p=>!initialPreviews.has(p)));
 		const preview=[...plugin.fulltextPreviews].find(p=>!initialPreviews.has(p));
 		await wait(()=>preview.contentEl.querySelector('.rar-fulltext-pager span')?.textContent===`第 1 / ${snapshot.validation.pageCount} 页`);

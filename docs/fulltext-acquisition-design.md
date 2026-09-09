@@ -1,6 +1,6 @@
 # 全文获取与多来源入库：架构和开发流程
 
-设计日期：2026-09-09。本文保留总体设计基线；实现进度：`0.44.0` 完成 [M1 流程骨架与演示](fulltext-acquisition-m1.md)，`0.45.0` 完成 [M2 PMC PDF 获取与预览](fulltext-acquisition-m2.md)。M3–M6 仍为规划。实际模块、阶段边界与验收结果以对应实现说明为准。
+设计日期：2026-09-09。本文保留总体设计基线；实现进度：`0.44.0` 完成 [M1 流程骨架与演示](fulltext-acquisition-m1.md)，`0.45.0` 完成 [M2 PMC PDF 获取与预览](fulltext-acquisition-m2.md)，`0.46.0` 完成 [M3 OA 回退与既有入库接续](fulltext-acquisition-m3.md)。M4–M6 仍为规划。实际模块、阶段边界与验收结果以对应实现说明为准。
 
 代码基线：`codex/research-learning-map`，版本 `0.43.2`，HEAD `d7c85a3ee85ac147ab15734df0b1f07f3334ca31`。实际仓库为 `E:\research-reader\research-agent-reader`。本方案依据当前代码静态检查、现有验收说明和官方服务文档制定，不代表真实下载、转换或模型验收已经通过。
 

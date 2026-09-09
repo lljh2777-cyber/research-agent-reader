@@ -83,6 +83,7 @@ export interface TaskRunArtifacts {
 }
 
 export interface TaskRun {
+	acquisitionSource?: import("../fulltext/contracts").AcquisitionIntakeRef;
 	ingestProgress?: import("../agent/ingest-progress").IngestProgress;
 	id: string;
 	actionId: string;
