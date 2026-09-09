@@ -24,6 +24,7 @@ import { TaskResultModal } from "../modals/task-result";
 import type { PaperIngestFlowOptions } from "../agent/paper-ingest-flow";
 import { parsePaperIngestInput } from "../agent/paper-ingest-flow";
 import type { AgentLoopRunOutcome } from "../agent/agent-loop-service";
+import { ingestTaskResult } from "../agent/ingest-task-result";
 import { serializeActionRequest } from "../runtime/action-request";
 import {
 	DashboardDataService,
@@ -61,6 +62,7 @@ import { recentReading, readingTitle } from "../reading/catalog";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
 interface DashboardHost extends PluginHost {
+	subscribeTaskRuns?(listener: () => void): () => void;
 	getRunningTaskRun(actionId: string): TaskRun | null;
 	stopTaskRun(runId: string): boolean;
 	stopDirectVaultQuery(runId: string): boolean;
@@ -104,6 +106,7 @@ export class DashboardView extends ItemView {
 	private maintenanceExpanded = false;
 	private recentSignature = "";
 	private recentExpanded = false;
+	private unsubscribeTaskRuns?: () => void;
 
 	private get currentData(): DashboardData {
 		if (!this.data) throw new Error("Dashboard data is not loaded");
@@ -141,6 +144,10 @@ export class DashboardView extends ItemView {
 		this.closed = false;
 		this.renderLoading();
 		this.registerVaultRefreshEvents();
+		this.unsubscribeTaskRuns?.();
+		this.unsubscribeTaskRuns = this.plugin.subscribeTaskRuns?.(() => {
+			if (!this.closed) void this.loadAndRender();
+		});
 		await this.loadAndRender();
 		if (this.plugin.getReadingWorkspace) {
 			try {
@@ -152,6 +159,8 @@ export class DashboardView extends ItemView {
 
 	async onClose(): Promise<void> {
 		this.closed = true;
+		this.unsubscribeTaskRuns?.();
+		this.unsubscribeTaskRuns = undefined;
 		this.loadSequence += 1;
 		if (this.reloadTimer) window.clearTimeout(this.reloadTimer);
 		this.contentEl.empty();
@@ -337,8 +346,9 @@ export class DashboardView extends ItemView {
 			});
 			if (isPrimary) setIcon(button.createSpan({ cls: "agent-dashboard-action-arrow", attr: { "aria-hidden": "true" } }), "arrow-up-right");
 			this.registerDomEvent(button, "click", () => {
-				if (runningTask) {
-					this.requestStopRun(runningTask);
+				const currentRun = this.plugin.getRunningTaskRun(action.id);
+				if (currentRun) {
+					this.requestStopRun(currentRun);
 					return;
 				}
 				this.openAction(action);
@@ -716,10 +726,11 @@ export class DashboardView extends ItemView {
 				executionOverrides,
 			)
 			: null;
-		const run = await this.plugin.startTaskRun(action, summary, executionConfig);
-		await this.loadAndRender();
+		let run: TaskRun | null = null;
 		let completedRun;
 		try {
+			run = await this.plugin.startTaskRun(action, summary, executionConfig);
+			await this.loadAndRender();
 			const result = await this.plugin.runVaultAction(run.id, action, requestPayload, executionConfig);
 			const output = this.formatProcessOutput(result);
 			const lintCompletedWithFindings = action.id === "vault-lint"
@@ -772,12 +783,12 @@ export class DashboardView extends ItemView {
 			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			completedRun = await this.plugin.finishTaskRun(run.id, {
+			completedRun = run ? await this.plugin.finishTaskRun(run.id, {
 				status: "failed",
 				exitCode: null,
 				output: "",
 				error: message,
-			});
+			}) : null;
 			new Notice(`${action.label}执行失败：${message}`);
 		}
 		await this.loadAndRender();
@@ -844,10 +855,11 @@ export class DashboardView extends ItemView {
 			reasoningEffort: null,
 			serviceTier: null,
 		};
-		const run = await this.plugin.startTaskRun(action, summary, executionConfig);
-		await this.loadAndRender();
+		let run: TaskRun | null = null;
 		let completedRun: TaskRun | null = null;
 		try {
+			run = await this.plugin.startTaskRun(action, summary, executionConfig);
+			await this.loadAndRender();
 			const outcome = await this.plugin.runLightPaperIngest(run.id, flowOptions, profileId);
 			const conflict = outcome.result?.status === "conflict";
 			const duplicate = outcome.result?.status === "completed"
@@ -855,27 +867,9 @@ export class DashboardView extends ItemView {
 				&& !outcome.result.wikiPath
 				&& !outcome.result.articlePath
 				&& (outcome.result.duplicates.length > 0 || outcome.result.notes.some((note) => note.includes("已存在完全相同文献")));
-			const status = outcome.exitCode === 0
-				? "done"
-				: outcome.loopStatus === "cancelled"
-					? "interrupted"
-					: "failed";
-			const failureReason = outcome.result?.errors.find(Boolean)
-				|| outcome.result?.conflicts.find(Boolean)
-				|| (outcome.result ? "轻量 Agent 未完成所选输出（详见输出）" : "轻量 Agent 未返回结构化结果");
-			completedRun = await this.plugin.finishTaskRun(run.id, {
-				status,
-				exitCode: outcome.exitCode,
-				output: outcome.stdout,
-				artifacts: outcome.artifacts,
-				error: status === "failed"
-					? conflict
-						? "发现身份或证据冲突，未生成所选输出（详见输出）"
-						: failureReason
-					: status === "interrupted"
-						? "任务已手动停止"
-						: "",
-			});
+			const updates = ingestTaskResult(outcome);
+			const status = updates.status;
+			completedRun = await this.plugin.finishTaskRun(run.id, updates);
 			new Notice(
 				status === "done"
 					? duplicate
@@ -889,12 +883,12 @@ export class DashboardView extends ItemView {
 			);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			completedRun = await this.plugin.finishTaskRun(run.id, {
+			completedRun = run ? await this.plugin.finishTaskRun(run.id, {
 				status: "failed",
 				exitCode: null,
 				output: "",
 				error: message,
-			});
+			}) : null;
 			new Notice(`${action.label}执行失败：${message}`);
 		}
 		await this.loadAndRender();

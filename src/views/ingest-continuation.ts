@@ -3,6 +3,7 @@ import type AgentDashboardPlugin from "../plugin";
 import { ACTION_BY_ID } from "../actions";
 import { validateIngestRequest } from "../agent/ingest-records";
 import { TaskResultModal } from "../modals/task-result";
+import { ingestTaskResult } from "../agent/ingest-task-result";
 import type { TaskRun } from "../types/contracts";
 
 export async function openIngestContinuation(plugin: AgentDashboardPlugin, previous: TaskRun): Promise<void> {
@@ -25,10 +26,17 @@ export async function openIngestContinuation(plugin: AgentDashboardPlugin, previ
 		try {
 			const profile = plugin.getProviderProfile(select.value)!; const action = ACTION_BY_ID.get("paper-ingest")!;
 			run = await plugin.startTaskRun(action, "续办：" + request.options.sourcePdfPath, { backend: "direct-api", providerId: profile.id, providerName: profile.name, model: profile.model, reasoningEffort: null, serviceTier: null });
-			modal.close(); const outcome = await plugin.runLightPaperIngest(run.id, { ...request.options, remoteUploadConfirmed: remote.checked }, profile.id);
-			const result = await plugin.finishTaskRun(run.id, { status: outcome.exitCode === 0 ? "done" : outcome.loopStatus === "cancelled" ? "interrupted" : "failed", output: outcome.stdout, error: outcome.stderr, exitCode: outcome.exitCode, artifacts: outcome.artifacts });
+			modal.close();
+			new Notice("已开始续办入库，可在控制台查看新任务或点击文献入库停止");
+			const outcome = await plugin.runLightPaperIngest(run.id, { ...request.options, remoteUploadConfirmed: remote.checked }, profile.id);
+			const result = await plugin.finishTaskRun(run.id, ingestTaskResult(outcome));
 			if (result) new TaskResultModal(plugin.app, plugin, result, null).open();
-		} catch (error) { if (run) await plugin.finishTaskRun(run.id, { status: "failed", error: String(error) }); new Notice(String(error)); }
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			const result = run ? await plugin.finishTaskRun(run.id, { status: "failed", error: message }) : null;
+			if (result) new TaskResultModal(plugin.app, plugin, result, null).open();
+			status.textContent = message; new Notice(message);
+		}
 		finally { start.disabled = false; }
 	}; modal.open();
 }

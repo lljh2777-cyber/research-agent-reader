@@ -301,6 +301,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private mineruReaderActivationQueue: Promise<void> = Promise.resolve();
 	private readonly readerAutoOpenBypass = new Set<string>();
 	private readonly finishingTaskRunIds = new Set<string>();
+	private readonly taskRunListeners = new Set<() => void>();
 	private taskRunMutationQueue: Promise<void> = Promise.resolve();
 	obsidianCliProbeState: ObsidianCliProbeState = { status: "idle" };
 
@@ -1971,6 +1972,17 @@ export default class AgentDashboardPlugin extends Plugin {
 		});
 	}
 
+	subscribeTaskRuns(listener: () => void): () => void {
+		this.taskRunListeners.add(listener);
+		return () => { this.taskRunListeners.delete(listener); };
+	}
+
+	private notifyTaskRuns(): void {
+		for (const listener of this.taskRunListeners) {
+			try { listener(); } catch (error) { console.warn("Could not refresh Dashboard tasks", error); }
+		}
+	}
+
 	getTaskRun(runId: string): TaskRun | null {
 		return this.taskRuns.find((run) => run.id === runId) || null;
 	}
@@ -2153,6 +2165,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		executionConfig: ExecutionConfig | null = null,
 	): Promise<TaskRun> {
 		return this.withTaskRunMutation(async () => {
+			// Check inside the save queue: two open intake dialogs must not both start.
+			if (action.id === "paper-ingest" && this.isActionRunning(action.id)) {
+				throw new Error("文献入库正在运行，请在控制台查看或停止当前任务");
+			}
 			const now = new Date().toISOString();
 			const run: TaskRun = {
 				id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
@@ -2179,6 +2195,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				this.taskRuns = originalRuns;
 				throw error;
 			}
+			this.notifyTaskRuns();
 			return run;
 		});
 	}
@@ -2258,6 +2275,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				return this.taskRuns.find((run) => run.id === completedRun.id) || completedRun;
 			} finally {
 				this.finishingTaskRunIds.delete(runId);
+				this.notifyTaskRuns();
 			}
 		});
 	}

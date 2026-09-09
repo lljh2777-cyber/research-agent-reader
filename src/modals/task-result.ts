@@ -129,7 +129,7 @@ export class TaskResultModal extends Modal {
 			const read = footer.createEl("button", { text: "从原始 PDF 进入深读" }); read.type = "button";
 			read.onclick = async () => { read.disabled = true; try { await this.plugin.readIngestPdf!(this.run); this.close(); } catch (error) { new Notice(String(error)); } finally { read.disabled = false; } };
 		}
-		if (this.run.actionId === "paper-ingest" && this.run.executionConfig?.backend === "direct-api" && this.run.status !== "done" && this.plugin.continuePaperIngest) {
+		if (this.run.actionId === "paper-ingest" && this.run.executionConfig?.backend === "direct-api" && ["failed", "interrupted"].includes(this.run.status) && this.plugin.continuePaperIngest) {
 			const retry = footer.createEl("button", { text: "继续完成入库" }); retry.type = "button";
 			retry.onclick = async () => { retry.disabled = true; try { await this.plugin.continuePaperIngest!(this.run); this.close(); } catch (error) { new Notice(String(error)); } finally { retry.disabled = false; } };
 		}
