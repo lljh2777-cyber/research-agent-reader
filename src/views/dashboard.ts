@@ -25,6 +25,8 @@ import type { PaperIngestFlowOptions } from "../agent/paper-ingest-flow";
 import { parsePaperIngestInput } from "../agent/paper-ingest-flow";
 import type { AgentLoopRunOutcome } from "../agent/agent-loop-service";
 import { ingestTaskResult } from "../agent/ingest-task-result";
+import { renderIngestProgress } from "./ingest-progress";
+import { ingestProgressDisplay } from "../agent/ingest-progress";
 import { serializeActionRequest } from "../runtime/action-request";
 import {
 	DashboardDataService,
@@ -62,7 +64,7 @@ import { recentReading, readingTitle } from "../reading/catalog";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
 interface DashboardHost extends PluginHost {
-	subscribeTaskRuns?(listener: () => void): () => void;
+	subscribeTaskRuns?(listener: (progressOnly?: boolean) => void): () => void;
 	getRunningTaskRun(actionId: string): TaskRun | null;
 	stopTaskRun(runId: string): boolean;
 	stopDirectVaultQuery(runId: string): boolean;
@@ -145,8 +147,8 @@ export class DashboardView extends ItemView {
 		this.renderLoading();
 		this.registerVaultRefreshEvents();
 		this.unsubscribeTaskRuns?.();
-		this.unsubscribeTaskRuns = this.plugin.subscribeTaskRuns?.(() => {
-			if (!this.closed) void this.loadAndRender();
+		this.unsubscribeTaskRuns = this.plugin.subscribeTaskRuns?.((progressOnly) => {
+			if (!this.closed) { if (progressOnly) this.refreshIngestProgress(); else void this.loadAndRender(); }
 		});
 		await this.loadAndRender();
 		if (this.plugin.getReadingWorkspace) {
@@ -263,6 +265,8 @@ export class DashboardView extends ItemView {
 		const shell = this.contentEl.createDiv({ cls: "agent-dashboard-shell" });
 		this.renderHeader(shell);
 		this.renderActions(shell);
+		shell.createDiv({ cls: "ingest-progress" });
+		this.refreshIngestProgress();
 		const main = shell.createEl("main", {
 			cls: "agent-dashboard-grid",
 			attr: { "aria-label": "研究知识库控制台" },
@@ -282,6 +286,19 @@ export class DashboardView extends ItemView {
 		this.renderCoverage(detail);
 		this.renderOkfReadiness(detail);
 		this.contentEl.scrollTop = scrollTop;
+	}
+
+	private refreshIngestProgress(): void {
+		if (this.closed) return;
+		const panel = this.contentEl.querySelector<HTMLElement>(".ingest-progress");
+		if (!panel) return;
+		const run = this.plugin.getRunningTaskRun("paper-ingest") || this.plugin.getTaskRuns().find(r => r.actionId === "paper-ingest" && r.ingestProgress) || null;
+		renderIngestProgress(panel, run, { stop: () => { const current = this.plugin.getRunningTaskRun("paper-ingest"); if (current) this.requestStopRun(current); }, result: () => { if (run) this.openTaskResult(run); }, stopping: Boolean(run && this.stoppingRunIds.has(run.id)) });
+		const state = this.contentEl.querySelector<HTMLElement>('[data-action-id="paper-ingest"] .agent-dashboard-action-state');
+		if (state && run && ["running", "queued"].includes(run.status)) {
+			const progress = ingestProgressDisplay(run);
+			if (progress) state.textContent = this.stoppingRunIds.has(run.id) ? "停止中" : progress.waiting ? "等待你的确认" : progress.stage + " · 点击停止";
+		}
 	}
 
 	renderHeader(parent: HTMLElement): void {

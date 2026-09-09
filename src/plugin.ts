@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { IngestRecords, validateIngestRequest } from "./agent/ingest-records";
 import { openIngestContinuation } from "./views/ingest-continuation";
 import { IngestRegistrationController } from "./views/ingest-registration";
+import { ingestSteps, normalizeIngestProgress, type IngestProgress } from "./agent/ingest-progress";
 
 import { ACTION_BY_ID, type DashboardAction } from "./actions";
 import {
@@ -301,7 +302,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private mineruReaderActivationQueue: Promise<void> = Promise.resolve();
 	private readonly readerAutoOpenBypass = new Set<string>();
 	private readonly finishingTaskRunIds = new Set<string>();
-	private readonly taskRunListeners = new Set<() => void>();
+	private readonly taskRunListeners = new Set<(progressOnly?: boolean) => void>();
 	private taskRunMutationQueue: Promise<void> = Promise.resolve();
 	obsidianCliProbeState: ObsidianCliProbeState = { status: "idle" };
 
@@ -1068,6 +1069,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const recoveredOutput = completion.output.slice(0, 12000);
 			const recoveredError = completion.error.slice(0, 4000);
 			const recoveredSummary = completion.summary.slice(0, 4000);
+			const recoveredProgress = completion.ingestProgress || run.ingestProgress;
 			const differs = run.status !== completion.status
 				|| run.exitCode !== completion.exitCode
 				|| run.finishedAt !== completion.finishedAt
@@ -1075,7 +1077,8 @@ export default class AgentDashboardPlugin extends Plugin {
 				|| run.outputPath !== completion.relativePath
 				|| run.error !== recoveredError
 				|| run.summary !== recoveredSummary
-				|| JSON.stringify(run.artifacts) !== JSON.stringify(recoveredArtifacts);
+				|| JSON.stringify(run.artifacts) !== JSON.stringify(recoveredArtifacts)
+				|| JSON.stringify(run.ingestProgress) !== JSON.stringify(recoveredProgress);
 			if (differs) {
 				run.status = completion.status;
 				run.exitCode = completion.exitCode;
@@ -1085,6 +1088,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				run.error = recoveredError;
 				run.summary = recoveredSummary;
 				run.artifacts = recoveredArtifacts;
+				run.ingestProgress = recoveredProgress;
 				changed = true;
 			}
 		}
@@ -1972,14 +1976,29 @@ export default class AgentDashboardPlugin extends Plugin {
 		});
 	}
 
-	subscribeTaskRuns(listener: () => void): () => void {
+	subscribeTaskRuns(listener: (progressOnly?: boolean) => void): () => void {
 		this.taskRunListeners.add(listener);
 		return () => { this.taskRunListeners.delete(listener); };
 	}
 
-	private notifyTaskRuns(): void {
-		for (const listener of this.taskRunListeners) {
-			try { listener(); } catch (error) { console.warn("Could not refresh Dashboard tasks", error); }
+	private notifyTaskRuns(progressOnly = false): void {
+		for (const listener of [...this.taskRunListeners]) {
+			try { listener(progressOnly); } catch (error) { console.warn("Could not refresh Dashboard tasks", error); }
+		}
+	}
+
+	updateIngestProgress(runId: string, value: unknown): void {
+		const run = this.getTaskRun(runId), progress = normalizeIngestProgress(value);
+		if (!run || run.actionId !== "paper-ingest" || !["running", "queued"].includes(run.status) || !progress) return;
+		const before = run.ingestProgress;
+		if (before && JSON.stringify(before.steps) === JSON.stringify(progress.steps) && before.steps.indexOf(before.stage) > progress.steps.indexOf(progress.stage)) return;
+		if (JSON.stringify(before) === JSON.stringify(progress)) return;
+		run.ingestProgress = progress;
+		this.notifyTaskRuns(true);
+		// Persist stage transitions only; tool updates stay in memory until the
+		// next stage/completion. No extra model requests or per-token disk writes.
+		if (!before || before.stage !== progress.stage || before.waiting !== progress.waiting) {
+			void this.withTaskRunMutation(() => this.saveSettings()).catch(error => console.warn("Could not save intake progress", error));
 		}
 	}
 
@@ -2183,6 +2202,9 @@ export default class AgentDashboardPlugin extends Plugin {
 				exitCode: null,
 				output: "",
 				error: "",
+				...(action.id === "paper-ingest" ? { ingestProgress: executionConfig?.backend === "direct-api"
+					? { steps: ["prepare"], stage: "prepare", detail: "正在准备入库请求", waiting: false } as IngestProgress
+					: { steps: ["cli"], stage: "cli", detail: "正在执行，等待 CLI 阶段回报", waiting: false } as IngestProgress } : {}),
 			};
 			const originalRuns = [...this.taskRuns];
 			const limit = this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit;
@@ -2778,10 +2800,18 @@ export default class AgentDashboardPlugin extends Plugin {
 		profileId: string,
 		hooks: { onEvent?: (event: DashboardProcessEvent) => void } = {},
 	): Promise<AgentLoopRunOutcome> {
+		const steps = ingestSteps(options);
+		this.updateIngestProgress(runId, { steps, stage: "prepare", detail: "正在准备授权 PDF 与入库参数", waiting: false });
 		this.lightAgentResults.delete(runId);
 		await this.getIngestRecords().write("request", runId, { version: 1, runId, profileId, options: structuredClone(options) });
-		return this.agentLoopService.runPaperIngest(runId, options, profileId, hooks)
+		return this.agentLoopService.runPaperIngest(runId, options, profileId, {
+			onEvent: event => {
+				if (event.status === "running" || event.status === "waiting") this.updateIngestProgress(runId, event.payload?.ingestProgress);
+				hooks.onEvent?.(event);
+			},
+		})
 			.then(async (outcome) => {
+				if (outcome.exitCode === 0) this.updateIngestProgress(runId, { steps, stage: "save", detail: "正在同步文件索引并保存任务结果", waiting: false });
 				const articlePath = outcome.artifacts.articlePath;
 				if (articlePath && outcome.filesWritten.includes(articlePath)) {
 					await this.reconcilePublishedPackage(articlePath);
@@ -3291,7 +3321,12 @@ export default class AgentDashboardPlugin extends Plugin {
 			input,
 			executionConfig: effectiveConfig,
 			settings: this.settings,
-			hooks,
+			hooks: action.id === "paper-ingest" ? { ...hooks, onEvent: event => {
+				if (event.type === "status" && event.status !== "done" && event.status !== "failed" && event.stage !== "stopped") {
+					this.updateIngestProgress(runId, { steps: ["cli"], stage: "cli", detail: event.label || "正在执行，等待 CLI 阶段回报", waiting: event.status === "waiting" });
+				}
+				hooks.onEvent?.(event);
+			} } : hooks,
 		});
 	}
 

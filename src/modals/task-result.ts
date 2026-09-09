@@ -1,8 +1,12 @@
 import { App, Modal, Notice } from "obsidian";
 
 import type { LintStatus, TaskRun } from "../types/contracts";
+import { renderIngestProgress } from "../views/ingest-progress";
 
 interface TaskResultHost {
+	getTaskRun?(runId: string): TaskRun | null;
+	subscribeTaskRuns?(listener: (progressOnly?: boolean) => void): () => void;
+	stopTaskRun?(runId: string): boolean;
 	getModelLabel(model: string): string;
 	getReasoningLabel(reasoningEffort: string): string;
 	getTaskRunOutput(run: TaskRun): string;
@@ -25,8 +29,9 @@ interface TaskResultHost {
 
 export class TaskResultModal extends Modal {
 	private readonly plugin: TaskResultHost;
-	private readonly run: TaskRun;
+	private run: TaskRun;
 	private readonly onRepair: (() => void) | null;
+	private unsubscribeTasks?: () => void;
 
 	constructor(
 		app: App,
@@ -68,6 +73,19 @@ export class TaskResultModal extends Modal {
 			contentEl.createEl("p", {
 				cls: "agent-dashboard-result-summary",
 				text: this.run.summary,
+			});
+		}
+		if (this.run.actionId === "paper-ingest") {
+			const progress = contentEl.createDiv({ cls: "ingest-progress" });
+			let stopping = false;
+			const refresh = () => renderIngestProgress(progress, this.plugin.getTaskRun?.(this.run.id) || this.run, {
+				...(this.plugin.stopTaskRun ? { stop: () => { stopping = this.plugin.stopTaskRun!(this.run.id); refresh(); } } : {}), stopping,
+			});
+			refresh(); this.unsubscribeTasks = this.plugin.subscribeTaskRuns?.(() => {
+				const current = this.plugin.getTaskRun?.(this.run.id);
+				if (current && current.status !== this.run.status) {
+					this.unsubscribeTasks?.(); this.contentEl.empty(); this.run = current; this.onOpen();
+				} else refresh();
 			});
 		}
 		const output = this.plugin.getTaskRunOutput(this.run)
@@ -186,6 +204,7 @@ export class TaskResultModal extends Modal {
 	}
 
 	onClose() {
+		this.unsubscribeTasks?.(); this.unsubscribeTasks = undefined;
 		this.contentEl.empty();
 	}
 }

@@ -8,6 +8,8 @@ const obsidian = { Plugin: Base, PluginSettingTab: Base, Component: Base, ItemVi
 const Plugin = loadReading("plugin.ts", { obsidian, electron: {} }).default;
 const { DashboardView } = loadReading("views/dashboard.ts", { obsidian });
 const { ingestTaskResult } = loadReading("agent/ingest-task-result.ts");
+const { ingestSteps, ingestProgressDisplay, normalizeIngestProgress } = loadReading("agent/ingest-progress.ts");
+const { normalizeStoredTaskRuns } = loadReading("runtime/persistence.ts");
 const action = { id: "paper-ingest", label: "文献入库", agent: "paper-intake-pipeline" };
 const outcome = overrides => ({ exitCode: 1, stdout: "structured output", stderr: "", loopStatus: "failed", artifacts: { articlePath: "", wikiPath: "", filesWritten: [] }, result: { status: "failed", errors: ["identity receipt conflict"], conflicts: [] }, ...overrides });
 const makePlugin = () => {
@@ -72,5 +74,49 @@ const makePlugin = () => {
 	await view.onOpen(); assert.equal(renders, 3);
 	await plugin.finishTaskRun(plugin.getRunningTaskRun(action.id).id, ingestTaskResult(outcome())); assert.equal(renders, 4);
 	await view.onClose();
+
+	const options = { createArticleMarkdown: true, createArticleWiki: true }, steps = ingestSteps(options);
+	assert.deepEqual(steps, ["prepare", "identity", "confirm", "extract", "draft", "save"]);
+	assert.equal(ingestSteps({ createArticleWiki: true }).includes("extract"), false);
+	assert.equal(ingestSteps({ createArticleMarkdown: true }).includes("draft"), false);
+	const progress = (stage, waiting = false, detail = stage) => ({ steps, stage, waiting, detail });
+	for (const malformed of [null, { steps: ["unknown"], stage: "unknown" }, { steps: ["save", "identity"], stage: "save" }, { steps: ["cli", "save"], stage: "cli" }]) assert.equal(normalizeIngestProgress(malformed), undefined);
+	assert.equal(normalizeIngestProgress(progress("draft", false, "x".repeat(500))).detail.length, 240);
+	const progressPlugin = makePlugin(), events = []; let saves = 0;
+	progressPlugin.saveSettings = async () => { saves++; };
+	progressPlugin.subscribeTaskRuns(only => events.push(only));
+	const tracked = await progressPlugin.startTaskRun(action, "progress", { backend: "direct-api" });
+	progressPlugin.updateIngestProgress(tracked.id, progress("identity"));
+	await progressPlugin.withTaskRunMutation(async () => {});
+	const beforeDetail = saves;
+	progressPlugin.updateIngestProgress(tracked.id, progress("identity", false, "tool update"));
+	await progressPlugin.withTaskRunMutation(async () => {});
+	assert.equal(saves, beforeDetail, "tool detail does not write settings again"); assert.equal(events.at(-1), true);
+	progressPlugin.updateIngestProgress(tracked.id, progress("confirm", true));
+	assert.equal(ingestProgressDisplay(tracked).waiting, true);
+	progressPlugin.updateIngestProgress(tracked.id, progress("prepare"));
+	assert.equal(tracked.ingestProgress.stage, "confirm", "late events cannot move progress backwards");
+	await progressPlugin.finishTaskRun(tracked.id, ingestTaskResult(outcome()));
+	const failed = progressPlugin.getTaskRun(tracked.id), failedDisplay = ingestProgressDisplay(failed);
+	assert.equal(failedDisplay.waiting, false); assert.ok(failedDisplay.value < failedDisplay.total);
+	assert.equal(failedDisplay.detail, "identity receipt conflict");
+	progressPlugin.updateIngestProgress(tracked.id, progress("save")); assert.equal(failed.ingestProgress.stage, "confirm");
+	const restored = normalizeStoredTaskRuns(JSON.parse(JSON.stringify([failed])))[0];
+	assert.deepEqual(restored.ingestProgress, failed.ingestProgress);
+	assert.equal(ingestProgressDisplay({ ...failed, status: "done" }).value, steps.length);
+	assert.equal(ingestProgressDisplay({ ...failed, status: "running", ingestProgress: { steps: ["cli"], stage: "cli" } }).indeterminate, true);
+
+	// Exercise the plugin's actual backend event bridge shared by initial and resumed intake.
+	const bridge = await progressPlugin.startTaskRun(action, "bridge", { backend: "direct-api" });
+	progressPlugin.getIngestRecords = () => ({ write: async () => {} });
+	progressPlugin.agentLoopService = { runPaperIngest: async (_id, _options, _profile, hooks) => {
+		for (const stage of steps) { hooks.onEvent({ status: stage === "confirm" ? "waiting" : "running", payload: { ingestProgress: progress(stage, stage === "confirm") } }); assert.equal(progressPlugin.getTaskRun(bridge.id).ingestProgress.stage, stage); }
+		return { ...outcome({ exitCode: 0 }), filesWritten: [] };
+	} };
+	let forwarded = 0;
+	await progressPlugin.runLightPaperIngest(bridge.id, options, "fake", { onEvent: () => forwarded++ });
+	assert.equal(forwarded, steps.length); assert.equal(ingestProgressDisplay(progressPlugin.getTaskRun(bridge.id)).value, steps.length - 1, "backend completion does not fill bar before task save");
+	await progressPlugin.finishTaskRun(bridge.id, ingestTaskResult(outcome({ exitCode: 0 })));
+	assert.equal(ingestProgressDisplay(progressPlugin.getTaskRun(bridge.id)).value, steps.length);
 	console.log("INGEST_TASK_LIFECYCLE_OK: status notifications, concurrent start, retry, cancellation, persistence failure, subscription cleanup");
 })().catch(error => { console.error(error); process.exitCode = 1; });

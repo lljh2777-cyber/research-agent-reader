@@ -1,4 +1,5 @@
 import type { App } from "obsidian";
+import { ingestSteps, type IngestStage } from "./ingest-progress";
 
 import type { LLMProvider } from "../providers/adapters";
 import type {
@@ -269,9 +270,13 @@ export class AgentLoopService {
 			state.budgetAborted = true;
 			abortController.abort();
 		}, Math.max(0, deadline - Date.now()));
+		let progressStage: IngestStage = "prepare";
+		const steps = ingestSteps(options);
 		const emitStatus = (status: string, label: string): void => {
-			hooks.onEvent?.({ type: "status", stage: "agent-loop", status, label });
+			hooks.onEvent?.({ type: "status", stage: "agent-loop", status, label,
+				payload: { ingestProgress: { steps, stage: progressStage, detail: label, waiting: status === "waiting" } } });
 		};
+		const advanceStage = (stage: IngestStage, status: string, label: string): void => { progressStage = stage; emitStatus(status, label); };
 		const onStep = (phase: string) => (step: AgentLoopStep): void => {
 			emitStatus("running", [phase, STEP_TITLES[step.kind] || step.kind, step.title, step.detail]
 				.filter(Boolean).join(" · "));
@@ -320,7 +325,7 @@ export class AgentLoopService {
 			} else if (options.sourcePdfPath) {
 				state.notes.push(localPdfEvidence.warning);
 			}
-			emitStatus("running", "阶段一 · 身份核验与去重");
+			advanceStage("identity", "running", "正在核对书目信息，并检索已有原文与笔记");
 			const identityLoop = await runBoundedAgentLoop({
 				system: buildIdentitySystemPrompt(options),
 				user: buildIdentityUserMessage(options, localPdfEvidence),
@@ -385,7 +390,7 @@ export class AgentLoopService {
 				state.conflicts.push("没有授权 PDF 快照，无法完成人工视觉身份确认");
 				return this.finish(state, options, profileId, resolved, emitStatus);
 			}
-			emitStatus("waiting", "等待人工确认 PDF 页面与书目记录");
+			advanceStage("confirm", "waiting", "请在确认窗口核对 PDF 页面与书目记录；确认后自动继续");
 			const confirmation = await this.deps.confirmPaperIdentity({
 				taskId: runId,
 				snapshotSha256: authorizedPdfSnapshot.sha256,
@@ -458,7 +463,7 @@ export class AgentLoopService {
 
 			// ---- Phase 2: MinerU extraction (deterministic, authorized PDF only) ----
 			if (options.createArticleMarkdown && !state.existingSourcePath) {
-				emitStatus("running", "阶段二 · MinerU 原文提取");
+				advanceStage("extract", "running", "MinerU 正在解析、校验并发布原文包；服务未提供页级进度");
 				if (!ensureBudget()) {
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}
@@ -506,7 +511,7 @@ export class AgentLoopService {
 				if (!ensureBudget()) {
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}
-				emitStatus("running", "阶段三 · 整理文章 Wiki 字段");
+				advanceStage("draft", "running", "正在依据原文整理文章 Wiki");
 				const draftLoop = await runBoundedAgentLoop({
 					system: buildDraftSystemPrompt(
 						options,
@@ -559,6 +564,7 @@ export class AgentLoopService {
 					} else {
 						state.draft.title_zh = resolvedTitleZh;
 						try {
+							advanceStage("save", "running", "正在校验并保存文章 Wiki");
 							const receipt = await commitSourceNote(
 								toolDeps.vault,
 								identity.citekey,

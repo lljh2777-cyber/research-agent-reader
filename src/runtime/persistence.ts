@@ -9,6 +9,7 @@ import type {
 } from "../types/contracts";
 import { normalizeProviderProfile } from "../providers/profile";
 import { isCliBackendId } from "../config";
+import { normalizeIngestProgress } from "../agent/ingest-progress";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -145,6 +146,7 @@ export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 			cleanupPending: source.cleanupPending === true || undefined,
 			completionPending: source.completionPending === true || undefined,
 			artifacts: normalizeTaskRunArtifacts(source.artifacts),
+			ingestProgress: normalizeIngestProgress(source.ingestProgress),
 		};
 	});
 	return selectTaskRunsForPersistence(normalized, boundedLimit);
