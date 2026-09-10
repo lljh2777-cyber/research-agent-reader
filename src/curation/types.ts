@@ -1,10 +1,11 @@
 import type { ReadingSource } from "../reading/types";
+import type { StructuredReadingLocation } from "../reading/structured-source";
 
 export const CURATION_RULE_VERSION = "curation-v2";
 export type SuggestionKind = "add" | "replace" | "covered" | "condition" | "conflict" | "insufficient";
 export const SUGGESTION_LABELS: Record<SuggestionKind, string> = { add: "可以补充", replace: "段落修订", covered: "已有内容覆盖", condition: "条件不同", conflict: "可能存在冲突", insufficient: "证据不足" };
 export interface CurationParagraph { id: string; heading: string; start: number; end: number; text: string; }
-export interface CurationEvidence { id: string; kind: "paper" | "vault"; path: string; hash: string; text: string; label: string; role: string; depth: string; origins: string[]; start?: number; end?: number; page?: number; visual?: boolean; quotes?: { id: string; start: number; end: number; text: string }[]; }
+export interface CurationEvidence { id: string; kind: "paper" | "vault"; path: string; hash: string; text: string; label: string; role: string; depth: string; origins: string[]; start?: number; end?: number; page?: number; visual?: boolean; evidenceId?: string; structured?: StructuredReadingLocation; quotes?: { id: string; start: number; end: number; text: string }[]; }
 export interface CurationCitation { id: string; quote: string; quoteId?: string; }
 export interface CurationSuggestion { id: string; kind: SuggestionKind; modelKind?: SuggestionKind; comparison?: { targetQuote: string; evidenceId: string }; paragraphId: string; claim: string; text: string; reason: string; citations: CurationCitation[]; warnings: string[]; applicable: boolean; decision: "pending" | "ignored" | "applied"; }
 export interface CurationUsage { kind: "reported" | "estimated"; input?: number; output?: number; cachedInput?: number; calls: number; model: string; note?: string; }

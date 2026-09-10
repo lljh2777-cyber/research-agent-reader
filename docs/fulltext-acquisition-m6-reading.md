@@ -41,4 +41,4 @@
 
 ## 下一步：正式 Wiki
 
-`0.50.0` 已交付受限 JATS 正文工具、初始草稿、完整预览、只创建新 Wiki 的保存和既有登记流程，见 [M6 初始文章 Wiki](fulltext-acquisition-m6-wiki.md)。JATS 阅读助手和既有笔记修订仍待后续适配。
+`0.50.0` 已交付受限 JATS 正文工具、初始草稿、完整预览、只创建新 Wiki 的保存和既有登记流程，见 [M6 初始文章 Wiki](fulltext-acquisition-m6-wiki.md)。`0.51.0` 已接通 JATS 阅读助手和既有笔记修订，包含原文核对、完整差异、应用、恢复及撤销，见 [M6 阅读助手与既有 Wiki 修订](fulltext-acquisition-m6-curation.md)。

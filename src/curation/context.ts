@@ -1,4 +1,4 @@
-import type { App } from "obsidian";
+import { parseYaml, type App } from "obsidian";
 import curationSkill from "../../skills/knowledge-curation/SKILL.md";
 import { readingCategory, readingTitle } from "../reading/catalog";
 import { selectReadingEvidence } from "../reading/document";
@@ -9,6 +9,7 @@ import { curationParagraphs, curationTarget, estimatedTokens } from "./policy";
 import { CURATION_RULE_VERSION, type CurationContext, type CurationEvidence } from "./types";
 import { curationQuotes, selectCurationParagraphs, type CurationSearch } from "./selection";
 import { curationAnswerSchema } from "../reading/schemas";
+import { structuredReference, matchStructuredReference, structuredTargetCompatible } from "../reading/structured-reference";
 
 export { curationSkill };
 export function curationLearningHash(session: ReadingSession, nodeIds: string[]): string {
@@ -23,23 +24,26 @@ export async function prepareCuration(app: App, workspace: ReadingWorkspaceServi
 	if (!curationTarget(targetPath)) throw new Error("请选择已有的来源、概念、方法或综合笔记");
 	const file = app.vault.getFileByPath(targetPath); if (!file) throw new Error("目标笔记不存在");
 	const text = await app.vault.cachedRead(file); if (text.length > 160000) throw new Error("目标笔记超过本轮整理容量");
-	const metadata = app.metadataCache.getFileCache(file)?.frontmatter || {}; const title = String(metadata.title || file.basename);
-	if (targetPath.startsWith("wiki/sources/") && [metadata.reading_depth, metadata.status].includes("metadata-only")) throw new Error("目标仅有元数据，请先创建有依据的来源笔记正文");
+	const metadata = session.source.kind === "structured" ? parseYaml(/^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] || "") || {} : app.metadataCache.getFileCache(file)?.frontmatter || {}; const title = String(metadata.title || file.basename);
+	if (targetPath.startsWith("wiki/sources/") && [metadata.depth, metadata.reading_depth, metadata.status].includes("metadata-only")) throw new Error("目标仅有元数据，请先创建有依据的来源笔记正文");
 	const query = nodes.map(node => node!.title + " " + node!.question).join(" ").slice(0, 1000);
 	const { paragraphs, warnings, selection } = await selectCurationParagraphs(text, targetPath, query, search, signal);
 	if (!paragraphs.length) throw new Error("目标笔记没有适合整理的正文段落");
 	const backend = backendFor(session); const source = await workspace.document(sessionId); await source.verify();
+	const sourceWarnings = (source.sourceWarnings || []).slice(0, 12).map(s => s.slice(0, 500)); warnings.push(...sourceWarnings);
 	if (source.source.fingerprint !== session.source.fingerprint) throw new Error("原文已变化，请重新选择来源");
 	const evidence: CurationEvidence[] = []; const preferred = nodes.flatMap(node => node!.evidence.filter(item => item.kind === "paper").map(item => item.id));
 	const selected = selectReadingEvidence(source, query, 0, preferred).filter(item => !item.asset).slice(0, 5);
 	for (const item of selected) evidence.push({ id: "P" + (evidence.length + 1), kind: "paper", path: session.source.path, hash: session.source.fingerprint, text: item.text.slice(0, 4000), label: item.label,
-		role: "本文原文", depth: "原文文本，未升级阅读状态", origins: [session.source.path], start: item.start, end: item.start === undefined ? undefined : item.start + Math.min(item.text.length, 4000), page: item.page });
+		role: "本文原文", depth: "原文文本，未升级阅读状态", origins: [session.source.path], start: item.start, end: item.start === undefined ? undefined : item.start + Math.min(item.text.length, 4000), page: item.page,
+		...(session.source.kind === "structured" ? structuredReference(item, session.source, 4000) : {}) });
 	const visuals = source.evidence.filter(item => item.asset && nodes.some(node => node!.evidence.some(previous => previous.id === item.id && previous.visualInspected))).slice(0, 2);
 	if (visuals.length && !backend.images) warnings.push("当前后端不支持图像；图表判断需复核");
-	if (backend.images) for (const item of visuals) evidence.push({ id: "V:" + item.id, kind: "paper", path: session.source.path, hash: session.source.fingerprint, text: item.text.slice(0, 1200), label: item.label, role: "本文原文", depth: "本轮附带图像", origins: [session.source.path], page: item.page, visual: true });
+	if (backend.images) for (const item of visuals) evidence.push({ id: "V:" + item.id, kind: "paper", path: session.source.path, hash: session.source.fingerprint, text: item.text.slice(0, 1200), label: item.label, role: "本文原文", depth: "本轮附带图像", origins: [session.source.path], page: item.page, visual: true,
+		...(session.source.kind === "structured" ? structuredReference(item, session.source, 1200) : {}) });
 	// Supplement only from already-read, hash-matched formal evidence. Learning QA never enters this list.
 	for (const item of nodes.flatMap(node => node!.evidence).filter(item => item.kind === "vault" && item.sourceHash)) {
-		if (evidence.filter(e => e.kind === "vault").length >= 3 || evidence.some(e => e.path === item.path) || !curationTarget(item.path)) continue;
+		if (evidence.filter(e => e.kind === "vault").length >= 3 || evidence.some(e => e.path === item.path) || !curationTarget(item.path) || item.path === targetPath) continue;
 		const vaultFile = app.vault.getFileByPath(item.path); if (!vaultFile) continue; const raw = await app.vault.cachedRead(vaultFile);
 		if (contentHash(raw) !== item.sourceHash || item.start === undefined || item.end === undefined || item.start < 0 || item.end > raw.length || item.end <= item.start) continue;
 		const meta = app.metadataCache.getFileCache(vaultFile)?.frontmatter || {};
@@ -50,11 +54,13 @@ export async function prepareCuration(app: App, workspace: ReadingWorkspaceServi
 	const normalize = (value: unknown): string => String(value || "").replace(/\\/g, "/").toLowerCase().trim();
 	const titleText = (value: string): string => value.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 	const pdfTitle = session.source.kind === "pdf" && titleText(title).length >= 30 && titleText(source.evidence.filter(item => !item.asset && item.page !== undefined && item.page <= 2).map(item => item.text).join(" ").slice(0, 18000)).includes(titleText(title));
-	const sourceCompatible = !targetPath.startsWith("wiki/sources/") || (key && targetPath === "wiki/sources/" + key + ".md") || pdfTitle || normalize(title) === normalize(session.source.title) || [metadata.source_path, metadata.pdf, metadata.source_pdf, metadata.article_path].some(value => value && normalize(value) === normalize(session.source.path));
+	const sourceCompatible = session.source.kind === "structured" ? structuredTargetCompatible(session.source, targetPath, metadata) : !targetPath.startsWith("wiki/sources/") || (key && targetPath === "wiki/sources/" + key + ".md") || pdfTitle || normalize(title) === normalize(session.source.title) || [metadata.source_path, metadata.pdf, metadata.source_pdf, metadata.article_path].some(value => value && normalize(value) === normalize(session.source.path));
+	if (session.source.kind === "structured") warnings.push("JATS 依据使用固定版本、正文块和字符位置，没有 PDF 页码；仅附带并实际读取的图像可参与本轮图像判断，不自动升级阅读深度。");
 	if (!sourceCompatible) warnings.push("目标来源笔记与当前论文身份未匹配；请选择同一论文或概念/方法笔记");
 	for (const item of evidence) item.quotes = curationQuotes(item);
 	const buildPrompt = (): string => JSON.stringify({ instruction: "比较待核对的学习内容与目标段落。仅使用 evidence 的事实依据，不把学习回答当作证据。最多五条建议。", learning: nodes.map(node => ({ title: node!.title, question: node!.question, text: node!.content })),
-		target: { title, category: targetPath.split("/")[1], depth: metadata.reading_depth || metadata.status || "未标注", paragraphs }, evidence: evidence.map(({ text: _text, quotes, ...item }) => ({ ...item, quotes })), sourceCompatible });
+		target: { title, category: targetPath.split("/")[1], depth: metadata.depth || metadata.reading_depth || metadata.status || "未标注", paragraphs }, evidence: evidence.map(({ text: _text, quotes, ...item }) => ({ ...item, quotes })), sourceCompatible,
+		...(session.source.kind === "structured" ? { source: { format: "jats", version: session.source.structured!.manifest.sourceVersionId, projectionId: session.source.structured!.manifest.projectionId, location: "正文块与字符范围，无 PDF 页码", warnings: sourceWarnings } } : {}) });
 	const estimateInput = (prompt: string) => estimatedTokens(curationSkill + prompt + JSON.stringify(curationAnswerSchema({ evidence, target: { paragraphs } })));
 	let prompt = buildPrompt(); let estimate = estimateInput(prompt); const selectedCount = paragraphs.length;
 	while (estimate > 18000 && paragraphs.length > 1) { paragraphs.pop(); prompt = buildPrompt(); estimate = estimateInput(prompt); }
@@ -71,9 +77,11 @@ export async function verifyCurationContext(app: App, workspace: ReadingWorkspac
 	if (curationLearningHash(session, context.nodeIds) !== context.learningHash) throw new Error("学习内容已变化，请刷新整理范围");
 	const target = app.vault.getFileByPath(context.target.path);
 	if (!target || contentHash(await app.vault.cachedRead(target)) !== targetHash) throw new Error("目标笔记已变化，请重新预览");
+	if (context.source.kind === "structured" && !structuredTargetCompatible(context.source, context.target.path, parseYaml(/^---\r?\n([\s\S]*?)\r?\n---/.exec(await app.vault.cachedRead(target))?.[1] || "") || {})) throw new Error("JATS 原文与目标论文或来源版本不一致");
 	const source = await workspace.document(context.sessionId); await source.verify();
 	if (source.source.fingerprint !== context.source.fingerprint) throw new Error("论文来源已变化，请重新核对证据");
 	for (const evidence of context.evidence.filter(item => item.kind === "paper")) {
+		if (context.source.kind === "structured") { const item = matchStructuredReference(evidence, context.source, source.evidence); if (!!evidence.visual !== !!item.asset) throw new Error("JATS 图像与文字证据类型不一致"); continue; }
 		if (evidence.path !== context.source.path || evidence.hash !== context.source.fingerprint || !source.evidence.some(item =>
 			(evidence.visual ? "V:" + item.id === evidence.id && !!item.asset : !item.asset && item.start === evidence.start && item.page === evidence.page)
 			&& item.text.startsWith(evidence.text))) throw new Error("保存的引用片段与原文不匹配，请重新读取依据");

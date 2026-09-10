@@ -69,7 +69,7 @@ export async function openStructuredDocument(vaultRoot: string, rawPath: string,
 		const fresh = await loadJatsSource(storage, key);
 		if (structuredFingerprint({ version: 1, format: "jats", manifest: fresh.manifest }) !== fingerprint) throw new Error("JATS 原文版本已变化，请创建新会话");
 	};
-	return { source, evidence, catalog, verify,
+	return { source, evidence, catalog, sourceWarnings: [...projection.issues], verify,
 		async destroy() { destroyed = true; loaded.files.clear(); canonical.clear(); },
 		async image(item, signal) {
 			signal?.throwIfAborted(); if (!item.asset) return null;

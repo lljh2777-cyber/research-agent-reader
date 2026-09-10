@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fulltext acquisition M6 assistant and revisions — 0.51.0
+
+- JATS 会话开放阅读助手与「整理进知识库」，沿用现有工具、操作卡、建议选择、差异预览、修订记录及撤销流程。
+- 助手历史和整理证据保留固定来源、版本、正文块、字符范围及 XML 位置；图像引用绑定实际资源。原文变化后仍可查看助手历史文字，新的操作和原文跳转会停止。
+- 对来源笔记检查论文标识与 JATS 版本凭据，拒绝同标题但 DOI 不同、版本不一致的目标。整理实际读取本轮图像，保留转换缺口，不修改 frontmatter 或阅读深度。
+- JATS 修订每次写入前重新核对来源和目标内容，部分失败可恢复，用户后续编辑不会被覆盖。原生界面与专项模拟验收见 [M6 助手与修订](docs/fulltext-acquisition-m6-curation.md)。
+
 ### Fulltext acquisition M6 initial Wiki — 0.50.0
 
 - 已保存的 JATS 原文可生成初始文章 Wiki：受限正文工具返回实际读取片段，草稿保留中文译名、摘要级正文、原文块引用和固定来源凭据。

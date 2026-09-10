@@ -8,6 +8,8 @@ import { curationSkill, prepareCuration, verifyCurationContext } from "./context
 import { curationParagraphs, curationTarget, estimatedTokens, parseCurationResult, validateSuggestion } from "./policy";
 import type { CurationContext, CurationRecordStore, CurationReview, CurationRevision, CurationSuggestion } from "./types";
 import type { CurationSearch } from "./selection";
+import { validateStructuredSource } from "../reading/structured-source";
+import { validateStructuredReference } from "../reading/structured-reference";
 
 const id = (): string => "c-" + randomUUID(); const now = (): string => new Date().toISOString();
 export function validatedReview(raw: unknown): CurationReview {
@@ -16,6 +18,11 @@ export function validatedReview(raw: unknown): CurationReview {
 	const paragraphs = curationParagraphs(context.target.text);
 	if (!context.target.paragraphs.every(p => paragraphs.some(original => original.id === p.id && original.text === p.text && original.start === p.start && original.end === p.end))) throw new Error("整理段落定位错误");
 	for (const evidence of context.evidence) if (!evidence || !["paper", "vault"].includes(evidence.kind) || typeof evidence.text !== "string" || typeof evidence.path !== "string" || typeof evidence.hash !== "string" || !Array.isArray(evidence.origins)) throw new Error("整理证据结构错误");
+	if (context.source?.kind === "structured") validateStructuredSource(context.source);
+	for (const e of context.evidence) if (e.structured || e.evidenceId || context.source?.kind === "structured" && e.kind === "paper") {
+		if (e.kind !== "paper") throw new Error("JATS 正文不能伪装为知识库补充"); validateStructuredReference(e, context.source);
+		if (!!e.visual !== !!e.structured?.resourceId || e.visual && e.id !== "V:" + e.evidenceId) throw new Error("JATS 图像证据绑定无效");
+	}
 	const copy = structuredClone(record); copy.suggestions = record.suggestions.map((suggestion, index) => {
 		const checked = validateSuggestion(suggestion, copy.context, index);
 		// Earlier versions could discard an invalid quotation. Reload must never promote a blocked record.
@@ -32,7 +39,7 @@ export class CurationService {
 	constructor(readonly app: App, readonly workspace: ReadingWorkspaceService, readonly store: CurationRecordStore, private backendFor: (session: ReadingSession) => ReadingBackend, private search?: CurationSearch) {}
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	get activeCount(): number { return this.operations.size; }
-	noteChange(path: string): void { if ([...this.reviews.values()].some(r => r.context.target.path === path || r.context.evidence.some(e => e.path === path) || r.context.source.kind === "article" && path.startsWith(r.context.source.path.replace(/article\.md$/, "")))) { this.changesPending = true; this.emit(); } }
+	noteChange(path: string): void { if ([...this.reviews.values()].some(r => r.context.target.path === path || r.context.evidence.some(e => e.path === path) || ["article", "structured"].includes(r.context.source.kind) && path.startsWith(r.context.source.path.replace(/article\.md$/, "")))) { this.changesPending = true; this.emit(); } }
 	emit(): void { this.listeners.forEach(listener => { try { listener(); } catch { /* A closed view must not interrupt persistence. */ } }); }
 	ready(): Promise<void> {
 		if (!this.initialization) this.initialization = (async () => {

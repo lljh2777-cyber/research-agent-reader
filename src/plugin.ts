@@ -37,6 +37,7 @@ import { JatsWikiService } from "./jats/wiki-service";
 import { openJatsWiki } from "./jats/wiki-modal";
 import { commitSourceNote } from "./agent/tools";
 import { runBoundedAgentLoop } from "./agent/loop";
+import { matchStructuredReference, validateStructuredReference, structuredLocationLabel } from "./reading/structured-reference";
 import { renderAuthorizedPdfIdentityPage } from "./agent/pdf-identity";
 import { catalogIntake, legacyCatalogAssociation } from "./papers/agent-intake";
 import type { AcquisitionMode } from "./fulltext/contracts";
@@ -2693,7 +2694,6 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	openReadingAssistant(sessionId: string, nodeId: string): void {
 		try {
-			if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "structured") throw new Error("JATS 已支持交互深读和初步文章 Wiki；阅读助手尚未接入");
 			if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") throw new Error("代码会话请使用主线和支线追问；阅读助手暂面向论文");
 			const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(n => n.id === nodeId && n.status === "done")) throw new Error("请先选择一个已完成的正式阅读节点");
 			this.assistantModal?.close(); this.assistantModal = this.showCurationModal(new ReadingAssistantModal(this.app, this, sessionId, nodeId));
@@ -2737,6 +2737,19 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	async openAssistantEvidence(runId: string, sourceId: string): Promise<void> {
 		const run = this.getReadingAssistant().runs.get(runId), source = run?.sources.find(s => s.id === sourceId); if (!run || !source) throw new Error("助手引用不存在");
+		if (source.structured) {
+			if (!run.source) throw new Error("JATS 助手记录缺少固定来源"); validateStructuredReference(source, run.source);
+			const modal = new Modal(this.app); modal.titleEl.setText(source.id + " · " + source.label); modal.modalEl.addClass("reading-modal");
+			modal.contentEl.createEl("p", { cls: "reading-evidence-location", text: structuredLocationLabel(source) + " · " + run.source.structured!.manifest.sourceVersionId });
+			modal.contentEl.createEl("p", { text: "以下是助手实际读取时的文字快照；图像未在本轮助手中核验。" });
+			modal.contentEl.createEl("pre", { cls: "reading-evidence-text", text: source.text });
+			const status = modal.contentEl.createEl("p", { text: "正在核对当前原文…" }), open = modal.contentEl.createEl("button", { text: "前往原文块" }); open.disabled = true;
+			const verify = async () => { const doc = await this.getReadingWorkspace().document(run.sessionId); await doc.verify(); matchStructuredReference(source, doc.source, doc.evidence); };
+			open.onclick = () => void verify().then(() => this.openReadingEvidence(source.path, undefined, source.structured!.blockId)).catch(e => { status.setText("当前原文无法核对，保留历史快照：" + String(e)); open.disabled = true; });
+			this.showCurationModal(modal);
+			try { await verify(); if (modal.modalEl.isConnected) { status.setText("当前原文与历史依据一致。"); open.disabled = false; } }
+			catch (e) { if (modal.modalEl.isConnected) status.setText("当前原文无法核对，保留历史快照：" + String(e)); } return;
+		}
 		const doc = await this.getReadingWorkspace().document(run.sessionId); await doc.verify();
 		if (source.kind === "knowledge" && assistantHash(await this.getReadingAssistant().deps.readFile(source.path)) !== source.hash) throw new Error("知识来源已变化，请重新读取");
 		if (source.kind === "paper" && doc.source.fingerprint !== source.hash) throw new Error("原文已变化，请重新读取");
@@ -2756,7 +2769,6 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	openKnowledgeMaintenance(): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this)); }
 	openKnowledgeCuration(sessionId: string, nodeId: string, review?: CurationReview): void {
-		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "structured") { new Notice("可通过生成文章 Wiki 新建初步笔记；已有笔记的逐条修订尚未接入 JATS"); return; }
 		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") { new Notice("代码学习可导出独立笔记并关联已有笔记，暂不自动整理正式代码页"); return; }
 		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review)); }
 		catch (error) { new Notice(String(error)); }
@@ -2768,11 +2780,12 @@ export default class AgentDashboardPlugin extends Plugin {
 	async openCurationEvidence(context: CurationContext, evidenceId: string): Promise<void> {
 		const evidence = context.evidence.find(item => item.id === evidenceId); if (!evidence || evidence.kind !== "paper") throw new Error("本文依据不存在");
 		const source = await this.getReadingWorkspace().document(context.sessionId); await source.verify(); if (source.source.fingerprint !== context.source.fingerprint) throw new Error("原文已变化，请重新读取依据");
-		const original = source.evidence.find(item => evidence.visual ? "V:" + item.id === evidence.id : !item.asset && item.start === evidence.start && item.page === evidence.page && item.text.startsWith(evidence.text));
+		const original = context.source.kind === "structured" ? matchStructuredReference(evidence, context.source, source.evidence) : source.evidence.find(item => evidence.visual ? "V:" + item.id === evidence.id : !item.asset && item.start === evidence.start && item.page === evidence.page && item.text.startsWith(evidence.text));
 		if (!original) throw new Error("原文中的引用位置已无法匹配");
 		const modal = new Modal(this.app); modal.titleEl.setText(evidence.label); modal.modalEl.addClass("reading-modal"); modal.contentEl.createEl("p", { text: evidence.path + (evidence.page ? " · 第 " + evidence.page + " 页" : "") });
 		modal.contentEl.createEl("pre", { text: evidence.text, cls: "reading-evidence-text" });
-		if (source.source.kind === "article") { const open = modal.contentEl.createEl("button", { text: "在阅读器打开原文" }); open.onclick = () => { void this.openReadingEvidence(evidence.path, evidence.page).catch(error => new Notice(String(error))); }; }
+		if (evidence.structured) modal.contentEl.createEl("p", { cls: "reading-evidence-location", text: structuredLocationLabel(evidence) + " · " + context.source.structured!.manifest.sourceVersionId });
+		if (["article", "structured"].includes(source.source.kind)) { const open = modal.contentEl.createEl("button", { text: "在阅读器打开原文" }); open.onclick = () => { void source.verify().then(() => this.openReadingEvidence(evidence.path, evidence.page, evidence.structured?.blockId)).catch(error => new Notice(String(error))); }; }
 		this.showCurationModal(modal);
 		const image = await source.image(source.source.kind === "pdf" && original.page ? { ...original, asset: "pdf-page" } : original);
 		if (image && modal.modalEl.isConnected) { const img = modal.contentEl.createEl("img", { attr: { alt: evidence.label } }); img.src = image.dataUrl; img.style.maxWidth = "100%"; }

@@ -29,7 +29,8 @@ export function curationNoteText(review: CurationReview, selectedIds: string[]):
 			const citations = suggestion.citations.map(citation => {
 				const evidence = context.evidence.find(e => e.id === citation.id)!;
 				const location = evidence.kind === "vault" && curationTarget(evidence.path) ? link(evidence.path) : readingPathCode(evidence.path);
-				return location + (evidence.page ? "，第 " + evidence.page + " 页" : "") + (evidence.start !== undefined ? "，字符 " + evidence.start + "–" + evidence.end : "") + "：“" + citation.quote.replace(/[\r\n]+/g, " ").replace(/[<>\[\]`]/g, "") + "”";
+				const structured = evidence.structured ? "，" + readingPathCode(`JATS ${context.source.structured!.manifest.sourceVersionId}；块 ${evidence.structured.blockId}；XML ${evidence.structured.xmlPath}`) : "";
+				return location + structured + (evidence.page ? "，第 " + evidence.page + " 页" : "") + (evidence.start !== undefined ? "，字符 " + evidence.start + "–" + evidence.end : "") + "：“" + citation.quote.replace(/[\r\n]+/g, " ").replace(/[<>\[\]`]/g, "") + "”";
 			});
 			return suggestion.text.trim() + "\n\n依据：" + [...new Set(citations)].join("；");
 		};
@@ -107,10 +108,16 @@ export class CurationWriter {
 			for (const write of revision.writes) { const text = await this.read(write.path); const hash = text === null ? null : contentHash(text); if (hash !== write.beforeHash && hash !== write.afterHash) throw new Error("文件已变化，需要重新核对：" + write.path); }
 			revision.state = "applying"; revision.updated = new Date().toISOString(); await this.service.saveRevision(revision);
 			for (const write of revision.writes) {
+				if (!revision.undoOf && review.context.source.kind === "structured") {
+					const currentTarget = await this.read(target.path), currentHash = currentTarget === null ? null : contentHash(currentTarget);
+					if (!currentHash || ![target.beforeHash, target.afterHash].includes(currentHash)) throw new Error("目标笔记已有后续编辑，停止剩余写入");
+					await verifyCurationContext(this.service.app, this.service.workspace, review.context, currentHash);
+				}
 				const file = this.service.app.vault.getFileByPath(write.path);
 				if (!file) { if (write.before !== null) throw new Error("待更新文件缺失"); await this.service.app.vault.create(write.path, write.after); }
 				else await this.service.app.vault.process(file, text => { const hash = contentHash(text); if (hash === write.afterHash) return text; if (hash !== write.beforeHash) throw new Error("写入前文件已变化：" + write.path); return write.after; });
 			}
+			if (!revision.undoOf && review.context.source.kind === "structured") await verifyCurationContext(this.service.app, this.service.workspace, review.context, target.afterHash);
 			revision.state = "applied"; revision.error = ""; revision.updated = new Date().toISOString(); await this.service.saveRevision(revision);
 			return await this.finish(revision);
 		} catch (error) {

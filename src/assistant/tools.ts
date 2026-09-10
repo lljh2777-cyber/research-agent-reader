@@ -8,6 +8,7 @@ import { curationTarget } from "../curation/policy";
 import type { AssistantDependencies, AssistantRun, AssistantSource } from "./types";
 import type { AssistantToolName } from "./capabilities";
 import { toolRequestKey, ToolFeedbackError } from "../agent/tool-feedback";
+import { structuredReference, matchStructuredReference } from "../reading/structured-reference";
 
 function boundedBackground(text: string, limit: number): string {
 	if (text.length <= limit) return text;
@@ -76,6 +77,7 @@ export class AssistantTools {
 					if (previous.kind === "paper") {
 						const doc = await this.deps.workspace.document(this.session.id); const original = doc.evidence.find(e => e.id === previous.id); if (!original) throw new Error("原文引用已失效");
 						source = { kind: "paper", path: this.session.source.path, hash: this.session.source.fingerprint, label: original.label, text: original.text.slice(0, 5000), page: original.page, role: original.asset ? "本文图注/文字，图像尚未核对" : "本文原文", start: original.start, end: original.start === undefined ? undefined : original.start + Math.min(original.text.length, 5000) };
+						if (this.session.source.kind === "structured") { Object.assign(source, structuredReference(original, this.session.source, 5000)); matchStructuredReference(source, this.session.source, doc.evidence); }
 					} else {
 						if (!inKnowledgeScope(previous.path) || !previous.sourceHash || previous.start === undefined || previous.end === undefined) throw new Error("补充来源缺少可核对的位置或指纹");
 						const raw = await this.deps.readFile(previous.path); if (contentHash(raw) !== previous.sourceHash || previous.start < 0 || previous.end > raw.length || previous.end <= previous.start) throw new Error("知识来源已变化");
@@ -86,10 +88,10 @@ export class AssistantTools {
 					if (contentHash(raw) !== candidate.hash || candidate.start < 0 || candidate.end > raw.length || candidate.end <= candidate.start || retrievalPassageText(raw.slice(candidate.start, candidate.end)) !== candidate.text) throw new Error("检索来源已变化，请重新检索");
 					source = { kind: "knowledge", path: candidate.path, hash: candidate.hash, label: candidate.title, role: candidate.role + " · " + candidate.depth, text: raw.slice(candidate.start, Math.min(candidate.end, candidate.start + 5000)), start: candidate.start, end: Math.min(candidate.end, candidate.start + 5000) };
 				}
-				const existing = this.run.sources.find(s => s.path === source.path && s.hash === source.hash && s.text === source.text);
+				const existing = this.run.sources.find(s => s.path === source.path && s.hash === source.hash && s.text === source.text && s.evidenceId === source.evidenceId);
 				const saved = existing || { ...source, id: "S" + (this.run.sources.length + 1) }; if (!existing) this.run.sources.push(saved); sources.push(saved);
 			}
-			value = { sources, note: "仅提供本轮文字片段，不代表全文或图像已核验" };
+			await this.verify(); value = { sources, sourceWarnings: ((await this.deps.workspace.document(this.session.id)).sourceWarnings || []).slice(0, 12).map(s => s.slice(0, 500)), note: "仅提供本轮文字片段，不代表全文或图像已核验；JATS 使用正文块与字符定位，没有 PDF 页码" };
 		} else if (tool === "prepare_action") {
 			const ids = [...new Set(args.nodeIds as string[])]; if (!ids.length || ids.length > 3) throw new Error("请选择一至三个节点"); ids.forEach(id => this.node(id));
 			if (!["curation", "export", "advance"].includes(String(args.kind)) || !["node", "branch", "session"].includes(String(args.scope))) throw new Error("操作类别或范围无效");

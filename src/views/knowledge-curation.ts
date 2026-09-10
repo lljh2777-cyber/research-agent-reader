@@ -5,6 +5,7 @@ import { SUGGESTION_LABELS, type CurationContext, type CurationReview, type Cura
 import { readingTitle } from "../reading/catalog";
 import { readingExportDiff } from "../reading/export-review";
 import type { ReadingSession } from "../reading/types";
+import { structuredLocationLabel } from "../reading/structured-reference";
 
 function action(parent: HTMLElement, text: string, run: () => unknown | Promise<unknown>, primary = false): HTMLButtonElement {
 	const button = parent.createEl("button", { text, cls: primary ? "mod-cta" : "", attr: { type: "button" } });
@@ -99,7 +100,7 @@ export class KnowledgeCurationModal extends Modal {
 		if (context.selection) this.evidence.createEl("small", { text: "目标选段：" + ({ hybrid: "混合检索＋重排", rerank: "关键词＋重排", lexical: "关键词" }[context.selection.mode] || context.selection.mode) + " · 从 " + context.selection.candidates + " 段中选择 " + context.selection.selected + " 段；相关性不代表事实支持。" });
 		if (context.backendId === "codex-cli") this.evidence.createEl("small", { text: "Codex CLI 还会附加运行上下文，实际输入可能高于这里的文字估算。" });
 		for (const warning of context.warnings) this.evidence.createEl("p", { cls: "reading-error", text: warning });
-		for (const evidence of context.evidence) { const box = detail(this.evidence, evidence.id + " · " + evidence.role + (evidence.visual ? " · 附带图像" : ""), evidence.text); box.createEl("small", { text: evidence.path + (evidence.page ? " · 第 " + evidence.page + " 页" : "") + " · " + evidence.depth }); }
+		for (const evidence of context.evidence) { const box = detail(this.evidence, evidence.id + " · " + evidence.role + (evidence.visual ? " · 附带图像" : ""), evidence.text); box.createEl("small", { text: evidence.path + (evidence.page ? " · 第 " + evidence.page + " 页" : "") + " · " + evidence.depth }); if (evidence.structured) box.createEl("small", { text: structuredLocationLabel(evidence) }); }
 	}
 	private async generate(force = false): Promise<void> {
 		if (!this.context || !this.context.sourceCompatible || this.operation) return; const context = this.context; const token = this.sequence; this.operation = true; this.runningKey = context.key; this.status.setText("正在核对证据并生成整理建议…");

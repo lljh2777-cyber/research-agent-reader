@@ -56,7 +56,7 @@ module.exports = async function(app, fixtureRoot, apiPath, keepOpen = false) {
 		leaf = app.workspace.getLeaf("tab"); await leaf.setViewState({ type: "research-interactive-reading", active: true, state: { sessionId, domain: "paper" } }); await app.workspace.revealLeaf(leaf);
 		const view = leaf.view; await wait(() => view.contentEl.querySelectorAll("[data-reading-citation]").length >= 2, "clickable JATS citations");
 		check(view.getReadingDomain() === "paper" && view.contentEl.textContent.includes("JATS 原文"), "structured reading remains in the paper workspace");
-		check(!view.contentEl.querySelector('[aria-label="整理进知识库"]') && !!view.contentEl.querySelector('[aria-label="生成文章 Wiki"]'), "initial Wiki is available while existing-note curation remains gated");
+		check(!!view.contentEl.querySelector('[aria-label="整理进知识库"]') && !!view.contentEl.querySelector('[aria-label="生成文章 Wiki"]') && !!view.contentEl.querySelector('[aria-label="阅读助手"]'), "initial Wiki, assistant and existing-note curation are available for JATS");
 		view.openSource({ source: { kind: "structured", path: sourcePath } });
 		const sourceModal = [...view.modals].find(m => m.contentEl.querySelector('[aria-label="原文位置"]'));
 		check(sourceModal && [...sourceModal.contentEl.querySelectorAll("select")].some(s => s.value === "structured") && sourceModal.contentEl.querySelector('[aria-label="原文位置"]').value === sourcePath, "source picker explicitly selects JATS"); sourceModal.close();
@@ -80,7 +80,7 @@ module.exports = async function(app, fixtureRoot, apiPath, keepOpen = false) {
 		catalog.storage.files.set(sourcePath, originalBytes); await doc.verify();
 		check(JSON.stringify(plugin.settings) === original.settings, "plugin settings remain unchanged");
 		ordinary.detach(); ordinary = undefined; await app.workspace.revealLeaf(leaf);
-		if (keepOpen) globalThis.__jatsReadingQa = { cleanup, leaf, service, sessionId };
+		if (keepOpen) globalThis.__jatsReadingQa = { cleanup, leaf, service, sessionId, catalog, doc };
 		return { ok: true, version: plugin.manifest.version, checks, blocks: acquired.projection.blocks.length, evidence: doc.evidence.length, realModelCalls: 0, realNetworkCalls: 0, formalWrites: "memory-only", viewsRetained: keepOpen };
 	} finally { if (!keepOpen || !globalThis.__jatsReadingQa) await cleanup(); }
 };

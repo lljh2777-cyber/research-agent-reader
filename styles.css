@@ -6289,6 +6289,7 @@ body.agent-dashboard-mineru-resizing {
 .curation-side, .curation-paper { min-width: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding-right: 7px; }
 .curation-side { display: flex; flex-direction: column; gap: 10px; font-size: 13px; }
 .curation-side > strong { line-height: 1.5; }
+.curation-side :is(p, small, strong, summary) { overflow-wrap: anywhere; }
 .curation-eyebrow { display: block; color: var(--text-accent); font-size: 10px; font-weight: 650; letter-spacing: .09em; margin: 6px 0; }
 .curation-side input:not([type=checkbox]), .curation-side select { width: 100%; min-height: 32px; font-size: 12px; }
 .curation-side small, .curation-results > small { color: var(--text-muted); line-height: 1.5; }

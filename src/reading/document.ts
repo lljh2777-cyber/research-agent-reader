@@ -20,6 +20,7 @@ export interface ReadingDocument {
 	source: ReadingSource;
 	evidence: ReadingEvidence[];
 	catalog: string;
+	sourceWarnings?: string[];
 	image(evidence: ReadingEvidence, signal?: AbortSignal): Promise<ReadingImage | null>;
 	verify(): Promise<void>;
 	destroy(): Promise<void>;

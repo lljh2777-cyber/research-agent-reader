@@ -9,6 +9,7 @@ import { contentHash } from "../retrieval/chunks";
 import type { AssistantAction, AssistantDependencies, AssistantExecution, AssistantRun, AssistantStorage } from "./types";
 import { curationTarget } from "../curation/policy";
 import { ToolFailureGuard, toolFeedback } from "../agent/tool-feedback";
+import { matchStructuredReference } from "../reading/structured-reference";
 export class ReadingAssistantService {
 	readonly runs = new Map<string, AssistantRun>(); readonly errors: string[] = [];
 	actionError = "";
@@ -98,8 +99,10 @@ export class ReadingAssistantService {
 	private async run(sessionId: string, nodeId: string, profileId: string, question: string, controller: AbortController): Promise<AssistantRun> {
 		await this.ready(); if (!question.trim() || question.length > 4000) throw new Error("请输入不超过 4000 字符的请求");
 		const session = structuredClone(this.deps.workspace.repository.get(sessionId)); if (session.demo) throw new Error("演示会话不调用助手模型");
+		if (session.source.kind === "code") throw new Error("代码会话暂不支持论文阅读助手");
 		const context = assistantContext(session, nodeId); const backend = this.deps.backend(session, profileId);
 		const run: AssistantRun = { version: 1, id: "a-" + randomUUID(), sessionId, nodeId, profileId, model: backend.name + " · " + backend.model, question: question.trim(), created: new Date().toISOString(), state: "running", answer: "", error: "", steps: [], sources: [], actions: [], citations: [], calls: [] };
+		if (session.source.kind === "structured") run.source = structuredClone(session.source);
 		await this.save(run); const tools = new AssistantTools(this.deps, session, run, controller.signal); const timer = setTimeout(() => controller.abort(), 240000);
 		const history: { role: string; data: unknown }[] = []; const failures = new ToolFailureGuard(); let used = 0; let outputChars = 0;
 		const system = rules + "\n可用工具（参数必须齐全）：" + JSON.stringify(ASSISTANT_CAPABILITIES);
@@ -118,6 +121,7 @@ export class ReadingAssistantService {
 					const citations = [...new Set(step.arguments.citations as string[])]; if (citations.some(id => !run.sources.some(s => s.id === id))) throw new Error("助手引用了本轮未读取的依据");
 					const answer = String(step.arguments.answer); if (!answer.trim()) throw new Error("助手返回空回答"); for (const match of answer.matchAll(/\[(S\d+)\]/g)) if (!citations.includes(match[1])) throw new Error("助手正文与引用列表不一致");
 					await tools.verify(); for (const s of run.sources.filter(s => s.kind === "knowledge")) if (contentHash(await this.deps.readFile(s.path)) !== s.hash) throw new Error("回答期间知识来源已变化");
+					if (run.source?.kind === "structured") { const doc = await this.deps.workspace.document(sessionId); for (const s of run.sources.filter(s => s.kind === "paper")) matchStructuredReference(s, run.source, doc.evidence); }
 					run.answer = answer; run.citations = citations; run.state = "done"; await this.save(run); return run;
 				}
 				try { const result = await tools.execute(step.tool, step.arguments); outputChars += result.output.length; failures.succeeded(step.tool, step.arguments);

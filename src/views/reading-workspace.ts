@@ -150,8 +150,8 @@ export class ReadingWorkspaceView extends ItemView {
 			actionButton(actions, "download", "导出学习笔记", () => this.openExport(), true);
 			if (session.source.kind === "code") actionButton(actions, "code-xml", "浏览源码", () => { const modal = new CodeSourceModal(this.app, this.service, this.session!, id => { if (this.sessionId === session.id) this.selectNode(id, false, true); }); this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open(); }, true);
 			if (!session.demo && session.source.kind === "structured") actionButton(actions, "file-plus", "生成文章 Wiki", () => this.handle(this.service.document(session.id).then(async doc => { await doc.verify(); await this.plugin.openJatsWiki(session.source.structured!.manifest.packageKey); })), true);
-			if (!session.demo && ["pdf", "article"].includes(session.source.kind)) actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, this.session!.ui.selectedId), true);
-			if (!session.demo && ["pdf", "article"].includes(session.source.kind)) actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, this.session!.ui.selectedId), true);
+			if (!session.demo && ["pdf", "article", "structured"].includes(session.source.kind)) actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, this.session!.ui.selectedId), true);
+			if (!session.demo && ["pdf", "article", "structured"].includes(session.source.kind)) actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, this.session!.ui.selectedId), true);
 		}
 		const create = actionButton(actions, "plus", "新建阅读", () => this.openSource()); create.classList.add("reading-primary");
 		const more = actionButton(actions, "ellipsis", "更多阅读选项", () => {
@@ -814,7 +814,7 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	private openExport(): void {
 		const sessionId = this.sessionId; const nodeId = this.session!.ui.selectedId;
-		const modal = new ReadingExportModal(this.app, () => this.service.repository.get(sessionId), nodeId, (query, options) => this.plugin.searchKnowledge(query, options), path => this.plugin.openVaultFile(path), ["code", "structured"].includes(this.session!.source.kind) ? undefined : () => this.plugin.openKnowledgeCuration(sessionId, nodeId));
+		const modal = new ReadingExportModal(this.app, () => this.service.repository.get(sessionId), nodeId, (query, options) => this.plugin.searchKnowledge(query, options), path => this.plugin.openVaultFile(path), this.session!.source.kind === "code" ? undefined : () => this.plugin.openKnowledgeCuration(sessionId, nodeId));
 		this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open();
 	}
 	revealLearningNode(nodeId: string): void { if (this.session?.nodes.some(node => node.id === nodeId)) this.selectNode(nodeId, true); }

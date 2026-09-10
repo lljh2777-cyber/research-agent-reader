@@ -2,6 +2,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { AssistantRun, AssistantStorage } from "./types";
 import { ASSISTANT_CAPABILITIES, parseAssistantStep } from "./capabilities";
+import { validateStructuredSource } from "../reading/structured-source";
+import { validateStructuredReference } from "../reading/structured-reference";
 const ID = /^a-[a-f0-9-]{36}$/;
 export function validateAssistantRun(raw: unknown): AssistantRun {
 	const r = raw as AssistantRun;
@@ -17,6 +19,10 @@ export function validateAssistantRun(raw: unknown): AssistantRun {
 		|| new Set(r.sources.map(s => s.id)).size !== r.sources.length || r.citations.some(id => !r.sources.some(s => s.id === id))
 		|| r.actions.some(a => !a || !str(a.id, 50) || !["curation", "export", "advance"].includes(a.kind) || !["node", "branch", "session"].includes(a.scope) || !["prepared", "opened"].includes(a.state) || !array(a.nodeIds, 3) || !a.nodeIds.length || a.nodeIds.some(id => !str(id, 100)) || !str(a.target) || !/^[a-f0-9]{64}$/.test(a.contextHash))
 		|| new Set(r.actions.map(a => a.id)).size !== r.actions.length) throw new Error("助手记录内容无效");
+	if (r.source) validateStructuredSource(r.source);
+	for (const s of r.sources) {
+		if (s.structured || s.evidenceId || r.source && s.kind === "paper") { if (!r.source || s.kind !== "paper") throw new Error("JATS 助手依据缺少来源快照"); validateStructuredReference(s, r.source); }
+	}
 	for (const s of r.steps) if (s.arguments) parseAssistantStep(JSON.stringify({ step: { tool: s.tool, arguments: s.arguments } }));
 	for (const a of r.actions) if (a.execution !== undefined) {
 		const e = a.execution;
