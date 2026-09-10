@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Paper library foundation — R0 first step
+
+- 新增纯文献聚合契约：按已有精确标识或 paperId 关联，保持各来源版本与对象独立，冲突和无标识旧资料不自动合并或分配新身份。
+- 分开来源能力、获取状态、主线生成、人工阅读与笔记审阅；复用现有节点理解标记，审阅绑定正文哈希。
+- 15 个内存场景覆盖确定性、只读边界、传递冲突及 2,000 条记录共享诊断。尚未接入真实资料适配或首页，插件运行版本保持 `0.51.2`。见 [R0 实现记录](docs/library-r0.md)。
+
 ### Nature fulltext input fix — 0.51.2
 
 - 修复 Nature 文章页面与 PDF 链接无法启用「查找全文」的问题；按固定域名和文章路径提取 DOI，继续交由现有身份服务校验。

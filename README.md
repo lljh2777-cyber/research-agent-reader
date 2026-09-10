@@ -4,6 +4,8 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 未来开发以[开发路线：阅读与知识沉淀](docs/development-roadmap.md)为准：先补齐文献关联与状态，接通文献详情、统一添加、摘录和知识整理，再独立推进存储迁移、翻译与专题对照。路线中的规划功能尚未实现；下文记录当前能力。
 
+已开始 [R0 文献聚合基础](docs/library-r0.md)：第一批交付纯数据契约与内存关联，区分来源、生成进度、人工阅读及笔记审阅。尚未接入文献详情或变更现有首页。
+
 > Public release status: `0.31.0` beta is published at
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
