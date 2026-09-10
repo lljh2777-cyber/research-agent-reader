@@ -32,7 +32,7 @@ function checkObject(item: LibraryObject): void {
 
 /** No IO here. The action owner must revalidate the source immediately before opening it. */
 export function librarySourceCapabilities(source: LibrarySourceDescription): LibrarySourceCapabilities {
-	if (!["pdf", "mineru", "jats", "markdown"].includes(source.format)) throw new Error("文献来源格式无效");
+	if (!["pdf", "mineru", "jats", "markdown", "unknown"].includes(source.format) || source.format === "unknown" && source.verification.state === "verified") throw new Error("文献来源格式无效");
 	const blocked = (reason: string) => ({ available: false, reason });
 	const available = () => ({ available: true, reason: "" });
 	if (source.verification.state !== "verified") {
@@ -72,6 +72,7 @@ function summarize(item: LibraryObject): LibraryObjectSummary {
 		: { state: "unreviewed" };
 	if (item.kind === "annotation" && item.roles) result.roles = [...item.roles];
 	if (item.kind === "acquisition") result.acquisitionPhase = item.phase;
+	if ((item.kind === "session" || item.kind === "annotation") && item.binding) result.binding = { ...item.binding };
 	return result;
 }
 
@@ -93,6 +94,7 @@ function paper(items: LibraryObject[], conflicts: LibraryDiagnostic[], issues: M
 	for (const item of sorted) if (item.kind === "source" && item.source.verification.state !== "verified") {
 		diagnostics.push(diagnostic("source_unavailable", item.source.verification.reason || "原文尚未通过核验", [item]));
 	}
+	for (const item of sorted) if ((item.kind === "session" || item.kind === "annotation") && item.binding && item.binding.state !== "matched") diagnostics.push(diagnostic("source_binding", item.binding.reason, [item]));
 	if (primary && !hasPrimary) diagnostics.push(diagnostic("primary_note_missing", "主要论文笔记尚未关联或需要重新核对", [record]));
 	for (const issue of diagnostics) issues.set(issue.id, issue);
 	return {
@@ -128,6 +130,15 @@ export function projectLibrary(input: readonly LibraryObject[]): LibraryProjecti
 		if (item.paperId) keys.push(JSON.stringify(["paperId", item.paperId]));
 		for (const key of keys) { const previous = index.get(key); if (previous === undefined) index.set(key, i); else parents[root(i)] = root(previous); }
 	});
+	const sources = new Map(items.map((item, i) => [refKey(item), { item, i }]));
+	for (let i = 0; i < items.length; i++) {
+		const item = items[i]; if (item.kind !== "session" || item.binding?.state !== "matched") continue;
+		const target = sources.get(refKey({ kind: "source", id: item.binding.sourceId || "" }));
+		if (!target || target.item.kind !== "source" || target.item.source.verification.state !== "verified"
+			|| target.item.source.verification.fingerprint !== item.session.source.fingerprint || item.binding.fingerprint !== item.session.source.fingerprint
+			|| ({ pdf: "pdf", mineru: "article", jats: "structured", markdown: "markdown", unknown: "unknown" }[target.item.source.format]) !== item.session.source.kind) throw new Error("阅读会话与已核验来源绑定不一致");
+		parents[root(i)] = root(target.i);
+	}
 	const groups = new Map<number, LibraryObject[]>();
 	items.forEach((item, i) => { const key = root(i); if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(item); });
 	const citekeys = new Map<string, { groups: Set<number>; items: LibraryObject[] }>();

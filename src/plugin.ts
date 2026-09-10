@@ -7,6 +7,7 @@ import {
 	Plugin,
 	TFile,
 	normalizePath,
+	parseYaml,
 	type WorkspaceLeaf,
 } from "obsidian";
 
@@ -15,6 +16,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { AcquisitionService } from "./fulltext/service";
+import { readPaperLibrary } from "./library/reader";
 import { AcquisitionRepository } from "./fulltext/repository";
 import { FileAcquisitionStorage } from "./fulltext/file-storage";
 import { DemoAcquisitionBackend } from "./fulltext/demo-backend";
@@ -2658,6 +2660,12 @@ export default class AgentDashboardPlugin extends Plugin {
 	private readingPluginDirectory(): string {
 		const adapter = this.app.vault.adapter; if (!(adapter instanceof FileSystemAdapter)) throw new Error("知识整理需要桌面文件系统");
 		return path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader");
+	}
+	/** Explicit read-only inspection; never initializes reading recovery or models. */
+	inspectPaperLibrary(signal?: AbortSignal) {
+		return readPaperLibrary(new FileSourceStorage(this.getActiveVaultRoot()), new FileSourceStorage(this.readingPluginDirectory()), {
+			vaultRoot: this.getActiveVaultRoot(), parseYaml, signal,
+		});
 	}
 	getLearningLibrary(): LearningLibrary {
 		if (!this.learningLibrary) { this.getKnowledgeService(); this.learningLibrary = new LearningLibrary(this.app, this.getReadingWorkspace(), new FileVectorStorage(this.readingPluginDirectory(), "learning-index"), this.knowledgeModels!, () => this.settings.knowledgeRetrievalMode); }

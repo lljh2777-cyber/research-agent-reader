@@ -108,6 +108,22 @@ check("source capabilities preserve format differences and block unavailable ori
 	assert.throws(() => librarySourceCapabilities(source("bad", {}, "pdf", { verification: { state: "verified", fingerprint: "" } }).source), /指纹/);
 });
 
+check("matched source bindings require an existing verified source, the correct type and the fixed fingerprint", () => {
+	const original = source("original", { doi: "10.1234/a" });
+	const reading = { ...session("reader"), binding: { state: "matched", sourceId: original.id, fingerprint: HASH, reason: "Verified" } };
+	const result = projectLibrary([original, reading]);
+	assert.equal(result.papers.length, 1); assert.equal(result.papers[0].objects.length, 2);
+	assert.equal(result.papers[0].paperId, undefined);
+	assert.deepEqual(result, projectLibrary([reading, original]));
+	assert.throws(() => projectLibrary([reading]), /绑定不一致/);
+	assert.throws(() => projectLibrary([original, { ...reading, binding: { ...reading.binding, fingerprint: OTHER_HASH } }]), /绑定不一致/);
+	assert.throws(() => projectLibrary([source(original.id, {}, "jats"), reading]), /绑定不一致/);
+	assert.throws(() => projectLibrary([source(original.id, {}, "pdf", { verification: { state: "unverified", reason: "Pending" } }), reading]), /绑定不一致/);
+	assert.throws(() => projectLibrary([source(original.id, {}, "pdf", { verification: { state: "verified", fingerprint: OTHER_HASH } }), reading]), /绑定不一致/);
+	const conflict = projectLibrary([original, { ...reading, identifiers: { doi: "10.1234/b" } }]);
+	assert.ok(conflict.papers.every(paper => paper.association === "conflict"));
+});
+
 check("generated explanations do not imply reading completion, resolved questions or reviewed notes", () => {
 	const reading = session("done", { doi: "10.1234/a" }, { nodes: [node("one"), node("two")], mainIds: ["one", "two"], outline: ["one", "two"], completed: true });
 	const result = projectLibrary([reading, note("wiki/sources/a.md", { doi: "10.1234/a" })]), paper = result.papers[0];

@@ -4,11 +4,13 @@ import { decodeSourceManifest, loadPdfSource, sourceVersion, type SourceManifest
 import type { SourceStorage } from "../sources/storage";
 import { identityRelation, safeCitekey, sourceCitekey, type ResolvedIdentity } from "./identity";
 import { decodePackageManifest,loadSourcePackage,type SourcePackageManifest } from "../sources/package";
+import { inspectSourcePackages } from "./catalog-reader";
 
 export interface LegacySource {path:string;kind:"mineru"|"markdown"|"wiki";identifiers:ResolvedIdentity["identifiers"];title:string;citekey?:string;}
 export interface CatalogPlan {paperId:string;citekey:string;packages:SourcePackageManifest[];legacy:LegacySource[];reuse?:SourceManifest;warnings:string[];}
 export class SourceCatalog {
 	constructor(readonly storage:SourceStorage,private legacySources:()=>Promise<LegacySource[]>=async()=>[]){}
+	inspect() { return inspectSourcePackages(this.storage); }
 	async list():Promise<{packages:SourcePackageManifest[];warnings:string[]}> {
 		const packages:SourcePackageManifest[]=[],warnings:string[]=[];let total=0;
 		for(const entry of await this.storage.list("papers")){

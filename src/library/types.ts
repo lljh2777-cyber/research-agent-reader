@@ -2,7 +2,7 @@ import type { AcquisitionPhase } from "../fulltext/contracts";
 import type { ResolvedIdentity } from "../papers/identity";
 import type { ReadingEvidence, ReadingLearningState, ReadingSession, ReadingSource } from "../reading/types";
 
-/** View contracts only. Persistent records and adapters are separate development steps. */
+/** View contracts shared by the pure projection and read adapters; persistence is separate. */
 export type LibraryIdentifiers = ResolvedIdentity["identifiers"];
 export type LibraryContentRole = "original_quote" | "ai_explanation" | "personal_note" | "external_material" | "synthesis";
 export type LibraryEvidenceReference = ReadingEvidence;
@@ -21,7 +21,7 @@ export type LibrarySourceVerification =
 	| { state: "verified"; fingerprint: string }
 	| { state: "unverified" | "missing" | "invalid"; reason: string };
 export interface LibrarySourceDescription {
-	format: "pdf" | "mineru" | "jats" | "markdown";
+	format: "pdf" | "mineru" | "jats" | "markdown" | "unknown";
 	path: string;
 	packageKey?: string;
 	sourceVersionId?: string;
@@ -41,6 +41,13 @@ export interface LibrarySessionObject extends LibraryObjectBase {
 	kind: "session";
 	/** Existing validated session; the projection never changes its source or node state. */
 	session: ReadingSession;
+	binding?: LibrarySourceBinding;
+}
+export interface LibrarySourceBinding {
+	state: "matched" | "changed" | "unresolved";
+	sourceId?: string;
+	fingerprint?: string;
+	reason: string;
 }
 export interface LibraryNoteObject extends LibraryObjectBase {
 	kind: "note";
@@ -52,6 +59,7 @@ export interface LibraryAnnotationObject extends LibraryObjectBase {
 	kind: "annotation";
 	/** Missing on legacy records; do not infer content identity from file placement. */
 	roles?: LibraryContentRole[];
+	binding?: LibrarySourceBinding;
 }
 export interface LibraryAcquisitionObject extends LibraryObjectBase { kind: "acquisition"; phase: AcquisitionPhase; }
 export type LibraryObject = LibraryRecordObject | LibrarySourceObject | LibrarySessionObject | LibraryNoteObject | LibraryAnnotationObject | LibraryAcquisitionObject;
@@ -85,8 +93,9 @@ export interface LibraryObjectSummary extends LibraryObjectRef {
 	noteReview?: { state: "unreviewed" | "reviewed" | "stale"; reviewedAt?: string };
 	roles?: LibraryContentRole[];
 	acquisitionPhase?: AcquisitionPhase;
+	binding?: LibrarySourceBinding;
 }
-export type LibraryDiagnosticCode = "identifier_conflict" | "paper_id_conflict" | "citekey_conflict" | "citekey_collision" | "source_unavailable" | "primary_note_missing";
+export type LibraryDiagnosticCode = "identifier_conflict" | "paper_id_conflict" | "citekey_conflict" | "citekey_collision" | "source_unavailable" | "primary_note_missing" | "source_binding";
 export interface LibraryDiagnostic {
 	id: string;
 	code: LibraryDiagnosticCode;

@@ -221,6 +221,29 @@ function readMarkedSection(raw: string, start: string, end: string): string {
 	return raw.slice(contentStart, endIndex).trim();
 }
 
+/** Read existing annotation blocks without invoking any view, model, relocation or writer. */
+export function readAnnotationRecords(content: string, annotationPath: string): { records: AnnotationRecord[]; errors: string[] } {
+	const records: AnnotationRecord[] = [], errors: string[] = [], seen = new Set<string>(), duplicates = new Set<string>();
+	const parts = content.split(BLOCK_START).slice(1);
+	if (parts.length > 2000) throw new Error("单文件批注超过读取上限");
+	for (const part of parts) {
+		const opening = /^([A-Za-z0-9_-]{1,200}) -->/.exec(part), raw = BLOCK_START + part;
+		if (!opening) { errors.push("批注起始标记无效"); continue; }
+		const id = opening[1], end = `${BLOCK_END}${id} -->`, endAt = raw.indexOf(end);
+		if (seen.has(id)) { duplicates.add(id); errors.push("重复批注 ID，所有同名记录均待核对：" + id); continue; }
+		seen.add(id);
+		const block = endAt >= 0 ? raw.slice(0, endAt + end.length) : "", meta = parseMeta(block);
+		if (!meta || meta.id !== id || !meta.sourcePath || !meta.selectedText) { errors.push("批注标记、元数据或 ID 不一致：" + id); continue; }
+		if ([[MANUAL_START, MANUAL_END], [AI_START, AI_END]].some(([start, end]) => {
+			const at = block.indexOf(start), until = block.indexOf(end);
+			return (at < 0) !== (until < 0) || at >= 0 && until < at;
+		})) { errors.push("批注内容分区未闭合：" + id); continue; }
+		records.push({ ...meta, annotationPath, manualText: readMarkedSection(block, MANUAL_START, MANUAL_END), aiText: readMarkedSection(block, AI_START, AI_END) });
+	}
+	if (!parts.length && content.trim()) errors.push("未发现可识别的批注记录，文件已保留");
+	return { records: records.filter(record => !duplicates.has(record.id)), errors };
+}
+
 export class AnnotationService {
 	constructor(
 		private readonly app: App,
