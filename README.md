@@ -1,8 +1,8 @@
 # Research Agent Reader
 
-Research Agent Reader is a desktop-only Obsidian plugin for reading research Markdown,
-reviewing validated MinerU document packages, annotating selected text, and
-connecting optional local AI-agent workflows.
+Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据为基础的科研文献阅读与知识沉淀：保存可靠来源、逐步理解论文、核对依据，并将有价值的阅读内容整理为可复用笔记。
+
+未来开发以[开发路线：阅读与知识沉淀](docs/development-roadmap.md)为准：先补齐文献关联与状态，接通文献详情、统一添加、摘录和知识整理，再独立推进存储迁移、翻译与专题对照。路线中的规划功能尚未实现；下文记录当前能力。
 
 > Public release status: `0.31.0` beta is published at
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).

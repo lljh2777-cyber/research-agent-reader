@@ -1,5 +1,7 @@
 # 全文获取与多来源入库：架构和开发流程
 
+后续产品优先级见[开发路线：阅读与知识沉淀](development-roadmap.md)（基于 `0.51.2`）。本文保留全文获取 M1–M6 的历史架构、接口和兼容边界；下面的“当前代码事实”属于当时 `0.43.2` 基线，不代表后续阶段尚未实现。
+
 `0.51.1` 完成 M1–M6 功能检查与修复，包含转换版本兼容、来源身份与性能优化；见[检查与优化记录](fulltext-acquisition-review.md)。
 
 设计日期：2026-09-09。本文保留总体设计基线；实现进度：`0.44.0` 完成 [M1 流程骨架与演示](fulltext-acquisition-m1.md)，`0.45.0` 完成 [M2 PMC PDF 获取与预览](fulltext-acquisition-m2.md)，`0.46.0` 完成 [M3 OA 回退与既有入库接续](fulltext-acquisition-m3.md)，`0.47.0` 完成 [M4 来源中立身份与原文保存](fulltext-acquisition-m4.md)，`0.48.0` 完成 [M5 JATS 普通阅读](fulltext-acquisition-m5.md)，`0.49.0` 完成 [M6 交互阅读步骤](fulltext-acquisition-m6-reading.md)，`0.50.0` 完成 [M6 初始文章 Wiki 步骤](fulltext-acquisition-m6-wiki.md)，`0.51.0` 完成 [M6 阅读助手与既有 Wiki 修订](fulltext-acquisition-m6-curation.md)。M1–M6 的功能路径已接通，真实模型科学内容质量仍需独立验收。实际模块、阶段边界与验收结果以对应实现说明为准。
