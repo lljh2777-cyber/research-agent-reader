@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fulltext acquisition M6 initial Wiki — 0.50.0
+
+- 已保存的 JATS 原文可生成初始文章 Wiki：受限正文工具返回实际读取片段，草稿保留中文译名、摘要级正文、原文块引用和固定来源凭据。
+- 生成、完整预览、保存、登记分别执行；私有草稿记录接入任务历史，关闭或重载后可继续核对与保存。来源变化、伪造引用、重复笔记或用户编辑会阻止不一致写入。
+- 沿用只创建新文件的 Wiki 写入与入库登记。保存意图和回执支持中断续办，独立库更新本库索引与日志，完整工作区可登记 CSV / BibTeX。恢复和登记不再次调用模型。
+- JATS 阅读助手与既有笔记修订仍待适配，不自动升级 X-Ray。详见 [实现与验收](docs/fulltext-acquisition-m6-wiki.md)。
+
 ### Fulltext acquisition M6 interactive reading — 0.49.0
 
 - 新增明确的 JATS 结构化阅读来源，复用论文阅读空间。会话固定来源包清单、版本、投影和文件摘要，旧 PDF / MinerU / 代码会话保持兼容。

@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import type AgentDashboardPlugin from "../plugin";
 import { IngestRegistrationWriter, planIngestRegistration, registrationFiles, registrationHash, ingestRegistrationAvailability, type RegistrationPlan } from "../agent/ingest-registration";
 import { readTrustedVaultFile, resolveTrustedVaultPath } from "../runtime/trusted-vault-fs";
+import { FileSourceStorage } from "../sources/storage";
+import { verifyJatsWikiSource } from "../jats/wiki-source-guard";
 
 export class IngestRegistrationController {
 	private writer: IngestRegistrationWriter;
@@ -15,6 +17,7 @@ export class IngestRegistrationController {
 		if (!(plugin.app.vault.adapter instanceof FileSystemAdapter)) throw new Error("入库登记需要桌面文件系统");
 		this.vaultRoot = plugin.app.vault.adapter.getBasePath();
 		this.writer = new IngestRegistrationWriter({ read: p => this.read(p), write: (p, before, after) => this.write(p, before, after),
+			verify: async plan => { const note = await this.read(plan.notePath); if (!note) throw new Error("登记笔记缺失"); await verifyJatsWikiSource(new FileSourceStorage(this.vaultRoot), plan.notePath, note); },
 			save: plan => this.plugin.getIngestRecords().write("registration", plan.id, plan) });
 	}
 	private root(p: string): string {

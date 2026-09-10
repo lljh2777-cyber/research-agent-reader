@@ -6716,8 +6716,11 @@ body.agent-dashboard-mineru-resizing {
 .rar-fulltext-modal button:disabled { opacity: .55; cursor: not-allowed; }
 .rar-jats-partial { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0; }
 .rar-jats-partial input[type="checkbox"] { flex: 0 0 auto; width: auto; margin-top: 3px; }
-.rar-jats-save-modal :is(p, code) { overflow-wrap: anywhere; white-space: normal; }
-.rar-jats-save-modal button { white-space: normal; height: auto; min-height: 32px; }
+:is(.rar-jats-save-modal, .rar-jats-wiki-modal) :is(p, code) { overflow-wrap: anywhere; white-space: normal; }
+:is(.rar-jats-save-modal, .rar-jats-wiki-modal) button { white-space: normal; height: auto; min-height: 32px; }
+.rar-jats-wiki-modal :is(label, textarea, select) { display: block; width: 100%; margin-block: 8px; }
+.rar-jats-wiki-modal textarea { min-height: 72px; resize: vertical; }
+.rar-jats-wiki-modal button { margin: 4px 6px 4px 0; }
 .rar-jats-xml-evidence { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow-y: auto; font-size: 12px; }
 .rar-jats-block { scroll-margin-top: 16px; overflow-wrap: anywhere; }
 .agent-dashboard-mineru-article .rar-jats-block h1 { font-size: 1.5em; line-height: 1.35; }

@@ -8,12 +8,14 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.49.0`; the beta
+The `codex/research-learning-map` development branch is at `0.50.0`; the beta
 release link above remains the published release.
 
 全文获取与多来源入库的后续设计见[架构与开发流程](docs/fulltext-acquisition-design.md)。
 总体设计基于 `0.43.2`，各阶段按实现说明验收。
-`0.49.0` 完成 M6 的交互阅读步骤：在已保存的 JATS 图文阅读器点击「交互深读」，或在新建阅读中选择「已保存 JATS article.md」。支持主线、支线、图像证据、会话恢复和保留来源快照的学习记录导出。正式文章 Wiki 与阅读助手将在后续步骤接入。详见 [M6 交互阅读实现](docs/fulltext-acquisition-m6-reading.md)。
+`0.50.0` 完成 M6 的初始文章 Wiki 步骤：在已保存的 JATS 图文阅读器点击「文章 Wiki」，或在交互阅读中点击「生成文章 Wiki」。模型读取固定原文生成摘要级草稿；核对完整内容与证据片段后保存，再预览入库登记。草稿可恢复，保存只创建新笔记，已有 Wiki 可直接打开或继续登记。阅读助手和既有笔记修订仍待后续接入。详见 [M6 Wiki 实现](docs/fulltext-acquisition-m6-wiki.md)。
+
+`0.49.0` 已完成 M6 的交互阅读步骤：在已保存的 JATS 图文阅读器点击「交互深读」，或在新建阅读中选择「已保存 JATS article.md」。支持主线、支线、图像证据、会话恢复和保留来源快照的学习记录导出。详见 [M6 交互阅读实现](docs/fulltext-acquisition-m6-reading.md)。
 
 `0.48.0` 已完成 M5：在「获取全文 → 获取内容」选择 JATS XML，可获取 PMC 的正文与同版本图片。
 核对主文章信息后可无模型、无 MinerU 保存图文原文，支持章节、图表与参考文献跳转。

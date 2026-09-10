@@ -25,6 +25,7 @@ interface TaskResultHost {
 	getIngestRegistrationAvailability?(notePath: string): Promise<{ eligible: boolean; reason: string }>;
 	readIngestPdf?(run: TaskRun): Promise<void>;
 	openVaultFile?(path: string): void;
+	openJatsWikiTask?(runId: string): Promise<void>;
 }
 
 export class TaskResultModal extends Modal {
@@ -96,6 +97,10 @@ export class TaskResultModal extends Modal {
 			text: output,
 		});
 		const footer = contentEl.createDiv({ cls: "agent-dashboard-modal-actions" });
+		if (this.run.actionId === "jats-wiki" && this.plugin.openJatsWikiTask) {
+			const review = footer.createEl("button", { text: "查看草稿／继续保存", cls: "mod-cta" });
+			review.onclick = () => { void this.plugin.openJatsWikiTask!(this.run.id).then(() => this.close()).catch(error => new Notice(String(error))); };
+		}
 		const copy = footer.createEl("button", { text: "复制结果" });
 		copy.type = "button";
 		copy.addEventListener("click", async () => {

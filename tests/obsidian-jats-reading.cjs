@@ -56,7 +56,7 @@ module.exports = async function(app, fixtureRoot, apiPath, keepOpen = false) {
 		leaf = app.workspace.getLeaf("tab"); await leaf.setViewState({ type: "research-interactive-reading", active: true, state: { sessionId, domain: "paper" } }); await app.workspace.revealLeaf(leaf);
 		const view = leaf.view; await wait(() => view.contentEl.querySelectorAll("[data-reading-citation]").length >= 2, "clickable JATS citations");
 		check(view.getReadingDomain() === "paper" && view.contentEl.textContent.includes("JATS 原文"), "structured reading remains in the paper workspace");
-		check(!view.contentEl.querySelector('[aria-label="整理进知识库"]'), "formal Wiki action remains unavailable until next stage");
+		check(!view.contentEl.querySelector('[aria-label="整理进知识库"]') && !!view.contentEl.querySelector('[aria-label="生成文章 Wiki"]'), "initial Wiki is available while existing-note curation remains gated");
 		view.openSource({ source: { kind: "structured", path: sourcePath } });
 		const sourceModal = [...view.modals].find(m => m.contentEl.querySelector('[aria-label="原文位置"]'));
 		check(sourceModal && [...sourceModal.contentEl.querySelectorAll("select")].some(s => s.value === "structured") && sourceModal.contentEl.querySelector('[aria-label="原文位置"]').value === sourcePath, "source picker explicitly selects JATS"); sourceModal.close();

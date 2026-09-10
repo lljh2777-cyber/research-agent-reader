@@ -899,8 +899,12 @@ export async function runAuthorizedMineruExtract(
 
 export interface SourceNoteFields {
 	sourcePath?: string;
-	sourceKind?: "pdf" | "article";
+	sourceKind?: "pdf" | "article" | "jats";
 	sourceHash?: string;
+	jatsSource?: {
+		manifestDigest: string; projectionId: string; xmlSha256: string; identityDigest: string; sourceVersionId: string;
+		evidence: Array<{ id: string; blockId: string; start: number; end: number; xmlPath: string; xmlStart: number; xmlEnd: number; textHash: string }>;
+	};
 	title: string;
 	title_zh: string;
 	authors: string;
@@ -1027,8 +1031,8 @@ function buildSourceNoteMarkdown(
 	citekey: string,
 	fields: SourceNoteFields,
 	depthNote: string,
+	created = new Date().toISOString().slice(0, 10),
 ): string {
-	const created = new Date().toISOString().slice(0, 10);
 	const frontmatter = [
 		"---",
 		`title: ${yamlSafeScalar(fields.title)}`,
@@ -1044,6 +1048,14 @@ function buildSourceNoteMarkdown(
 		`created: ${yamlSafeScalar(created)}`,
 		...(fields.sourcePath ? [`source_path: ${yamlSafeScalar(fields.sourcePath)}`, `source_kind: ${yamlSafeScalar(fields.sourceKind || "article")}`] : []),
 		...(fields.sourceHash ? [`source_pdf_sha256: ${yamlSafeScalar(fields.sourceHash)}`] : []),
+		...(fields.jatsSource ? [
+			`source_manifest_digest: ${yamlSafeScalar(fields.jatsSource.manifestDigest)}`,
+			`source_projection_id: ${yamlSafeScalar(fields.jatsSource.projectionId)}`,
+			`source_xml_sha256: ${yamlSafeScalar(fields.jatsSource.xmlSha256)}`,
+			`source_identity_digest: ${yamlSafeScalar(fields.jatsSource.identityDigest)}`,
+			`source_version: ${yamlSafeScalar(fields.jatsSource.sourceVersionId)}`,
+			`source_evidence: ${JSON.stringify(fields.jatsSource.evidence)}`,
+		] : []),
 		...(depthNote ? [depthNote] : []),
 		"---",
 	].join("\n");
@@ -1072,6 +1084,21 @@ export interface VaultCreateDeps extends VaultToolDeps {
 	};
 }
 
+/** The same renderer/validator owns both the review preview and the final write. */
+export function prepareSourceNote(citekey: string, fields: SourceNoteFields, depthNote = "", created?: string): { path: string; content: string } {
+	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(citekey)) throw new Error(`citekey 不合法：${citekey}`);
+	if (!fields.title.trim()) throw new Error("笔记缺少核验后的原文标题");
+	if (!fields.title_zh.trim()) throw new Error("笔记缺少审校后的简体中文标题 title_zh");
+	if (created !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(created)) throw new Error("笔记创建日期无效");
+	if (fields.sourceKind === "jats" && (!fields.jatsSource || fields.sourceHash) || fields.jatsSource && fields.sourceKind !== "jats") throw new Error("JATS 原文凭据缺失或类型不一致");
+	const path = normalizePath(`wiki/sources/${citekey}.md`);
+	if (pathEscapesScope(path)) throw new Error("派生笔记路径不合法");
+	const content = buildSourceNoteMarkdown(citekey, fields, depthNote, created);
+	const violations = validateSourceNoteContent(content);
+	if (violations.length) throw new Error(`生成的笔记未通过结构校验：${violations.join("；")}`);
+	return { path, content };
+}
+
 /**
  * Commits one source note at the citekey-derived path. Create-only via the
  * vault's atomic create (an existing note is never overwritten — the Codex
@@ -1084,21 +1111,12 @@ export async function commitSourceNote(
 	citekey: string,
 	fields: SourceNoteFields,
 	depthNote = "",
-	options: { signal?: AbortSignal } = {},
+	options: { signal?: AbortSignal; created?: string; expectedContent?: string; beforeCreate?: () => Promise<void> } = {},
 ): Promise<SourceNoteWriteReceipt> {
 	if (options.signal?.aborted) throw new Error("任务已取消，未写入文件");
-	if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$/.test(citekey)) {
-		throw new Error(`citekey 不合法：${citekey}`);
-	}
-	if (!fields.title.trim()) throw new Error("笔记缺少核验后的原文标题");
-	if (!fields.title_zh.trim()) throw new Error("笔记缺少审校后的简体中文标题 title_zh");
-	const path = normalizePath(`wiki/sources/${citekey}.md`);
-	if (pathEscapesScope(path)) throw new Error(`派生路径不合法：wiki/sources/${citekey}.md`);
-	const content = buildSourceNoteMarkdown(citekey, fields, depthNote);
-	const violations = validateSourceNoteContent(content);
-	if (violations.length) {
-		throw new Error(`生成的笔记未通过结构校验：${violations.join("；")}`);
-	}
+	const { path, content } = prepareSourceNote(citekey, fields, depthNote, options.created);
+	if (options.expectedContent !== undefined && content !== options.expectedContent) throw new Error("文章 Wiki 与已预览内容不一致");
+	await options.beforeCreate?.();
 	if (options.signal?.aborted) throw new Error("任务已取消，未写入文件");
 	try {
 		await createTrustedVaultTextFile(deps.app.vault.adapter, path, content);

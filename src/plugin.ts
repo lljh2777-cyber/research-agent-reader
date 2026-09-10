@@ -33,6 +33,10 @@ import { FileSourceStorage } from "./sources/storage";
 import { openSourceSave } from "./papers/source-save-modal";
 import { JatsIntakeService } from "./jats/intake";
 import { openJatsSave } from "./jats/modal";
+import { JatsWikiService } from "./jats/wiki-service";
+import { openJatsWiki } from "./jats/wiki-modal";
+import { commitSourceNote } from "./agent/tools";
+import { runBoundedAgentLoop } from "./agent/loop";
 import { renderAuthorizedPdfIdentityPage } from "./agent/pdf-identity";
 import { catalogIntake, legacyCatalogAssociation } from "./papers/agent-intake";
 import type { AcquisitionMode } from "./fulltext/contracts";
@@ -438,6 +442,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.addCommand({ id: "open-fulltext-acquisition", name: "按标识获取论文全文", callback: () => this.openFulltextAcquisition() });
 		this.addCommand({ id: "demo-fulltext-acquisition", name: "全文获取流程演示（开发）", callback: () => this.openFulltextAcquisition("demo") });
 		void Promise.resolve().then(() => this.getAcquisitionService().ready()).catch(() => new Notice("全文获取记录读取失败，其他功能仍可使用"));
+		void Promise.resolve().then(() => this.getJatsWikiService().ready()).catch(() => new Notice("JATS Wiki 草稿记录读取失败，原记录保留"));
 		this.registerEvent(this.app.vault.on("modify", file => this.curationService?.noteChange(file.path)));
 		this.registerEvent(this.app.vault.on("delete", file => this.curationService?.noteChange(file.path)));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { this.curationService?.noteChange(oldPath); this.curationService?.noteChange(file.path); }));
@@ -556,6 +561,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		for(const modal of [...this.acquisitionDialogs])modal.close();
 		await this.sourceIntakeService?.dispose();
 		await this.jatsIntakeService?.dispose();
+		await this.jatsWikiService?.dispose();
 		for (const modal of [...this.acquisitionModals]) modal.close();
 		await Promise.all([...this.acquisitionServices.values()].map(service => service.dispose()));
 		for (const modal of [...this.curationModals]) modal.close();
@@ -2016,7 +2022,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	getTaskRuns(): TaskRun[] {
 		const acquisitionRuns = this.acquisitionServices.get("production")?.list().map(acquisitionTaskRun) || [];
-		return [...this.taskRuns, ...acquisitionRuns].sort((a, b) => {
+		return [...this.taskRuns, ...acquisitionRuns, ...(this.jatsWikiService?.taskRuns() || [])].sort((a, b) => {
 			return new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime();
 		});
 	}
@@ -2048,6 +2054,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	getTaskRun(runId: string): TaskRun | null {
+		const wiki = this.jatsWikiService?.taskRuns().find(r => r.id === runId); if (wiki) return wiki;
 		const acquisition = this.acquisitionServices.get("production")?.get(runId);
 		return acquisition ? acquisitionTaskRun(acquisition) : this.taskRuns.find((run) => run.id === runId) || null;
 	}
@@ -2073,6 +2080,35 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	private sourceIntakeService?:SourceIntakeService;
 	private jatsIntakeService?:JatsIntakeService;
+	private jatsWikiService?: JatsWikiService;
+	getJatsWikiService(): JatsWikiService {
+		if (this.acquisitionClosing) throw new Error("插件已关闭");
+		if (!this.jatsWikiService) {
+			const storage = new FileSourceStorage(this.getActiveVaultRoot());
+			this.jatsWikiService = new JatsWikiService({ catalog: this.getSourceCatalog(), journal: new FileSourceStorage(this.readingPluginDirectory()),
+				readNote: async p => { const bytes = await storage.read(p, 4 * 1024 * 1024); return bytes ? Buffer.from(bytes).toString("utf8") : null; },
+				commit: async (citekey, fields, content, created, verify) => {
+					await commitSourceNote({ app: this.app }, citekey, fields, "", { created, expectedContent: content, beforeCreate: verify });
+					const adapter = this.app.vault.adapter as typeof this.app.vault.adapter & { reconcileInternalFile?(path: string): void | Promise<void> };
+					await adapter.reconcileInternalFile?.(`wiki/sources/${citekey}.md`);
+				},
+				run: async request => {
+					const profile = this.getVerifiedProviderProfiles().find(p => p.id === request.profileId); if (!profile) throw new Error("请选择已通过连接测试的 Direct API 模型");
+					const provider = this.createLLMProvider({ ...profile, timeoutSeconds: Math.max(60, Math.min(120, profile.timeoutSeconds)) });
+					return runBoundedAgentLoop({ system: request.system, user: request.user, tools: request.tools, signal: request.signal, provider, model: profile.model,
+						maxSteps: Math.max(3, Math.min(8, this.settings.lightAgentMaxSteps || 8)), maxTokens: Math.max(512, Math.min(8192, this.settings.lightAgentMaxOutputTokens || 4096)),
+						timeoutMs: Math.max(60_000, Math.min(600_000, this.settings.taskTimeoutMinutes * 60_000 || 300_000)), providerTimeoutMs: 120_000, maxToolOutputChars: 60000, maxToolResultChars: 24000,
+						onStep: step => request.progress(step.title + (step.detail ? " · " + step.detail : "")) });
+				} });
+			this.jatsWikiService.subscribe(() => this.notifyTaskRuns());
+		}
+		return this.jatsWikiService;
+	}
+	async openJatsWiki(key: string, requestId?: string): Promise<void> { await openJatsWiki(this, key, requestId); }
+	async openJatsWikiTask(runId: string): Promise<void> {
+		const service = this.getJatsWikiService(); await service.ready(); const record = service.get(runId);
+		if (!record) throw new Error("JATS Wiki 草稿记录不存在"); await this.openJatsWiki(record.request.packageKey, runId);
+	}
 	getJatsIntakeService():JatsIntakeService {
 		if(this.acquisitionClosing)throw new Error("插件已关闭");return this.jatsIntakeService ||= new JatsIntakeService({deviceId:this.getAcquisitionService().deviceId,catalog:this.getSourceCatalog(),journal:new FileSourceStorage(this.readingPluginDirectory()),index:sourceIndexIO(this.app,this.getActiveVaultRoot()),read:id=>this.getAcquisitionService().previewJats(id),link:async(id,key)=>{await this.getAcquisitionService().linkSourcePackage(id,key);const adapter=this.app.vault.adapter as typeof this.app.vault.adapter&{reconcileInternalFile?(path:string):void|Promise<void>};await adapter.reconcileInternalFile?.(`papers/${key}/article.md`);}});
 	}
@@ -2657,7 +2693,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	openReadingAssistant(sessionId: string, nodeId: string): void {
 		try {
-			if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "structured") throw new Error("JATS 已支持主线和支线追问；阅读助手与正式 Wiki 整理将在下一步接入");
+			if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "structured") throw new Error("JATS 已支持交互深读和初步文章 Wiki；阅读助手尚未接入");
 			if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") throw new Error("代码会话请使用主线和支线追问；阅读助手暂面向论文");
 			const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(n => n.id === nodeId && n.status === "done")) throw new Error("请先选择一个已完成的正式阅读节点");
 			this.assistantModal?.close(); this.assistantModal = this.showCurationModal(new ReadingAssistantModal(this.app, this, sessionId, nodeId));
@@ -2720,7 +2756,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	openKnowledgeMaintenance(): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this)); }
 	openKnowledgeCuration(sessionId: string, nodeId: string, review?: CurationReview): void {
-		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "structured") { new Notice("JATS 学习记录可以导出；正式 Wiki 整理将在下一步接入"); return; }
+		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "structured") { new Notice("可通过生成文章 Wiki 新建初步笔记；已有笔记的逐条修订尚未接入 JATS"); return; }
 		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") { new Notice("代码学习可导出独立笔记并关联已有笔记，暂不自动整理正式代码页"); return; }
 		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review)); }
 		catch (error) { new Notice(String(error)); }
@@ -3434,6 +3470,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	 * executor in turn instead of inferring from executionConfig.backend.
 	 */
 	stopTaskRun(runId: string): boolean {
+		if (this.jatsWikiService?.stop(runId)) return true;
 		if (this.acquisitionServices.get("production")?.get(runId)) return this.acquisitionServices.get("production")!.stop(runId);
 		if (this.agentLoopService.stop(runId)) return true;
 		if (this.directQueryService.stop(runId)) return true;

@@ -4,6 +4,7 @@ import { contentHash } from "../retrieval/chunks";
 export interface RegistrationWrite { path: string; before: string | null; after: string; }
 export interface RegistrationPlan { version: 1; id: string; notePath: string; created: string; full: boolean; scope: string; writes: RegistrationWrite[]; state: "prepared" | "applied" | "recovery"; }
 export interface RegistrationIO {
+	verify?(plan: RegistrationPlan): Promise<void>;
 	read(path: string): Promise<string | null>;
 	write(path: string, before: string | null, after: string): Promise<void>;
 	save(plan: RegistrationPlan): Promise<void>;
@@ -61,7 +62,7 @@ export function planIngestRegistration(notePath: string, files: Record<string, s
 		const matches = rows.slice(1).filter(r => at(r, "citekey") === key || doi && normalizeDoi(at(r, "doi")) === doi);
 		if (matches.some(r => at(r, "citekey") !== key || normalizeDoi(at(r, "doi")) !== doi || at(r, "title") !== title) || matches.length > 1) throw new Error("CSV 中的 citekey、DOI 或标题存在冲突，请先核对");
 		if (!matches.length) {
-			const values: Record<string, string> = { citekey: key, bibtex_key: key, title, authors: scalar(m.authors), year: scalar(m.year), doi, source_path: m.source_kind === "pdf" ? source : "", converted_path: m.source_kind === "article" ? source : "", status: scalar(m.depth), updated: created.slice(0, 10) };
+			const values: Record<string, string> = { citekey: key, bibtex_key: key, title, authors: scalar(m.authors), year: scalar(m.year), doi, source_path: m.source_kind === "pdf" ? source : "", converted_path: ["article", "jats"].includes(String(m.source_kind)) ? source : "", status: scalar(m.depth), updated: created.slice(0, 10) };
 			put(CSV, existing.trimEnd() + "\n" + columns.map(c => csv(values[c] || "")).join(",") + "\n");
 		}
 		const references = files[BIB] || ""; const entries = [...references.matchAll(/@\w+\s*\{\s*([^,\s]+)\s*,/g)];
@@ -84,6 +85,7 @@ export class IngestRegistrationWriter {
 	apply(plan: RegistrationPlan): Promise<RegistrationPlan> {
 		const task = this.queue.then(async () => {
 			if (plan.version !== 1 || !Array.isArray(plan.writes)) throw new Error("登记记录格式无效");
+			await this.io.verify?.(plan);
 			// Rebuild deterministic edits from the stored before-text, rejecting tampered after-text/paths.
 			const before = Object.fromEntries(plan.writes.map(w => [w.path, w.before]));
 			if (!before[plan.notePath]) before[plan.notePath] = await this.io.read(plan.notePath);
@@ -92,7 +94,7 @@ export class IngestRegistrationWriter {
 			if (JSON.stringify(rebuilt.writes) !== JSON.stringify(plan.writes)) throw new Error("登记预览与保存记录不一致，请重新预览");
 			for (const w of plan.writes) { const now = await this.io.read(w.path); if (now !== w.before && now !== w.after) throw new Error("文件已编辑，停止登记：" + w.path); }
 			const result = structuredClone(plan); await this.io.save(result);
-			try { for (const w of result.writes) { if (await this.io.read(w.path) !== w.after) await this.io.write(w.path, w.before, w.after); }
+			try { for (const w of result.writes) { await this.io.verify?.(plan); if (await this.io.read(w.path) !== w.after) await this.io.write(w.path, w.before, w.after); }
 				result.state = "applied"; await this.io.save(result); return result;
 			} catch (error) { result.state = "recovery"; await this.io.save(result); throw error; }
 		}); this.queue = task.catch(() => undefined); return task;

@@ -41,6 +41,7 @@ interface MineruReaderHost {
 	settings: DashboardSettings;
 	openReaderSourceMarkdown?(articlePath: string): Promise<void>;
 	activateReadingWorkspace?(entry: import("../reading/entry").ReadingEntry): Promise<void>;
+	openJatsWiki?(key: string): Promise<void>;
 	openSelectionAnnotation(): Promise<void>;
 }
 
@@ -404,6 +405,10 @@ export class MineruReaderView extends ItemView {
 		if (readerPackage.sourceKind === "jats" && this.plugin.activateReadingWorkspace) {
 			const read = header.createEl("button", { text: "交互深读", attr: { "data-jats-action": "interactive" } });
 			this.onWorkspaceEvent(read, "click", () => { void this.plugin.activateReadingWorkspace!({ domain: "paper", source: { kind: "structured", path: readerPackage.articlePath } }).catch(error => new Notice(String(error))); });
+		}
+		if (readerPackage.sourceKind === "jats" && this.plugin.openJatsWiki) {
+			const wiki = header.createEl("button", { text: "文章 Wiki", attr: { "data-jats-action": "wiki" } });
+			this.onWorkspaceEvent(wiki, "click", () => { void this.plugin.openJatsWiki!(readerPackage.articlePath.split("/")[1]).catch(error => new Notice(String(error))); });
 		}
 	}
 
