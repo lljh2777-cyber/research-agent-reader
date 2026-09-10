@@ -6,7 +6,7 @@ module.exports = async function(app, fixtureRoot, keepOpen = false) {
 	const plugin = app.plugins.plugins["research-agent-reader"], acquisition = plugin.getAcquisitionService(); await acquisition.ready();
 	if (plugin.acquisitionDialogs.size || plugin.getTaskRuns().some(r => r.status === "running")) throw new Error("Finish active tasks before native QA");
 	const original = { wiki: plugin.getJatsWikiService(), registration: plugin.ingestRegistration, records: plugin.getIngestRecords, profiles: plugin.getVerifiedProviderProfiles, provider: plugin.createLLMProvider, open: plugin.openVaultFile, active: app.workspace.activeLeaf, settings: JSON.stringify(plugin.settings) };
-	const snapshot = JSON.parse(fs.readFileSync(path.join(fixtureRoot, "snapshot.json"), "utf8")), cache = f.storage(), content = new Map();
+	const snapshot = JSON.parse(fs.readFileSync(path.join(fixtureRoot, "snapshot.json"), "utf8")), cache = f.storage(), content = new Map(); snapshot.artifact.converter = "rar-jats-2";
 	for (const file of snapshot.artifact.files) { const bytes = fs.readFileSync(path.join(fixtureRoot, file.path)); cache.files.set(file.path, bytes); content.set(file.ref, bytes); }
 	const deny = async () => { throw new Error("Native JATS Wiki QA must not call network or MinerU"); }, provider = new acquisition.backend.jats.constructor({ metadata: deny, download: deny }, cache);
 	snapshot.validation = provider.project(content.get("article.xml"), snapshot.identity, snapshot.artifact, content).validation;

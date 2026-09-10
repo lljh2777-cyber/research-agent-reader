@@ -1,9 +1,10 @@
 import { acquisitionId,decodeIdentity,decodeInput,decodeCandidates,type AcquisitionCandidate,type AcquisitionInput,type ResolvedIdentity } from "../fulltext/contracts";
+import { jatsConverter } from "./converter-version";
 export const JATS_LIMITS={xml:8*1024*1024,media:16*1024*1024,total:64*1024*1024,assets:64};
 export interface JatsFileLocator {key:string;md5:string;}
 export interface JatsLocator {pmcid:string;sourceVersionId:string;manifestSha256:string;xml:JatsFileLocator;media:JatsFileLocator[];license:string;retracted:boolean;observedAt:string;}
 export interface JatsFile {path:string;ref:string;role:"xml"|"metadata"|"media";sha256:string;md5:string;byteLength:number;}
-export interface JatsBundle {kind:"jats";files:JatsFile[];issues:string[];includeFigures:boolean;}
+export interface JatsBundle {kind:"jats";files:JatsFile[];issues:string[];includeFigures:boolean;converter?:string;}
 export interface JatsValidation {kind:"jats";identityCheck:"verified";bodyCheck:"usable"|"partial";assetCheck:"not_requested"|"complete"|"partial";requestSatisfaction:"satisfied"|"partial";issues:string[];}
 export interface JatsSnapshot {schemaVersion:3;mode:"production";id:string;jobId:string;attemptId:string;input:AcquisitionInput;candidateId:string;createdAt:string;identity:ResolvedIdentity;candidate:AcquisitionCandidate;artifact:JatsBundle;validation:JatsValidation;}
 const rec=(v:unknown):Record<string,unknown>=>{if(!v||typeof v!=="object"||Array.isArray(v))throw new Error("JATS 记录无效");return v as Record<string,unknown>;};
@@ -21,6 +22,7 @@ export function decodeJatsLocator(v:unknown):JatsLocator {
 }
 export function decodeJatsBundle(v:unknown):JatsBundle {
 	const r=rec(v);if(r.kind!=="jats"||typeof r.includeFigures!=="boolean")throw new Error("JATS 文件包无效");
+	jatsConverter(r.converter);
 	const files=list(r.files,JATS_LIMITS.assets+2).map(value=>{const f=rec(value),path=text(f.path,180),role=f.role as JatsFile["role"],byteLength=f.byteLength as number;
 		if(!/^jats\/a-[a-f0-9-]{36}\/(?:article\.xml|metadata\.json|m\d+\.[a-z0-9]{1,8})$/.test(path)||!["xml","metadata","media"].includes(role)||!Number.isSafeInteger(byteLength)||byteLength<1||byteLength>(role==="xml"?JATS_LIMITS.xml:role==="metadata"?2*1024*1024:JATS_LIMITS.media))throw new Error("JATS 文件路径或大小无效");
 		const ref=text(f.ref,200),name=path.split("/").pop()!;
@@ -28,7 +30,7 @@ export function decodeJatsBundle(v:unknown):JatsBundle {
 		return {path,role,byteLength,ref,sha256:hash(f.sha256),md5:hash(f.md5,32)};});
 	if(files.filter(f=>f.role==="xml").length!==1||files.filter(f=>f.role==="metadata").length!==1||new Set(files.map(f=>f.path)).size!==files.length||files.reduce((n,f)=>n+f.byteLength,0)>JATS_LIMITS.total)throw new Error("JATS 文件包缺少核心文件或超限");
 	if(new Set(files.map(f=>f.ref)).size!==files.length||!r.includeFigures&&files.some(f=>f.role==="media"))throw new Error("JATS 媒体引用重复或超出请求");
-	return {kind:"jats",files,issues:jatsIssues(r.issues),includeFigures:r.includeFigures};
+	return {kind:"jats",files,issues:jatsIssues(r.issues),includeFigures:r.includeFigures,...(r.converter===undefined?{}:{converter:r.converter as string})};
 }
 export function decodeJatsValidation(v:unknown):JatsValidation {const r=rec(v);if(r.kind!=="jats"||r.identityCheck!=="verified"||!["usable","partial"].includes(String(r.bodyCheck))||!["not_requested","complete","partial"].includes(String(r.assetCheck))||!["satisfied","partial"].includes(String(r.requestSatisfaction)))throw new Error("JATS 验证结果无效");return {kind:"jats",identityCheck:"verified",bodyCheck:r.bodyCheck as JatsValidation["bodyCheck"],assetCheck:r.assetCheck as JatsValidation["assetCheck"],requestSatisfaction:r.requestSatisfaction as JatsValidation["requestSatisfaction"],issues:jatsIssues(r.issues)};}
 export function decodeJatsSnapshot(v:unknown):JatsSnapshot {

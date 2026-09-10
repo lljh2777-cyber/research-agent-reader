@@ -5,7 +5,7 @@ module.exports=async function(app){
 	const assert=require("node:assert/strict"),{setTimeout}=require("node:timers"),{memory,waitFor}=require("./fulltext-fixtures.cjs");
 	const plugin=app.plugins.plugins["research-agent-reader"],previous=plugin.getAcquisitionService();await previous.ready();
 	if(plugin.isActionRunning("paper-ingest"))throw new Error("Wait for current intake before native QA");
-	const job=previous.list().find(j=>j.phase==="acquired");if(!job)throw new Error("Native QA needs an acquired local PDF");
+	const job=previous.list().find(j=>j.phase==="acquired"&&j.request.goal==="pdf");if(!job)throw new Error("Native QA needs an acquired local PDF");
 	const snapshot=await previous.repository.snapshot(job.snapshotId),storage=memory();storage.jobs.set(job.id,structuredClone(job));storage.snapshots.set(snapshot.id,structuredClone(snapshot));
 	const service=new previous.constructor(new previous.repository.constructor(storage,"production"),previous.deviceId,previous.backend);
 	const before={settings:JSON.stringify(plugin.settings),history:[...plugin.taskRuns],results:new Map(plugin.lightAgentResults),modals:new Set(document.querySelectorAll(".modal-container"))};

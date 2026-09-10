@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { loadJatsSource } from "../sources/jats-package";
+import { loadJatsSource, verifyLoadedJatsSource } from "../sources/jats-package";
 import { FileSourceStorage, type SourceStorage } from "../sources/storage";
 import { objectDigest } from "../papers/identity";
 import { imageInfo } from "../jats/media";
@@ -40,6 +40,7 @@ export async function openStructuredDocument(vaultRoot: string, rawPath: string,
 	const loaded = await loadJatsSource(storage, key), { projection, manifest } = loaded;
 	const snapshot: StructuredReadingSnapshot = { version: 1, format: "jats", manifest };
 	const fingerprint = structuredFingerprint(snapshot);
+	const verifiedManifest = structuredClone(manifest);
 	const source: ReadingSource = { kind: "structured", path: articlePath, title: manifest.identity.title, fingerprint, structured: snapshot };
 	const evidence: ReadingEvidence[] = []; let heading = projection.title;
 	for (const block of projection.blocks) {
@@ -57,17 +58,18 @@ export async function openStructuredDocument(vaultRoot: string, rawPath: string,
 	}
 	const catalog = readingCatalog(evidence) + "\nJATS 来源：无 PDF 页码。" + (projection.issues.length ? "原文缺口：" + projection.issues.join("；").slice(0, 4000) : "");
 	// Bind captions and referencing paragraphs to actual image resources, without inventing page adjacency.
+	const blockEvidence = new Map<string, ReadingEvidence[]>();
+	for (const e of evidence) { const id=e.structured!.blockId; const group=blockEvidence.get(id)||[]; group.push(e); blockEvidence.set(id,group); }
 	for (const e of evidence) {
 		const loc = e.structured!, body = projection.markdown.slice(loc.blockStart, loc.blockEnd);
 		const targets = new Set([loc.blockId, ...[...body.matchAll(/\]\(#(b-[a-f0-9]{24})\)/g)].map(m => m[1])]);
-		e.relatedIds = evidence.filter(other => other.id !== e.id && targets.has(other.structured!.blockId) && (e.asset ? !other.asset : !!other.asset)).map(other => other.id);
+		e.relatedIds = [...targets].flatMap(id => blockEvidence.get(id)||[]).filter(other => other.id !== e.id && (e.asset ? !other.asset : !!other.asset)).map(other => other.id);
 	}
 	const canonical = new Map(evidence.map(e => [e.id, structuredClone(e)]));
 	let destroyed = false;
 	const verify = async (): Promise<void> => {
 		if (destroyed) throw new Error("JATS 阅读来源已关闭");
-		const fresh = await loadJatsSource(storage, key);
-		if (structuredFingerprint({ version: 1, format: "jats", manifest: fresh.manifest }) !== fingerprint) throw new Error("JATS 原文版本已变化，请创建新会话");
+		await verifyLoadedJatsSource(storage, verifiedManifest);
 	};
 	return { source, evidence, catalog, sourceWarnings: [...projection.issues], verify,
 		async destroy() { destroyed = true; loaded.files.clear(); canonical.clear(); },

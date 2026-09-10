@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fulltext and JATS verification fixes — 0.51.1
+
+- JATS 新转换器保留根级浮动图表，避免段内独立公式重复输出；旧快照与原文包继续按原转换器校验。
+- Wiki 检查与独立登记均拒绝冲突 DOI / PMID / PMCID；无 DOI 的旧笔记可使用其他精确标识。
+- 概览按实际 JSON 大小限制片段，避免长摘要无法开始；重复来源核验保留完整文件检查并减少重复转换，图文关系使用块索引。
+- 修正 JATS 候选版本与重试提示、保存完成后的按钮状态。125 项原生检查和 9 次公开元数据请求的结果见[检查记录](docs/fulltext-acquisition-review.md)。
+
 ### Fulltext acquisition M6 assistant and revisions — 0.51.0
 
 - JATS 会话开放阅读助手与「整理进知识库」，沿用现有工具、操作卡、建议选择、差异预览、修订记录及撤销流程。

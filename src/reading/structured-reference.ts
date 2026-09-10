@@ -1,5 +1,6 @@
 import { objectDigest } from "../papers/identity";
 import { canonicalTitle } from "../fulltext/identity-resolver";
+import { noteIdentifiers, conflictingNoteIdentifiers } from "../papers/note-identity";
 import type { ReadingEvidence, ReadingSource } from "./types";
 import { validateStructuredSource, validateStructuredEvidence, type StructuredReadingLocation } from "./structured-source";
 
@@ -34,10 +35,9 @@ export function structuredTargetCompatible(source: ReadingSource, path: string, 
 	if (!path.startsWith("wiki/sources/")) return true;
 	if (canonicalTitle(String(metadata.title || "")) !== canonicalTitle(m.identity.title)) return false;
 	if (metadata.citekey && metadata.citekey !== m.citekey) return false;
-	const ids = { doi: String(metadata.doi || "").replace(/^(?:doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)/i, "").trim().toLowerCase(),
-		pmid: String(metadata.pmid || "").replace(/^PMID:\s*/i, "").trim(), pmcid: String(metadata.pmcid || "").toUpperCase().trim() };
+	const ids = noteIdentifiers(metadata);
 	const keys = ["doi", "pmid", "pmcid"] as const;
-	if (keys.some(k => ids[k] && m.identity.identifiers[k] && ids[k] !== m.identity.identifiers[k])) return false;
+	if (conflictingNoteIdentifiers(m.identity, metadata)) return false;
 	const jats = metadata.source_kind === "jats" || metadata.source_manifest_digest || /--jats--/.test(String(metadata.source_path || ""));
 	if (jats) return metadata.source_kind === "jats" && metadata.source_path === source.path && metadata.source_manifest_digest === m.digest
 		&& metadata.source_projection_id === m.projectionId && metadata.source_identity_digest === objectDigest(m.identity)

@@ -6,7 +6,6 @@ import type { SourceIndexIO } from "../papers/source-intake";
 import type { SourceStorage } from "../sources/storage";
 import { decodeJatsManifest,loadJatsSource,sourcePayloads,type JatsManifest } from "../sources/jats-package";
 import { confirmJats,displayedJatsIdentity,validateJatsConfirmation,type JatsConfirmation } from "./confirmation";
-import { JATS_CONVERTER } from "./projection";
 
 type Acquired=Awaited<ReturnType<AcquisitionService["previewJats"]>>;
 export interface JatsIntakeDeps {deviceId:string;catalog:SourceCatalog;journal:SourceStorage;index:SourceIndexIO;read(jobId:string):Promise<Acquired>;link(jobId:string,key:string):Promise<void>;}
@@ -48,7 +47,7 @@ export class JatsIntakeService {
 			if(current.snapshot.validation.requestSatisfaction==="partial"&&!acceptedPartial)throw new Error("请明确接受当前缺图或部分内容结果");
 			const createdAt=p.durable?.manifest.createdAt||new Date().toISOString(),transaction={schemaVersion:1,requestId:id,packageKey:v.packageKey,paperId:v.paperId,citekey:v.citekey,snapshotId:current.snapshot.id,createdAt};
 			const files=sourcePayloads(current.snapshot,current.content,current.projection,confirmation,transaction);
-			if(!p.durable){const base:Omit<JatsManifest,"digest">={schemaVersion:1,packageKind:"jats-source",state:"committed",packageKey:v.packageKey,paperId:v.paperId,citekey:v.citekey,snapshotId:current.snapshot.id,requestId:id,createdAt,version:current.snapshot.candidate.version,sourceVersionId:current.snapshot.candidate.jats!.sourceVersionId,identity:current.snapshot.identity,projectionId:current.projection.projectionId,converter:JATS_CONVERTER,capabilities:{pdf:false,body:true,figures:current.projection.assets.some(a=>!!a.path)},files:[...files].map(([path,b])=>({path,sha256:bytesDigest(b),byteLength:b.length}))};const manifest=decodeJatsManifest({...base,digest:objectDigest(base)}),before=await this.deps.index.read(),durable:Durable={schemaVersion:1,deviceId:this.deps.deviceId,manifest,confirmation,indexBefore:before,indexAfter:nextIndex(before,manifest)};
+			if(!p.durable){const base:Omit<JatsManifest,"digest">={schemaVersion:1,packageKind:"jats-source",state:"committed",packageKey:v.packageKey,paperId:v.paperId,citekey:v.citekey,snapshotId:current.snapshot.id,requestId:id,createdAt,version:current.snapshot.candidate.version,sourceVersionId:current.snapshot.candidate.jats!.sourceVersionId,identity:current.snapshot.identity,projectionId:current.projection.projectionId,converter:current.projection.converter,capabilities:{pdf:false,body:true,figures:current.projection.assets.some(a=>!!a.path)},files:[...files].map(([path,b])=>({path,sha256:bytesDigest(b),byteLength:b.length}))};const manifest=decodeJatsManifest({...base,digest:objectDigest(base)}),before=await this.deps.index.read(),durable:Durable={schemaVersion:1,deviceId:this.deps.deviceId,manifest,confirmation,indexBefore:before,indexAfter:nextIndex(before,manifest)};
 				if(encode(durable).length>256*1024)throw new Error("JATS 保存计划超限");this.live(id);await this.deps.journal.mkdir("jats-intake");await this.deps.journal.mkdir("jats-intake/"+id,true);await this.deps.journal.create(`jats-intake/${id}/plan.json`,encode(durable));p.durable=durable;
 			}
 			const manifest=p.durable.manifest;for(const f of manifest.files)if(!files.has(f.path)||bytesDigest(files.get(f.path)!)!==f.sha256)throw new Error("JATS 恢复内容与原计划不一致");

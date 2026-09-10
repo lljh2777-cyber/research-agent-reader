@@ -84,11 +84,11 @@ export class FulltextAcquisitionModal extends Modal {
 				const el = card.createEl("button", { text, attr: { "data-fulltext-action": key, "data-fulltext-key": job.id + ":" + key } });
 				el.addEventListener("click", () => { el.disabled = true; void Promise.resolve().then(work).catch(() => new Notice("操作未完成，请检查任务状态")).finally(() => { el.disabled = false; }); });
 			};
-			if(job.phase==="awaiting_selection" && job.mode==="production")card.createEl("p",{text:"从所选来源开始，获取失败会依次尝试下方符合版本范围的候选；身份冲突会停止。",cls:"rar-fulltext-muted"});
+			if(job.phase==="awaiting_selection" && job.mode==="production")card.createEl("p",{text:job.request.goal==="jats"?"选择要获取的 JATS 版本。XML 与图片均来自此版本；失败后可重试或重新查询。":"从所选来源开始，获取失败会依次尝试下方符合版本范围的候选；身份冲突会停止。",cls:"rar-fulltext-muted"});
 			if (job.phase === "awaiting_selection") for (const candidate of job.candidates) {
 				if (candidate.pmc) card.createEl("p", {text: `${candidate.pmc.sourceVersionId} · ${candidate.version === "accepted_manuscript" ? "作者接受稿" : "出版版本"} · 许可：${candidate.pmc.license}${candidate.pmc.retracted ? " · 来源标记为已撤稿" : ""}`});
 				if(candidate.oa)card.createEl("p",{text:`${candidate.oa.origin} · ${candidate.version==="accepted_manuscript"?"作者接受稿":"出版版本"} · ${candidate.oa.hostType==="publisher"?"出版社":"开放仓储"} · 许可：${candidate.oa.license}`});
-				if(candidate.jats)card.createEl("p",{text:`${candidate.jats.sourceVersionId} · 许可：${candidate.jats.license}${candidate.jats.retracted?" · 已撤稿":""}`});
+				if(candidate.jats)card.createEl("p",{text:`${candidate.jats.sourceVersionId} · ${candidate.version==="accepted_manuscript"?"作者接受稿":"出版版本"} · 许可：${candidate.jats.license}${candidate.jats.retracted?" · 已撤稿":""}`});
 				button(candidate.jats?"获取 JATS · "+candidate.jats.sourceVersionId:candidate.pmc ? "获取 PDF · " + candidate.pmc.sourceVersionId : candidate.oa?"获取 PDF · "+new URL(candidate.oa.origin).hostname:"选择 " + candidate.title, candidate.id, () => this.service.choose(job.id, candidate.id));
 			}
 			if (job.phase === "acquired" &&job.request.goal==="pdf"&& job.mode === "production" && this.openPdf) button("预览 PDF", "preview", () => this.openPdf!(job.id));

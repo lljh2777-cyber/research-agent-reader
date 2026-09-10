@@ -33,6 +33,9 @@ export function boundJatsWikiReader(source: JatsWikiSource, verify: () => Promis
 				if (slices.reduce((n, s) => n + s.text.trim().length, 0) < 40) throw new Error("JATS 摘要或正文文字不足，不能生成文章结论");
 				payload = { coverage: abstract.length ? "摘要片段；长段落或后续段落可能未读" : "无摘要，使用正文开头片段", title: source.manifest.identity.title, sourceVersion: source.manifest.sourceVersionId, projectionId: source.manifest.projectionId,
 					issues: source.snapshot.validation.issues.slice(0, 12), evidence: slices, sections: blocks.filter(b => b.kind === "section").slice(0, 24).map(b => ({ id: b.id, label: b.label.slice(0, 160) })) };
+				// JSON escaping is part of the result budget. Keep an actual readable overview;
+				// remaining paragraphs stay available through catalog/block, with coverage explicit above.
+				while (JSON.stringify(payload).length > 23500 && slices.length > 1) slices.pop();
 			} else if (mode === "catalog") {
 				if (offset >= blocks.length) throw new Error("目录 offset 超出范围");
 				payload = { blocks: blocks.slice(offset, offset + 40).map(b => ({ id: b.id, kind: b.kind, label: b.label.slice(0, 160), chars: b.end - b.start })), next: offset + 40 < blocks.length ? offset + 40 : null };

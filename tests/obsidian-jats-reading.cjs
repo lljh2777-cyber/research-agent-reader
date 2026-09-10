@@ -13,7 +13,7 @@ module.exports = async function(app, fixtureRoot, apiPath, keepOpen = false) {
 	const plugin = app.plugins.plugins["research-agent-reader"], acq = plugin.getAcquisitionService(); await acq.ready();
 	if (plugin.isActionRunning("paper-ingest") || plugin.acquisitionDialogs.size || plugin.getReadingWorkspace().repository.sessions.size && [...plugin.getReadingWorkspace().repository.sessions.values()].some(s => s.nodes.some(n => n.status === "running" || n.status === "pending"))) throw new Error("Finish active work before native QA");
 	const original = { workspace: plugin.getReadingWorkspace, engine: plugin.getReadingEngine, profiles: plugin.getVerifiedProviderProfiles, activate: plugin.activateReadingWorkspace, openEvidence: plugin.openReadingEvidence, active: app.workspace.activeLeaf, settings: JSON.stringify(plugin.settings) };
-	const snapshot = JSON.parse(fs.readFileSync(path.join(fixtureRoot, "snapshot.json"), "utf8")), cache = f.storage(), content = new Map();
+	const snapshot = JSON.parse(fs.readFileSync(path.join(fixtureRoot, "snapshot.json"), "utf8")), cache = f.storage(), content = new Map(); snapshot.artifact.converter = "rar-jats-2";
 	for (const file of snapshot.artifact.files) { const bytes = fs.readFileSync(path.join(fixtureRoot, file.path)); cache.files.set(file.path, bytes); content.set(file.ref, bytes); }
 	const deny = async () => { throw new Error("Native JATS reading QA cannot call network, models or MinerU"); };
 	const provider = new acq.backend.jats.constructor({ metadata: deny, download: deny }, cache);

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { parseYaml } from "obsidian";
 import { objectDigest, identityRelation } from "../papers/identity";
 import { canonicalTitle } from "../fulltext/identity-resolver";
+import { noteIdentifiers, conflictingNoteIdentifiers } from "../papers/note-identity";
 import { SourceCatalog } from "../papers/catalog";
 import { loadJatsSource, jatsKey } from "../sources/jats-package";
 import type { SourceStorage } from "../sources/storage";
@@ -91,7 +92,8 @@ export class JatsWikiService {
 			const text = await this.deps.readNote(existingPath); if (!text) throw new Error("既有 Wiki 无法读取");
 			const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text), meta = match && parseYaml(match[1]);
 			if (!meta || canonicalTitle(String(meta.title || "")) !== canonicalTitle(m.identity.title)
-				|| !(meta.source_identity_digest === objectDigest(m.identity) || identityRelation(m.identity.identifiers, { doi: String(meta.doi || "").replace(/^(?:doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)/i, "").toLowerCase() }) === "same")) throw new Error("既有 Wiki 与当前论文身份不一致；未覆盖文件");
+				|| conflictingNoteIdentifiers(m.identity, meta)
+				|| !(meta.source_identity_digest === objectDigest(m.identity) || identityRelation(m.identity.identifiers, noteIdentifiers(meta)) === "same")) throw new Error("既有 Wiki 与当前论文身份不一致；未覆盖文件");
 			existing = { path: existingPath, text };
 		}
 		return { source, existing, warnings: [...association.warnings, ...source.snapshot.validation.issues] };

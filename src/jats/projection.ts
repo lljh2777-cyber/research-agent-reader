@@ -3,7 +3,8 @@ import { canonicalTitle } from "../fulltext/identity-resolver";
 import { bytesDigest, objectDigest } from "../papers/identity";
 import { child,children,childNodes,descendants,localName,parseXml,xmlText,type XmlNode } from "./xml";
 
-export const JATS_CONVERTER="rar-jats-1";
+import { JATS_CONVERTER, JATS_LEGACY_CONVERTER, jatsConverter } from "./converter-version";
+export { JATS_CONVERTER } from "./converter-version";
 export interface JatsAsset {ref:string;path?:string;issue?:string;}
 export interface JatsBlock {id:string;kind:"title"|"section"|"paragraph"|"list"|"figure"|"table"|"formula"|"reference";xmlPath:string;xmlId?:string;sourceStart:number;sourceEnd:number;start:number;end:number;label:string;level:number;caption?:string;table?:Array<Array<{text:string;header:boolean;rowspan:number;colspan:number}>>;}
 export interface JatsProjection {schemaVersion:1;converter:string;xmlSha256:string;projectionId:string;title:string;authors:string[];identifiers:ResolvedIdentity["identifiers"];markdown:string;blocks:JatsBlock[];references:Array<{id:string;target:string}>;assets:JatsAsset[];issues:string[];bodyCheck:"usable"|"partial";}
@@ -23,12 +24,14 @@ export function jatsFront(root:XmlNode) {
 	const authors=children(meta,"contrib-group").flatMap(group=>children(group,"contrib").filter(n=>!n.attrs["contrib-type"]||n.attrs["contrib-type"]==="author").map(authorName)).filter(Boolean);
 	return {meta,title,identifiers,authors};
 }
-export function graphicReferences(bytes:Uint8Array):string[] {
+export function graphicReferences(bytes:Uint8Array,converter=JATS_CONVERTER):string[] {
+	jatsConverter(converter);
 	const root=parseXml(bytes),refs=new Set<string>();
 	const visit=(n:XmlNode)=>{if(["sub-article","response","supplementary-material"].includes(localName(n)))return;if(["graphic","inline-graphic"].includes(localName(n))){const ref=n.attrs["xlink:href"]||n.attrs.href;if(ref)refs.add(ref);}for(const c of childNodes(n))visit(c);};
-	for(const abstract of children(jatsFront(root).meta,"abstract"))visit(abstract);for(const part of [child(root,"body"),child(root,"back")])if(part)visit(part);return [...refs];
+	for(const abstract of children(jatsFront(root).meta,"abstract"))visit(abstract);for(const part of [child(root,"body"),child(root,"back"),...(converter===JATS_LEGACY_CONVERTER?[]:children(root,"floats-group"))])if(part)visit(part);return [...refs];
 }
-export function projectJats(bytes:Uint8Array,identity:ResolvedIdentity,assets:JatsAsset[]):JatsProjection {
+export function projectJats(bytes:Uint8Array,identity:ResolvedIdentity,assets:JatsAsset[],converter=JATS_CONVERTER):JatsProjection {
+	jatsConverter(converter);
 	const root=parseXml(bytes),front=jatsFront(root),xmlSha256=bytesDigest(bytes),issues:string[]=[],blocks:JatsBlock[]=[],refs:Array<{id:string;target:string}>=[];let markdown="";
 	if(!Object.keys(front.identifiers).some(k=>front.identifiers[k as keyof typeof front.identifiers]===identity.identifiers[k as keyof typeof front.identifiers]))throw new Error("JATS 主文章缺少共同精确标识");
 	for(const k of ["doi","pmid","pmcid"] as const)if(front.identifiers[k]&&identity.identifiers[k]&&front.identifiers[k]!==identity.identifiers[k])throw new Error("JATS 主文章与来源记录标识冲突");
@@ -45,7 +48,7 @@ export function projectJats(bytes:Uint8Array,identity:ResolvedIdentity,assets:Ja
 	const inline=(n:XmlNode):string=>n.children.map(c=>{
 		if(typeof c==="string")return escape(c.replace(/\s+/g," "));const name=localName(c);
 		if(name==="xref"){const target=idMap.get(c.attrs.rid||""),label=escape(xmlText(c));if(target){refs.push({id:blockId(n),target});return `[${label}](#${target})`;}issue("未解析的交叉引用："+(c.attrs.rid||c.path));return label;}
-		if(name==="inline-formula"||name==="disp-formula")return formula(c);
+		if(name==="inline-formula"||name==="disp-formula"&&converter===JATS_LEGACY_CONVERTER)return formula(c);
 		if(["graphic","inline-graphic","fig","table-wrap","list","boxed-text","disp-formula"].includes(name))return "";
 		if(name==="sup")return "^("+inline(c)+")";if(name==="sub")return "_("+inline(c)+")";
 		if(name==="p")return inline(c)+" ";
@@ -89,9 +92,10 @@ export function projectJats(bytes:Uint8Array,identity:ResolvedIdentity,assets:Ja
 	for(const permission of children(front.meta,"permissions"))add(permission,"paragraph",escape(xmlText(permission)));
 	for(const abstract of children(front.meta,"abstract"))walk(abstract);
 	walk(child(root,"body")!);const back=child(root,"back");if(back)walk(back);
+	if(converter!==JATS_LEGACY_CONVERTER)for(const floats of children(root,"floats-group"))walk(floats);
 	for(const a of assets)if(a.issue)issue(a.issue,false);
 	const emitted=new Set(blocks.map(b=>b.id));for(const r of refs)if(!emitted.has(r.target))issue("引用目标没有独立正文块："+r.target);
 	if(!blocks.some(b=>b.kind==="paragraph"&&b.xmlPath.includes("/body[")))throw new Error("JATS 没有可读正文段落");
-	const payload={schemaVersion:1 as const,converter:JATS_CONVERTER,xmlSha256,title:front.title,authors:front.authors,identifiers:front.identifiers,markdown,blocks,references:refs,assets,issues,bodyCheck:bodyPartial?"partial" as const:"usable" as const};
+	const payload={schemaVersion:1 as const,converter,xmlSha256,title:front.title,authors:front.authors,identifiers:front.identifiers,markdown,blocks,references:refs,assets,issues,bodyCheck:bodyPartial?"partial" as const:"usable" as const};
 	return {...payload,projectionId:objectDigest(payload)};
 }

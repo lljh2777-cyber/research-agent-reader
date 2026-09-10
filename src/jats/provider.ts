@@ -10,6 +10,7 @@ import { decodeJatsBundle,decodeJatsLocator,decodeJatsSnapshot,JATS_LIMITS,type 
 import { graphicReferences,projectJats,type JatsAsset } from "./projection";
 import { assetFor } from "./media";
 import { validateJatsProjection } from "./validation";
+import { JATS_CONVERTER, jatsConverter } from "./converter-version";
 
 const BUCKET="https://pmc-oa-opendata.s3.amazonaws.com/",flag=(v:unknown)=>v===true||v==="yes";
 function s3File(value:unknown,version:string) {
@@ -50,11 +51,11 @@ export class JatsProvider {
 			if(!file||!extension||! /^(png|jpg|jpeg|webp|tif|tiff|svg)$/.test(extension)){issues.push("未找到同版本、受支持的媒体定位："+ref);continue;}
 			try{await retain(`${dir}/m${i}.${extension}`,ref,"media",await get(file,"media"));}catch(error){signal.throwIfAborted();if(error instanceof SourceError&&["checksum_mismatch","total_size_limit","timeout"].includes(error.code))throw error;issues.push("图片获取未完成："+ref);}
 		}
-		const artifact=decodeJatsBundle({kind:"jats",files,issues,includeFigures:!!request.includeFigures});return {artifact,validation:this.project(xml,identity,artifact,content).validation};
+		const artifact=decodeJatsBundle({kind:"jats",converter:JATS_CONVERTER,files,issues,includeFigures:!!request.includeFigures});return {artifact,validation:this.project(xml,identity,artifact,content).validation};
 	}
 	project(xml:Uint8Array,identity:ResolvedIdentity,artifact:JatsBundle,content:Map<string,Uint8Array>) {
-		const assets:JatsAsset[]=graphicReferences(xml).map(ref=>content.has(ref)?assetFor(ref,content.get(ref)!):{ref,issue:artifact.includeFigures?"同版本图片缺失："+ref:"本次未请求图片："+ref});
-		const projection=projectJats(xml,identity,assets),validation=validateJatsProjection(artifact,projection);
+		const converter=jatsConverter(artifact.converter),assets:JatsAsset[]=graphicReferences(xml,converter).map(ref=>content.has(ref)?assetFor(ref,content.get(ref)!):{ref,issue:artifact.includeFigures?"同版本图片缺失："+ref:"本次未请求图片："+ref});
+		const projection=projectJats(xml,identity,assets,converter),validation=validateJatsProjection(artifact,projection);
 		return {projection,validation};
 	}
 	async read(snapshot:JatsSnapshot) {
