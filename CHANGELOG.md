@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fulltext acquisition M6 interactive reading — 0.49.0
+
+- 新增明确的 JATS 结构化阅读来源，复用论文阅读空间。会话固定来源包清单、版本、投影和文件摘要，旧 PDF / MinerU / 代码会话保持兼容。
+- JATS 主线与支线引用绑定正文块、UTF-16 字符范围及图像资源；图像实际解码并提交给模型后才记录视觉读取。图注和正文交叉引用可关联同版本图片，不伪造 PDF 页码。
+- 图文阅读器提供「交互深读」入口，证据窗口可跳转到原文块。学习导出保留清单和当时引用片段；来源变化会阻止新讲解与核对，历史仍可查看和导出。
+- M6 分步交付：本版支持交互阅读与学习记录导出；正式文章 Wiki、阅读助手与知识整理的 JATS 凭据适配仍待下一步。详见 [实现与验收](docs/fulltext-acquisition-m6-reading.md)。
+
 ### Fulltext acquisition M5 — 0.48.0
 
 - 新增 PMC JATS 获取内容选项，XML 与引用图片绑定同一版本和来源清单摘要，逐文件核对 MD5 / SHA-256；沿用原有任务、取消、恢复和缓存机制。

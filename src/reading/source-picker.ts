@@ -8,14 +8,15 @@ export interface SourceDialogOptions { title: string; defaultPath: string; prope
 export type SourceDialog = (options: SourceDialogOptions) => Promise<{ canceled: boolean; filePaths: string[] }>;
 export function acceptsSourceFile(kind: SourceKind, filename: string): boolean {
 	const name = filename.replace(/\\/g, "/").split("/").slice(-1)[0].toLowerCase();
-	return kind === "pdf" ? name.endsWith(".pdf") : kind === "article" ? name === "article.md" : /\.(py|r)$/.test(name);
+	return kind === "pdf" ? name.endsWith(".pdf") : kind === "article" || kind === "structured" ? name === "article.md" : /\.(py|r)$/.test(name);
 }
 export function sourceDialogOptions(kind: SourceKind, directory: boolean, current: string, vaultRoot: string): SourceDialogOptions {
 	if (directory && kind !== "code") throw new Error("当前来源需要选择文件");
 	const value = current.trim().replace(/^"|"$/g, "");
-	return { title: directory ? "选择代码项目文件夹" : kind === "code" ? "选择 Python/R 文件" : kind === "pdf" ? "选择 PDF" : "选择 MinerU article.md",
+	const articleLabel = kind === "structured" ? "JATS article.md" : "MinerU article.md";
+	return { title: directory ? "选择代码项目文件夹" : kind === "code" ? "选择 Python/R 文件" : kind === "pdf" ? "选择 PDF" : "选择 " + articleLabel,
 		defaultPath: value ? path.resolve(vaultRoot, value) : vaultRoot, properties: [directory ? "openDirectory" : "openFile"],
-		...(directory ? {} : { filters: [{ name: kind === "pdf" ? "PDF" : kind === "article" ? "MinerU article.md" : "Python / R", extensions: kind === "pdf" ? ["pdf"] : kind === "article" ? ["md"] : ["py", "r", "R"] }] }) };
+		...(directory ? {} : { filters: [{ name: kind === "pdf" ? "PDF" : kind !== "code" ? articleLabel : "Python / R", extensions: kind === "pdf" ? ["pdf"] : kind !== "code" ? ["md"] : ["py", "r", "R"] }] }) };
 }
 export const systemSourceDialog: SourceDialog = async options => {
 	try {

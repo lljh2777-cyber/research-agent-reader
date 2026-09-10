@@ -13,13 +13,16 @@ export interface ReadingEvidenceView {
 	x: number; y: number; width: number; height: number;
 }
 export interface ReadingSource {
-	kind: "pdf" | "article" | "code";
+	kind: "pdf" | "article" | "structured" | "code";
+	structured?: import("./structured-source").StructuredReadingSnapshot;
 	code?: import("../code-reading/source").CodeSnapshot;
 	path: string;
 	fingerprint: string;
 	title: string;
 }
 export interface ReadingEvidence {
+	structured?: import("./structured-source").StructuredReadingLocation;
+	relatedIds?: string[];
 	id: string;
 	kind: "paper" | "vault" | "code";
 	startLine?: number;

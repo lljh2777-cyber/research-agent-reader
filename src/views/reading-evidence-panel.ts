@@ -31,7 +31,7 @@ export class ReadingEvidencePanel {
 		act(header, "下一处", () => edit(s => { s.ui.evidenceView!.cursor++; })).disabled = pane.cursor === pane.history.length - 1;
 		act(header, "关闭对照", () => edit(s => { s.ui.evidenceView = undefined; }));
 		const body = panel.createDiv("reading-evidence-panel-body"); body.createEl("h3", { text: evidence.label });
-		body.createEl("p", { cls: "reading-evidence-location", text: evidence.path + (evidence.startLine ? " · 第 " + evidence.startLine + "–" + evidence.endLine + " 行" : evidence.page ? " · 第 " + evidence.page + " 页" : " · 页码未唯一定位") });
+		body.createEl("p", { cls: "reading-evidence-location", text: evidence.path + (evidence.structured ? " · JATS 块 " + evidence.structured.blockId + " · 投影字符 " + evidence.start + "–" + evidence.end + " · 无 PDF 页码" : evidence.startLine ? " · 第 " + evidence.startLine + "–" + evidence.endLine + " 行" : evidence.page ? " · 第 " + evidence.page + " 页" : " · 页码未唯一定位") });
 		body.createEl("p", { cls: "reading-evidence-location", text: [evidence.kind === "code" ? "项目代码 · 静态阅读" : evidence.kind === "paper" ? "本文原文" : "知识库补充", evidence.role, evidence.heading, evidence.visualInspected ? "图像已提供给模型" : "本轮引用文本"].filter(Boolean).join(" · ") });
 		if (evidence.kind === "code") renderCodeEvidence(body, evidence); else body.createEl("pre", { cls: "reading-evidence-text", text: evidence.text });
 		const status = body.createEl("p", { cls: "reading-evidence-location", text: "正在核对来源完整性…", attr: { role: "status" } });
@@ -51,7 +51,7 @@ export class ReadingEvidencePanel {
 			if (controller.signal.aborted) return;
 			if (evidence.kind === "vault") return this.plugin.openVaultFile(evidence.path);
 			if (evidence.kind === "code") { this.plugin.showCurationModal(new CodeSourceModal(this.app, this.service, session, id => { void this.plugin.openLearningRecord(session.id, id).catch(error => { status.textContent = String(error); }); })); return; }
-			if (session.source.kind === "article") return this.plugin.openReadingEvidence(evidence.path, evidence.page);
+			if (["article", "structured"].includes(session.source.kind)) return this.plugin.openReadingEvidence(evidence.path, evidence.page, evidence.structured?.blockId);
 			return (require("electron") as { shell: { openPath(path: string): Promise<string> } }).shell.openPath(session.source.path).then(error => { if (error) throw new Error(error); });
 		}).catch(error => { status.textContent = String(error); }); }); open.disabled = true;
 		void verify().then(async source => {

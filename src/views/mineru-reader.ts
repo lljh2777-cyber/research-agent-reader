@@ -40,6 +40,7 @@ interface MineruReaderHost {
 	app: App;
 	settings: DashboardSettings;
 	openReaderSourceMarkdown?(articlePath: string): Promise<void>;
+	activateReadingWorkspace?(entry: import("../reading/entry").ReadingEntry): Promise<void>;
 	openSelectionAnnotation(): Promise<void>;
 }
 
@@ -400,6 +401,15 @@ export class MineruReaderView extends ItemView {
 			text: readerPackage.title,
 			attr: { title: readerPackage.title },
 		});
+		if (readerPackage.sourceKind === "jats" && this.plugin.activateReadingWorkspace) {
+			const read = header.createEl("button", { text: "交互深读", attr: { "data-jats-action": "interactive" } });
+			this.onWorkspaceEvent(read, "click", () => { void this.plugin.activateReadingWorkspace!({ domain: "paper", source: { kind: "structured", path: readerPackage.articlePath } }).catch(error => new Notice(String(error))); });
+		}
+	}
+
+	revealReadingBlock(blockId: string): void {
+		if (!this.readerPackage?.document?.structured?.blocks.some(b => b.id === blockId)) throw new Error("JATS 正文块不属于当前原文");
+		this.markdownScroller?.querySelector<HTMLElement>(`[data-jats-block="${CSS.escape(blockId)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
 	}
 
 	private async renderMarkdownPane(parent: HTMLElement): Promise<void> {

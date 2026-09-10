@@ -7,7 +7,7 @@ export class VaultSourcePicker extends Modal {
 	constructor(app: App, private root: string, private kind: SourceKind, private choose: (path: string) => void) { super(app); }
 	onOpen(): void {
 		this.modalEl.addClass("reading-modal", "reading-vault-source-modal"); this.titleEl.setText("从 Vault 选择来源");
-		this.contentEl.createEl("p", { cls: "reading-modal-intro", text: this.kind === "code" ? "展开目录选择 Python/R 文件，或将整个文件夹选为代码项目。" : this.kind === "pdf" ? "展开目录，选择 PDF 文件。" : "展开目录，选择 article.md；打开时会继续验证 MinerU 包。" });
+		this.contentEl.createEl("p", { cls: "reading-modal-intro", text: this.kind === "code" ? "展开目录选择 Python/R 文件，或将整个文件夹选为代码项目。" : this.kind === "pdf" ? "展开目录，选择 PDF 文件。" : this.kind === "structured" ? "展开 papers 目录，选择已保存的 JATS article.md；打开时会核对 XML、正文映射与图像。" : "展开目录，选择 article.md；打开时会继续验证 MinerU 包。" });
 		const tree = this.contentEl.createDiv("reading-source-tree"); tree.setAttribute("aria-label", "Vault 目录结构");
 		const footer = this.contentEl.createDiv("reading-source-picker-footer"); const location = footer.createEl("small", { text: "尚未选择来源", attr: { role: "status" } });
 		const confirm = footer.createEl("button", { text: "使用所选来源", cls: "mod-cta" }); confirm.disabled = true;

@@ -5,6 +5,7 @@ import { answerHash, effectiveReadingContent } from "./quality";
 import { codeFingerprint, validateCodeSnapshot } from "../code-reading/source";
 import { verifyCodeQuote, readingQuestionContext } from "../code-reading/quote";
 import type { ReadingBranch, ReadingNode, ReadingQuote, ReadingSession, ReadingSource } from "./types";
+import { validateStructuredEvidence, validateStructuredSource } from "./structured-source";
 
 export const newReadingId = (): string => "r-" + randomUUID();
 export function createReadingSession(source: ReadingSource, backend = "codex-cli", model = ""): ReadingSession {
@@ -66,10 +67,12 @@ export function addReadingNode(session: ReadingSession, branchId: string | null,
 export function validateReadingSession(value: unknown): ReadingSession {
 	const session = value as ReadingSession;
 	if (!session || session.version !== 1 || !/^r-[a-f0-9-]{36}$/.test(session.id)
-		|| !["pdf", "article", "code"].includes(session.source?.kind) || typeof session.source.path !== "string"
+		|| !["pdf", "article", "structured", "code"].includes(session.source?.kind) || typeof session.source.path !== "string"
 		|| !/^[a-f0-9]{64}$/.test(session.source.fingerprint) || !Array.isArray(session.nodes)
 		|| !Array.isArray(session.branches) || !Array.isArray(session.mainIds) || !session.ui) throw new Error("阅读会话格式无效");
 	const nodes = new Map<string, ReadingNode>();
+	if (session.source.kind === "structured") validateStructuredSource(session.source);
+	else if (session.source.structured !== undefined) throw new Error("结构化来源不可绑定到旧来源类型");
 	if (session.source.kind === "code" && codeFingerprint(validateCodeSnapshot(session.source.code)) !== session.source.fingerprint) throw new Error("代码来源指纹与快照不一致");
 	for (const node of session.nodes) {
 		if (!node.id || nodes.has(node.id) || typeof node.content !== "string" || typeof node.question !== "string"
@@ -84,6 +87,10 @@ export function validateReadingSession(value: unknown): ReadingSession {
 			const file = session.source.code?.files.find(f => f.path === e.path);
 			if (session.source.kind !== "code" || !file || e.sourceHash !== file.hash || !Number.isInteger(e.startLine) || !Number.isInteger(e.endLine)
 				|| e.startLine! < 1 || e.endLine! < e.startLine! || e.endLine! > file.lines || e.language !== file.language) throw new Error("代码引用与来源快照不一致");
+		}
+		for (const e of node.evidence) {
+			if (session.source.kind === "structured" && e.kind === "paper" || e.structured !== undefined) validateStructuredEvidence(e, session.source);
+			if (e.relatedIds !== undefined && (!Array.isArray(e.relatedIds) || e.relatedIds.length > 2000 || e.relatedIds.some(id => typeof id !== "string"))) throw new Error("证据关联记录无效");
 		}
 	}
 	const attached = new Set<string>();

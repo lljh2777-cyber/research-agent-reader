@@ -7,6 +7,7 @@ export async function validateSourcePackageFile(vaultRoot:string,filename:string
 	if(parts[0].toLowerCase()!=="papers" || parts.length<3)return;
 	const storage=new FileSourceStorage(vaultRoot),root=`${parts[0]}/${parts[1]}`;
 	if(!(await storage.list(root)).some(e=>e.name==="_source"))return;
+	if (parts[1].includes("--jats--")) throw new Error("这是 JATS 原文包，请在原文类型中选择已保存 JATS article.md");
 	if(parts.length!==3||parts[2]!=="source.pdf")throw new Error("此原文包没有可用的正文投影，请选择 source.pdf");
 	return (await loadPdfSource(storage,parts[1])).manifest;
 }

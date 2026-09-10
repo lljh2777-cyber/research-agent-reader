@@ -36,6 +36,11 @@ function exportBody(session: ReadingSession, scope: ReadingExportScope, nodeId: 
 	const nodes = readingExportNodes(session, scope, nodeId);
 	const body = ["# " + safeReadingMarkdown(session.title).trim(), "", session.source.kind === "code" ? "本文记录代码交互学习过程（static-read），未运行项目，讲解不代表测试通过。" : "本文记录交互学习过程，学习进度不代表正式 X-Ray 核验状态。", "",
 		"原文位置：" + readingPathCode(session.source.path), ""];
+	if (session.source.structured) {
+		const m = session.source.structured.manifest;
+		body.push("固定 JATS 原文：" + readingPathCode(m.sourceVersionId) + "；包 " + readingPathCode(m.packageKey)
+			+ "；投影 " + readingPathCode(m.projectionId) + "；清单 " + readingPathCode(m.digest) + "。没有 PDF 页码。", "");
+	}
 	for (const node of nodes) {
 		body.push("## " + safeReadingMarkdown(node.title).trim(), "");
 		const trail: string[] = []; let current = node;
@@ -55,9 +60,12 @@ function exportBody(session: ReadingSession, scope: ReadingExportScope, nodeId: 
 		for (const evidence of node.evidence) body.push("- " + readingPathCode(evidence.id) + " " + (evidence.kind === "code" ? "项目代码" : evidence.kind === "paper" ? "本文" : "知识库补充") + "：" + readingPathCode(evidence.path)
 			+ (evidence.startLine ? "，第 " + evidence.startLine + "–" + evidence.endLine + " 行，文件版本 " + readingPathCode(evidence.sourceHash || "") : "")
 			+ (evidence.page ? "，第 " + evidence.page + " 页" : "") + (evidence.start !== undefined ? "，阅读文本字符 " + evidence.start + "–" + evidence.end : "") + (evidence.visualInspected ? "，已查看图像" : "")
+			+ (evidence.structured ? "；JATS 块 " + readingPathCode(evidence.structured.blockId) + "；XML 节点 " + readingPathCode(evidence.structured.xmlPath)
+				+ "，UTF-16 字符 " + evidence.structured.xmlStart + "–" + evidence.structured.xmlEnd + (evidence.structured.resourceId ? "；图像资源 " + readingPathCode(evidence.structured.resourceId) : "") : "")
 			+ (evidence.role ? "；" + safeReadingMarkdown(evidence.role) : "") + (evidence.heading ? "；章节：" + safeReadingMarkdown(evidence.heading) : ""));
 		body.push("");
 		for (const evidence of node.evidence.filter(e => e.kind === "code")) body.push("保存的代码依据 " + readingPathCode(evidence.id) + "：", "", codeFence(evidence.text, evidence.language), "");
+		for (const evidence of node.evidence.filter(e => e.structured)) body.push("保存的 JATS 依据片段 " + readingPathCode(evidence.id) + "（生成当时的投影文本）：", "", codeFence(evidence.text), "");
 		if (node.web) {
 			body.push("网络补充（" + node.web.mode + "）：" + safeReadingMarkdown(node.web.warning), "");
 			for (const [i, source] of node.web.sources.entries()) body.push(`- [网络 W${i + 1}] ` + readingPathCode(source.url) + " · " + safeReadingMarkdown(source.title));
@@ -76,7 +84,8 @@ export function readingExportContent(session: ReadingSession, scope: ReadingExpo
 	return ["---", "title: " + JSON.stringify(session.title + " · 学习记录"), "type: qa", "tags: [qa, reading]", "created: " + (options.created || new Date().toISOString()), "reading_session: " + JSON.stringify(session.id),
 		"reading_export_key: " + readingExportKey(session, scope, nodeId), "reading_content_hash: " + readingExportHash(session, scope, nodeId, options), "reading_source_fingerprint: " + JSON.stringify(session.source.fingerprint),
 		"reading_nodes: " + JSON.stringify(readingExportNodes(session, scope, nodeId).map(node => ({ id: node.id, parent: node.parentId, branch: node.branchId, hash: readingNodeContentHash(node) }))),
-		"related_notes: " + JSON.stringify(relatedPaths(options)), ...(session.source.kind === "code" ? ["analysis_depth: static-read", "reading_source_kind: code"] : []), ...(revision ? ["reading_revision_of: " + JSON.stringify(revision)] : []), "---", "",
+		"related_notes: " + JSON.stringify(relatedPaths(options)), ...(session.source.kind === "code" ? ["analysis_depth: static-read", "reading_source_kind: code"] : []),
+		...(session.source.structured ? ["reading_source_kind: structured", "reading_source_snapshot: " + JSON.stringify(session.source.structured)] : []), ...(revision ? ["reading_revision_of: " + JSON.stringify(revision)] : []), "---", "",
 		...(revision ? ["上一版：" + wikiLink(revision), ""] : []), exportBody(session, scope, nodeId, options)].join("\n");
 }
 /** Read generated QA metadata directly: the metadata cache can lag a just-created export. */

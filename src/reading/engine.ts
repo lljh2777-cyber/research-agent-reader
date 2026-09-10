@@ -35,7 +35,7 @@ export function validateReadingResult(text: string, evidence: ReadingEvidence[],
 	const inline = new Set<string>();
 	for (const match of raw.content.matchAll(/\[(?:证据\s*ID\s*[:：]\s*)?([^\[\]\n]+)\]/gi)) {
 		const ids = match[1].split(/[,，、]\s*/).map(id => id.trim());
-		if (ids.some(id => /^(?:text-|page-|figure-|vault-|code-)/.test(id)) && ids.some(id => !known.has(id) || !cited.has(id))) throw new Error("正文引用与证据列表不一致");
+		if (ids.some(id => /^(?:text-|page-|figure-|vault-|code-|jats-)/.test(id)) && ids.some(id => !known.has(id) || !cited.has(id))) throw new Error("正文引用与证据列表不一致");
 		for (const id of ids) if (known.has(id) && cited.has(id)) inline.add(id);
 	}
 	if (!inline.size) throw new Error(MISSING_READING_CITATION);
@@ -190,13 +190,13 @@ export class ReadingEngine {
 				currentModule: currentModule ? { title: currentModule.title, question: currentModule.question, number: currentModule.number, purpose: currentModule.purpose } : undefined,
 				teachingPreference: teachingPreference(session), completedUnits: node.branchId ? undefined : completedCount,
 				retrieval: retrieval ? { query: retrieval.query, found: retrieval.paths.length, error: retrieval.error, instruction: "若没有足够补充依据，明确写 Vault 中未找到足够依据" } : null,
-					evidence: evidence.map(({ id, kind, label, text, page, visualInspected, role, origins, heading, path, startLine, endLine, language }) => ({ id, kind, label, text, page, visualInspected, role, origins, heading, ...(kind === "code" ? { path, startLine, endLine, language } : {}) })),
+					evidence: evidence.map(({ id, kind, label, text, page, visualInspected, role, origins, heading, path, startLine, endLine, language, structured, start, end }) => ({ id, kind, label, text, page, visualInspected, role, origins, heading, ...(structured ? { structured, start, end } : {}), ...(kind === "code" ? { path, startLine, endLine, language } : {}) })),
 				images: images.map((image, index) => ({ index: index + 1, evidenceId: image.evidenceId })),
 				output: node.branchId ? { title: "短标题", content: "Markdown 正文，结论附 [证据ID]", evidenceIds: ["引用的ID"] }
 					: { title: "本单元短标题", content: "Markdown 正文，结论附 [证据ID]", evidenceIds: ["引用的ID"], mainSummary: "截至本单元的累计摘要及进度", ...(!session.modulePlan ? { outline: ["完整主线提纲"], completed: false } : {}) } });
 			let streamed = "";
 			const hostRules = isCode ? CODE_HOST_RULES : web?.mode === "native" ? READING_HOST_RULES.replace("不调用工具、联网或修改文件", "仅可调用只读联网搜索，不调用其他工具或修改文件") : READING_HOST_RULES;
-			const raw = await measuredReadingCall(repository, sessionId, nodeId, "answer", backend, { system: skill + "\n" + hostRules + (web ? "\n" + readingWebInstruction(web) : ""), prompt, images, signal: controller.signal,
+			const raw = await measuredReadingCall(repository, sessionId, nodeId, "answer", backend, { system: skill + "\n" + hostRules + (session.source.kind === "structured" ? "\n本文来源为固定 JATS 投影。用实际 jats- 证据 ID 引用章节、正文块或图像资源；没有 PDF 页码和版面框。图注文字不等于查看图像。复杂表格的字符片段可能按行降级，不能据此推测缺失布局；正文和图片缺口以目录记录为准。" : "") + (web ? "\n" + readingWebInstruction(web) : ""), prompt, images, signal: controller.signal,
 				webSearch: webResolution?.kind === "native" ? webResolution.protocol : undefined, schema: readingAnswerSchema(!node.branchId, evidence.map(e => e.id), Boolean(session.modulePlan)),
 				onDelta: (delta) => { streamed += delta; const match = /"content"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(streamed); if (match) {
 					try { this.emit(sessionId, nodeId, JSON.parse('"' + match[1] + '"')); } catch { /* Incomplete escape; retain previous frame. */ }

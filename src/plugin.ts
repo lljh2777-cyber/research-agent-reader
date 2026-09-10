@@ -2657,6 +2657,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	openReadingAssistant(sessionId: string, nodeId: string): void {
 		try {
+			if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "structured") throw new Error("JATS 已支持主线和支线追问；阅读助手与正式 Wiki 整理将在下一步接入");
 			if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") throw new Error("代码会话请使用主线和支线追问；阅读助手暂面向论文");
 			const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(n => n.id === nodeId && n.status === "done")) throw new Error("请先选择一个已完成的正式阅读节点");
 			this.assistantModal?.close(); this.assistantModal = this.showCurationModal(new ReadingAssistantModal(this.app, this, sessionId, nodeId));
@@ -2719,6 +2720,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	openKnowledgeMaintenance(): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this)); }
 	openKnowledgeCuration(sessionId: string, nodeId: string, review?: CurationReview): void {
+		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "structured") { new Notice("JATS 学习记录可以导出；正式 Wiki 整理将在下一步接入"); return; }
 		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") { new Notice("代码学习可导出独立笔记并关联已有笔记，暂不自动整理正式代码页"); return; }
 		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review)); }
 		catch (error) { new Notice(String(error)); }
@@ -3558,12 +3560,13 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.isMineruArticleFile(file) || this.isConfiguredReaderMarkdownFile(file);
 	}
 
-	async openReadingEvidence(articlePath: string, page?: number): Promise<void> {
+	async openReadingEvidence(articlePath: string, page?: number, blockId?: string): Promise<void> {
 		await this.activateMineruReaderView(articlePath);
 		const view = this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE)[0]?.view;
 		if (view instanceof MineruReaderView && page) {
 			view.revealReadingPage(page);
 		}
+		if (view instanceof MineruReaderView && blockId) view.revealReadingBlock(blockId);
 	}
 	async activateMineruReaderView(articlePath = "", preferredLeaf?: WorkspaceLeaf): Promise<void> {
 		const contextFile = this.app.workspace.getActiveFile() || this.lastContextFile;

@@ -64,7 +64,7 @@ export class ReadingWorkspaceView extends ItemView {
 	constructor(leaf: WorkspaceLeaf, private readonly plugin: AgentDashboardPlugin) { super(leaf); }
 	getViewType(): string { return READING_VIEW_TYPE; }
 	getReadingDomain(): ReadingDomain { return this.domain; }
-	getDisplayText(): string { return (this.domain === "code" ? "代码分析" : "PDF 深读") + (this.session ? " · " + readingTitle(this.session) : ""); }
+	getDisplayText(): string { return (this.domain === "code" ? "代码分析" : "论文深读") + (this.session ? " · " + readingTitle(this.session) : ""); }
 	getIcon(): string { return this.domain === "code" ? "code-xml" : "book-open"; }
 	getState(): Record<string, unknown> { return { sessionId: this.sessionId, domain: this.domain }; }
 	async setState(state: unknown): Promise<void> {
@@ -136,8 +136,8 @@ export class ReadingWorkspaceView extends ItemView {
 		const header = element(this.contentEl, "header", "reading-header");
 		const identity = element(header, "div", "reading-identity"); const mark = element(identity, "div", "reading-brand-mark"); icon(mark, this.getIcon());
 		const names = element(identity, "div", "reading-identity-text");
-		const eyebrow = element(names, "div", "reading-eyebrow"); element(eyebrow, "span", "", this.domain === "code" ? "代码分析" : "PDF 深读");
-		if (session) element(eyebrow, "span", "reading-source-badge", session.demo ? "交互演示" : session.source.kind === "code" ? "代码 · 静态阅读" : session.source.kind === "pdf" ? "PDF 原文" : "MinerU 原文");
+		const eyebrow = element(names, "div", "reading-eyebrow"); element(eyebrow, "span", "", this.domain === "code" ? "代码分析" : "论文深读");
+		if (session) element(eyebrow, "span", "reading-source-badge", session.demo ? "交互演示" : session.source.kind === "code" ? "代码 · 静态阅读" : session.source.kind === "pdf" ? "PDF 原文" : session.source.kind === "structured" ? "JATS 原文" : "MinerU 原文");
 		const select = button(names, session ? readingTitle(session) : "选择或管理阅读会话", () => this.openSessionLibrary(), "选择阅读会话"); select.className = "reading-session-select";
 		icon(names, "chevron-down").classList.add("reading-session-chevron");
 		const actions = element(header, "div", "reading-header-actions");
@@ -149,8 +149,8 @@ export class ReadingWorkspaceView extends ItemView {
 			}
 			actionButton(actions, "download", "导出学习笔记", () => this.openExport(), true);
 			if (session.source.kind === "code") actionButton(actions, "code-xml", "浏览源码", () => { const modal = new CodeSourceModal(this.app, this.service, this.session!, id => { if (this.sessionId === session.id) this.selectNode(id, false, true); }); this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open(); }, true);
-			if (!session.demo && session.source.kind !== "code") actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, this.session!.ui.selectedId), true);
-			if (!session.demo && session.source.kind !== "code") actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, this.session!.ui.selectedId), true);
+			if (!session.demo && ["pdf", "article"].includes(session.source.kind)) actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, this.session!.ui.selectedId), true);
+			if (!session.demo && ["pdf", "article"].includes(session.source.kind)) actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, this.session!.ui.selectedId), true);
 		}
 		const create = actionButton(actions, "plus", "新建阅读", () => this.openSource()); create.classList.add("reading-primary");
 		const more = actionButton(actions, "ellipsis", "更多阅读选项", () => {
@@ -174,7 +174,7 @@ export class ReadingWorkspaceView extends ItemView {
 		element(empty, "p", "", code ? "逐步理解入口、模块与数据流，划选源码追问，并保留代码依据和学习过程。" : "让 AI 逐步讲解论文，在导图中追问、回看依据，并保存你的阅读过程。");
 		const actions = element(empty, "div", "reading-empty-actions"); actionButton(actions, "plus", code ? "打开代码项目或脚本" : "打开一篇论文", () => this.openSource()).classList.add("reading-primary");
 		if (!code) actionButton(actions, "play", "先体验交互演示", () => this.handle(this.service.demo().then((id) => this.selectSession(id))));
-		element(empty, "small", "", code ? "支持 Python/R 文件与小型项目 · 只做静态阅读" : "支持 PDF 与已验证的 MinerU article.md");
+		element(empty, "small", "", code ? "支持 Python/R 文件与小型项目 · 只做静态阅读" : "支持 PDF、已验证的 MinerU 与 JATS article.md");
 	}
 	private render(force = false): void {
 		this.contentEl.dataset.readingDomain = this.domain;
@@ -689,14 +689,14 @@ export class ReadingWorkspaceView extends ItemView {
 			if (!sessions.length) element(list, "p", "reading-library-empty", query ? "没有找到匹配的会话" : "这里还没有会话");
 			for (const group of groups.values()) {
 				const section = element(list, "section", "reading-library-group");
-				if (group.length > 1) element(section, "p", "reading-library-group-label", (group[0].source.kind === "code" ? "代码" : group[0].source.kind === "pdf" ? "PDF" : "MinerU") + " · 同一来源的 " + group.length + " 个会话");
+				if (group.length > 1) element(section, "p", "reading-library-group-label", (group[0].source.kind === "code" ? "代码" : group[0].source.kind === "pdf" ? "PDF" : group[0].source.kind === "structured" ? "JATS" : "MinerU") + " · 同一来源的 " + group.length + " 个会话");
 				for (const session of group) {
 					const row = element(section, "div", "reading-library-row" + (session.id === this.sessionId ? " is-current" : "")); row.dataset.sessionId = session.id;
 					const open = button(row, "", () => { modal.close(); this.selectSession(session.id); }, "打开会话：" + readingTitle(session)); open.className = "reading-library-open";
 					element(open, "strong", "", (session.pinned ? "置顶 · " : "") + readingTitle(session));
 					const completed = session.mainIds.filter((id) => readingNode(session, id).status === "done").length;
 					const timestamp = session.lastOpenedAt || session.updatedAt; const date = Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toLocaleString() : "时间未记录";
-					element(open, "small", "", (session.source.kind === "code" ? "代码" : session.source.kind === "pdf" ? "PDF" : "MinerU") + " · " + completed + " 个主线单元 · " + date);
+					element(open, "small", "", (session.source.kind === "code" ? "代码" : session.source.kind === "pdf" ? "PDF" : session.source.kind === "structured" ? "JATS" : "MinerU") + " · " + completed + " 个主线单元 · " + date);
 					element(open, "small", "reading-library-path", session.source.path).title = session.source.path;
 					const actions = element(row, "div", "reading-library-actions");
 					actionButton(actions, session.pinned ? "pin-off" : "pin", session.pinned ? "取消置顶" : "置顶", () => this.handle(this.service.repository.transact(session.id, (s) => { s.pinned = !s.pinned; })), true);
@@ -716,9 +716,9 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	openSource(entry?: import("../reading/entry").ReadingEntry): void {
 		if (entry?.source && sourceReadingDomain(entry.source) !== this.domain) { this.handle(this.plugin.activateReadingWorkspace(entry)); return; }
-		const code = this.domain === "code"; const modal = this.modal(code ? "开始代码分析" : "开始 PDF 深读");
+		const code = this.domain === "code"; const modal = this.modal(code ? "开始代码分析" : "开始论文深读");
 		element(modal.contentEl, "p", "reading-modal-intro", code ? "选择脚本或项目，建立可以持续追问的代码阅读会话。" : "选择论文原文，建立可以随时继续的深读会话。");
-		const kind = element(element(modal.contentEl, "label", "reading-field", "原文类型"), "select"); (code ? [["code", "Python/R 文件或项目目录"]] : [["pdf", "原始 PDF"], ["article", "已验证 article.md"]]).forEach(([value, label]) => { element(kind, "option", "", label).value = value; }); kind.disabled = code;
+		const kind = element(element(modal.contentEl, "label", "reading-field", "原文类型"), "select"); (code ? [["code", "Python/R 文件或项目目录"]] : [["pdf", "原始 PDF"], ["article", "已验证 MinerU article.md"], ["structured", "已保存 JATS article.md"]]).forEach(([value, label]) => { element(kind, "option", "", label).value = value; }); kind.disabled = code;
 		const sourceLocation = new ReadingSourceLocation(this.app, element(modal.contentEl, "div"), () => kind.value as ReadingSession["source"]["kind"]); const path = sourceLocation.input;
 		const close = modal.onClose.bind(modal); modal.onClose = () => { sourceLocation.dispose(); close(); };
 		const backend = element(element(modal.contentEl, "label", "reading-field", "讲解后端"), "select"); element(backend, "option", "", "Codex CLI").value = "codex-cli";
@@ -753,7 +753,8 @@ export class ReadingWorkspaceView extends ItemView {
 		if (item.kind === "code") { renderCodeEvidence(modal.contentEl, item); element(modal.contentEl, "small", "", "回答生成时保存的代码 · 文件版本 " + item.sourceHash?.slice(0, 12)); }
 		else element(modal.contentEl, "pre", "reading-evidence-text", item.text);
 		if (item.kind === "vault") button(modal.contentEl, "打开来源笔记", () => { this.plugin.openVaultFile(item.path); modal.close(); });
-		if (item.kind === "paper" && this.session!.source.kind === "article") button(modal.contentEl, "在阅读器打开原文", () => this.handle(this.service.document(this.sessionId).then(async (source) => { await source.verify(); await this.plugin.openReadingEvidence(item.path, item.page); modal.close(); })));
+		if (item.structured) element(modal.contentEl, "p", "reading-evidence-location", "JATS 块 " + item.structured.blockId + " · 投影字符 " + item.start + "–" + item.end + " · 无 PDF 页码");
+		if (item.kind === "paper" && ["article", "structured"].includes(this.session!.source.kind)) button(modal.contentEl, "在阅读器打开原文", () => this.handle(this.service.document(this.sessionId).then(async (source) => { await source.verify(); await this.plugin.openReadingEvidence(item.path, item.page, item.structured?.blockId); modal.close(); })));
 		if (item.kind === "paper") this.handle(this.service.document(this.sessionId).then(async (document) => {
 			await document.verify(); const image = await document.image(document.source.kind === "pdf" && item.page ? { ...item, asset: "pdf-page" } : item); if (image) { const img = element(modal.contentEl, "img"); img.src = image.dataUrl; img.style.maxWidth = "100%"; }
 		})); modal.open();
@@ -812,7 +813,7 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	private openExport(): void {
 		const sessionId = this.sessionId; const nodeId = this.session!.ui.selectedId;
-		const modal = new ReadingExportModal(this.app, () => this.service.repository.get(sessionId), nodeId, (query, options) => this.plugin.searchKnowledge(query, options), path => this.plugin.openVaultFile(path), this.session!.source.kind === "code" ? undefined : () => this.plugin.openKnowledgeCuration(sessionId, nodeId));
+		const modal = new ReadingExportModal(this.app, () => this.service.repository.get(sessionId), nodeId, (query, options) => this.plugin.searchKnowledge(query, options), path => this.plugin.openVaultFile(path), ["code", "structured"].includes(this.session!.source.kind) ? undefined : () => this.plugin.openKnowledgeCuration(sessionId, nodeId));
 		this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open();
 	}
 	revealLearningNode(nodeId: string): void { if (this.session?.nodes.some(node => node.id === nodeId)) this.selectNode(nodeId, true); }

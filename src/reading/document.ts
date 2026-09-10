@@ -8,6 +8,7 @@ import { tokenizeForLexicalRetrieval } from "../query/lexical-retrieval";
 import { openCodeProject } from "../code-reading/source";
 import type { ReadingEvidence, ReadingImage, ReadingSource } from "./types";
 import { validateSourcePackageFile } from "../sources/reading-guard";
+import { openStructuredDocument } from "./structured-document";
 
 interface PdfPage {
 	getTextContent(): Promise<{ items: Array<{ str?: string; hasEOL?: boolean }> }>;
@@ -66,7 +67,9 @@ export function selectReadingEvidence(document: ReadingDocument, query: string, 
 	const ranked = document.evidence.map((item, index) => {
 		const haystack = (item.label + " " + item.text).toLowerCase();
 		const score = terms.reduce((sum, term) => sum + (haystack.includes(term.toLowerCase()) ? 1 : 0), 0)
-			+ (preferredIds.includes(item.id) ? 1000 : 0) + (textItems[focus]?.id === item.id ? 0.1 : 0);
+			+ (preferredIds.includes(item.id) ? 1000 : 0)
+			+ (document.evidence.some(e => preferredIds.includes(e.id) && e.relatedIds?.includes(item.id)) ? 500 : 0)
+			+ (textItems[focus]?.id === item.id ? 0.1 : 0);
 		return { item, score, index };
 	}).sort((a, b) => b.score - a.score || a.index - b.index);
 	const selected: ReadingEvidence[] = [];
@@ -85,6 +88,7 @@ export function selectReadingEvidence(document: ReadingDocument, query: string, 
 export class ReadingDocumentLoader {
 	constructor(private readonly app: App, private readonly vaultRoot: string) {}
 	async open(kind: ReadingSource["kind"], rawPath: string): Promise<ReadingDocument> {
+		if (kind === "structured") return openStructuredDocument(this.vaultRoot, rawPath);
 		if (kind === "code") { if (!rawPath.trim()) throw new Error("请输入 Python/R 文件或项目目录"); return openCodeProject(path.isAbsolute(rawPath) ? rawPath : path.resolve(this.vaultRoot, rawPath)); }
 		return kind === "pdf" ? this.pdf(rawPath) : this.article(rawPath.replace(/\\/g, "/"));
 	}
