@@ -8,11 +8,13 @@ connecting optional local AI-agent workflows.
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.51.1`; the beta
+The `codex/research-learning-map` development branch is at `0.51.2`; the beta
 release link above remains the published release.
 
 全文获取与多来源入库的后续设计见[架构与开发流程](docs/fulltext-acquisition-design.md)。
 总体设计基于 `0.43.2`，各阶段按实现说明验收。
+`0.51.2` 修复粘贴 Nature 文章链接后「查找全文」禁用的问题。支持 Nature `/articles/<文章标识>` 页面与 `.pdf` 链接，忽略查询参数和页内锚点，转换为 DOI 后沿用原有身份与全文查询。其他不支持的链接会提示改用 DOI、PMID 或 PMCID；识别链接不代表已找到可用全文。
+
 `0.51.1` 完成全文入库与 JATS 功能检查：修复正文外主图漏读、公式重复、Wiki 标识冲突和长摘要工具预算，优化重复来源核验及保存状态反馈，保留旧转换器与历史来源。验收范围与限制见[完整检查记录](docs/fulltext-acquisition-review.md)。
 
 `0.51.0` 完成 M6 的阅读助手与既有 Wiki 修订步骤：JATS 会话可核对文字依据、准备后续操作卡，并对已有正式笔记生成建议、预览差异、应用或撤销。引用保留固定版本、正文块、XML 与字符范围；来源变化和用户编辑会阻止不一致写入。助手仍只读取文字，整理流程按需读取同版本图像，不自动升级 X-Ray。详见 [M6 助手与修订实现](docs/fulltext-acquisition-m6-curation.md)。

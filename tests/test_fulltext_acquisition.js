@@ -13,6 +13,20 @@ const make = (storage = memory(), backend = controlledBackend(), mode = "demo", 
 	for (const [input, kind, value] of [[" DOI:10.1234/ABC ", "doi", "10.1234/abc"], ["https://doi.org/10.1234/A%2FB", "doi", "10.1234/a/b"], ["https://pubmed.ncbi.nlm.nih.gov/123/", "pmid", "123"], ["https://pmc.ncbi.nlm.nih.gov/articles/PMC123/", "pmcid", "PMC123"], ["pmcid: pmc123", "pmcid", "PMC123"], ["123", "pmid", "123"]]) assert.deepEqual(parseAcquisitionInput(input), { kind, value });
 	for (const input of ["", "0", "https://example.org/10.1234/a", "https://user:pass@doi.org/10.1234/a", "https://doi.org:9000/10.1234/a", "10.1234/a b", "PMC0", "10.1234/<a>"]) assert.throws(() => parseAcquisitionInput(input));
 	assert.throws(() => decodeRequest(request(), "production"));
+	for (const input of [
+		"https://www.nature.com/articles/s41592-026-03217-4",
+		"https://nature.com/articles/s41592-026-03217-4/",
+		"https://www.nature.com/articles/s41592-026-03217-4.pdf?download=1#citeas",
+		"https://www.nature.com/articles/s41592-026-03217-4?utm_source=test#Fig1",
+	]) assert.deepEqual(parseAcquisitionInput(input), { kind: "doi", value: "10.1038/s41592-026-03217-4" });
+	assert.deepEqual(parseAcquisitionInput("https://www.nature.com/articles/nature12373"), { kind: "doi", value: "10.1038/nature12373" });
+	for (const input of [
+		"https://www.nature.com/", "https://www.nature.com/articles/", "https://www.nature.com/articles/a/b",
+		"https://www.nature.com/articles/s41592-026-03217-4/figures/1", "https://www.nature.com/articles/%2Fetc",
+		"https://www.nature.com.evil.example/articles/s41592-026-03217-4", "https://evil.example/?url=https://www.nature.com/articles/s41592-026-03217-4",
+		"https://user:password@www.nature.com/articles/s41592-026-03217-4", "https://www.nature.com:9000/articles/s41592-026-03217-4",
+	]) assert.throws(() => parseAcquisitionInput(input));
+	assert.throws(() => parseAcquisitionInput("https://example.org/article"), /暂不支持.*请粘贴.*DOI/);
 	assert.throws(() => make(memory(), controlledBackend(), "production"), /演示/);
 
 	const a = make(), states = []; const unsubscribe = a.service.subscribe(() => states.push(a.service.list()[0]?.phase));

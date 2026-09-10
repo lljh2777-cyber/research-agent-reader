@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Nature fulltext input fix — 0.51.2
+
+- 修复 Nature 文章页面与 PDF 链接无法启用「查找全文」的问题；按固定域名和文章路径提取 DOI，继续交由现有身份服务校验。
+- 输入框展示具体校验原因和不支持链接的替代输入方式。回归覆盖用户报告的地址、查询参数、旧式文章标识、无效路径及仿冒域名；原生界面检查覆盖按钮启用、点击提交与错误恢复。
+
 ### Fulltext and JATS verification fixes — 0.51.1
 
 - JATS 新转换器保留根级浮动图表，避免段内独立公式重复输出；旧快照与原文包继续按原转换器校验。

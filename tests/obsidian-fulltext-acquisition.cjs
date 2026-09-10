@@ -25,7 +25,19 @@ module.exports = async function(app) {
 		check(Boolean(modal()), "dashboard opens the acquisition panel");
 		check(element().querySelector('[data-fulltext-action="start"]').disabled, "formal query requires a valid identifier");
 		const input = element().querySelector("input"); input.value = "https://pubmed.ncbi.nlm.nih.gov/123/"; input.dispatchEvent(new Event("input", { bubbles: true }));
-		check(element().querySelector(".rar-fulltext-parsed").textContent.includes("PMID · 123") && !element().querySelector('[data-fulltext-action="start"]').disabled, "formal query available after normalization without model configuration"); close();
+		check(element().querySelector(".rar-fulltext-parsed").textContent.includes("PMID · 123") && !element().querySelector('[data-fulltext-action="start"]').disabled, "formal query available after normalization without model configuration");
+		input.value = "https://www.nature.com/articles/s41592-026-03217-4"; input.dispatchEvent(new Event("input", { bubbles: true }));
+		check(element().querySelector(".rar-fulltext-parsed").textContent === "DOI · 10.1038/s41592-026-03217-4" && !element().querySelector('[data-fulltext-action="start"]').disabled, "reported Nature URL enables the fulltext button with the canonical DOI");
+		const originalStart = production.start; let submitted;
+		try {
+			production.start = async request => { submitted = structuredClone(request); return { id: "native-input-check" }; };
+			click("start"); await waitFor(() => submitted && !element().querySelector('[data-fulltext-action="start"]').disabled);
+			check(submitted.input.kind === "doi" && submitted.input.value === "10.1038/s41592-026-03217-4" && submitted.goal === "pdf", "click forwards the normalized Nature DOI (submission intercepted; no production task or network)");
+		} finally { production.start = originalStart; }
+		input.value = "https://example.org/article"; input.dispatchEvent(new Event("input", { bubbles: true }));
+		check(element().querySelector('[data-fulltext-action="start"]').disabled && /暂不支持.*请粘贴.*DOI/.test(element().querySelector(".rar-fulltext-parsed").textContent), "unsupported URLs explain the reason and DOI workaround");
+		input.value = "https://doi.org/10.1038/s41592-026-03217-4"; input.dispatchEvent(new Event("input", { bubbles: true }));
+		check(!element().querySelector('[data-fulltext-action="start"]').disabled, "replacing an unsupported URL with its DOI restores the button"); close();
 		plugin.openFulltextAcquisition("demo"); await service.ready();
 		click("start"); click("start"); await phase("downloading");
 		check(backend.calls === 1 && service.list().length === 1, "double click produces one attempt");

@@ -15,7 +15,7 @@ export class FulltextAcquisitionModal extends Modal {
 		this.setTitle(this.service.mode === "demo" ? "全文获取 · 流程演示" : "获取论文全文");
 		const intro = this.service.mode === "demo" ? "开发演示使用虚构论文和模拟进度。仅保存演示记录，不下载文件、不调用模型，也不写入文献库。" : "输入论文标识或官方链接，先识别论文，再获取可用全文。此功能不需要模型配置。";
 		this.contentEl.createEl("p", { text: intro, cls: "rar-fulltext-intro" });
-		const label = this.contentEl.createEl("label", { text: "DOI、PMID 或 PMCID", cls: "rar-fulltext-input-label" });
+		const label = this.contentEl.createEl("label", { text: "DOI、PMID、PMCID 或论文链接", cls: "rar-fulltext-input-label" });
 		const input = label.createEl("input", { type: "text", attr: { placeholder: "10.xxxx/…、PMID:… 或 PMC…", "aria-label": "论文标识", maxlength: "1024" } });
 		if (this.service.mode === "demo") input.value = "10.0000/fulltext-demo";
 		const parsedEl = this.contentEl.createEl("p", { cls: "rar-fulltext-parsed", attr: { "aria-live": "polite" } });
@@ -37,7 +37,7 @@ export class FulltextAcquisitionModal extends Modal {
 		const start = this.contentEl.createEl("button", { text: this.service.mode === "demo" ? "开始演示" : "查找全文", cls: "mod-cta", attr: { "data-fulltext-action": "start" } });
 		const validate = () => {
 			try { const parsed = parseAcquisitionInput(input.value); parsedEl.setText(`${parsed.kind.toUpperCase()} · ${parsed.value}`); start.disabled = this.busy || !this.service.available; }
-			catch { parsedEl.setText(input.value.trim() ? "请输入有效 DOI、PMID、PMCID 或官方论文链接" : "支持 DOI、PubMed 和 PMC 官方论文链接"); start.disabled = true; }
+			catch (error) { parsedEl.setText(input.value.trim() ? error instanceof Error ? error.message : "请输入有效 DOI、PMID、PMCID 或论文链接" : "支持 DOI、PubMed、PMC 和 Nature 文章链接"); start.disabled = true; }
 		};
 		input.addEventListener("input", validate); validate();
 		start.addEventListener("click", () => {

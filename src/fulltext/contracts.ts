@@ -52,7 +52,12 @@ export function parseAcquisitionInput(raw: string): AcquisitionInput {
 		if (["doi.org", "dx.doi.org"].includes(host)) value = decodeURIComponent(url.pathname.slice(1));
 		else if (host === "pubmed.ncbi.nlm.nih.gov" && /^\/\d+\/?$/.test(url.pathname)) value = "PMID:" + url.pathname.replace(/\//g, "");
 		else if (host === "pmc.ncbi.nlm.nih.gov" && /^\/articles\/PMC\d+\/?$/i.test(url.pathname)) value = url.pathname.split("/")[2];
-		else throw new Error("目前只识别 DOI、PubMed 和 PMC 官方论文链接");
+		else if (["nature.com", "www.nature.com"].includes(host) && /^\/articles\/[A-Za-z0-9][A-Za-z0-9-]*(?:\.pdf)?\/?$/.test(url.pathname)) {
+			// Nature article paths carry the 10.1038 DOI suffix. Resolve the resulting
+			// DOI through the existing identity providers before any source discovery.
+			value = "10.1038/" + url.pathname.split("/")[2].replace(/\.pdf$/, "");
+		}
+		else throw new Error("暂不支持此链接格式；请粘贴论文 DOI、PMID 或 PMCID。可识别 DOI、PubMed、PMC 和 Nature 文章链接");
 	}
 	value = value.replace(/^doi:\s*/i, "").trim();
 	if (/^10\.\d{4,9}\/\S+$/i.test(value) && !/[<>\u0000-\u0020]/.test(value)) return { kind: "doi", value: value.toLowerCase() };
