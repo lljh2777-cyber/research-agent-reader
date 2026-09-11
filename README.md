@@ -18,8 +18,10 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.61.1`; the beta
+The `codex/research-learning-map` development branch is at `0.62.0`; the beta
 release link above remains the published release.
+
+`0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；本批不下载原文或生成论文笔记。接下来接入本地 PDF 与更多添加动作，跨阶段待处理中心按路线归 R3。
 
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。
 

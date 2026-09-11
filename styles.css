@@ -6814,6 +6814,10 @@ body.agent-dashboard-mineru-resizing {
 .rar-library h1 { margin: 0; font-size: 1.6em; }
 .rar-library-header p { margin: 8px 0 16px; }
 .rar-library-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.rar-metadata-intake { overflow-wrap: anywhere; }
+.rar-metadata-intake [hidden] { display: none !important; }
+.rar-metadata-intake input { width: 100%; margin-bottom: 12px; }
+.rar-metadata-intake button { height: auto; min-height: 32px; white-space: normal; margin-block: 6px; }
 .rar-library-actions button { height: auto; min-height: 32px; white-space: normal; }
 .rar-library-tools { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 12px; }
 .rar-library-tools input { flex: 1 1 220px; min-width: 0; }

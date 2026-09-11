@@ -31,6 +31,9 @@ import { TopicStudyView, TOPIC_STUDY_VIEW_TYPE } from "./views/topic-study";
 import { libraryMineruVerifier } from "./library/mineru-verifier";
 import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/record-store";
 import { PaperRecordService, type PaperRecordEdit } from "./library/record-service";
+import { MetadataIntakeService } from "./library/metadata-intake";
+import { MetadataIntakeModal } from "./views/metadata-intake";
+import { IdentityResolver } from "./fulltext/identity-resolver";
 import { AcquisitionRepository } from "./fulltext/repository";
 import { FileAcquisitionStorage } from "./fulltext/file-storage";
 import { DemoAcquisitionBackend } from "./fulltext/demo-backend";
@@ -465,6 +468,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(TOPIC_STUDY_VIEW_TYPE, (leaf) => new TopicStudyView(leaf, this));
 		this.addCommand({ id: "open-topic-planning", name: "打开主题路线（预览）", callback: () => { void this.activateLearningSpace({ kind: "topic" }).catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
+		this.addCommand({ id: "add-paper-metadata", name: "添加文献信息（无需模型）", callback: () => this.openMetadataIntake() });
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
 		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ domain: "code" }); } });
 		this.addCommand({ id: "open-knowledge-maintenance", name: "打开知识库维护", callback: () => this.openKnowledgeMaintenance() });
@@ -590,6 +594,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.topicStudy?.dispose();
 		this.acquisitionClosing = true; for (const modal of this.fulltextPreviews) modal.close();
 		for(const modal of [...this.acquisitionDialogs])modal.close();
+		await this.metadataIntake?.dispose();
 		await this.sourceIntakeService?.dispose();
 		await this.jatsIntakeService?.dispose();
 		await this.jatsWikiService?.dispose();
@@ -2708,13 +2713,25 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!(file instanceof TFile)) throw new Error("代码笔记已缺失，请刷新文献库");
 		signal.throwIfAborted(); await this.app.workspace.getLeaf("tab").openFile(file);
 	}
-	activatePaperLibrary(): Promise<void> {
+	private metadataIntake?: MetadataIntakeService;
+	getMetadataIntake(): MetadataIntakeService {
+		if (this.acquisitionClosing) throw new Error("插件已关闭");
+		return this.metadataIntake ||= new MetadataIntakeService(new IdentityResolver(new HttpsSourceTransport()), this.getSourceCatalog(), new JournalPaperRecordStore(new FileSourceStorage(this.readingPluginDirectory())));
+	}
+	openMetadataIntake(): void {
+		try {
+			const modal = new MetadataIntakeModal(this.app, this.getMetadataIntake(), id => this.activatePaperLibrary(id));
+			if (this.trackAcquisitionDialog(modal)) modal.open();
+		} catch (error) { new Notice(String(error)); }
+	}
+	activatePaperLibrary(paperId?: string): Promise<void> {
 		const operation = this.libraryOpenings.then(async () => {
 			const existing = this.app.workspace.getLeavesOfType(PAPER_LIBRARY_VIEW_TYPE)[0];
 			if (existing) await existing.loadIfDeferred();
 			const leaf = existing || this.app.workspace.getLeaf("tab");
 			if (!existing) await leaf.setViewState({ type: PAPER_LIBRARY_VIEW_TYPE, active: true });
 			await this.app.workspace.revealLeaf(leaf);
+			if (paperId && leaf.view instanceof PaperLibraryView) await leaf.view.revealPaper(paperId);
 		}); this.libraryOpenings = operation.catch(() => undefined); return operation;
 	}
 	activateLearningSpace(entry: LearningEntry = { kind: "document" }): Promise<void> {

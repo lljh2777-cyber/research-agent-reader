@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { decodeInput } from "../fulltext/contracts";
+import { decodeIdentity, decodeInput } from "../fulltext/contracts";
 import { objectDigest, safeCitekey } from "../papers/identity";
 import type { SourceStorage } from "../sources/storage";
 import type { LibraryRecordObject } from "./types";
@@ -37,17 +37,21 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 const decode = (value: Uint8Array) => new TextDecoder("utf-8", { fatal: true }).decode(value);
 const same = (a: unknown, b: unknown) => objectDigest(a) === objectDigest(b);
 const exactKeys = (value: Record<string, unknown>, keys: string[]) => Object.keys(value).every(key => keys.includes(key));
-const recordIdentity = ({ paperId, title, identifiers, citekey }: LibraryRecordObject) => ({ paperId, title, identifiers, citekey });
+const recordIdentity = ({ paperId, title, identifiers, citekey, bibliography }: LibraryRecordObject) => ({ paperId, title, identifiers, citekey, ...(bibliography ? { bibliography } : {}) });
 
 export function validatePaperRecord(raw: unknown): LibraryRecordObject {
 	if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("文献人工记录格式无效");
 	const record = raw as LibraryRecordObject;
-	if (!exactKeys(raw as Record<string, unknown>, ["kind", "id", "paperId", "title", "identifiers", "citekey", "readingState", "primaryNoteId"])
+	if (!exactKeys(raw as Record<string, unknown>, ["kind", "id", "paperId", "title", "identifiers", "citekey", "bibliography", "readingState", "primaryNoteId"])
 		|| record.kind !== "record" || !PAPER_ID.test(record.paperId) || record.id !== record.paperId
 		|| typeof record.title !== "string" || !record.title.trim() || record.title.length > 2000
 		|| !record.identifiers || typeof record.identifiers !== "object" || Array.isArray(record.identifiers)
 		|| !exactKeys(record.identifiers, ["doi", "pmid", "pmcid"]) || !STATES.includes(record.readingState || "")) throw new Error("文献人工记录字段无效");
 	for (const kind of ["doi", "pmid", "pmcid"] as const) if (record.identifiers[kind] !== undefined) decodeInput({ kind, value: record.identifiers[kind] });
+	if (record.bibliography !== undefined) {
+		const bibliography = decodeIdentity(record.bibliography);
+		if (!same(bibliography, record.bibliography) || bibliography.title !== record.title || !same(bibliography.identifiers, record.identifiers)) throw new Error("书目信息与文献身份快照不一致");
+	}
 	if (record.citekey !== undefined && !safeCitekey(record.citekey)) throw new Error("文献人工记录 citekey 无效");
 	if (record.primaryNoteId !== undefined && (typeof record.primaryNoteId !== "string" || record.primaryNoteId.length > 600
 		|| !/^wiki\/sources\/[^/\\<>:"|?*\x00-\x1f]+\.md$/.test(record.primaryNoteId))) throw new Error("主要笔记必须是当前 Wiki 的论文笔记");

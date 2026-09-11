@@ -40,6 +40,8 @@ export interface LibrarySourceDescription {
 export interface LibraryRecordObject extends LibraryObjectBase {
 	kind: "record";
 	paperId: string;
+	/** Provider metadata confirmed at intake; not a scientific review or source version. */
+	bibliography?: ResolvedIdentity;
 	readingState?: PaperReadingState;
 	primaryNoteId?: string;
 	/** Read projection only: a conflicted journal has identity, but no selected human decision. */
@@ -97,6 +99,7 @@ export interface LibraryReadingProgress {
 export interface LibraryObjectSummary extends LibraryObjectRef {
 	title: string;
 	identifiers: LibraryIdentifiers;
+	bibliography?: ResolvedIdentity;
 	paperId?: string;
 	citekey?: string;
 	source?: LibrarySourceDescription;

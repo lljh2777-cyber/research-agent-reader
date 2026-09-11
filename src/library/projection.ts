@@ -66,6 +66,7 @@ function summarize(item: LibraryObject): LibraryObjectSummary {
 	const result: LibraryObjectSummary = { ...ref(item), title: item.title, identifiers: { ...item.identifiers },
 		...(item.paperId ? { paperId: item.paperId } : {}), ...(item.citekey ? { citekey: item.citekey } : {}) };
 	if (item.kind === "source") { result.source = structuredClone(item.source); result.capabilities = librarySourceCapabilities(item.source); }
+	if (item.kind === "record" && item.bibliography) result.bibliography = structuredClone(item.bibliography);
 	if (item.kind === "session") result.reading = libraryReadingProgress(item.session);
 	if (item.kind === "note") result.contentHash = item.contentHash;
 	if (item.kind === "note") result.noteReview = item.review

@@ -7,7 +7,7 @@ import { decodePackageManifest,loadSourcePackage,type SourcePackageManifest } fr
 import { inspectSourcePackages } from "./catalog-reader";
 
 export interface LegacySource {path:string;kind:"mineru"|"markdown"|"wiki";identifiers:ResolvedIdentity["identifiers"];title:string;citekey?:string;}
-export interface CatalogPlan {paperId:string;citekey:string;packages:SourcePackageManifest[];legacy:LegacySource[];reuse?:SourceManifest;warnings:string[];}
+export interface CatalogPlan {paperId:string;existingPaperId?:string;citekey:string;packages:SourcePackageManifest[];legacy:LegacySource[];reuse?:SourceManifest;warnings:string[];}
 export interface CatalogIdentityRecord {paperId:string;citekey?:string;identifiers:ResolvedIdentity["identifiers"];}
 export class SourceCatalog {
 	constructor(readonly storage:SourceStorage,private legacySources:()=>Promise<LegacySource[]>=async()=>[],private recordIdentities:()=>Promise<CatalogIdentityRecord[]>=async()=>[]){}
@@ -64,7 +64,7 @@ export class SourceCatalog {
 		if (listed.packages.some(p => p.citekey === citekey && !packages.includes(p))) throw new Error("原文 citekey 被另一论文占用");
 		if (persisted.some(p => p.citekey === citekey && !records.includes(p))) throw new Error("文献记录 citekey 被另一论文占用");
 		for (const item of packages) await loadSourcePackage(this.storage, item.packageKey);
-		return { paperId: [...ids][0] || "p-" + randomUUID(), citekey, packages, legacy,
+		return { paperId: [...ids][0] || "p-" + randomUUID(), ...(ids.size ? { existingPaperId: [...ids][0] } : {}), citekey, packages, legacy,
 			warnings: [...listed.warnings, ...legacy.filter(p => p.kind !== "wiki").map(p => "旧来源版本未知，未自动替代本次来源：" + p.path)] };
 	}
 }

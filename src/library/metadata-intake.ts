@@ -1,0 +1,58 @@
+import { decodeIdentity, parseAcquisitionInput } from "../fulltext/contracts";
+import type { IdentityResolver } from "../fulltext/identity-resolver";
+import type { SourceCatalog, CatalogPlan } from "../papers/catalog";
+import type { ResolvedIdentity } from "../papers/identity";
+import type { PaperRecordStore } from "./record-store";
+
+export interface MetadataPreview {
+	identity: ResolvedIdentity;
+	existing: boolean;
+	warnings: string[];
+}
+export interface MetadataSaved { paperId: string; reused: boolean; }
+
+/** Read-only preview followed by explicit, serialized create. No acquisition job or model. */
+export class MetadataIntakeService {
+	private previews = new WeakMap<MetadataPreview, { identity: ResolvedIdentity; plan: CatalogPlan }>();
+	private queue: Promise<unknown> = Promise.resolve();
+	private closed = false;
+	constructor(private readonly resolver: Pick<IdentityResolver, "resolve">, private readonly catalog: SourceCatalog, private readonly store: PaperRecordStore) {}
+	private available(signal: AbortSignal): void { signal.throwIfAborted(); if (this.closed) throw new Error("插件已关闭，文献信息操作已停止"); }
+	async prepare(raw: string, signal: AbortSignal): Promise<MetadataPreview> {
+		this.available(signal);
+		const input = parseAcquisitionInput(raw);
+		const resolved = await this.resolver.resolve(input, signal);
+		this.available(signal);
+		if (!resolved) throw new Error("未找到可核对的书目信息，请检查标识后重新查询");
+		const identity = decodeIdentity(resolved);
+		if (identity.identifiers[input.kind] !== input.value) throw new Error("查询结果与输入标识不一致，未保存");
+		const plan = await this.catalog.associate(identity); this.available(signal);
+		const preview = { identity: structuredClone(identity), existing: Boolean(plan.existingPaperId), warnings: [...plan.warnings] };
+		this.previews.set(preview, { identity, plan }); return preview;
+	}
+	save(preview: MetadataPreview, signal: AbortSignal): Promise<MetadataSaved> {
+		const prepared = this.previews.get(preview);
+		if (!prepared) return Promise.reject(new Error("查询预览已失效，请重新查询"));
+		const operation = this.queue.then(async () => {
+			this.available(signal);
+			// Repeat exact-ID association to observe records saved since the preview.
+			const latest = await this.catalog.associate(prepared.identity); this.available(signal);
+			const paperId = latest.existingPaperId || prepared.plan.paperId;
+			if (prepared.plan.existingPaperId && latest.existingPaperId !== prepared.plan.existingPaperId) throw new Error("关联文献已变化，请重新查询核对");
+			const state = await this.store.read(paperId); this.available(signal);
+			if (state.errors.length) throw new Error("文献记录无法核验：" + state.errors.join("；"));
+			// A committed record owns its metadata and human decisions, including conflicts.
+			if (state.revisions.length) return { paperId, reused: true };
+			const bibliography = structuredClone(prepared.identity);
+			await this.store.append({ kind: "record", id: paperId, paperId, title: bibliography.title,
+				identifiers: { ...bibliography.identifiers }, bibliography, citekey: latest.citekey, readingState: "unmarked" }, []);
+			// Other devices/services do not share this queue. Retain competing records and
+			// expose association conflicts instead of silently merging their identities.
+			const published = await this.catalog.associate(bibliography);
+			if (published.existingPaperId !== paperId) throw new Error("书目信息已提交，但文献关联已变化，请重新核对");
+			return { paperId, reused: false };
+		});
+		this.queue = operation.catch(() => undefined); return operation;
+	}
+	async dispose(): Promise<void> { this.closed = true; await this.queue; }
+}
