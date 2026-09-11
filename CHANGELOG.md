@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### R0 live fixed-evidence QA — development tools
+
+- 新增固定输入准备、PDF 页图像渲染、显式模型答题和复核报告工具。每题保留实际请求、首次响应与图像摘要，失败即停，无自动重试；输出只创建在仓库、原文、计划及 Vault 之外。
+- 非流式调用复用已验证的 OpenAI-compatible 配置；18 题均保存首次回答，6 道图像题保留实际提交记录，900 个测试库受保护文件不变。报告保留用量原始字段及不可相加的异常，区分图像传输、引用格式与独立科学审阅。
+- 保留阈值前后矛盾、额外条件和超范围推断等复核线索，不报告科学通过率或推算费用。
+- 本批保持插件 `0.52.2`，未改阅读规则和正式数据；运行结果与复现方式见 [R0 真实模型答题](docs/reading-quality-runner-r0.md)。
+
 ### JATS publisher formulas and alternative assets — 0.52.2
 
 - 新增 `rar-jats-3`，受限识别公式外的出版文档壳并保留数学正文；仅在实际采用 TeX 时免除同组备用图片要求，未知公式继续报告缺口。

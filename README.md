@@ -4,7 +4,7 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 未来开发以[开发路线：阅读与知识沉淀](docs/development-roadmap.md)为准：先补齐文献关联与状态，接通文献详情、统一添加、摘录和知识整理，再独立推进存储迁移、翻译与专题对照。路线中的规划功能尚未实现；下文记录当前能力。
 
-已完成 [R0 文献聚合基础](docs/library-r0.md)的只读查询、[人工决定持久记录](docs/library-records-r0.md)、[旧资料兼容与读取性能基线](docs/library-compatibility-r0.md)，并准备了 [3 篇论文共 18 题的科学阅读质量样本](docs/reading-quality-baseline-r0.md)。`0.52.1` 增加旧 MinerU 单包完整核验和外部批注只读适配，资产读取受统一预算约束；查询不触发恢复、模型或网络。质量样本已核验指定证据位置，真实模型答题和独立人工复核尚未完成；文献详情及编辑控件仍待交付，现有首页不变。
+已完成 [R0 文献聚合基础](docs/library-r0.md)的只读查询、[人工决定持久记录](docs/library-records-r0.md)、[旧资料兼容与读取性能基线](docs/library-compatibility-r0.md)，并建立 [3 篇论文共 18 题的科学阅读质量样本](docs/reading-quality-baseline-r0.md)与[真实模型答题和复核工具](docs/reading-quality-runner-r0.md)。`0.52.1` 增加旧 MinerU 单包完整核验和外部批注只读适配，资产读取受统一预算约束；查询不触发恢复、模型或网络。实际模型观察保留首次回答、图像和用量，独立科学复核尚未完成；文献详情及编辑控件仍待交付，现有首页不变。
 
 > Public release status: `0.31.0` beta is published at
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
