@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### R1 native source closeout — 0.61.1
+
+- 修复阅读器复用标签时仍显示上一篇文献标题：加载、成功与失败状态同步刷新标签，关闭及过期加载继续隔离。
+- 真实 PDF/JATS 保存包的原文显示、正确来源阅读设置、缺失保护和重载恢复通过；新增标题回归，R1 共 13 组测试通过。
+- [R1 完成工程收尾](docs/r1-closeout.md)，下一步进入 R2。测试库保留两份真实 QA 原文包，独立科学／教学审阅状态不变。
+
 ### R1 acceptance checkpoint — 0.61.0
 
 - 新增 `pnpm test:r1`，统一运行 12 组无批量清理的定向回归；产品版本与行为不变。

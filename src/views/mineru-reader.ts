@@ -173,6 +173,9 @@ export class MineruReaderView extends ItemView {
 	getDisplayText(): string {
 		return this.readerPackage?.title || "文献阅读器";
 	}
+	private refreshTabTitle(): void {
+		(this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
+	}
 
 	getIcon(): string {
 		return "book-open-text";
@@ -250,12 +253,14 @@ export class MineruReaderView extends ItemView {
 		const generation = ++this.loadGeneration;
 		this.revokeVerifiedResourceUrls();
 		this.readerPackage = null;
+		this.refreshTabTitle();
 		await this.pdfRenderer.destroy();
 		this.renderLoading();
 		try {
 			const loaded = await this.loader.load(this.readerState.articlePath);
 			if (!this.opened || generation !== this.loadGeneration) return;
 			this.readerPackage = loaded;
+			this.refreshTabTitle();
 			if (loaded.sourceKind !== "mineru") {this.readerState.mode = "visuals";this.readerState.showLayoutBoxes=false;}
 			if (loaded.pdfPath && loaded.verifiedPdfBytes) {
 				try {
@@ -319,6 +324,7 @@ export class MineruReaderView extends ItemView {
 		} catch (error) {
 			if (!this.opened || generation !== this.loadGeneration) return;
 			this.readerPackage = null;
+			this.refreshTabTitle();
 			await this.pdfRenderer.destroy();
 			this.renderError(error);
 		}
