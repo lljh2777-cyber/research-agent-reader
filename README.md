@@ -4,9 +4,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 未来开发以[开发路线：科研阅读、主题学习与知识沉淀](docs/development-roadmap.md)为准：接通文献详情、统一添加、摘录和知识整理，再独立推进存储迁移、翻译与专题对照。新增主题学习扩展，允许从主题、目标与基础开始，使用对话和思维导图学习一般知识；资料阅读继续保持原文证据规则。
 
-[主题学习 T0](docs/topic-learning-development.md)已交付独立会话、路线生成／编辑／确认与持久恢复的底层服务，`pnpm test:topic-learning` 可运行定向检查。尚未接入插件界面，当前不能直接从主题开始学习；对话、导图和导出在 R1 首批导航后的 T1 交付。
+[主题路线 T1.1](docs/topic-planning-t11.md)已在 `0.54.0` 接入原生界面：从工作台的「主题路线（预览）」创建目标、手动编排或显式调用模型生成路线，保存和确认，并查看历史版本。无需资料即可使用；讲解、对话、导图和导出尚未开放。实现复用 [T0 服务](docs/topic-learning-development.md)，新增 `pnpm test:topic-workspace` 定向检查。
 
-[R1 首批导航](docs/library-navigation-r1.md)已在 `0.53.0` 交付：从工作台的「文献库」搜索和筛选记录，打开详情、指定原文、阅读会话与笔记；旧 MinerU 可按需核验单个包。保留待关联和来源缺口，页面浏览不调用模型。下一步接入 T1 主题创建与路线编辑界面，R1 人工状态编辑随后继续。
+[R1 首批导航](docs/library-navigation-r1.md)已在 `0.53.0` 交付：从工作台的「文献库」搜索和筛选记录，打开详情、指定原文、阅读会话与笔记；旧 MinerU 可按需核验单个包。保留待关联和来源缺口，页面浏览不调用模型。下一步开展 T1.2 主题讲解与导图，R1 人工状态编辑随后继续。
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
@@ -14,7 +14,7 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.53.0`; the beta
+The `codex/research-learning-map` development branch is at `0.54.0`; the beta
 release link above remains the published release.
 
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。

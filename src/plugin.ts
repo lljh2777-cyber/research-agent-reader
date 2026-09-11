@@ -21,6 +21,9 @@ import { libraryNavigation } from "./library/browser";
 import type { LibraryObjectSummary } from "./library/types";
 import { PaperLibraryView, PAPER_LIBRARY_VIEW_TYPE } from "./views/paper-library";
 import { documentLearningEntry, type LearningEntry } from "./learning/entry";
+import { TopicLearningService } from "./topic-learning/service";
+import { TopicSessionStore } from "./topic-learning/store";
+import { TopicLearningView, TOPIC_LEARNING_VIEW_TYPE } from "./views/topic-learning";
 import { libraryMineruVerifier } from "./library/mineru-verifier";
 import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/record-store";
 import { PaperRecordService, type PaperRecordEdit } from "./library/record-service";
@@ -322,6 +325,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	private readingEngine?: ReadingEngine;
 	private readingOpenings: Promise<void> = Promise.resolve();
 	private libraryOpenings: Promise<void> = Promise.resolve();
+	private topicOpenings: Promise<void> = Promise.resolve();
+	private topicLearning?: TopicLearningService;
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private knowledgeService: KnowledgeRetrievalService | null = null;
 	private knowledgeModels: BgeModels | null = null;
@@ -448,6 +453,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(QUERY_WIKI_VIEW_TYPE, (leaf) => new QueryWikiView(leaf, this));
 		this.registerView(READING_VIEW_TYPE, (leaf) => new ReadingWorkspaceView(leaf, this));
 		this.registerView(PAPER_LIBRARY_VIEW_TYPE, (leaf) => new PaperLibraryView(leaf, this));
+		this.registerView(TOPIC_LEARNING_VIEW_TYPE, (leaf) => new TopicLearningView(leaf, this));
+		this.addCommand({ id: "open-topic-planning", name: "打开主题路线（预览）", callback: () => { void this.activateLearningSpace({ kind: "topic" }).catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
 		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ domain: "code" }); } });
@@ -570,6 +577,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		this.topicLearning?.dispose();
 		this.acquisitionClosing = true; for (const modal of this.fulltextPreviews) modal.close();
 		for(const modal of [...this.acquisitionDialogs])modal.close();
 		await this.sourceIntakeService?.dispose();
@@ -2688,7 +2696,24 @@ export default class AgentDashboardPlugin extends Plugin {
 		}); this.libraryOpenings = operation.catch(() => undefined); return operation;
 	}
 	activateLearningSpace(entry: LearningEntry = { kind: "document" }): Promise<void> {
+		if (entry.kind === "topic") {
+			const operation = this.topicOpenings.then(async () => {
+				const existing = this.app.workspace.getLeavesOfType(TOPIC_LEARNING_VIEW_TYPE)[0];
+				if (existing) await existing.loadIfDeferred();
+				const leaf = existing || this.app.workspace.getLeaf("tab");
+				if (!existing) await leaf.setViewState({ type: TOPIC_LEARNING_VIEW_TYPE, active: true });
+				await this.app.workspace.revealLeaf(leaf);
+				if (entry.sessionId && leaf.view instanceof TopicLearningView) await leaf.view.selectSession(entry.sessionId);
+			}); this.topicOpenings = operation.catch(() => undefined); return operation;
+		}
 		return this.activateReadingWorkspace(documentLearningEntry(entry));
+	}
+	getTopicLearning(): TopicLearningService { return this.topicLearning ||= new TopicLearningService(new TopicSessionStore(new FileSourceStorage(this.readingPluginDirectory()))); }
+	getTopicModels(): Array<{ id: string; name: string; model: string }> { return this.getVerifiedProviderProfiles().map(({ id, name, model }) => ({ id, name, model })); }
+	createTopicBackend(profileId: string): ReadingBackend {
+		const profile = this.getVerifiedProviderProfiles().find(p => p.id === profileId);
+		if (!profile) throw new Error("请选择已通过连接测试的 Direct API 模型");
+		return this.createReadingBackend({ backend: profile.id, model: profile.model }, false);
 	}
 	async openLibraryObject(item: LibraryObjectSummary, read: boolean, signal: AbortSignal): Promise<void> {
 		signal.throwIfAborted();
@@ -3597,7 +3622,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.readingWorkspace;
 	}
 	getReadingEngine(): ReadingEngine { this.getReadingWorkspace(); return this.readingEngine!; }
-	createReadingBackend(session: ReadingSession, streaming = true): ReadingBackend {
+	createReadingBackend(session: Pick<ReadingSession, "backend" | "model">, streaming = true): ReadingBackend {
 		if (session.backend === "codex-cli") return new CodexReadingBackend(this.settings.codexExecutable, session.model || this.settings.codexModel, this.readingPluginDirectory());
 		const profile = this.getProviderProfile(session.backend); if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
 		return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, streaming && profile.lastTest.streamingVerified === true, supportsReadingSchema(profile), () => this.resolveWebSearchBackend(profile));

@@ -1,4 +1,4 @@
-import type { ReadingBackend } from "../reading/types";
+import type { ReadingBackend, ReadingBackendRequest } from "../reading/types";
 import { createTopicSession, topicDigest, topicPlanDigest, validateTopicIntent, validateTopicPlan } from "./contracts";
 import { generateTopicPlan } from "./planning";
 import { TopicSessionStore } from "./store";
@@ -38,7 +38,15 @@ export class TopicLearningService {
 		session.confirmation = { planDigest: topicPlanDigest(session), confirmedAt: session.updatedAt };
 		return this.store.append(session, expected);
 	}
-	async plan(id: string, expected: string, backend: ReadingBackend, signal?: AbortSignal): Promise<TopicRevision> {
+	/** Explicit recovery into a new session; never rewrite or choose a winner in conflicted history. */
+	async copyRevision(id: string, digest: string): Promise<TopicRevision> {
+		const history = await this.store.read(id), revision = history.revisions.find(item => item.digest === digest);
+		if (!revision) throw new Error("所选历史版本无法核验，请重新读取");
+		const session = createTopicSession(revision.session.intent);
+		if (revision.session.plan) { session.plan = structuredClone(revision.session.plan); session.planOrigin = structuredClone(revision.session.planOrigin!); }
+		return this.store.append(session, null);
+	}
+	async plan(id: string, expected: string, backend: ReadingBackend, signal?: AbortSignal, onUsage?: ReadingBackendRequest["onUsage"]): Promise<TopicRevision> {
 		if (this.active.has(id)) throw new Error("主题路线正在生成，请等待或取消");
 		const controller = new AbortController(); this.active.set(id, controller);
 		const abort = () => controller.abort(new Error("主题路线生成已取消"));
@@ -54,7 +62,7 @@ export class TopicLearningService {
 			if (!provider?.trim() || !model?.trim() || provider.length > 160 || model.length > 200) throw new Error("主题路线需要有效的模型与供应商名称");
 			const cancelled = new Promise<never>((_, reject) => { rejectAbort = () => reject(controller.signal.reason); controller.signal.addEventListener("abort", rejectAbort, { once: true }); });
 			controller.signal.throwIfAborted();
-			const plan = await Promise.race([generateTopicPlan(current.session.intent, backend, controller.signal), cancelled]);
+			const plan = await Promise.race([generateTopicPlan(current.session.intent, backend, controller.signal, onUsage), cancelled]);
 			controller.signal.throwIfAborted();
 			const session = this.touch(current.session); session.plan = plan; session.planOrigin = { kind: "model-knowledge", provider, model };
 			delete session.confirmation;

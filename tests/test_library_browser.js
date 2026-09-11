@@ -40,7 +40,7 @@ const deferred = () => { let resolve, reject; const promise = new Promise((a, b)
 	assert.equal(libraryNavigation(sessionItem, history, true).sessionId, sessionItem.id, "missing source can still open exact history");
 	assert.throws(() => libraryNavigation({ ...sessionItem, reading: { ...sessionItem.reading, source: { ...sessionItem.reading.source, fingerprint: "b".repeat(64) } } }, history), /变化/);
 	assert.deepEqual(documentLearningEntry({ kind: "document", reading: { sessionId: "exact" } }), { sessionId: "exact" });
-	assert.throws(() => documentLearningEntry({ kind: "topic", sessionId: "t-new" }), /尚未开放/);
+	assert.throws(() => documentLearningEntry({ kind: "topic", sessionId: "t-new" }), /不能进入资料/);
 	// Duplicate clicks coalesce; opening/filtering/details are consumers, never separate scans.
 	{
 		const gate = deferred(); let calls = 0, changes = 0;

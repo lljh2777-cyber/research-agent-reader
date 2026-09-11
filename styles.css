@@ -6731,6 +6731,39 @@ body.agent-dashboard-mineru-resizing {
 .rar-jats-figure-link { margin-block: 8px; }
 
 /* Read-only paper library. The pane width, rather than the desktop window, controls stacking. */
+.rar-topic { container-type: inline-size; padding: 24px; overflow: auto; }
+.rar-topic [hidden] { display: none !important; }
+.rar-topic-header { display: flex; justify-content: space-between; align-items: start; gap: 16px; flex-wrap: wrap; }
+.rar-topic h1 { margin: 0; font-size: 1.65em; }
+.rar-topic h2 { margin: 0 0 14px; font-size: 1.25em; }
+.rar-topic h3 { margin: 0 0 12px; font-size: 1em; }
+.rar-topic-intro { padding: 12px 16px; border-radius: 8px; background: var(--background-secondary); line-height: 1.6; }
+.rar-topic-muted, .rar-topic-status { color: var(--text-muted); font-size: var(--font-ui-small); line-height: 1.6; overflow-wrap: anywhere; }
+.rar-topic-warning { border-left: 3px solid var(--text-warning); padding-left: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.rar-topic-body { display: grid; grid-template-columns: minmax(180px, 27%) minmax(0, 1fr); gap: 24px; align-items: start; }
+.rar-topic-sidebar, .rar-topic-editor { min-width: 0; }
+.rar-topic-editor { border-left: 1px solid var(--background-modifier-border); padding-left: 24px; overflow-wrap: anywhere; }
+.rar-topic-editor > section + section, .rar-topic-revisions { margin-top: 28px; }
+.rar-topic-field { display: flex; flex-direction: column; gap: 8px; margin: 14px 0; font-size: var(--font-ui-small); }
+.rar-topic-field :is(input, textarea, select) { width: 100%; min-width: 0; max-width: 100%; }
+.rar-topic-field textarea { resize: vertical; min-height: 72px; }
+.rar-topic-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.rar-topic button { white-space: normal; height: auto; min-height: 32px; }
+.rar-topic-history { display: flex; flex-direction: column; gap: 8px; max-height: 65vh; overflow: auto; padding: 2px; }
+.rar-topic-history button { flex: 0 0 auto; display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 12px; text-align: left; overflow-wrap: anywhere; box-shadow: none; border: 1px solid var(--background-modifier-border); }
+.rar-topic-history button span { color: var(--text-muted); font-size: var(--font-ui-small); }
+.rar-topic-history button[aria-pressed="true"] { border-color: var(--interactive-accent); background: var(--background-modifier-active-hover); }
+.rar-topic-unit { background: var(--background-secondary); border: 1px solid var(--background-modifier-border); border-radius: 8px; padding: 16px; margin: 18px 0; }
+.rar-topic-unit fieldset { border: 0; padding: 0; margin: 12px 0; min-width: 0; font-size: var(--font-ui-small); }
+.rar-topic-unit fieldset label { display: flex; align-items: start; gap: 8px; margin: 8px 0; }
+.rar-topic-unit fieldset input { flex-shrink: 0; }
+.rar-topic-revisions details { margin: 12px 0; padding-left: 12px; border-left: 1px solid var(--background-modifier-border); }
+.rar-topic-revisions p { white-space: pre-wrap; }
+@container (max-width: 650px) {
+  .rar-topic-body { grid-template-columns: minmax(0, 1fr); }
+  .rar-topic-history { max-height: 200px; }
+  .rar-topic-editor { border-left: 0; padding-left: 0; border-top: 1px solid var(--background-modifier-border); padding-top: 20px; }
+}
 .rar-library { container-type: inline-size; padding: 20px; overflow: auto; }
 .rar-library [hidden] { display: none !important; }
 .rar-library-header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
