@@ -1,6 +1,7 @@
 import { Modal, Notice } from "obsidian";
 import type AgentDashboardPlugin from "../plugin";
 import type { SourceSavePlan } from "./source-intake";
+import { pdfSourceVersionLabel } from "../sources/pdf-snapshot";
 
 /** No automatic confirmation: enable the commit button only after the bound raster is displayed. */
 export async function openSourceSave(plugin:AgentDashboardPlugin,jobId:string):Promise<void> {
@@ -11,7 +12,7 @@ export async function openSourceSave(plugin:AgentDashboardPlugin,jobId:string):P
 	modal.contentEl.createEl("h3",{text:plan.snapshot.identity.title});
 	modal.contentEl.createEl("p",{text:"核对原文身份后保存 PDF，并登记原文索引。此操作不调用模型或 MinerU，也不生成文章 Wiki。"});
 	modal.contentEl.createEl("p",{text:[plan.snapshot.identity.authors.join("；"),plan.snapshot.identity.year,Object.entries(plan.snapshot.identity.identifiers).map(([k,v])=>`${k.toUpperCase()}：${v}`).join(" · ")].filter(Boolean).join("\n")});
-	modal.contentEl.createEl("p",{text:`稿件类型：${plan.snapshot.candidate.version==="version_of_record"?"出版版本":"作者接受稿"}；身份依据：${plan.snapshot.identity.evidence.map(e=>e.provider).join("、")}`});
+	modal.contentEl.createEl("p",{text:`稿件类型：${pdfSourceVersionLabel(plan.snapshot)}；身份依据：${plan.snapshot.identity.evidence.map(e=>e.provider).join("、")}`});
 	modal.contentEl.createEl("code",{text:`papers/${plan.packageKey}/source.pdf`});
 	modal.contentEl.createEl("p",{text:"索引登记：在 papers/index.md 添加此原文的普通路径记录，保留现有内容。"});
 	for(const warning of [...plan.snapshot.identity.warnings,...plan.warnings])modal.contentEl.createEl("p",{text:warning,cls:"rar-fulltext-muted"});

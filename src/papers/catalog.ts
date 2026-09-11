@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { PdfSnapshot } from "../fulltext/contracts";
+import { pdfSourceVersion, type PdfSourceSnapshot } from "../sources/pdf-snapshot";
 import { decodeSourceManifest, loadPdfSource, sourceVersion, type SourceManifest } from "../sources/pdf-package";
 import type { SourceStorage } from "../sources/storage";
 import { safeCitekey, sourceCitekey, type ResolvedIdentity } from "./identity";
@@ -24,8 +24,8 @@ export class SourceCatalog {
 		}
 		return {packages,warnings};
 	}
-	async prepare(snapshot:PdfSnapshot):Promise<CatalogPlan> {
-		const plan=await this.associate(snapshot.identity),reuse=plan.packages.find((p):p is SourceManifest=>p.packageKind==="pdf-source"&&p.version===snapshot.candidate.version&&p.sourceVersionId===sourceVersion(snapshot)&&p.files[0].sha256===snapshot.artifact.sha256);return {...plan,reuse};
+	async prepare(snapshot:PdfSourceSnapshot):Promise<CatalogPlan> {
+		const plan=await this.associate(snapshot.identity),reuse=plan.packages.find((p):p is SourceManifest=>p.packageKind==="pdf-source"&&p.version===pdfSourceVersion(snapshot)&&p.sourceVersionId===sourceVersion(snapshot)&&p.files[0].sha256===snapshot.artifact.sha256);return {...plan,reuse};
 	}
 	async associate(identity:ResolvedIdentity):Promise<CatalogPlan> {
 		const listed = await this.list(), allLegacy = await this.legacySources(), persisted = await this.recordIdentities();

@@ -23,6 +23,8 @@ release link above remains the published release.
 
 `0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；本批不下载原文或生成论文笔记。接下来接入本地 PDF 与更多添加动作，跨阶段待处理中心按路线归 R3。
 
+[本地 PDF 来源与共用保存器](docs/local-pdf-core-r2.md)已完成底层适配，保留明确本地凭据及未核验版本，支持哈希绑定和中断恢复。本地文件选择界面尚未开放，版本与测试部署保持 `0.62.0`。
+
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。
 
 全文获取与多来源入库的后续设计见[架构与开发流程](docs/fulltext-acquisition-design.md)。

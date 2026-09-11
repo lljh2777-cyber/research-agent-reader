@@ -32,6 +32,7 @@
 		"test:library-code": "node tests/test_library_code_links.js",
 		"test:r1": "node tests/run_r1_tests.js",
 		"test:metadata-intake": "node tests/test_metadata_intake.js",
+		"test:local-pdf": "node tests/test_local_pdf_source.js",
 		"test:ingest": "node tests/test_agent_ingest_evidence.js && node tests/test_ingest_pdf_draft.js && node tests/test_ingest_requests.js && node tests/test_ingest_registration.js && node tests/test_ingest_task_lifecycle.js",
 		"test:fulltext": "node tests/test_fulltext_acquisition.js && node tests/test_fulltext_storage.js && node tests/test_fulltext_transport.js && node tests/test_fulltext_pmc.js && node tests/test_fulltext_oa.js && node tests/test_fulltext_intake_safety.js",
 		"test:annotations": "node tests/test_annotation_web_search.js && node tests/test_annotation_source_integrity.js && node tests/test_dashboard_annotations.js",
