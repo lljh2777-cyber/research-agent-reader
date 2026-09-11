@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### R0 scientific reading samples — development tools
+
+- 固定 3 篇 CC BY 全文、18 个问题、来源字节摘要及 PDF/JATS 原文锚点，提供只创建新文件的来源捕获、离线核验、模型输入与人工复核包导出工具。
+- 模型输入和暂定参考要点分开；图像请求不冒充实际视觉读取。保存真实转换失败、未运行模型和待独立人工复核状态，不以定位校验代替科学质量判断。
+- 本批不改变插件运行行为，版本保持 `0.52.1`；范围和复现方式见 [R0 科学阅读质量样本](docs/reading-quality-baseline-r0.md)。
+
 ### Legacy library compatibility and read baseline — 0.52.1
 
 - 显式单包 MinerU 核验复用现有完整加载器，清单产物及图像读取计入同一次预算并支持取消；普通查询保留未核验状态，损坏原文不降级。

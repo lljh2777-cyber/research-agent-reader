@@ -1,0 +1,741 @@
+{
+  "schemaVersion": 1,
+  "id": "r0-reading-quality-v1",
+  "referenceStatus": "provisional",
+  "createdAt": "2026-09-11",
+  "samples": [
+    {
+      "id": "deseq2",
+      "title": "Moderated estimation of fold change and dispersion for RNA-seq data with DESeq2",
+      "doi": "10.1186/s13059-014-0550-8",
+      "pmcid": "PMC4302049",
+      "version": "PMC4302049.1",
+      "license": "CC-BY-4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "files": [
+        {
+          "path": "metadata.json",
+          "bytes": 1759,
+          "sha256": "1f3b284a1ba779f6096e3705b1b54c293f4944d9106f0f05b7ff6341257cd77a",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/metadata/PMC4302049.1.json"
+        },
+        {
+          "path": "article.xml",
+          "bytes": 287151,
+          "sha256": "e33ad5f3dee3d0dfdbb360d1c4ef2752012698d04df421d15a38dd11d35b18fa",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/PMC4302049.1.xml",
+          "md5": "09c3e82ce47ff1864721a500f3749262"
+        },
+        {
+          "path": "source.pdf",
+          "bytes": 2878815,
+          "sha256": "bf6e86ec8bea5834bce478b907bf527af76fcecfa31680c0ae8291ab1f915572",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/PMC4302049.1.pdf",
+          "md5": "be1642ccc6f7df36271c8fb8b1ab05a8"
+        },
+        {
+          "path": "13059_2014_550_Fig1_HTML.jpg",
+          "bytes": 43877,
+          "sha256": "5d98b16b954b4a903e8bcdcd878581e458eda1c484c00780cc6518c154116d81",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/13059_2014_550_Fig1_HTML.jpg",
+          "md5": "4abdcb63e3cf96e69a36582223dc5891"
+        },
+        {
+          "path": "13059_2014_550_Fig2_HTML.jpg",
+          "bytes": 62275,
+          "sha256": "5e98df53cfe4d5c8d9c46b9d6f0be0cd3012aa133beae73bf0153e6b4908c2a4",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/13059_2014_550_Fig2_HTML.jpg",
+          "md5": "5b838bf6a2c3055721d1bc151e472f76"
+        },
+        {
+          "path": "13059_2014_550_Fig3_HTML.jpg",
+          "bytes": 44792,
+          "sha256": "58d4d148ddad03e40406193eff227bbb329e7fbee550ef1aecb565d49c420d98",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/13059_2014_550_Fig3_HTML.jpg",
+          "md5": "596bb26fe122689bb402ca37714b0437"
+        },
+        {
+          "path": "13059_2014_550_Fig4_HTML.jpg",
+          "bytes": 39414,
+          "sha256": "04a07b0e1f2a558ecd70286ebc3e6b8e06459e324402ce04baf0ca5da2379f50",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/13059_2014_550_Fig4_HTML.jpg",
+          "md5": "4137c829cc8941c6ce60daf256cd796c"
+        },
+        {
+          "path": "13059_2014_550_Fig5_HTML.jpg",
+          "bytes": 47777,
+          "sha256": "3dd44a7bbbaa34da24e62ad870db96abbe7fbd33eef01b3772348d2f7adfd456",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/13059_2014_550_Fig5_HTML.jpg",
+          "md5": "0df2aa0afa4b43d2b877e882a83df958"
+        },
+        {
+          "path": "13059_2014_550_Fig6_HTML.jpg",
+          "bytes": 69029,
+          "sha256": "46e34f5589c72605adfd6884ce45ff44eb28bfba6266f1f46083e0f5ea5e9090",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/13059_2014_550_Fig6_HTML.jpg",
+          "md5": "92a92c395d74f4bfa9cc86c26914b441"
+        },
+        {
+          "path": "13059_2014_550_Fig7_HTML.jpg",
+          "bytes": 24473,
+          "sha256": "3018a6a8ffc9f995f3125f11371b0c763288b22020aff51cde4da69fbf0b4636",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/13059_2014_550_Fig7_HTML.jpg",
+          "md5": "8a5a3242d06c51a3cfcf0160fd1f6323"
+        },
+        {
+          "path": "13059_2014_550_Fig8_HTML.jpg",
+          "bytes": 147961,
+          "sha256": "ba518042bcfefb03fcad541e7a8020305d62ae1c31c1d520c3c035e34c110ffb",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/13059_2014_550_Fig8_HTML.jpg",
+          "md5": "515fa8807d704ae1d9e6d0f12f497866"
+        },
+        {
+          "path": "13059_2014_550_Fig9_HTML.jpg",
+          "bytes": 146171,
+          "sha256": "898e1073a70b0bdb77968e13d98a8febcd3838271214373d38cedf2681e4ad2d",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC4302049.1/13059_2014_550_Fig9_HTML.jpg",
+          "md5": "bb7e8a9630b02daff38cc77caf65f013"
+        },
+        {
+          "path": "pdf-text.json",
+          "bytes": 101723,
+          "sha256": "a16c14f30c19973478c41e2a08325ef5ccd829bd9c1233822450a5071f4caf23",
+          "generatedBy": "PyMuPDF 1.27.2.3; page.get_text(); UTF-8 JSON"
+        }
+      ],
+      "questions": [
+        {
+          "id": "D01",
+          "category": "方法与数据",
+          "prompt": "按这篇 2014 年论文，DESeq2 的统计模型接收什么数据、采用什么分布？rlog 输出能否直接替代该模型的输入？",
+          "primaryFormat": "pdf",
+          "evidence": [
+            {
+              "format": "pdf",
+              "page": 2,
+              "sha256": "e832819627e11e4883d1b1287d5da27b134ed98c2ad0605ed02c3880b121a9b5"
+            },
+            {
+              "format": "pdf",
+              "page": 8,
+              "sha256": "1e9a7ef8f9c910280c9167667f3340e77e1cdbc939840989d138391368631c17"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "输入是基因 × 样本的原始计数矩阵，拟合负二项广义线性模型。",
+            "归一化因子进入均值模型；rlog 用于变换和探索，论文明确说差异推断使用原始计数。"
+          ],
+          "mustNotClaim": [
+            "把 rlog、TPM 或连续正态数据当成论文模型的既定输入。"
+          ]
+        },
+        {
+          "id": "D02",
+          "category": "数字与单位",
+          "prompt": "Methods 的公式使用自然对数链接，但论文说软件报告的系数和标准误是什么尺度？这两种表述是否矛盾？",
+          "primaryFormat": "pdf",
+          "evidence": [
+            {
+              "format": "pdf",
+              "page": 14,
+              "sha256": "f439f156e7edfcd5d3b2222e3d4bbe816379dff96d6c9f1f44ed7258d0676866"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "方法公式为记号简便使用自然对数。",
+            "论文说明软件系数及其标准误报告在 log2 尺度；应区分公式记号与报告尺度。"
+          ],
+          "mustNotClaim": [
+            "将论文报告的系数说成自然对数倍数变化。",
+            "把 2014 年论文描述直接当成未经核验的当前软件默认值。"
+          ]
+        },
+        {
+          "id": "D03",
+          "category": "条件与否定",
+          "prompt": "论文怎样按重复数处理计数离群值？请区分不参与检测、整基因排除与替代离群计数的条件。",
+          "primaryFormat": "pdf",
+          "evidence": [
+            {
+              "format": "pdf",
+              "page": 7,
+              "sha256": "bc59bf85d7675fe1a916ddf820ac2386338d4440e2c57f4183755843c333a49a"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "每条件不超过 2 个重复的样本不参与这项离群检测。",
+            "存在被标记离群值时，论文描述不超过 6 个重复的条件会排除整个基因；7 个及以上重复则按规模因子调整的截尾均值替代，再重新估计。"
+          ],
+          "mustNotClaim": [
+            "不论重复数都自动删除单个异常样本。",
+            "将离群检测与离群后处理的阈值混为一谈。"
+          ]
+        },
+        {
+          "id": "D04",
+          "category": "主图解读",
+          "prompt": "结合 Figure 1 的实际图像与图注，解释黑点、红线、蓝色箭头和蓝圈；是否所有基因都必须收缩到红线？",
+          "primaryFormat": "pdf",
+          "evidence": [
+            {
+              "format": "pdf",
+              "page": 2,
+              "sha256": "e832819627e11e4883d1b1287d5da27b134ed98c2ad0605ed02c3880b121a9b5"
+            },
+            {
+              "format": "pdf",
+              "page": 3,
+              "sha256": "7afa28f7eee4cc1d0599e45e064551eaba63d158cb6a741428f6dcc6bc4b7db3"
+            }
+          ],
+          "visuals": [
+            {
+              "kind": "pdf-page",
+              "page": 3
+            }
+          ],
+          "expectedPoints": [
+            "黑点为逐基因估计，红线为均值—离散度趋势，蓝箭头表示向先验趋势收缩后的 MAP 估计。",
+            "蓝圈标记的高离散度异常基因不作这种收缩；图中展示的是富集了离群点的部分基因。"
+          ],
+          "mustNotClaim": [
+            "蓝圈是已被移除的样本。",
+            "所有点都被强制设为红线上的值。",
+            "只读图注却声称已经查看了图像。"
+          ]
+        },
+        {
+          "id": "D05",
+          "category": "指标与分母",
+          "prompt": "论文中 21/100 与 81/100 比较的究竟是什么？能否把 81% 称作 DESeq2 的总体差异基因检出准确率？",
+          "primaryFormat": "pdf",
+          "evidence": [
+            {
+              "format": "pdf",
+              "page": 5,
+              "sha256": "b10c4583ae5c553d48d19e6d6a33ca731864254e150a42842415e3245ad57425"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "Bottomly 数据被均衡拆分为两组，比较两组按 LFC 排序的前 100 个上调或下调基因的重叠。",
+            "未收缩重叠 21 个，收缩后 81 个；这是该排名可重复性例子，不是总体准确率。"
+          ],
+          "mustNotClaim": [
+            "81% 是所有数据集上的敏感度、精确率或临床诊断准确率。",
+            "声称已查看本样本未提供的 Supplementary Figure S3。"
+          ]
+        },
+        {
+          "id": "D06",
+          "category": "局限与证据缺口",
+          "prompt": "Gene-level analysis 对转录本长度变化提出了什么限制？作者观察到的符号不一致频率能否消除该限制？",
+          "primaryFormat": "pdf",
+          "evidence": [
+            {
+              "format": "pdf",
+              "page": 9,
+              "sha256": "a86e80876e58c09aff597cae71e580024d04836c773ec1e5ef31048a2c598a88"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "只用基因总计数可能因转录本异构体长度变化产生假差异，极端情况下 LFC 符号也可能错误。",
+            "作者在本基准中发现符号不一致较少，不能排除其他数据中的风险；若有平均转录本长度估计，可纳入基因／样本特异归一化因子。"
+          ],
+          "mustNotClaim": [
+            "DESeq2 已证明对所有转录本组成变化免疫。",
+            "把潜在风险写成该基准中普遍发生的错误。"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sopa",
+      "title": "Sopa: a technology-invariant pipeline for analyses of image-based spatial omics",
+      "doi": "10.1038/s41467-024-48981-z",
+      "pmcid": "PMC11167053",
+      "version": "PMC11167053.1",
+      "license": "CC-BY-4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "files": [
+        {
+          "path": "metadata.json",
+          "bytes": 1693,
+          "sha256": "41ff4d59b050fdae71dd510e6a236db7e3b33d409c4bd04b218eeb7a3986c278",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/metadata/PMC11167053.1.json"
+        },
+        {
+          "path": "article.xml",
+          "bytes": 126652,
+          "sha256": "41b6f499c51a040c81a51905df2a2f63376136fe4088c68d521f096c971cc525",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC11167053.1/PMC11167053.1.xml",
+          "md5": "1b809a5437ec6c20c23e735fbb31c5fd"
+        },
+        {
+          "path": "source.pdf",
+          "bytes": 13315661,
+          "sha256": "88f921c4e34f9786a6c23818eb69ead7975ea7f359d04f77b041073f12788451",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC11167053.1/PMC11167053.1.pdf",
+          "md5": "54e65cc9113e80eef312b69c5c026c4b"
+        },
+        {
+          "path": "41467_2024_48981_Fig1_HTML.jpg",
+          "bytes": 128440,
+          "sha256": "0cbc4283f9560f8a9db7590e6f6ea4c49e332899e2afd0a3884db894cbbf0677",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC11167053.1/41467_2024_48981_Fig1_HTML.jpg",
+          "md5": "0e1e7f2de1957efa5bec34638ea06060"
+        },
+        {
+          "path": "41467_2024_48981_Fig2_HTML.jpg",
+          "bytes": 262392,
+          "sha256": "112b2b8e4b7c2c46e899f46217f182440f80571976527c108dfe91c3ac7b9841",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC11167053.1/41467_2024_48981_Fig2_HTML.jpg",
+          "md5": "204869df16e7092acc2985f6f66672fa"
+        },
+        {
+          "path": "41467_2024_48981_Fig3_HTML.jpg",
+          "bytes": 364672,
+          "sha256": "c81851a82b5f14e6fa88c3c1070151329dc96c92b2692d8ec563dc4e5161b810",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC11167053.1/41467_2024_48981_Fig3_HTML.jpg",
+          "md5": "5ee1f7bfb4c78e206028d06dfe9803dc"
+        },
+        {
+          "path": "41467_2024_48981_Fig4_HTML.jpg",
+          "bytes": 331237,
+          "sha256": "b299bd0fa018b0cf2493788b3c94b147e774441d20ae033532b679e1a1a9fa09",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC11167053.1/41467_2024_48981_Fig4_HTML.jpg",
+          "md5": "df7b7a781626465b5d1ea9a2887efe69"
+        },
+        {
+          "path": "41467_2024_48981_Fig5_HTML.jpg",
+          "bytes": 105732,
+          "sha256": "a58f9df589b1851b1147f178ff58a0b5be22043495866d2ba29c1aeb9450ef86",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC11167053.1/41467_2024_48981_Fig5_HTML.jpg",
+          "md5": "845f10c93b4f74b93d5eab9aa1a871f4"
+        },
+        {
+          "path": "pdf-text.json",
+          "bytes": 64133,
+          "sha256": "d357ce125775a1834cc68aae924cb33581f9294b6045d9605bcbe886c1a76982",
+          "generatedBy": "PyMuPDF 1.27.2.3; page.get_text(); UTF-8 JSON"
+        }
+      ],
+      "questions": [
+        {
+          "id": "S01",
+          "category": "方法与数据",
+          "prompt": "Sopa 分别怎样处理图像分割与转录本分割？这些组件和底层统一数据结构各是什么？",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-70c205b3512e1f590fa1b477",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[1]/p[1]",
+              "sha256": "b4c332bf559d057c8a4df1e51d86abd8a268ee20310cc3b2d0f61c0716023a8a"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "统一表示为 SpatialData；Cellpose 用于图像分割，Baysor 用于转录本分割。",
+            "在重叠小块上运行后合并细胞边界，聚合转录本计数和通道强度，再进行注释等分析。"
+          ],
+          "mustNotClaim": [
+            "将 Sopa 描述为 Novae 的预训练基础模型。",
+            "颠倒 Cellpose 与 Baysor 的输入类型。"
+          ]
+        },
+        {
+          "id": "S02",
+          "category": "数字与单位",
+          "prompt": "Figure 2a、b 的横轴和内存纵轴是什么单位，RAM 按什么计算？能否直接把它解释为多核任务总内存？",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-729b3c45daeaef58ee8c7058",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[3]/p[1]/fig[1]",
+              "sha256": "503651803a4fa528f3689e7d32ea13788a5971f3f58b0430fe114b99690a4759"
+            }
+          ],
+          "visuals": [
+            {
+              "kind": "image",
+              "path": "41467_2024_48981_Fig2_HTML.jpg"
+            }
+          ],
+          "expectedPoints": [
+            "横轴是图像宽度，单位为千像素；RAM 轴以 GB 表示。",
+            "图注明确 a、b 的 RAM 为每核用量；不能直接当成多核进程总峰值。"
+          ],
+          "mustNotClaim": [
+            "把宽度当面积、细胞数或原始单像素数。",
+            "把每核内存当整个任务的总内存。"
+          ]
+        },
+        {
+          "id": "S03",
+          "category": "条件与阈值",
+          "prompt": "重叠小块产生细胞边界冲突后，Sopa 用什么规则合并？0.07、0.8 与实际合并阈值是否相同？",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-241ee355b34108d4541ebbc0",
+              "xmlPath": "/article[1]/body[1]/sec[4]/sec[3]/p[1]",
+              "sha256": "96eee778c13065f24902b77d88a9e3ddd0fe18687d2e220c411c0cc27cbce596"
+            },
+            {
+              "format": "jats",
+              "blockId": "b-729b3c45daeaef58ee8c7058",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[3]/p[1]/fig[1]",
+              "sha256": "503651803a4fa528f3689e7d32ea13788a5971f3f58b0430fe114b99690a4759"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "交集面积超过较小细胞面积的一半时合并，否则保留两条边界。",
+            "0.07 以下或 0.8 以上描述作者认为较容易可靠解决的冲突区间，不能替代合并规则的 0.5。",
+            "重叠宽度通常至少为平均细胞直径的两倍，以便细胞在至少一个小块中完整。"
+          ],
+          "mustNotClaim": [
+            "把 IOMA 说成交并比 IoU。",
+            "把 0.8 当成实现中的合并阈值。"
+          ]
+        },
+        {
+          "id": "S04",
+          "category": "主图与外推",
+          "prompt": "Figure 3c、f 比较哪些分割质量指标？斜线柱能否作为独立实测实验结果来计数？",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-382c4b2c70fb5bac4eec1677",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[5]/p[1]/fig[1]",
+              "sha256": "63b8354333d59182646d790236d8cb3528474b4fdbb81e45e458f131325d87f3"
+            },
+            {
+              "format": "jats",
+              "blockId": "b-77fc1c7a70bfbddd1e581508",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[5]/p[1]",
+              "sha256": "26f5a4d6a540565743188dd231b2aebc77b8b974b5b575a9c0891bc48a8b5b11"
+            }
+          ],
+          "visuals": [
+            {
+              "kind": "image",
+              "path": "41467_2024_48981_Fig3_HTML.jpg"
+            }
+          ],
+          "expectedPoints": [
+            "图中比较 Calinski-Harabasz score、Mean DE score 与 Mean cluster distance。",
+            "斜线柱代表没有小块化时的外推分数；图注明确它是外推，不是另一次独立实测。"
+          ],
+          "mustNotClaim": [
+            "用斜线柱声称已经实际运行了完整无小块实验。",
+            "仅凭 UMAP 分开就断言真实细胞类型的准确率。"
+          ]
+        },
+        {
+          "id": "S05",
+          "category": "资料与复现缺口",
+          "prompt": "这篇论文的数据可获得性说明是否意味着四种技术的数据都能直接公开下载？",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-114cc8396a905c409c957507",
+              "xmlPath": "/article[1]/back[1]/notes[3]/p[1]",
+              "sha256": "baae7b904b30d49e70d27fedfa766d32dea0ca6121e929263a67333421e2abc6"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "MERSCOPE 和 Xenium 提供在线数据地址。",
+            "PhenoCycler 需要向 Akoya Biosciences 请求，MACSima 需要向 Miltenyi Biotec 请求；可请求不等于无条件直接下载。"
+          ],
+          "mustNotClaim": [
+            "声称四套原始数据均已下载、已重现。",
+            "根据公开全文许可推断原始实验数据也有同一开放许可。"
+          ]
+        },
+        {
+          "id": "S06",
+          "category": "局限与结论边界",
+          "prompt": "作者称 Sopa 最多可快 100 倍，是否意味着 Figure 2 中所有任务、所有规模都快 100 倍？请结合图中的实测与外推范围回答。",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-8aaed8040a89ce1535983eeb",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[3]/p[1]",
+              "sha256": "dfad10ae2e276cd485d9af4f59fa40dd26dcb8ea0f12c1d3ecda6e082746eb9a"
+            },
+            {
+              "format": "jats",
+              "blockId": "b-729b3c45daeaef58ee8c7058",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[3]/p[1]/fig[1]",
+              "sha256": "503651803a4fa528f3689e7d32ea13788a5971f3f58b0430fe114b99690a4759"
+            }
+          ],
+          "visuals": [
+            {
+              "kind": "image",
+              "path": "41467_2024_48981_Fig2_HTML.jpg"
+            }
+          ],
+          "expectedPoints": [
+            "作者说依任务不同内存可低 10–100 倍，速度最多可快 100 倍，是条件性和上界描述。",
+            "图像写入等任务的时间曲线接近；图中的浅灰虚线还包含外推，不能把所有点视为测量。"
+          ],
+          "mustNotClaim": [
+            "所有任务均快 100 倍。",
+            "把最大内存节省倍数直接当作所有任务的运行时间加速。"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "survey",
+      "title": "Risk factors for cannabis use disorders and cannabis psychosis in Japan: Second report of a survey on cannabis‐related health problems among community cannabis users using social networking services",
+      "doi": "10.1002/npr2.12307",
+      "pmcid": "PMC10009416",
+      "version": "PMC10009416.1",
+      "license": "CC-BY-4.0",
+      "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+      "files": [
+        {
+          "path": "metadata.json",
+          "bytes": 1056,
+          "sha256": "1949f9a934247d99a609f264e798e38bcfa2f6832b1ffeb67f245ad933b3589c",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/metadata/PMC10009416.1.json"
+        },
+        {
+          "path": "article.xml",
+          "bytes": 111310,
+          "sha256": "b4a8a3d46fa2ad5a8f8afbd9e8b1dff2d7e162ad0f5837f4191c3d71bc669371",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC10009416.1/PMC10009416.1.xml",
+          "md5": "cd0487dd0e133dcb079a0b0807ea745a"
+        },
+        {
+          "path": "source.pdf",
+          "bytes": 471593,
+          "sha256": "95646dd6fefc136cb522bdcc6caaf504da0ccb710a3df623a298b9dc83c1b1c4",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC10009416.1/PMC10009416.1.pdf",
+          "md5": "648db0ce6ce56688995af0450090db28"
+        },
+        {
+          "path": "NPR2-43-85-g001.jpg",
+          "bytes": 46032,
+          "sha256": "f49be79e14679f7ec1bf57419ff8cfddd01094050dbbca1a7230b612ab3d9de4",
+          "url": "https://pmc-oa-opendata.s3.amazonaws.com/PMC10009416.1/NPR2-43-85-g001.jpg",
+          "md5": "398150948786a4394a2516b9adb1483f"
+        },
+        {
+          "path": "pdf-text.json",
+          "bytes": 46091,
+          "sha256": "35f74c813a524c03610800a85a2e43edb1237797435bf4b26f3d4b2a62ae7c3b",
+          "generatedBy": "PyMuPDF 1.27.2.3; page.get_text(); UTF-8 JSON"
+        }
+      ],
+      "questions": [
+        {
+          "id": "C01",
+          "category": "设计与分母",
+          "prompt": "这项分析是怎样的研究设计？4138 与 3142 各是什么分母，3142 人要满足哪些关键条件？",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-642e852dd865fda205744ee8",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[1]/p[4]",
+              "sha256": "45420c4ddb9b3cbbc708e52acb4eddfdd8fb11173c218af4e7943d843bd1de05"
+            },
+            {
+              "format": "jats",
+              "blockId": "b-ea179188abc7cc129a1dc02c",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[1]/p[1]",
+              "sha256": "bc3fefd52dd2f5812b93c306017269276c8f02b94e05331fe3345f1f39b3e389"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "这是通过网络招募、匿名自填的横断面问卷。",
+            "4138 为调查应答者；本分析纳入 3142 名日本国籍、居住日本且过去一年使用过大麻的应答者。"
+          ],
+          "mustNotClaim": [
+            "随机抽样了全日本居民。",
+            "把 4138 当成本分析 CUD／CP 比例的分母。"
+          ]
+        },
+        {
+          "id": "C02",
+          "category": "数字与单位",
+          "prompt": "19–24 岁这样的年龄组如何转成回归分析中的年龄？使用年限如何计算，这是否精确测得了每个人的实际年龄？",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-1c6bbba47af425716246183f",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[3]/p[2]",
+              "sha256": "f82f907ccbbe435b33a9373a85efe99527003e103c4001963b667a68fb5d2b20"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "取年龄组上界，19–24 岁记作 24 岁；单位为年。",
+            "使用年限以当前年龄减首次使用年龄计算，是根据分组回答构造的变量，不能说精确测得年龄。"
+          ],
+          "mustNotClaim": [
+            "取组中点 21.5 岁。",
+            "把年限说成服用频次或每日剂量。"
+          ]
+        },
+        {
+          "id": "C03",
+          "category": "结局定义与条件",
+          "prompt": "研究中的 CUD 与 CP 是怎样界定的？能否直接当作独立临床医师确诊结果？",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-09228936904e0b50095c8e69",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[2]/p[3]",
+              "sha256": "cf88dea2c500d4b6df3b0ce71bdbe529d829a70d697a7257d28db5ea476cbe3b"
+            },
+            {
+              "format": "jats",
+              "blockId": "b-b43e0485a298496c85034ad0",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[2]/p[16]",
+              "sha256": "ffbf7678b0c3053525bcd06515674eb7a6cd140deec97b4b43d90ee023e8de9e"
+            },
+            {
+              "format": "jats",
+              "blockId": "b-ed4359af8c3afb544927600f",
+              "xmlPath": "/article[1]/body[1]/sec[4]/sec[3]/p[1]",
+              "sha256": "2dbddd663aa538d2dba0c064db79629d2c7db8341d4c3c2bc1de25e24acd85e8"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "CUD 按自填问卷中 DSM-5 条目至少两项回答“是”判定；CP 依据慢性精神问题与大麻有关的自报问题。",
+            "作者明确说问卷判定并不直接等同于常规临床诊断。"
+          ],
+          "mustNotClaim": [
+            "这些结局由盲法精神科临床诊断确认。",
+            "把自报 CP 自动等同于某个精确临床疾病。"
+          ]
+        },
+        {
+          "id": "C04",
+          "category": "表格与数值冲突",
+          "prompt": "既往精神障碍与 CUD 的多变量 OR，在表 2、摘要和结果正文中是否完全一致？请保留差异和共同的区间，不擅自选一个作为“正确值”。",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-679290b041426a430526748f",
+              "xmlPath": "/article[1]/body[1]/sec[3]/p[4]",
+              "sha256": "1ae014dfaa6668ad77d5bbb6397f69490cac31612dd1975308c4cfa178c0f4b7"
+            },
+            {
+              "format": "jats",
+              "blockId": "b-eec4c9d74dacea8d7d6c2c7a",
+              "xmlPath": "/article[1]/body[1]/sec[3]/table-wrap[2]",
+              "sha256": "3462fe833c975a619c1daf5bd568b4102bc5af997dbb5ca67d065d8a93180204"
+            },
+            {
+              "format": "jats",
+              "blockId": "b-eb6a0585936360a71d2cf9fd",
+              "xmlPath": "/article[1]/front[1]/article-meta[1]/abstract[1]/sec[3]/p[1]",
+              "sha256": "8ec85a1eb61128f5e27cb461573f4e537d41bafd62dab59ec329ff8997f6c9b5"
+            }
+          ],
+          "visuals": [
+            {
+              "kind": "pdf-page",
+              "page": 5
+            }
+          ],
+          "expectedPoints": [
+            "表 2 的 Exp(β) 是 1.671；摘要和结果正文写为 1.672。",
+            "共同报告的 p 为 0.039，95% CI 为 1.026–2.722；应保留原文内部差异，现有范围没有独立回归输出供裁定。"
+          ],
+          "mustNotClaim": [
+            "三处完全一致。",
+            "无证据断言表格或正文哪一处排版错误。",
+            "把 OR 当风险比或绝对风险差。"
+          ]
+        },
+        {
+          "id": "C05",
+          "category": "否定与不确定性",
+          "prompt": "表 3 中“既往精神障碍”与 CP 的多变量结果是否达到论文的 5% 显著性标准？不显著是否证明没有关联？",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-1c6bbba47af425716246183f",
+              "xmlPath": "/article[1]/body[1]/sec[2]/sec[3]/p[2]",
+              "sha256": "f82f907ccbbe435b33a9373a85efe99527003e103c4001963b667a68fb5d2b20"
+            },
+            {
+              "format": "jats",
+              "blockId": "b-286fb1b98d67dd211ca356ce",
+              "xmlPath": "/article[1]/body[1]/sec[3]/table-wrap[3]",
+              "sha256": "459384705f94ed6c09f113a6fcebfe69035c049cee944747ddab2d81e9d0fecf"
+            }
+          ],
+          "visuals": [
+            {
+              "kind": "pdf-page",
+              "page": 6
+            }
+          ],
+          "expectedPoints": [
+            "多变量 OR 为 2.644，95% CI 为 0.990–7.051，p 为 0.052，未达到 5% 标准。",
+            "区间跨 1 且范围宽，不能据此证明没有关联，也不能因点估计大于 1 就声称显著。"
+          ],
+          "mustNotClaim": [
+            "p=0.052 小于 0.05。",
+            "证明无影响或已经证明因果作用。"
+          ]
+        },
+        {
+          "id": "C06",
+          "category": "局限与因果边界",
+          "prompt": "作者列出的哪些限制妨碍把横断面关联推广为人群因果结论？请至少指出三项并说明其影响。",
+          "primaryFormat": "jats",
+          "evidence": [
+            {
+              "format": "jats",
+              "blockId": "b-ed4359af8c3afb544927600f",
+              "xmlPath": "/article[1]/body[1]/sec[4]/sec[3]/p[1]",
+              "sha256": "2dbddd663aa538d2dba0c064db79629d2c7db8341d4c3c2bc1de25e24acd85e8"
+            },
+            {
+              "format": "jats",
+              "blockId": "b-18e9a0a5b2628da68c9dfd9f",
+              "xmlPath": "/article[1]/body[1]/sec[4]/sec[3]/p[2]",
+              "sha256": "0fe423640f76456fca2625bc71b56b3c1fa4680b3ee627a434c04e52af1c0c19"
+            }
+          ],
+          "visuals": [],
+          "expectedPoints": [
+            "自填结局与临床诊断有差异；回顾性自报存在回忆偏倚。",
+            "横断面设计不能判定因果；网络招募和宣传大麻相关信息的组织可能带来选择与代表性偏倚。",
+            "精神疾病、其他物质使用和家族问题的控制或分型不够细。"
+          ],
+          "mustNotClaim": [
+            "研究已经证明某因素导致 CUD／CP。",
+            "把该便利样本的比例当全日本人群风险或个体医疗建议。"
+          ]
+        }
+      ]
+    }
+  ]
+}
