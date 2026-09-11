@@ -17,6 +17,7 @@ import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { AcquisitionService } from "./fulltext/service";
 import { readPaperLibrary } from "./library/reader";
+import { libraryMineruVerifier } from "./library/mineru-verifier";
 import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/record-store";
 import { PaperRecordService, type PaperRecordEdit } from "./library/record-service";
 import { AcquisitionRepository } from "./fulltext/repository";
@@ -2664,9 +2665,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		return path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader");
 	}
 	/** Explicit read-only inspection; never initializes reading recovery or models. */
-	inspectPaperLibrary(signal?: AbortSignal) {
+	inspectPaperLibrary(signal?: AbortSignal, verifyMineruPath?: string) {
 		return readPaperLibrary(new FileSourceStorage(this.getActiveVaultRoot()), new FileSourceStorage(this.readingPluginDirectory()), {
 			vaultRoot: this.getActiveVaultRoot(), parseYaml, signal,
+			...(verifyMineruPath !== undefined ? { verifyMineruPath, verifyMineru: libraryMineruVerifier(this.app, signal) } : {}),
 		});
 	}
 	private paperRecords(): PaperRecordService {

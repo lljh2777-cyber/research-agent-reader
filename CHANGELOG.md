@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Legacy library compatibility and read baseline — 0.52.1
+
+- 显式单包 MinerU 核验复用现有完整加载器，清单产物及图像读取计入同一次预算并支持取消；普通查询保留未核验状态，损坏原文不降级。
+- 新增外部 `annotation_schema: 2` 的只读兼容，保留内容角色和原样来源信息；未知仓库与版本算法不按本地同名路径强行关联。
+- 新增真实完整加载器的 5 个兼容场景和混合格式性能脚本；测试库 5 个旧包核验通过，3 条外部批注可读，879 个受保护文件不变。科学质量样本与文献详情尚待开发，范围见 [R0 兼容与性能记录](docs/library-compatibility-r0.md)。
+
 ### Persistent paper decisions — 0.52.0
 
 - 新增人工阅读状态和主要笔记选择的准备／保存接口；复用已有 `paperId`，编辑凭据包含归组、修订头和笔记哈希，旧凭据或错误笔记不能直接保存。

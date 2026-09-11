@@ -4,13 +4,13 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 未来开发以[开发路线：阅读与知识沉淀](docs/development-roadmap.md)为准：先补齐文献关联与状态，接通文献详情、统一添加、摘录和知识整理，再独立推进存储迁移、翻译与专题对照。路线中的规划功能尚未实现；下文记录当前能力。
 
-已完成 [R0 文献聚合基础](docs/library-r0.md)前三批：纯数据契约、实际资料只读查询，以及[人工决定的持久记录](docs/library-records-r0.md)。`0.52.0` 提供人工阅读状态、主要笔记选择和冲突恢复接口；查询不触发恢复、模型或网络，保存不改写原文和笔记。可见文献详情及编辑控件尚未接入，现有首页不变。
+已完成 [R0 文献聚合基础](docs/library-r0.md)的只读查询、[人工决定持久记录](docs/library-records-r0.md)及[旧资料兼容与读取性能基线](docs/library-compatibility-r0.md)。`0.52.1` 增加旧 MinerU 单包完整核验和外部批注只读适配，资产读取受统一预算约束；查询不触发恢复、模型或网络。真实科学质量样本、可见文献详情及编辑控件尚未交付，现有首页不变。
 
 > Public release status: `0.31.0` beta is published at
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.52.0`; the beta
+The `codex/research-learning-map` development branch is at `0.52.1`; the beta
 release link above remains the published release.
 
 全文获取与多来源入库的后续设计见[架构与开发流程](docs/fulltext-acquisition-design.md)。

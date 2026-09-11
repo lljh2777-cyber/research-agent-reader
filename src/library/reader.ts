@@ -5,7 +5,7 @@ import { bytesDigest, safeCitekey } from "../papers/identity";
 import { noteIdentifiers } from "../papers/note-identity";
 import { loadSourcePackage } from "../sources/package";
 import type { SourceStorage } from "../sources/storage";
-import { readAnnotationRecords } from "../annotations/annotation-service";
+import { readLibraryAnnotations } from "./annotation-reader";
 import { validateReadingSession } from "../reading/session";
 import { structuredFingerprint } from "../reading/structured-source";
 import { readingCategory } from "../reading/catalog";
@@ -26,8 +26,10 @@ export interface LibraryReadResult extends LibraryProjection {
 export interface LibraryReaderOptions {
 	vaultRoot: string;
 	parseYaml(text: string): unknown;
-	/** Trusted read-only validator; its own IO has separate limits and is not included in stats. */
-	verifyMineru?: (articlePath: string) => Promise<void>;
+	/** Trusted verifier must use the supplied storage so all file bytes share the scan budget. */
+	verifyMineru?: (articlePath: string, storage: LibraryReadStorage) => Promise<void>;
+	/** When present, only this explicitly selected legacy article is fully verified. */
+	verifyMineruPath?: string;
 	maxBytes?: number;
 	signal?: AbortSignal;
 }
@@ -41,6 +43,8 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 	const started = performance.now(), stats = { filesRead: 0, bytesRead: 0, directoriesRead: 0, objects: 0, elapsedMs: 0 };
 	const limit = options.maxBytes ?? 256 * 1024 * 1024, issues: LibraryReadIssue[] = [], objects: LibraryObject[] = [];
 	if (!Number.isSafeInteger(limit) || limit <= 0 || !path.isAbsolute(options.vaultRoot)) throw new Error("文献读取预算或 Vault 根路径无效");
+	if (options.verifyMineruPath !== undefined && (!/^papers\/[^/\\<>:"|?*\x00-\x1f]+\/article\.md$/.test(options.verifyMineruPath)
+		|| options.verifyMineruPath.split("/").some(part => part === "." || part === "..") || !options.verifyMineru)) throw new Error("按需核验需要有效的旧 MinerU 路径及验证器");
 	let exhausted: Error | undefined;
 	const checkScan = () => { options.signal?.throwIfAborted(); if (exhausted) throw exhausted; };
 	const budgetExceeded = (): never => { exhausted = new Error("文献读取超过总预算，请缩小范围或显式增加读取预算"); throw exhausted; };
@@ -96,6 +100,7 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 	try {
 		const inventory = await new SourceCatalog(v).inspect();
 		checkScan();
+		if (options.verifyMineruPath && !inventory.legacyArticles.includes(options.verifyMineruPath)) issue("sources", options.verifyMineruPath, "所选旧 MinerU 包不存在或已改为其他来源类型");
 		for (const entry of inventory.packages) {
 			const m = entry.manifest;
 			if (!m) {
@@ -119,13 +124,13 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 				const article = await v.read(name, 16 * 1024 * 1024), manifest = await v.read(name.replace(/article.md$/, "_extraction/manifest.json"), 2 * 1024 * 1024);
 				if (!article || !manifest) throw new Error("旧原文或提取清单缺失");
 				const text = decode(article); markdown.set(name, text); Object.assign(item, metadata(text));
-				if (options.verifyMineru) {
-					await options.verifyMineru(name);
+				if (options.verifyMineru && (!options.verifyMineruPath || options.verifyMineruPath === name)) {
+					await options.verifyMineru(name, { read: v.read, list: v.list }); checkScan();
 					const afterArticle = await v.read(name, 16 * 1024 * 1024), afterManifest = await v.read(name.replace(/article.md$/, "_extraction/manifest.json"), 2 * 1024 * 1024);
 					const fingerprint = bytesDigest(Buffer.concat([article, manifest]));
 					if (!afterArticle || !afterManifest || bytesDigest(Buffer.concat([afterArticle, afterManifest])) !== fingerprint) throw new Error("旧原文在扫描期间变化");
 					item.source.verification = { state: "verified", fingerprint };
-				} else issue("sources", name, "未提供 MinerU 完整验证器；保留为未核验来源", false);
+				} else issue("sources", name, "本次未执行 MinerU 完整核验；保留为未核验来源", false);
 			} catch (error) { item.source.verification = { state: "invalid", reason: message(error) }; issue("sources", name, error); }
 			addSource(item);
 		}
@@ -144,17 +149,22 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 	}, false);
 	await walk("wiki/annotations", "annotations", async name => {
 		const bytes = await v.read(name, 2 * 1024 * 1024); if (!bytes) throw new Error("批注文件已不存在");
-		const parsed = readAnnotationRecords(decode(bytes), name);
+		const parsed = readLibraryAnnotations(decode(bytes), name, options.parseYaml);
 		for (const error of parsed.errors) issue("annotations", name, error);
 		for (const record of parsed.records) {
-			const sourcePath = canonicalPath(record.sourcePath), source = sourcePath && sources.get(sourcePath);
-			// Old annotations have anchors, but no immutable source fingerprint. Keep a hint,
-			// never copy present-day bibliographic identity into the historical annotation.
+			const sourcePath = canonicalPath(record.sourcePath);
+			// External Vault identity/revision semantics are unknown. Even the same local path
+			// is not sufficient to compare its anchor or report that historical text changed.
+			const source = record.provenance.format === "annotation-schema-2" ? undefined : sourcePath && sources.get(sourcePath);
+			// Dashboard anchors lack an immutable fingerprint; their path is only a hint.
 			const binding: LibrarySourceBinding = { state: "unresolved", ...(source ? { sourceId: source.id } : {}), reason: "旧批注没有固定来源指纹，需核对后确认关联" };
-			const text = sourcePath && markdown.get(sourcePath), anchor = record.sourceAnchor;
+			const text = source && markdown.get(source.source.path), anchor = record.anchor;
 			if (text && anchor && text.slice(anchor.start, anchor.end) !== record.selectedText) { binding.state = "changed"; binding.reason = "旧批注位置与当前原文不同，未重新绑定"; }
+			if (record.provenance.sourceRevision) {
+				if (binding.state !== "changed") binding.reason = "旧批注保留来源版本；仓库标识及版本算法尚未确认，保持独立";
+			}
 			objects.push({ kind: "annotation", id: name + "#" + record.id, title: record.section || record.selectedText.slice(0, 80), identifiers: {},
-				roles: ["original_quote", ...(record.manualText ? ["personal_note" as const] : []), ...(record.aiText ? ["ai_explanation" as const] : [])], binding });
+				roles: record.roles, provenance: record.provenance, binding });
 		}
 	});
 	const sessionIds = new Set<string>();

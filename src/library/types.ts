@@ -5,6 +5,13 @@ import type { ReadingEvidence, ReadingLearningState, ReadingSession, ReadingSour
 /** View contracts shared by the pure projection and read adapters; persistence is separate. */
 export type LibraryIdentifiers = ResolvedIdentity["identifiers"];
 export type LibraryContentRole = "original_quote" | "ai_explanation" | "personal_note" | "external_material" | "synthesis";
+export interface LibraryAnnotationProvenance {
+	format: "dashboard-blocks" | "annotation-schema-2";
+	sourcePath: string;
+	/** Preserve external revision and Vault identifiers without assuming their algorithms. */
+	sourceRevision?: string;
+	vaultId?: string;
+}
 export type LibraryEvidenceReference = ReadingEvidence;
 export type PaperReadingState = "unmarked" | "not_started" | "reading" | "completed" | "revisit";
 export type LibraryObjectKind = "record" | "source" | "session" | "note" | "annotation" | "acquisition";
@@ -62,6 +69,7 @@ export interface LibraryAnnotationObject extends LibraryObjectBase {
 	/** Missing on legacy records; do not infer content identity from file placement. */
 	roles?: LibraryContentRole[];
 	binding?: LibrarySourceBinding;
+	provenance?: LibraryAnnotationProvenance;
 }
 export interface LibraryAcquisitionObject extends LibraryObjectBase { kind: "acquisition"; phase: AcquisitionPhase; }
 export type LibraryObject = LibraryRecordObject | LibrarySourceObject | LibrarySessionObject | LibraryNoteObject | LibraryAnnotationObject | LibraryAcquisitionObject;
@@ -98,6 +106,7 @@ export interface LibraryObjectSummary extends LibraryObjectRef {
 	roles?: LibraryContentRole[];
 	acquisitionPhase?: AcquisitionPhase;
 	binding?: LibrarySourceBinding;
+	annotationProvenance?: LibraryAnnotationProvenance;
 }
 export type LibraryDiagnosticCode = "identifier_conflict" | "paper_id_conflict" | "citekey_conflict" | "citekey_collision" | "source_unavailable" | "primary_note_missing" | "source_binding" | "record_conflict";
 export interface LibraryDiagnostic {
