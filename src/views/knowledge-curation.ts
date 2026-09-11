@@ -6,6 +6,7 @@ import { readingTitle } from "../reading/catalog";
 import { readingExportDiff } from "../reading/export-review";
 import type { ReadingSession } from "../reading/types";
 import { structuredLocationLabel } from "../reading/structured-reference";
+import type { CurationNavigation } from "../services/dashboard-curation";
 
 function action(parent: HTMLElement, text: string, run: () => unknown | Promise<unknown>, primary = false): HTMLButtonElement {
 	const button = parent.createEl("button", { text, cls: primary ? "mod-cta" : "", attr: { type: "button" } });
@@ -154,11 +155,11 @@ function filterTarget(select: HTMLSelectElement, path: string): void { if (![...
 export class KnowledgeMaintenanceModal extends Modal {
 	private tab = "pending"; private body!: HTMLElement; private counts!: HTMLElement; private closed = false; private unsubscribes: Array<() => void> = [];
 	private indexUnsubscribes: Array<() => void> = [];
-	constructor(app: App, private plugin: AgentDashboardPlugin) { super(app); }
+	constructor(app: App, private plugin: AgentDashboardPlugin, private entry: CurationNavigation = {}) { super(app); this.tab = entry.revisionId ? "history" : entry.tab || "pending"; }
 	onOpen(): void {
 		this.titleEl.setText("知识整理"); this.modalEl.addClass("curation-modal", "curation-maintenance-modal");
 		this.contentEl.createEl("p", { cls: "curation-intro", text: "核对待整理内容、失效依据和修订历史。这里的浏览与检查不调用回答模型。" });
-		const nav = this.contentEl.createDiv("curation-tabs"); for (const [id, title] of [["pending", "待审阅"], ["stale", "需复查"], ["history", "修订记录"], ["indices", "索引"]]) { const button = action(nav, title, () => { this.tab = id; nav.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === button))); this.render(); }); button.setAttribute("aria-pressed", String(id === this.tab)); }
+		const nav = this.contentEl.createDiv("curation-tabs"); for (const [id, title] of [["pending", "待审阅"], ["stale", "需复查"], ["activity", "整理批次"], ["history", "修订记录"], ["indices", "索引"]]) { const button = action(nav, title, () => { this.entry = {}; this.tab = id; nav.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === button))); this.render(); }); button.setAttribute("aria-pressed", String(id === this.tab)); }
 		this.counts = this.contentEl.createEl("p", { cls: "curation-status", attr: { role: "status" } }); this.body = this.contentEl.createDiv("curation-maintenance-body");
 		const footer = this.contentEl.createDiv("curation-footer"); action(footer, "检查来源与笔记变化", async () => { await this.plugin.getCurationService().inspect(); this.render(); }); action(footer, "刷新记录", () => this.render());
 		this.unsubscribes.push(this.plugin.getCurationService().subscribe(() => this.renderCounts()));
@@ -171,22 +172,24 @@ export class KnowledgeMaintenanceModal extends Modal {
 		if (this.tab === "indices") { this.renderIndices(); return; }
 		if (service.errors.length) detail(this.body, "无法加载的记录（原文件保留）", service.errors.join("\n"));
 		if (this.tab !== "history") {
-			const records = [...service.reviews.values()].filter(r => this.tab === "stale" ? ["stale", "failed", "interrupted"].includes(r.state) : r.state === "generating" || r.state === "ready" && r.suggestions.some(s => s.decision === "pending")).sort((a, b) => b.updated.localeCompare(a.updated));
+			if (this.tab === "activity") this.body.createEl("p", { text: "全部已加载整理批次；遗留生成记录在打开后可能标记为中断。", cls: "curation-status" });
+			const records = [...service.reviews.values()].filter(r => this.tab === "activity" || (this.tab === "stale" ? ["stale", "failed", "interrupted"].includes(r.state) : r.state === "generating" || r.state === "ready" && r.suggestions.some(s => s.decision === "pending"))).sort((a, b) => b.updated.localeCompare(a.updated));
 			for (const record of records) { const row = this.body.createEl("article", { cls: "curation-record" }); row.createEl("strong", { text: record.context.title }); row.createEl("p", { text: record.context.target.path + " · " + new Date(record.updated).toLocaleString() }); if (record.error) row.createEl("p", { cls: "reading-error", text: record.error });
 				action(row, record.state === "generating" ? "查看进度" : "审阅建议", () => { this.close(); this.plugin.openKnowledgeCuration(record.context.sessionId, record.context.nodeIds[0], record); });
 				if (record.state === "generating") action(row, "停止生成", () => service.stop(record.context.key));
 			}
-			if (!records.length) this.body.createEl("p", { cls: "curation-empty", text: this.tab === "stale" ? "暂无需要复查的整理记录。可运行一次变化检查。" : "暂无待审阅内容。从阅读界面选择一个已完成节点，点击「整理进知识库」。" });
+			if (!records.length) this.body.createEl("p", { cls: "curation-empty", text: this.tab === "activity" ? "暂无已加载的整理批次。" : this.tab === "stale" ? "暂无需要复查的整理记录。可运行一次变化检查。" : "暂无待审阅内容。从阅读界面选择一个已完成节点，点击「整理进知识库」。" });
 		}
 		if (this.tab === "history" || this.tab === "stale") {
-			const revisions = [...service.revisions.values()].filter(r => this.tab === "history" || r.needsReview || r.state !== "applied").sort((a, b) => b.created.localeCompare(a.created));
+			const revisions = [...service.revisions.values()].filter(r => (!this.entry.revisionId || r.id === this.entry.revisionId) && (this.tab === "history" || r.needsReview || r.state !== "applied")).sort((a, b) => b.created.localeCompare(a.created));
+			if (this.entry.revisionId) this.body.createEl("p", { text: revisions.length ? "正在查看所选修订；点击上方「修订记录」查看全部。" : "所选修订已缺失或无法读取，未跳到其他记录。", cls: "curation-status" });
 			for (const revision of revisions) { const row = this.body.createEl("article", { cls: "curation-record" }); row.createEl("strong", { text: revision.writes.find(w => w.role === "target")?.path || "修订" }); row.createEl("p", { text: new Date(revision.created).toLocaleString() + " · " + (revision.state === "applied" ? revision.undoOf ? "已撤销" : "已应用" : "等待恢复") });
 				if (revision.error || revision.needsReview) row.createEl("p", { cls: "reading-error", text: revision.error || revision.needsReview });
 				action(row, "查看修改", () => this.plugin.showCurationModal(new RevisionPreviewModal(this.app, revision)));
 				if (revision.state !== "applied") action(row, "预览并恢复", () => this.plugin.showCurationModal(new RevisionPreviewModal(this.app, revision, () => this.plugin.getCurationWriter().resume(revision.id), () => this.render())));
 				else if (!revision.undoOf) action(row, "预览撤销", async () => { const undo = await this.plugin.getCurationWriter().previewUndo(revision.id); this.plugin.showCurationModal(new RevisionPreviewModal(this.app, undo, () => this.plugin.getCurationWriter().applyUndo(undo), () => this.render())); });
 			}
-			if (this.tab === "history" && !revisions.length) this.body.createEl("p", { cls: "curation-empty", text: "采用整理建议后，会在这里保留修改前后的完整内容。" });
+			if (this.tab === "history" && !revisions.length && !this.entry.revisionId) this.body.createEl("p", { cls: "curation-empty", text: "采用整理建议后，会在这里保留修改前后的完整内容。" });
 		}
 	}
 	private renderIndices(): void {

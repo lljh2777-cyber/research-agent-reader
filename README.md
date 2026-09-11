@@ -10,7 +10,7 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 [deepseek-flash 试用](docs/topic-model-deepseek-flash.md)与[迁移题补测](docs/topic-model-deepseek-transfer.md)沿用同一 v2 规则，现已留档十七题有效回答。前两次迁移运行的余额不足失败保留，用户充值后完成八题；本批核心概念解释整体优于此前 qwen，仍有能力承诺、条件遗漏与迭代器协议错误。作为学习预览优先候选，默认模型与预览状态不变，独立审阅仍待完成。
 
-[R1 首批导航](docs/library-navigation-r1.md)已在 `0.53.0` 交付：从工作台的「文献库」搜索和筛选记录，打开详情、指定原文、阅读会话与笔记；旧 MinerU 可按需核验单个包。`0.57.0` 接入[人工阅读状态](docs/library-reading-state-r1.md)，`0.58.0` 接入[主要笔记选择](docs/library-primary-note-r1.md)：文献详情支持明确选择、更换、清除及打开主要笔记，同名笔记按路径区分。保存保留阅读状态，正文或关联变化会阻止旧编辑覆盖。`0.59.0` 已完成[首页主次入口整理](docs/dashboard-home-r1.md)，下一步补齐待处理摘要、最近整理与关联代码入口；主题学习继续保持预览，独立审阅作为单独门槛保留。
+[R1 首批导航](docs/library-navigation-r1.md)已在 `0.53.0` 交付：从工作台的「文献库」搜索和筛选记录，打开详情、指定原文、阅读会话与笔记；旧 MinerU 可按需核验单个包。`0.57.0` 接入[人工阅读状态](docs/library-reading-state-r1.md)，`0.58.0` 接入[主要笔记选择](docs/library-primary-note-r1.md)：文献详情支持明确选择、更换、清除及打开主要笔记，同名笔记按路径区分。保存保留阅读状态，正文或关联变化会阻止旧编辑覆盖。`0.59.0` 已完成[首页主次入口整理](docs/dashboard-home-r1.md)，`0.60.0` 已接入[待处理摘要与最近整理](docs/dashboard-summary-r1.md)，下一步补齐关联代码入口并进行 R1 整体验收；主题学习继续保持预览，独立审阅作为单独门槛保留。
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
@@ -18,7 +18,7 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.59.0`; the beta
+The `codex/research-learning-map` development branch is at `0.60.0`; the beta
 release link above remains the published release.
 
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。

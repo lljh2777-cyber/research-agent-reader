@@ -6543,6 +6543,11 @@ body.agent-dashboard-mineru-resizing {
 .agent-dashboard-view .agent-dashboard-secondary-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .agent-dashboard-view .agent-dashboard-tools { margin-top: 10px; color: var(--text-muted); font-size: var(--font-ui-small); }
 .agent-dashboard-view .agent-dashboard-tools summary { cursor: pointer; padding: 8px 0; }
+.agent-dashboard-view .agent-dashboard-followup ~ .agent-dashboard-tasks { grid-column: 1 / -1; }
+.agent-dashboard-view .agent-dashboard-followup details { font-size: var(--font-ui-small); overflow-wrap: anywhere; }
+.agent-dashboard-view .agent-dashboard-followup .agent-dashboard-secondary-actions { gap: 8px; }
+.agent-dashboard-view .agent-dashboard-followup button.agent-dashboard-text-action { padding: 6px 10px; height: auto; white-space: normal; border: 1px solid var(--background-modifier-border); border-radius: 6px; }
+.agent-dashboard-view .agent-dashboard-followup .agent-dashboard-recent-list { grid-template-columns: 1fr; }
 .agent-dashboard-view button.agent-dashboard-action-button.is-secondary { width: auto; display: inline-flex; gap: 7px; min-height: 34px; padding: 6px 11px; border-color: transparent; border-radius: 7px; background: transparent; }
 .agent-dashboard-view .is-secondary .agent-dashboard-action-label { font-size: 12px; font-weight: 500; }
 .agent-dashboard-view .is-secondary .agent-dashboard-action-icon { width: 16px; height: 16px; background: transparent; color: var(--text-muted); }

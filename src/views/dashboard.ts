@@ -65,9 +65,11 @@ import { recentReading, readingTitle } from "../reading/catalog";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
 import { dashboardActionGroup } from "../services/dashboard-navigation";
+import { emptyCurationSummary, type CurationNavigation, type DashboardCurationSummary } from "../services/dashboard-curation";
 
 interface DashboardHost extends PluginHost {
-	openKnowledgeMaintenance(): void;
+	openKnowledgeMaintenance(entry?: CurationNavigation): void;
+	readDashboardCuration(): Promise<DashboardCurationSummary>;
 	subscribeTaskRuns?(listener: (progressOnly?: boolean) => void): () => void;
 	getRunningTaskRun(actionId: string): TaskRun | null;
 	stopTaskRun(runId: string): boolean;
@@ -114,6 +116,7 @@ export class DashboardView extends ItemView {
 	private runsExpanded = false;
 	private maintenanceExpanded = false;
 	private toolsExpanded = false;
+	private curationSummary = emptyCurationSummary();
 	private recentSignature = "";
 	private recentExpanded = false;
 	private unsubscribeTaskRuns?: () => void;
@@ -225,8 +228,9 @@ export class DashboardView extends ItemView {
 	async loadAndRender(changes: DashboardVaultChange[] = []): Promise<void> {
 		const sequence = ++this.loadSequence;
 		try {
-			const data = await this.dataService.load(changes);
+			const [data, summary] = await Promise.all([this.dataService.load(changes), this.plugin.readDashboardCuration().catch(error => ({ ...emptyCurationSummary(), issues: ["整理记录读取失败：" + String(error)] }))]);
 			if (!data || this.closed || sequence !== this.loadSequence) return;
+			this.curationSummary = summary;
 			this.data = data;
 			this.renderDashboard();
 		} catch (error) {
@@ -282,6 +286,7 @@ export class DashboardView extends ItemView {
 		this.recentSignature = "";
 		const recent = main.createDiv({ cls: "agent-dashboard-recent", attr: { "aria-label": "最近阅读" } });
 		this.refreshRecentReading(recent);
+		this.renderFollowup(main);
 		this.renderAgentRuns(main);
 		this.renderStats(main);
 		this.renderHeatmap(main);
@@ -307,6 +312,32 @@ export class DashboardView extends ItemView {
 			const progress = ingestProgressDisplay(run);
 			if (progress) state.textContent = this.stoppingRunIds.has(run.id) ? "停止中" : progress.waiting ? "等待你的确认" : progress.stage + " · 点击停止";
 		}
+	}
+	private renderFollowup(parent: HTMLElement): void {
+		const summary = this.curationSummary;
+		const panel = this.createPanel(parent, "agent-dashboard-panel-wide agent-dashboard-followup", "继续处理", "待处理与最近整理");
+		panel.createEl("p", { text: "按本次读取的保存记录展示，未核验当前正文。", cls: "agent-dashboard-empty-state" });
+		const actions = panel.createDiv("agent-dashboard-secondary-actions");
+		const link = (text: string, run: () => void, id: string) => { const b = actions.createEl("button", { text, cls: "agent-dashboard-text-action", attr: { type: "button", "data-summary-action": id } }); b.onclick = run; };
+		const tasks = this.currentData.agentRuns.filter(run => run.runId && ["failed", "interrupted", "queued", "running"].includes(run.status));
+		link(`未完成任务 ${tasks.length}`, () => { this.runsFilter = "open"; this.runsExpanded = true; this.renderDashboard(); this.contentEl.querySelector(".agent-dashboard-tasks")?.scrollIntoView({ block: "start" }); }, "tasks");
+		link(`待审阅 ${summary.pending} 批`, () => this.plugin.openKnowledgeMaintenance({ tab: "pending" }), "pending");
+		link(`需复查／恢复 ${summary.revisit + summary.unfinished} 条`, () => this.plugin.openKnowledgeMaintenance({ tab: "stale" }), "stale");
+		if (summary.generating) link(`生成记录待核对 ${summary.generating} 批`, () => this.plugin.openKnowledgeMaintenance({ tab: "activity" }), "generating");
+		link("刷新整理摘要", () => { void this.loadAndRender(); }, "refresh");
+		if (summary.issues.length) {
+			panel.createEl("p", { text: "整理统计不完整，数量仅代表成功读取的部分。", cls: "agent-dashboard-empty-state" });
+			const details = panel.createEl("details"); details.createEl("summary", { text: `查看 ${summary.issues.length} 条读取提示` });
+			for (const issue of summary.issues.slice(0, 20)) details.createEl("p", { text: issue });
+		}
+		const recent = panel.createDiv("agent-dashboard-recent-list");
+		if (!summary.recent.length) recent.createEl("p", { text: summary.issues.length ? "尚无可展示的修订，请先核对读取提示。" : "尚无已保存修订。整理建议被采用后，可在这里回看修改记录。", cls: "agent-dashboard-empty-state" });
+		for (const item of summary.recent) {
+			const button = recent.createEl("button", { cls: "agent-dashboard-recent-item", attr: { type: "button", "data-revision-id": item.id } });
+			const copy = button.createSpan("agent-dashboard-recent-copy"); copy.createSpan({ text: item.path, cls: "agent-dashboard-recent-title" }); copy.createSpan({ text: `${item.label} · ${new Date(item.updated).toLocaleString()}`, cls: "agent-dashboard-recent-state" });
+			button.onclick = () => this.plugin.openKnowledgeMaintenance({ tab: "history", revisionId: item.id });
+		}
+		link("全部整理记录", () => this.plugin.openKnowledgeMaintenance({ tab: "history" }), "history");
 	}
 
 	renderHeader(parent: HTMLElement): void {

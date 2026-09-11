@@ -46,6 +46,7 @@ import { decodeIntakeRef, type AcquisitionIntakeRef } from "./fulltext/contracts
 import { SourceIntakeService } from "./papers/source-intake";
 import { createVaultCatalog, sourceIndexIO } from "./papers/vault-catalog";
 import { FileSourceStorage } from "./sources/storage";
+import { readDashboardCuration, type CurationNavigation } from "./services/dashboard-curation";
 import { openSourceSave } from "./papers/source-save-modal";
 import { JatsIntakeService } from "./jats/intake";
 import { openJatsSave } from "./jats/modal";
@@ -2870,7 +2871,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	showCurationModal<T extends Modal>(modal: T): T {
 		this.curationModals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.curationModals.delete(modal); }; modal.open(); return modal;
 	}
-	openKnowledgeMaintenance(): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this)); }
+	readDashboardCuration() { return readDashboardCuration(new FileSourceStorage(this.readingPluginDirectory())); }
+	openKnowledgeMaintenance(entry?: CurationNavigation): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this, entry)); }
 	openKnowledgeCuration(sessionId: string, nodeId: string, review?: CurationReview): void {
 		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") { new Notice("代码学习可导出独立笔记并关联已有笔记，暂不自动整理正式代码页"); return; }
 		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review)); }

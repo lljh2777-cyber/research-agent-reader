@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Dashboard pending work and recent curation — 0.60.0
+
+- 首页只读汇总未完成任务、待审阅、需复查／恢复及最近三条修订；明确保存状态、统计不完整与读取上限，不在首页恢复遗留任务或调用模型。
+- 最近修订按 ID 打开，失联时不替代；整理批次入口保留中断生成记录的可达性，支持刷新和任务筛选。
+- 定向回归、类型检查、构建及原生导航与窄面板验收通过。测试库部署至 `0.60.0`，897 个受保护文件和 13 个原有标签页保持不变。详见 [R1 摘要记录](docs/dashboard-summary-r1.md)。关联代码及 R1 整体验收仍待完成。
+
 ### Dashboard primary and secondary navigation — 0.59.0
 
 - 工作台以文献库、阅读空间、知识整理为三个主入口；入库、深读和检索等保持可见，代码分析、练习、体检和导出进入扩展区。有工具任务运行时自动展开，保留指定任务的停止入口。
