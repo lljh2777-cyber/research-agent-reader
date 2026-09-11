@@ -31,7 +31,8 @@ import { TopicStudyView, TOPIC_STUDY_VIEW_TYPE } from "./views/topic-study";
 import { libraryMineruVerifier } from "./library/mineru-verifier";
 import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/record-store";
 import { PaperRecordService, type PaperRecordEdit } from "./library/record-service";
-import { MetadataIntakeService } from "./library/metadata-intake";
+import { MetadataIntakeService, type PaperIntakeContext, type MetadataSource } from "./library/metadata-intake";
+import { loadSourcePackage } from "./sources/package";
 import { MetadataIntakeModal } from "./views/metadata-intake";
 import { LocalPdfIntakeService } from "./papers/local-pdf-intake";
 import { LocalPdfIntakeModal } from "./views/local-pdf-intake";
@@ -471,6 +472,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.addCommand({ id: "open-topic-planning", name: "打开主题路线（预览）", callback: () => { void this.activateLearningSpace({ kind: "topic" }).catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "add-paper-metadata", name: "添加文献信息（无需模型）", callback: () => this.openMetadataIntake() });
+		this.addCommand({ id: "add-paper", name: "添加文献（书目信息、全文与本地 PDF）", callback: () => this.openPaperIntake() });
 		this.addCommand({ id: "add-local-pdf", name: "添加本地 PDF（核对、保存与恢复）", callback: () => this.openLocalPdfIntake() });
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
 		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ domain: "code" }); } });
@@ -2114,9 +2116,13 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	openFulltextAcquisition(mode: AcquisitionMode = "production", jobId?: string): void {
 		try {
-			const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id), {open:id=>openAcquiredIntake(this,id),save:id=>openSourceSave(this,id),jats:id=>openJatsSave(this,id),runs:()=>this.getTaskRuns(),subscribe:listener=>this.subscribeTaskRuns(listener),openRun:run=>new TaskResultModal(this.app,this,run,null).open()});
-			this.acquisitionModals.add(modal); modal.open();
+			this.showFulltextAcquisition(mode, jobId);
 		} catch { new Notice("全文获取需要可读写的桌面插件目录"); }
+	}
+	private showFulltextAcquisition(mode: AcquisitionMode, jobId?: string, identity?: PaperIntakeContext["identity"]): void {
+		if (this.acquisitionClosing) throw new Error("插件已关闭");
+		const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id), {open:id=>openAcquiredIntake(this,id),save:id=>openSourceSave(this,id),jats:id=>openJatsSave(this,id),runs:()=>this.getTaskRuns(),subscribe:listener=>this.subscribeTaskRuns(listener),openRun:run=>new TaskResultModal(this.app,this,run,null).open()}, identity);
+		this.acquisitionModals.add(modal); modal.open();
 	}
 	private sourceIntakeService?:SourceIntakeService;
 	private jatsIntakeService?:JatsIntakeService;
@@ -2732,9 +2738,29 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	openLocalPdfIntake(): void {
 		try {
-			const modal = new LocalPdfIntakeModal(this.app, this.getLocalPdfIntake(), this.getActiveVaultRoot(), id => this.activatePaperLibrary(id));
+			this.showLocalPdfIntake();
+		} catch (error) { new Notice(String(error)); }
+	}
+	private showLocalPdfIntake(paper?: PaperIntakeContext): void {
+		const modal = new LocalPdfIntakeModal(this.app, this.getLocalPdfIntake(), this.getActiveVaultRoot(), id => this.activatePaperLibrary(id), undefined, paper);
+		if (!this.trackAcquisitionDialog(modal)) throw new Error("插件已关闭"); modal.open();
+	}
+	openPaperIntake(): void {
+		try {
+			const modal = new MetadataIntakeModal(this.app, this.getMetadataIntake(), id => this.activatePaperLibrary(id), {
+				local: context => this.showLocalPdfIntake(context), fulltext: context => this.showFulltextAcquisition("production", undefined, context.identity),
+				source: (source, signal) => this.openIntakeSource(source, signal),
+			});
 			if (this.trackAcquisitionDialog(modal)) modal.open();
 		} catch (error) { new Notice(String(error)); }
+	}
+	private async openIntakeSource(source: MetadataSource, signal: AbortSignal): Promise<void> {
+		signal.throwIfAborted(); const scan = await this.inspectPaperLibrary(signal);
+		const item = scan.papers.find(p => p.paperId === source.paperId)?.objects.find(o => o.kind === "source" && o.source?.path === source.path);
+		if (!item) throw new Error("原文关联已变化，请重新查询");
+		const loaded = await loadSourcePackage(this.getSourceCatalog().storage, source.packageKey); signal.throwIfAborted();
+		if (loaded.manifest.digest !== source.manifestDigest || loaded.manifest.paperId !== source.paperId) throw new Error("原文版本已变化，请重新查询");
+		await this.openLibraryObject(item, false, signal);
 	}
 	getMetadataIntake(): MetadataIntakeService {
 		if (this.acquisitionClosing) throw new Error("插件已关闭");
@@ -3812,6 +3838,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			return;
 		}
 		const existing = this.consolidateMineruReaderLeaves();
+		if (existing) await existing.loadIfDeferred();
 		const leaf = existing || this.app.workspace.getLeaf("tab");
 		// Markdown rendering can wait for visibility, including in a newly created tab.
 		await this.app.workspace.revealLeaf(leaf);

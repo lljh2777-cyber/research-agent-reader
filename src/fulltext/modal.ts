@@ -1,5 +1,5 @@
 import { Modal, Notice, type App } from "obsidian";
-import { acquisitionActive, acquisitionRetryable, parseAcquisitionInput, PHASE_LABELS, type AcquisitionRequest, type DemoScenario } from "./contracts";
+import { acquisitionActive, acquisitionRetryable, decodeIdentity, parseAcquisitionInput, PHASE_LABELS, type AcquisitionRequest, type DemoScenario, type ResolvedIdentity } from "./contracts";
 import type { AcquisitionService } from "./service";
 import type { TaskRun } from "../types/contracts";
 
@@ -9,7 +9,8 @@ export class FulltextAcquisitionModal extends Modal {
 	private closed = false;
 	private busy = false;
 	private unsubscribeRuns?:()=>void;
-	constructor(app: App, readonly service: AcquisitionService, private selectedId?: string, private afterClose?: () => void, private openPdf?: (id: string) => Promise<void>, private intake?:{open(id:string):Promise<void>;save?(id:string):Promise<void>;jats?(id:string):Promise<void>;runs():TaskRun[];subscribe(listener:()=>void):()=>void;openRun(run:TaskRun):void}) { super(app); }
+	private readonly confirmedIdentity?: ResolvedIdentity;
+	constructor(app: App, readonly service: AcquisitionService, private selectedId?: string, private afterClose?: () => void, private openPdf?: (id: string) => Promise<void>, private intake?:{open(id:string):Promise<void>;save?(id:string):Promise<void>;jats?(id:string):Promise<void>;runs():TaskRun[];subscribe(listener:()=>void):()=>void;openRun(run:TaskRun):void}, identity?: ResolvedIdentity) { super(app); this.confirmedIdentity = identity && decodeIdentity(identity); }
 	onOpen(): void {
 		this.closed = false; this.modalEl.addClass("rar-fulltext-modal");
 		this.setTitle(this.service.mode === "demo" ? "全文获取 · 流程演示" : "获取论文全文");
@@ -18,6 +19,10 @@ export class FulltextAcquisitionModal extends Modal {
 		const label = this.contentEl.createEl("label", { text: "DOI、PMID、PMCID 或论文链接", cls: "rar-fulltext-input-label" });
 		const input = label.createEl("input", { type: "text", attr: { placeholder: "10.xxxx/…、PMID:… 或 PMC…", "aria-label": "论文标识", maxlength: "1024" } });
 		if (this.service.mode === "demo") input.value = "10.0000/fulltext-demo";
+		if (this.confirmedIdentity) {
+			input.value = Object.values(this.confirmedIdentity.identifiers)[0]!; input.disabled = true;
+			this.contentEl.createEl("p", { text: "已确认文献：" + this.confirmedIdentity.title + "。沿用这份书目信息，选择内容与版本范围后再查找全文。" });
+		}
 		const parsedEl = this.contentEl.createEl("p", { cls: "rar-fulltext-parsed", attr: { "aria-live": "polite" } });
 		let scenario: DemoScenario = "success", versionPolicy: AcquisitionRequest["versionPolicy"] = "record_only",goal:AcquisitionRequest["goal"]="pdf",includeFigures=true;
 		if (this.service.mode === "demo") {
@@ -42,7 +47,9 @@ export class FulltextAcquisitionModal extends Modal {
 		input.addEventListener("input", validate); validate();
 		start.addEventListener("click", () => {
 			if (this.busy || start.disabled) return; this.busy = true; validate();
-			void this.service.start({ input: parseAcquisitionInput(input.value), goal,versionPolicy,...(goal==="jats"?{includeFigures}:{}), ...(this.service.mode === "demo" ? { scenario } : {}) }).then(job => { this.selectedId = job.id; this.renderJobs(); }).catch(() => new Notice("无法创建获取任务，请检查插件存储目录")).finally(() => { this.busy = false; if (!this.closed) validate(); });
+			const request: AcquisitionRequest = { input: parseAcquisitionInput(input.value), goal,versionPolicy,...(goal==="jats"?{includeFigures}:{}), ...(this.service.mode === "demo" ? { scenario } : {}) };
+			let failure = "";
+			void (this.confirmedIdentity ? this.service.startConfirmed(request, this.confirmedIdentity) : this.service.start(request)).then(job => { this.selectedId = job.id; this.renderJobs(); }).catch(error => { failure = "未能查找全文：" + String(error); }).finally(() => { this.busy = false; if (!this.closed) { validate(); if (failure) parsedEl.setText(failure); } });
 		});
 		this.jobsEl = this.contentEl.createDiv("rar-fulltext-jobs"); this.jobsEl.setText("正在读取获取记录…");
 		this.unsubscribe = this.service.subscribe(() => this.renderJobs());

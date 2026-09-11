@@ -18,12 +18,14 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.63.0`; the beta
+The `codex/research-learning-map` development branch is at `0.64.0`; the beta
 release link above remains the published release.
 
 `0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；不为保存书目信息生成论文笔记。跨阶段待处理中心按路线归 R3。
 
-`0.63.0` 已接通[本地 PDF 添加与恢复](docs/local-pdf-intake-r2.md)：进入「文献库 → 添加本地 PDF」，选择文件并查询文献标识，声明版本、核对实际页面后保存原文。无需模型，PDF 不上传；版本默认未核验。添加记录可恢复中断的保存或登记，重新选择文件必须匹配原内容。相同本地内容与版本复用原文包，保存后可在文献库查看并打开。底层来源约定见[共用保存器](docs/local-pdf-core-r2.md)。统一添加入口及更多来源补全动作仍在 R2 后续计划中。
+`0.63.0` 已接通[本地 PDF 添加与恢复](docs/local-pdf-intake-r2.md)：选择文件并查询文献标识，声明版本、核对实际页面后保存原文。无需模型，PDF 不上传；版本默认未核验。添加记录可恢复中断的保存或登记，重新选择文件必须匹配原内容。相同本地内容与版本复用原文包，保存后可在文献库查看并打开。底层来源约定见[共用保存器](docs/local-pdf-core-r2.md)。
+
+`0.64.0` 已接通[统一添加文献入口](docs/paper-intake-r2.md)：在「文献库 → 添加文献」查询和保存书目信息，再继续查找全文或添加本地 PDF；后续沿用已确认身份，不重复查询。已有 PDF／JATS 可以直接打开，也可从本地文件或本地恢复记录开始。全文请求仍需选择内容与版本范围后明确启动，获取失败或取消不会撤回已保存的文献记录。旧书目、本地 PDF 和全文命令保持可用。
 
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。
 

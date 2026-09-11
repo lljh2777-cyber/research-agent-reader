@@ -14,8 +14,7 @@ export interface PaperLibraryHost extends ReadingStateHost {
 	openLibraryObject(item: LibraryObjectSummary, read: boolean, signal: AbortSignal): Promise<void>;
 	openLibraryCodeLink(paperKey: string, link: LibraryCodeLink, signal: AbortSignal): Promise<void>;
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
-	openMetadataIntake(): void;
-	openLocalPdfIntake(): void;
+	openPaperIntake(): void;
 }
 
 export class PaperLibraryView extends ItemView {
@@ -38,7 +37,6 @@ export class PaperLibraryView extends ItemView {
 	private refreshButton?: HTMLButtonElement;
 	private spaceButton?: HTMLButtonElement;
 	private addButton?: HTMLButtonElement;
-	private localPdfButton?: HTMLButtonElement;
 	private cancelButton?: HTMLButtonElement;
 	constructor(leaf: WorkspaceLeaf, private readonly host: PaperLibraryHost) {
 		super(leaf);
@@ -80,8 +78,7 @@ export class PaperLibraryView extends ItemView {
 		const header = this.contentEl.createDiv("rar-library-header"), heading = header.createDiv();
 		heading.createEl("h1", { text: "文献库" }); heading.createEl("p", { text: "找到资料，继续阅读，回看已保存的笔记。", cls: "rar-library-muted" });
 		const actions = header.createDiv("rar-library-actions");
-		this.addButton = this.button(actions, "添加文献信息", () => this.host.openMetadataIntake());
-		this.localPdfButton = this.button(actions, "添加本地 PDF", () => this.host.openLocalPdfIntake());
+		this.addButton = this.button(actions, "添加文献", () => this.host.openPaperIntake());
 		this.spaceButton = this.button(actions, "阅读空间", () => { void this.run(signal => { signal.throwIfAborted(); return this.host.activateLearningSpace({ kind: "document" }); }); });
 		this.refreshButton = this.button(actions, "刷新文献库", () => { if (this.editingRecord) return; this.message = ""; void this.browser.refresh(); });
 		this.cancelButton = this.button(actions, "取消扫描", () => { if (this.action) this.action.abort(); else this.browser.cancel(); });
@@ -111,7 +108,6 @@ export class PaperLibraryView extends ItemView {
 		this.refreshButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
 		this.spaceButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
 		this.addButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
-		this.localPdfButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
 		this.cancelButton!.hidden = !this.browser.busy && !this.action;
 		this.cancelButton!.setText(this.action ? "取消打开" : "取消扫描");
 		this.cancelButton!.disabled = !this.action && state.phase !== "loading";
@@ -137,7 +133,7 @@ export class PaperLibraryView extends ItemView {
 			row.createSpan({ text: libraryRowContext(paper), cls: "rar-library-row-context" });
 		}
 		if (papers.length > this.limit) this.button(this.list, "显示更多记录", () => { this.limit += 40; this.renderResults(); });
-		if (!papers.length && state.phase !== "loading") this.list.createEl("p", { text: data?.papers.length ? "没有匹配结果，可修改关键词或筛选。" : "还没有可展示的文献记录。可通过上方“添加文献信息”查询并保存。", cls: "rar-library-muted" });
+		if (!papers.length && state.phase !== "loading") this.list.createEl("p", { text: data?.papers.length ? "没有匹配结果，可修改关键词或筛选。" : "还没有可展示的文献记录。可通过上方“添加文献”查询并保存。", cls: "rar-library-muted" });
 		const selected = data?.papers.find(paper => paper.key === this.selectedKey);
 		this.detail.empty();
 		if (selected) this.renderPaper(selected, data!);

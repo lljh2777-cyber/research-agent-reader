@@ -6,6 +6,7 @@ import type { SourceSavePlan } from "../papers/source-intake";
 import { pdfSourceVersionLabel, type LocalPdfSnapshot } from "../sources/pdf-snapshot";
 import { chooseSystemSource } from "../reading/source-picker";
 import { renderBibliography } from "./bibliography";
+import type { PaperIntakeContext } from "../library/metadata-intake";
 
 export class LocalPdfIntakeModal extends Modal {
 	private closed = false;
@@ -24,9 +25,10 @@ export class LocalPdfIntakeModal extends Modal {
 	private status!: HTMLElement;
 	private result!: HTMLElement;
 	private records!: HTMLElement;
+	private readonly paper?: PaperIntakeContext;
 	constructor(app: App, private readonly service: LocalPdfIntakeService, private readonly vaultRoot: string,
 		private readonly openPaper: (paperId: string) => Promise<void>,
-		private readonly picker = (current: string) => chooseSystemSource("pdf", false, current, vaultRoot)) { super(app); }
+		private readonly picker = (current: string) => chooseSystemSource("pdf", false, current, vaultRoot), paper?: PaperIntakeContext) { super(app); this.paper = paper && structuredClone(paper); }
 	onOpen(): void {
 		this.closed = false; this.contentEl.empty(); this.contentEl.addClass("rar-local-pdf-intake");
 		this.contentEl.createEl("h2", { text: "添加本地 PDF" });
@@ -38,14 +40,19 @@ export class LocalPdfIntakeModal extends Modal {
 		this.choose.onclick = () => { void this.run(async () => { const selected = await this.picker(this.file.value); if (!this.closed && selected) this.file.value = selected; }, "正在选择文件…"); };
 		files.createEl("label", { text: "文献标识" });
 		this.identifier = files.createEl("input", { type: "text", placeholder: "DOI、PMID、PMCID 或支持的论文链接", attr: { "aria-label": "本地 PDF 文献标识", maxlength: "1024" } });
+		if (this.paper) {
+			this.identifier.value = Object.values(this.paper.identity.identifiers)[0]!;
+			files.createEl("p", { text: "沿用已确认文献：" + this.paper.identity.title + "。此处仅核对 PDF，不重复查询书目信息。" });
+		}
 		files.createEl("label", { text: "版本声明" });
 		this.version = files.createEl("select", { attr: { "aria-label": "本地 PDF 版本声明" } });
 		for (const [value, text] of [["unknown", "版本未核验（默认）"], ["version_of_record", "我确认这是出版版本"], ["accepted_manuscript", "我确认这是作者接受稿"]]) this.version.createEl("option", { value, text });
 		this.file.oninput = this.identifier.oninput = this.version.onchange = () => { this.reset(); this.status.setText(""); this.controls(); };
 		const actions = this.contentEl.createDiv("rar-library-actions");
-		this.query = actions.createEl("button", { text: "查询并核对 PDF" });
+		this.query = actions.createEl("button", { text: this.paper ? "核对这篇文献的 PDF" : "查询并核对 PDF" });
 		this.query.onclick = () => { if (!this.query.disabled) void this.run(async signal => {
-			const plan = await this.service.prepare(this.file.value.trim(), this.identifier.value, this.version.value as LocalPdfSnapshot["version"], signal);
+			const plan = this.paper ? await this.service.prepareForPaper(this.file.value.trim(), this.paper, this.version.value as LocalPdfSnapshot["version"], signal)
+				: await this.service.prepare(this.file.value.trim(), this.identifier.value, this.version.value as LocalPdfSnapshot["version"], signal);
 			await this.preview(plan, signal);
 		}, "正在查询书目信息并检查 PDF…"); };
 		this.cancel = actions.createEl("button", { text: "取消核对" });
@@ -65,6 +72,7 @@ export class LocalPdfIntakeModal extends Modal {
 	private controls(): void {
 		let valid = false; try { parseAcquisitionInput(this.identifier.value); valid = path.isAbsolute(this.file.value.trim()) && /\.pdf$/i.test(this.file.value.trim()); } catch { /* Wait for a valid selection and identifier. */ }
 		for (const input of [this.file, this.identifier, this.version, this.choose]) input.disabled = this.busy || this.saving;
+		if (this.paper) this.identifier.disabled = true;
 		this.query.disabled = !valid || this.busy || this.saving;
 		this.cancel.hidden = !this.busy || this.saving;
 		for (const button of Array.from(this.records.querySelectorAll("button"))) button.disabled = this.busy || this.saving || button.dataset.unavailable === "true";

@@ -3,7 +3,7 @@ import { decodeIdentity, parseAcquisitionInput } from "../fulltext/contracts";
 import type { IdentityResolver } from "../fulltext/identity-resolver";
 import type { PdfLoader } from "../fulltext/file-validator";
 import { decodeLocalPdfSnapshot, type LocalPdfSnapshot } from "../sources/pdf-snapshot";
-import { canonicalJson, objectDigest } from "./identity";
+import { canonicalJson, objectDigest, type ResolvedIdentity } from "./identity";
 import { prepareLocalPdf, rereadLocalPdf, type readLocalPdfFile } from "./local-pdf";
 import { SourceIntakeService, type SourceIntakeDeps, type SourceSavePlan } from "./source-intake";
 
@@ -89,6 +89,17 @@ export class LocalPdfIntakeService {
 		return this.request(signal, async current => {
 			const operation = await this.readOperation(id); this.available(current);
 			return this.activate(operation, selectedPath || operation.path, current);
+		});
+	}
+	/** Continue a saved paper without a second metadata request; the catalog still owns association. */
+	async prepareForPaper(filePath: string, context: { identity: ResolvedIdentity; paperId: string }, version: LocalPdfSnapshot["version"], signal: AbortSignal): Promise<SourceSavePlan> {
+		const identity = decodeIdentity(context.identity), paperId = context.paperId;
+		if (!/^p-[a-f0-9-]{36}$/.test(paperId)) throw new Error("已确认文献标识无效");
+		return this.request(signal, async current => {
+			const selected = await prepareLocalPdf(filePath, identity, current, { version, read: this.deps.read, pdfLoader: this.deps.pdfLoader }); this.available(current);
+			const plan = await this.activate(this.decode({ schemaVersion: 1, deviceId: this.deps.deviceId, path: filePath, snapshot: selected.snapshot }, selected.snapshot.id), filePath, current);
+			if (plan.paperId !== paperId) { this.cancel(plan.requestId); throw new Error("文献关联已变化，请返回添加文献重新核对"); }
+			return plan;
 		});
 	}
 	private async activate(operation: LocalOperation, filePath: string, signal: AbortSignal): Promise<SourceSavePlan> {

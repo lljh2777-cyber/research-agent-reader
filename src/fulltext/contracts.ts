@@ -1,6 +1,7 @@
 import { oaUrl } from "./url-policy";
 import { decodeJatsLocator,decodeJatsSnapshot,type JatsLocator,type JatsSnapshot } from "../jats/contracts";
 import type { ResolvedIdentity } from "../papers/identity";
+import { objectDigest } from "../papers/identity";
 export type { ResolvedIdentity } from "../papers/identity";
 export type AcquisitionMode = "production" | "demo";
 export const ACQUISITION_PHASES = ["queued", "resolving", "discovering", "awaiting_selection", "downloading", "verifying", "acquired", "no_match", "needs_configuration", "conflict", "failed", "cancelled", "interrupted"] as const;
@@ -20,6 +21,7 @@ export interface AcquisitionJob {
 	detail: string; error: string; candidates: AcquisitionCandidate[]; selectedId?: string;
 	receivedBytes?: number; totalBytes?: number; snapshotId?: string; storageWarning?: string;
 	identity?: ResolvedIdentity; identityCheck?: "verified" | "needs_confirmation"; errorCode?: string;
+	confirmedIdentity?: ResolvedIdentity;
 	intakeRunIds?: string[];
 	sourcePackages?: string[];
 }
@@ -99,6 +101,11 @@ export function decodeJob(value: unknown, mode: AcquisitionMode): AcquisitionJob
 	if (job.phase === "acquired" && !job.snapshotId) throw new Error("完成记录缺少快照");
 	if (r.storageWarning !== undefined) job.storageWarning = string(r.storageWarning);
 	if (r.identity !== undefined) { if (mode !== "production") throw new Error("演示不能携带真实身份"); job.identity = decodeIdentity(r.identity); }
+	if (r.confirmedIdentity !== undefined) {
+		if (mode !== "production") throw new Error("演示不能携带已确认文献");
+		job.confirmedIdentity = decodeIdentity(r.confirmedIdentity);
+		if (job.confirmedIdentity.identifiers[job.request.input.kind] !== job.request.input.value || job.identity && objectDigest(job.identity) !== objectDigest(job.confirmedIdentity)) throw new Error("获取任务与已确认文献不一致");
+	}
 	if (r.identityCheck !== undefined) { if (!["verified", "needs_confirmation"].includes(String(r.identityCheck))) throw new Error("身份校验状态无效"); job.identityCheck = r.identityCheck as AcquisitionJob["identityCheck"]; }
 	if (r.errorCode !== undefined) job.errorCode = string(r.errorCode, 80);
 	if (r.intakeRunIds !== undefined) { job.intakeRunIds = strings(r.intakeRunIds, 100, 200); if (job.intakeRunIds.some(v=>!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(v)) || new Set(job.intakeRunIds).size !== job.intakeRunIds.length || mode !== "production") throw new Error("入库任务关联无效"); }

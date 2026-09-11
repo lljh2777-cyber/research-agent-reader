@@ -3,13 +3,20 @@ import type { IdentityResolver } from "../fulltext/identity-resolver";
 import type { SourceCatalog, CatalogPlan } from "../papers/catalog";
 import type { ResolvedIdentity } from "../papers/identity";
 import type { PaperRecordStore } from "./record-store";
+import type { SourcePackageManifest } from "../sources/package";
 
 export interface MetadataPreview {
 	identity: ResolvedIdentity;
 	existing: boolean;
 	warnings: string[];
+	sources: MetadataSource[];
 }
 export interface MetadataSaved { paperId: string; reused: boolean; }
+export interface MetadataSource { packageKey: string; paperId: string; path: string; label: string; manifestDigest: string; }
+export interface PaperIntakeContext { identity: ResolvedIdentity; paperId: string; }
+const sourceView = (m: SourcePackageManifest): MetadataSource => ({ packageKey: m.packageKey, paperId: m.paperId,
+	path: `papers/${m.packageKey}/${m.packageKind === "pdf-source" ? "source.pdf" : "article.md"}`, manifestDigest: m.digest,
+	label: `${m.packageKind === "pdf-source" ? m.schemaVersion === 2 ? "本地 PDF" : "在线 PDF" : "JATS"} · ${m.version === "unknown" ? "版本未核验" : (m.packageKind === "pdf-source" && m.schemaVersion === 2 ? "用户声明的" : "") + (m.version === "version_of_record" ? "出版版本" : "作者接受稿")} · ${m.packageKind === "pdf-source" && m.schemaVersion === 2 ? "保存于 " + m.createdAt.slice(0, 10) : m.sourceVersionId}` });
 
 /** Read-only preview followed by explicit, serialized create. No acquisition job or model. */
 export class MetadataIntakeService {
@@ -27,7 +34,7 @@ export class MetadataIntakeService {
 		const identity = decodeIdentity(resolved);
 		if (identity.identifiers[input.kind] !== input.value) throw new Error("查询结果与输入标识不一致，未保存");
 		const plan = await this.catalog.associate(identity); this.available(signal);
-		const preview = { identity: structuredClone(identity), existing: Boolean(plan.existingPaperId), warnings: [...plan.warnings] };
+		const preview = { identity: structuredClone(identity), existing: Boolean(plan.existingPaperId), warnings: [...plan.warnings], sources: plan.packages.map(sourceView) };
 		this.previews.set(preview, { identity, plan }); return preview;
 	}
 	save(preview: MetadataPreview, signal: AbortSignal): Promise<MetadataSaved> {
@@ -53,6 +60,23 @@ export class MetadataIntakeService {
 			return { paperId, reused: false };
 		});
 		this.queue = operation.catch(() => undefined); return operation;
+	}
+	/** Recheck the private query result, never trust mutated UI metadata or a guessed paperId. */
+	async context(preview: MetadataPreview, signal: AbortSignal, savedPaperId?: string): Promise<PaperIntakeContext> {
+		this.available(signal); const prepared = this.previews.get(preview);
+		if (!prepared) throw new Error("查询预览已失效，请重新查询");
+		const latest = await this.catalog.associate(prepared.identity); this.available(signal);
+		if (!latest.existingPaperId) throw new Error("请先保存书目信息后继续");
+		if (savedPaperId && latest.existingPaperId !== savedPaperId || prepared.plan.existingPaperId && latest.existingPaperId !== prepared.plan.existingPaperId) throw new Error("文献关联已变化，请重新查询核对");
+		return { identity: structuredClone(prepared.identity), paperId: latest.existingPaperId };
+	}
+	async source(preview: MetadataPreview, packageKey: string, signal: AbortSignal): Promise<MetadataSource> {
+		this.available(signal); const prepared = this.previews.get(preview), original = prepared?.plan.packages.find(p => p.packageKey === packageKey);
+		if (!prepared || !original) throw new Error("所选来源不属于本次查询预览");
+		const latest = await this.catalog.associate(prepared.identity); this.available(signal);
+		const current = latest.packages.find(p => p.packageKey === packageKey);
+		if (!current || current.digest !== original.digest || latest.existingPaperId !== original.paperId) throw new Error("原文或文献关联已变化，请重新查询");
+		return sourceView(current);
 	}
 	async dispose(): Promise<void> { this.closed = true; await this.queue; }
 }

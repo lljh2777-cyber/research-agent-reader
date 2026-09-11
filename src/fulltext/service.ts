@@ -84,23 +84,30 @@ export class AcquisitionService {
 		}
 	}
 	start(request:AcquisitionRequest):Promise<AcquisitionJob>{return this.startRequest(request,false);}
+	startConfirmed(request: AcquisitionRequest, raw: ResolvedIdentity): Promise<AcquisitionJob> {
+		const identity = decodeIdentity(raw), normalized = decodeRequest(request, this.mode);
+		if (this.mode !== "production" || identity.identifiers[normalized.input.kind] !== normalized.input.value) return Promise.reject(new Error("已确认文献与获取请求不一致"));
+		return this.startRequest({ ...normalized, ...(request.useUnpaywall === false ? { useUnpaywall: false } : {}) }, false, identity);
+	}
 	/** Explicit refresh keeps the previous immutable snapshot and starts a separate acquisition. */
-	async refreshJats(id:string):Promise<AcquisitionJob>{await this.ready();const job=this.get(id);if(!job||!this.owned(job)||job.request.goal!=="jats"||job.phase!=="acquired")throw new Error("此 JATS 记录不能重新查询");return this.startRequest(job.request,true);}
-	private async startRequest(request: AcquisitionRequest,fresh:boolean): Promise<AcquisitionJob> {
+	async refreshJats(id:string):Promise<AcquisitionJob>{await this.ready();const job=this.get(id);if(!job||!this.owned(job)||job.request.goal!=="jats"||job.phase!=="acquired")throw new Error("此 JATS 记录不能重新查询");return this.startRequest(job.request,true,job.confirmedIdentity);}
+	private async startRequest(request: AcquisitionRequest,fresh:boolean,confirmedIdentity?: ResolvedIdentity): Promise<AcquisitionJob> {
 		await this.ready();
 		return this.serial(async () => {
 			if (this.disposed) throw new Error("全文获取服务已关闭");
 			const normalized = decodeRequest(this.mode==="production"&&request.goal==="pdf"?{...request,useUnpaywall:request.useUnpaywall ?? this.unpaywallEnabled}:request, this.mode);
-			const duplicate = this.list().find(job => this.owned(job) && acquisitionActive(job.phase) && requestKey(job.request) === requestKey(normalized));
+			const compatible = (job: AcquisitionJob) => !confirmedIdentity || !!job.confirmedIdentity && objectDigest(job.confirmedIdentity) === objectDigest(confirmedIdentity);
+			const duplicate = this.list().find(job => this.owned(job) && compatible(job) && acquisitionActive(job.phase) && requestKey(job.request) === requestKey(normalized));
 			if (duplicate) return duplicate;
 			if (!fresh && this.mode === "production" && this.backend && (normalized.goal==="jats"?this.backend.readJatsSnapshot:this.backend.validateSnapshot)) {
-				for (const cached of this.list().filter(job => this.owned(job) && job.phase === "acquired" && job.request.goal===normalized.goal && job.request.includeFigures===normalized.includeFigures && job.request.versionPolicy === normalized.versionPolicy && job.identity?.identifiers[normalized.input.kind] === normalized.input.value)) {
+				for (const cached of this.list().filter(job => this.owned(job) && compatible(job) && job.phase === "acquired" && job.request.goal===normalized.goal && job.request.includeFigures===normalized.includeFigures && job.request.versionPolicy === normalized.versionPolicy && job.identity?.identifiers[normalized.input.kind] === normalized.input.value)) {
 					try { const snapshot = await this.repository.snapshot(cached.snapshotId!); if (snapshot.mode !== "production" || !this.matches(cached, snapshot)) throw new Error("invalid");if(snapshot.schemaVersion===3){if(!this.backend.readJatsSnapshot)throw new Error("JATS unavailable");await this.backend.readJatsSnapshot(snapshot);}else await this.backend.validateSnapshot!(snapshot); return cached; }
 					catch { await this.persist({ ...cached, phase: "interrupted", error: "已有全文快照校验失败，本次将重新查询来源", detail: "原文件保留，未覆盖" }); }
 				}
 			}
 			const now = new Date().toISOString();
 			const job: AcquisitionJob = { schemaVersion: 1, id: "a-" + randomUUID(), attemptId: "a-" + randomUUID(), revision: 1, mode: this.mode, deviceId: this.deviceId, request: normalized, phase: this.backend ? "queued" : "needs_configuration", createdAt: now, updatedAt: now, detail: this.backend ? this.mode === "demo" ? "准备开始演示" : "准备查询论文身份与 PMC 来源" : "全文来源不可用", error: "", candidates: [] };
+			if (confirmedIdentity) { job.confirmedIdentity = structuredClone(confirmedIdentity); job.identity = structuredClone(confirmedIdentity); job.detail = "沿用已确认的书目信息，准备查询全文来源"; }
 			// Initial write failures reject before any backend work or visible task is created.
 			try { await this.repository.save(job); } catch { throw new Error("无法保存新任务，请检查插件存储目录"); }
 			this.emit(); if (this.backend) this.launch(job); return this.get(job.id)!;
@@ -144,9 +151,10 @@ export class AcquisitionService {
 	}
 	private async run(id: string, attempt: Attempt): Promise<void> {
 		try {
-			if (!await this.stage(id, attempt, { phase: "resolving", detail: this.mode === "demo" ? "识别虚构论文" : "查询 Europe PMC 精确标识与 Crossref 元数据" })) return;
+			const seed = this.get(id)!.confirmedIdentity;
+			if (!await this.stage(id, attempt, { phase: "resolving", detail: seed ? "核对已确认的书目信息" : this.mode === "demo" ? "识别虚构论文" : "查询 Europe PMC 精确标识与 Crossref 元数据" })) return;
 			const request = this.get(id)!.request, signal = attempt.controller.signal;
-			const resolved = await this.backend!.resolve(request, signal);
+			const resolved = seed || await this.backend!.resolve(request, signal);
 			const identity = this.mode === "production" ? decodeIdentity(resolved) : undefined;
 			if (identity && identity.identifiers[request.input.kind] !== request.input.value) throw new SourceError("identity_mismatch", "解析记录不包含输入标识", "conflict");
 			if (!await this.stage(id, attempt, { phase: "discovering", identity, detail: this.mode === "demo" ? "查找模拟来源" : "查询 PMC 可用版本与文件清单" })) return;
