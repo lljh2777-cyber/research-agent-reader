@@ -1,0 +1,244 @@
+{
+  "version": 1,
+  "baselineId": "topic-t1-v1",
+  "baselineHash": "49446bb21c40a128d992de2c2f8876a87fc46f96c6965706cfaa3cdc04238364",
+  "instructionHash": "89e6cfd4e9bb979f20b265ca0b415dd8e44af7bf2e0d488484ecc40f2b0dfda3",
+  "inputHash": "8d6ec640bcc5323cb6aa5008c20786b3adefeb7fca84c22f395d4b8c197ffe72",
+  "planHash": "2f8dc4dd64a7757f25bc78d69dbbf9900f2e54e35a70b4471e7ee73d47973b05",
+  "runtimeHash": "37a5e1d522153945cc7bfa9c1ea5f7b68e5021cf6a8108d2cb1774c13a6e359d",
+  "runnerHash": "b8997deee7ed6a55ad38e2e6aa3cdab8cdbaaca6caea6144cc6174a8981fca70",
+  "pluginVersion": "0.56.0",
+  "pluginHash": "17a6996bbb3e224c1a554106a7ec46d1e150f4acf3a07cdb2bebe1d73b91006e",
+  "executionDate": "2026-09-11",
+  "mode": "live",
+  "configuredModel": "qwen3.7-flash",
+  "reportedModels": [
+    "qwen3.7-flash"
+  ],
+  "upstreamModelIdentity": "not_independently_verified",
+  "providerRoute": "existing_openai_compatible_loopback_proxy",
+  "sampleCount": 2,
+  "questionCount": 9,
+  "requestsRetained": 9,
+  "responsesRetained": 9,
+  "answered": 9,
+  "automaticRetries": 0,
+  "modelAnswerStatus": "recorded_not_reviewed",
+  "independentReviewStatus": "pending",
+  "independentlyReviewedQuestions": 0,
+  "teachingPassRate": null,
+  "usage": {
+    "input": 10142,
+    "output": 34165,
+    "total": 44307,
+    "cachedInput": 0,
+    "monetaryCost": null,
+    "source": "proxy_reported_not_independently_calibrated"
+  },
+  "usageWarnings": {
+    "textEqualsCompletionWithAdditionalReasoning": [
+      "M01",
+      "M02",
+      "M03",
+      "M04",
+      "M05",
+      "M06",
+      "N01",
+      "N02",
+      "N03"
+    ],
+    "outputExceedsRequestedMaxTokens": [
+      "N02"
+    ],
+    "note": "细项可能重叠，不能把正文与推理字段相加；客户端请求值不能证明上游预算如何执行。"
+  },
+  "questions": [
+    {
+      "id": "M01",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [],
+      "teachingRequestHash": "160f64282a8b2f8917af92ee99af4310acb2fcd3d183f901ee59d6cbd14e3335",
+      "requestHash": "457f4bd548998c6b2d3efee8f4b4ec2129e9fe78dfaa7fef072f78125fb874ae",
+      "responseHash": "86668291f67ebc9b93c2c39a9254f194219dad139d87a6b4c479b6a9d65b5c73",
+      "reportedModel": "qwen3.7-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 398,
+        "output": 2528,
+        "total": 2926,
+        "cachedInput": 0,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "M02",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "M01"
+      ],
+      "teachingRequestHash": "84a592ea31942c74cc92454ede591654473e645bb30c4fe6d3e489dfa15e0141",
+      "requestHash": "f2635288bb036e0bfbcd989c19a652177c6fa63b5bfa9c06e2a6aa5f2e76b188",
+      "responseHash": "dc07a6b3bbadeebf78acdea7cabc4fa64d268e89893fbb7500696864fcf94f1a",
+      "reportedModel": "qwen3.7-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 993,
+        "output": 2852,
+        "total": 3845,
+        "cachedInput": 0,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "M03",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "M01",
+        "M02"
+      ],
+      "teachingRequestHash": "59cf628a365c5ac200d00d4ec1e7a96d93abe0679f3fbfa985c178f5a5d33ffd",
+      "requestHash": "c5068462df376c65fba53bb3d8492bd89b5498fb0faddb4f2b9dd78d0c55a9b1",
+      "responseHash": "4959830969f5f49550ffa94dc5c10a14e86a4ed2473c49f696d698bcd5d93ac6",
+      "reportedModel": "qwen3.7-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1745,
+        "output": 4147,
+        "total": 5892,
+        "cachedInput": 0,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "M04",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "M01"
+      ],
+      "teachingRequestHash": "6a55281b75b5e0983d768fc23e578f4e0785484997a2728209817d45d33ab3d6",
+      "requestHash": "a244d3e60463071c09634c7b18734760e1075f45b77cdaf92d4f92da337bc7c5",
+      "responseHash": "fffbedfb07f01d9be5315c5d4c9a20e02a521c2474c150d8e6f9e0387166f6b7",
+      "reportedModel": "qwen3.7-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 999,
+        "output": 2890,
+        "total": 3889,
+        "cachedInput": 0,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "M05",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "M01"
+      ],
+      "teachingRequestHash": "6830bb4eed5094cae7027397d2234415af676273994a32ebfa57de5647a34f10",
+      "requestHash": "95a2f7180770f10884cebb1c25c9ff53e2456091ba5ca1d3b71d1f839cda7f6a",
+      "responseHash": "3315227c9b68696918e3b954ff398c848c4da08842cf347fc8fe28e16edc6602",
+      "reportedModel": "qwen3.7-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 995,
+        "output": 3348,
+        "total": 4343,
+        "cachedInput": 0,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "M06",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "M01"
+      ],
+      "teachingRequestHash": "f3dea51d0447891c486b51bb968cb8d1e82de62d2b1deee56d9890c0c3a75587",
+      "requestHash": "e207f330ce541272b2adf789ad4818d69c177f3003c429e7417d565170056f81",
+      "responseHash": "991841f71913a4b2871bbd6c3c7fd69eb3656b76b71519e6c9514e331e31ddeb",
+      "reportedModel": "qwen3.7-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 996,
+        "output": 3355,
+        "total": 4351,
+        "cachedInput": 0,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "N01",
+      "sampleId": "neural-python",
+      "state": "answered",
+      "contextSteps": [],
+      "teachingRequestHash": "d6f8c5ab61d319634abf1a90ef2ef591ae15cb4a381316d9ecd02a842f25709d",
+      "requestHash": "a6ba590ef0978bc02da2bcb5e31e2331c2403b625b0c0613f98b4a36270e12ff",
+      "responseHash": "b2ff87dc843e4e9649b02acb010b5fbbc5b23318b95b09c548bed658579af183",
+      "reportedModel": "qwen3.7-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 409,
+        "output": 3035,
+        "total": 3444,
+        "cachedInput": 0,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "N02",
+      "sampleId": "neural-python",
+      "state": "answered",
+      "contextSteps": [
+        "N01"
+      ],
+      "teachingRequestHash": "9459715d3ae28d952a17a96585f6a3111580b3bfc8b6a84dbf485361b288c600",
+      "requestHash": "1b19cdaf579c7440cb86d9daabcba1e6bf45b29aec064aec15ef04389f390972",
+      "responseHash": "c640fb4a9eafb69756c42f780d8c28255d36aa059203d80f4aa2f9055de709e4",
+      "reportedModel": "qwen3.7-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1248,
+        "output": 8415,
+        "total": 9663,
+        "cachedInput": 0,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "N03",
+      "sampleId": "neural-python",
+      "state": "answered",
+      "contextSteps": [
+        "N01",
+        "N02"
+      ],
+      "teachingRequestHash": "4e16a27ed50ba25295482179230555121a543248f85d023999b1321581ce69fc",
+      "requestHash": "50eb62abe1041e517f7c5d62d686b8ea1c0b1bc1780984eed2035947e1136b10",
+      "responseHash": "5b1559cc24fc1c69f6e9ac88db7ad42af5fefde4f095adea5bae3dc98a013486",
+      "reportedModel": "qwen3.7-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 2359,
+        "output": 3595,
+        "total": 5954,
+        "cachedInput": 0,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    }
+  ]
+}

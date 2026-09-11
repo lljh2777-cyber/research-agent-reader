@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Topic teaching benchmark — development tooling
+
+- 新增 T1.3B 真实教学运行器，使用冻结路线、实际主题服务及现有 Direct API 适配器，逐题保存首次请求、响应、学习日志和接口报告用量；请求先写盘再发送，失败停止、无自动重试，不写测试库会话或笔记。
+- 新增只读重放与审阅包工具，核对实际祖先内容、主支线关系、首次响应和字节摘要；评判要点不进入模型输入，开发者自查与独立教学审阅分开。插件保持 `0.56.0`，未修改教学规则，详见 [T1.3B 记录](docs/topic-quality-t13b.md)。
+- `pnpm test:topic-quality` 覆盖实际服务与模拟传输、分支隔离、结构化输出、取消与迟到响应、额外调用和写盘失败、跨进程恢复及报告篡改检查；保留测试文件，不使用批量清理。
+
 ### Topic understanding marks and export — 0.56.0
 
 - 主题讲解新增用户理解标记，与模型生成进度分开；绑定具体回答并追加保存，支持撤回为未标记。模型和自检不能自动赋予理解状态。
