@@ -4,9 +4,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 未来开发以[开发路线：科研阅读、主题学习与知识沉淀](docs/development-roadmap.md)为准：接通文献详情、统一添加、摘录和知识整理，再独立推进存储迁移、翻译与专题对照。新增主题学习扩展，允许从主题、目标与基础开始，使用对话和思维导图学习一般知识；资料阅读继续保持原文证据规则。
 
-[主题学习](docs/topic-study-t12.md)支持无资料的逐单元讲解、主支线对话和学习导图。`0.56.0` 新增 [T1.3 首批交付](docs/topic-records-t13.md)：手动标记“已理解、待回看、仍有疑问”，预览并导出选中节点、当前主支线或完整学习记录；保留原回答及手工编辑。入口仍为「主题路线（预览）→ 确认路线 → 打开学习预览」，无需模型即可标记或导出已保存讲解。页面打开与重载不自动调用模型。[T1.3B](docs/topic-quality-t13b.md) 已完成九题真实首次答题、请求／响应留档和开发者初读；概念边界、分支偏题等问题已记录，独立教学审阅待完成，当前保持开发预览。
+[主题学习](docs/topic-study-t12.md)支持无资料的逐单元讲解、主支线对话和学习导图，并可[手动标记理解状态、预览与导出记录](docs/topic-records-t13.md)。入口为「主题路线（预览）→ 确认路线 → 打开学习预览」，页面打开与重载不自动调用模型。`0.56.1` 新增 [T1.3C 教学规则版本化与同题对照](docs/topic-teaching-t13c.md)：新请求使用 v2，旧 v1 回答和导出保持可读。两版九题首次回答均已留档；v2 更短、部分追问更聚焦，但仍有事实错误和过度承诺，不能认定教学质量提升，继续保持开发预览。
 
-[R1 首批导航](docs/library-navigation-r1.md)已在 `0.53.0` 交付：从工作台的「文献库」搜索和筛选记录，打开详情、指定原文、阅读会话与笔记；旧 MinerU 可按需核验单个包。保留待关联和来源缺口，页面浏览不调用模型。下一步依据 T1.3 首次回答完成独立审阅、确定教学修正与对照复测，R1 人工状态编辑随后继续。
+[R1 首批导航](docs/library-navigation-r1.md)已在 `0.53.0` 交付：从工作台的「文献库」搜索和筛选记录，打开详情、指定原文、阅读会话与笔记；旧 MinerU 可按需核验单个包。保留待关联和来源缺口，页面浏览不调用模型。下一步核对 T1.3 两版的事实错误与来源承诺，完成独立教学审阅；后续候选需增加未参与修订的新题，R1 人工状态编辑随后继续。
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
@@ -14,7 +14,7 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.56.0`; the beta
+The `codex/research-learning-map` development branch is at `0.56.1`; the beta
 release link above remains the published release.
 
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。

@@ -36,7 +36,8 @@ export function topicExportContent(study: TopicStudy, scope: TopicExportScope, n
 		for (const attempt of n.attempts) {
 			const u = attempt.result?.usage;
 			const status = attempt.result ? { done: "已返回", failed: "失败", cancelled: "已取消" }[attempt.result.status] : "未完成";
-			body.push(`- ${line(attempt.provider)} / ${line(attempt.model)}；${attempt.date}；${status}；输入 ${u?.input ?? "未报告"}，输出 ${u?.output ?? "未报告"}，缓存输入 ${u?.cachedInput ?? "未报告"} token；祖先 ${attempt.contextIds.length} 轮，省略 ${attempt.omitted} 轮。`);
+			// Preserve the exact legacy export bytes; new attempts identify their teaching revision.
+			body.push(`- ${line(attempt.provider)} / ${line(attempt.model)}；${attempt.date}；${status}；${attempt.promptVersion === "topic-teaching-v1" ? "" : "教学规则 " + attempt.promptVersion + "；"}输入 ${u?.input ?? "未报告"}，输出 ${u?.output ?? "未报告"}，缓存输入 ${u?.cachedInput ?? "未报告"} token；祖先 ${attempt.contextIds.length} 轮，省略 ${attempt.omitted} 轮。`);
 		}
 		body.push("", "未报告不等于零消耗；失败与取消尝试仍保留在学习历史中。", "");
 	}

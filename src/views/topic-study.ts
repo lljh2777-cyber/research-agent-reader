@@ -99,7 +99,7 @@ export class TopicStudyView extends ItemView {
 		}
 		const history = article.createEl("details"); history.createEl("summary", { text: `${node.attempts.length} 次请求与用量记录` });
 		for (const attempt of node.attempts) {
-			const u = attempt.result?.usage; history.createEl("p", { text: `${attempt.provider} · ${attempt.model} · ${attempt.result ? labels[attempt.result.status] : labels.interrupted} · 输入 ${u?.input ?? "未报告"} / 输出 ${u?.output ?? "未报告"} token${u?.cachedInput === undefined ? "" : `，其中缓存输入 ${u.cachedInput}`}。上下文包含 ${attempt.contextIds.length} 轮祖先对话，省略更早 ${attempt.omitted} 轮。` });
+			const u = attempt.result?.usage; history.createEl("p", { text: `${attempt.provider} · ${attempt.model} · ${attempt.result ? labels[attempt.result.status] : labels.interrupted} · 教学规则 ${attempt.promptVersion === "topic-teaching-v1" ? "v1" : "v2"} · 输入 ${u?.input ?? "未报告"} / 输出 ${u?.output ?? "未报告"} token${u?.cachedInput === undefined ? "" : `，其中缓存输入 ${u.cachedInput}`}。上下文包含 ${attempt.contextIds.length} 轮祖先对话，省略更早 ${attempt.omitted} 轮。` });
 		}
 		history.createEl("p", { text: "未报告不等于零消耗；失败或中断的请求也可能产生费用。", cls: "rar-study-muted" });
 		if (node.status !== "done") return;

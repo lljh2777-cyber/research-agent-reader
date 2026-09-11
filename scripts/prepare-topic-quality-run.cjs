@@ -4,10 +4,7 @@ const fs = require('node:fs'), path = require('node:path'), esbuild = require('e
 const io = require('./reading-quality-io.cjs');
 const baseline = require('./topic-quality-baseline.cjs');
 function prepareRun(output) {
- const spec = require('../tests/fixtures/topic-quality/t1-v1.json');
- const frozen = require('../tests/fixtures/topic-quality/t1-v1-observation.json');
- const result = baseline.prepare(spec);
- if (JSON.stringify(result.observation) !== JSON.stringify(frozen)) throw Error('Frozen teaching baseline changed');
+ const { spec, frozen, result } = baseline.frozenBaseline();
  const built = esbuild.buildSync({ stdin: { contents: [
   'export { FileSourceStorage } from "./src/sources/storage";',
   'export { TopicSessionStore } from "./src/topic-learning/store";',
@@ -26,7 +23,7 @@ function prepareRun(output) {
  io.save(directory, 'inputs.json', result.inputs);
  io.save(directory, 'specification.json', spec);
  io.save(directory, 'review.md', result.review, true);
- const manifest = { protocol: 'topic-quality-run-1', ...frozen, runtimeHash: io.sha(runtime), sources,
+ const manifest = { protocol: 'topic-quality-run-1', baselineId: spec.id, ...frozen, runtimeHash: io.sha(runtime), sources,
   pluginVersion: require('../manifest.json').version, pluginHash: io.sha(fs.readFileSync(path.join(io.ROOT, 'main.js'))),
   runnerHash: io.sha(fs.readFileSync(path.join(__dirname, 'topic-quality-runner.cjs'))) };
  const planHash = io.sha(JSON.stringify(manifest));

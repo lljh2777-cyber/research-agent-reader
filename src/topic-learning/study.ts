@@ -2,18 +2,19 @@ import { randomUUID } from "node:crypto";
 import { learningAncestors, type LearningGraph } from "../learning/graph";
 import { TOPIC_HASH, topicDate, topicDigest, topicObject, topicPlanDigest, validateTopicSession } from "./contracts";
 import type { TopicSession } from "./types";
+import { isTopicTeachingPromptVersion, type TopicTeachingPromptVersion } from "./teaching-rules";
 
-export const STUDY_PROMPT_VERSION = "topic-teaching-v1";
+export { STUDY_PROMPT_VERSION } from "./teaching-rules";
 export interface TopicNodeSpec { id: string; parentId: string | null; branchId: string | null; moduleId: string | null; question: string; }
 export interface TopicStudyUsage { input?: number; output?: number; cachedInput?: number; }
 export const UNDERSTANDING_LABELS = { unmarked: "未标记", understood: "已理解", revisit: "待回看", question: "仍有疑问" } as const;
 export type TopicUnderstanding = keyof typeof UNDERSTANDING_LABELS;
 export type TopicStudyEvent = { type: "start"; session: TopicSession; revision: string }
-	| { type: "request"; node: TopicNodeSpec; provider: string; model: string; promptVersion: typeof STUDY_PROMPT_VERSION; contextIds: string[]; omitted: number }
+	| { type: "request"; node: TopicNodeSpec; provider: string; model: string; promptVersion: TopicTeachingPromptVersion; contextIds: string[]; omitted: number }
 	| { type: "result"; requestId: string; status: "done" | "failed" | "cancelled"; title: string; content: string; error: string; response: string; usage: TopicStudyUsage }
 	| { type: "understanding"; nodeId: string; answerRequestId: string; actor: "user"; state: TopicUnderstanding };
 export interface TopicStudyCommit { version: 1; id: string; parent: string | null; date: string; event: TopicStudyEvent; digest: string; }
-export interface TopicStudyAttempt { requestId: string; provider: string; model: string; date: string; contextIds: string[]; omitted: number; result?: Extract<TopicStudyEvent, { type: "result" }>; }
+export interface TopicStudyAttempt { requestId: string; provider: string; model: string; promptVersion: TopicTeachingPromptVersion; date: string; contextIds: string[]; omitted: number; result?: Extract<TopicStudyEvent, { type: "result" }>; }
 export interface TopicStudyNode extends TopicNodeSpec { title: string; content: string; status: "done" | "failed" | "cancelled" | "interrupted"; attempts: TopicStudyAttempt[]; understanding?: { state: TopicUnderstanding; date: string; commitId: string; answerRequestId: string; actor: "user" }; }
 export interface TopicStudy { session: TopicSession; revision: string; routeDigest: string; head: string; nodes: TopicStudyNode[]; graph: LearningGraph; }
 const UUID = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
@@ -32,8 +33,8 @@ export function validateStudyEvent(raw: unknown): TopicStudyEvent {
 	}
 	if (type === "request") {
 		const v = topicObject(raw, ["type", "node", "provider", "model", "promptVersion", "contextIds", "omitted"]), n = topicObject(v.node, ["id", "parentId", "branchId", "moduleId", "question"]);
-		if (v.promptVersion !== STUDY_PROMPT_VERSION || !Array.isArray(v.contextIds) || v.contextIds.length > 9 || new Set(v.contextIds).size !== v.contextIds.length || !Number.isSafeInteger(v.omitted) || (v.omitted as number) < 0 || (v.omitted as number) > 192) throw new Error("主题讲解上下文记录无效");
-		return { type, node: { id: identifier(n.id, NODE), parentId: n.parentId === null ? null : identifier(n.parentId, NODE), branchId: n.branchId === null ? null : identifier(n.branchId, BRANCH), moduleId: n.moduleId === null ? null : identifier(n.moduleId, /^unit-[a-z0-9-]{1,35}$/), question: text(n.question, 2000) }, provider: text(v.provider, 160), model: text(v.model, 200), promptVersion: STUDY_PROMPT_VERSION, contextIds: v.contextIds.map(id => identifier(id, NODE)), omitted: v.omitted as number };
+		if (!isTopicTeachingPromptVersion(v.promptVersion) || !Array.isArray(v.contextIds) || v.contextIds.length > 9 || new Set(v.contextIds).size !== v.contextIds.length || !Number.isSafeInteger(v.omitted) || (v.omitted as number) < 0 || (v.omitted as number) > 192) throw new Error("主题讲解上下文记录无效");
+		return { type, node: { id: identifier(n.id, NODE), parentId: n.parentId === null ? null : identifier(n.parentId, NODE), branchId: n.branchId === null ? null : identifier(n.branchId, BRANCH), moduleId: n.moduleId === null ? null : identifier(n.moduleId, /^unit-[a-z0-9-]{1,35}$/), question: text(n.question, 2000) }, provider: text(v.provider, 160), model: text(v.model, 200), promptVersion: v.promptVersion, contextIds: v.contextIds.map(id => identifier(id, NODE)), omitted: v.omitted as number };
 	}
 	if (type === "understanding") {
 		const v = topicObject(raw, ["type", "nodeId", "answerRequestId", "actor", "state"]);
@@ -92,7 +93,7 @@ export function projectStudy(commits: TopicStudyCommit[]): TopicStudy {
 			if (topicDigest(context.ids) !== topicDigest(e.contextIds) || context.omitted !== e.omitted) throw new Error("主题讲解上下文与祖先关系不一致");
 			const node = existing || { ...spec, title: spec.moduleId ? study.session.plan!.modules.find(m => m.id === spec.moduleId)!.title : spec.question, content: "", status: "interrupted" as const, attempts: [] };
 			if (!existing) study.nodes.push(node);
-			node.status = "interrupted"; node.attempts.push({ requestId: commit.id, provider: e.provider, model: e.model, date: commit.date, contextIds: [...e.contextIds], omitted: e.omitted }); requests.set(commit.id, node);
+			node.status = "interrupted"; node.attempts.push({ requestId: commit.id, provider: e.provider, model: e.model, promptVersion: e.promptVersion, date: commit.date, contextIds: [...e.contextIds], omitted: e.omitted }); requests.set(commit.id, node);
 		} else if (e.type === "result") {
 			const node = requests.get(e.requestId), attempt = node?.attempts.slice(-1)[0];
 			if (!node || !attempt || attempt.requestId !== e.requestId || attempt.result) throw new Error("讲解返回缺少唯一且仍有效的请求");

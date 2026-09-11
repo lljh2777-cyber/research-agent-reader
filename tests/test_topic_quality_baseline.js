@@ -5,4 +5,11 @@ const before=JSON.stringify(spec),result=baseline.prepare(spec);assert.equal(JSO
 assert.equal(result.observation.independentReviewStatus,'pending');assert(!JSON.stringify(result.inputs).includes('expectedPoints'));assert(!JSON.stringify(result.inputs).includes('mustNotClaim'));assert(!JSON.stringify(result.inputs).includes('sklearn-leakage'));assert.match(result.review,/待独立审阅/);
 const bad=structuredClone(spec);bad.samples[0].steps[1].parent='M06';assert.throws(()=>baseline.prepare(bad));
 const changed=structuredClone(spec);changed.samples[0].steps[1].expectedPoints.push('不得用事后修改消除失败');assert.notEqual(baseline.prepare(changed).observation.baselineHash,frozen.baselineHash);
-console.log('TOPIC_QUALITY_BASELINE_OK: 2 source-free goals, 9 ordered questions, frozen references separated from inputs, no automatic quality verdict');
+const v2=baseline.frozenBaseline('topic-t1-v2'),v1=baseline.frozenBaseline('topic-t1-v1');
+assert.equal(baseline.activeBaselineId,'topic-t1-v2');
+assert.deepEqual(v2.spec,{...spec,id:'topic-t1-v2'});assert.deepEqual(v2.result.inputs.samples,v1.result.inputs.samples);
+assert.notEqual(v2.result.inputs.system,v1.result.inputs.system);assert.equal(v2.result.inputs.promptVersion,'topic-teaching-v2');
+assert.equal(v2.result.observation.independentReviewStatus,'pending');
+assert(!/expectedPoints|mustNotClaim|M0[1-6]|N0[1-3]|backward\(|归一化|测试集|梯度截断/.test(v2.result.inputs.system));
+assert.throws(()=>baseline.frozenBaseline('unknown'));
+console.log('TOPIC_QUALITY_BASELINE_OK: v1 hashes preserved; v2 changes general rules only, with identical 2 goals, 9 questions and provisional rubrics');

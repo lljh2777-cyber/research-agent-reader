@@ -11,7 +11,7 @@ async function inspect(directory, planDirectory, planHash) {
  const manifest = json(directory, 'manifest.json');
  check(manifest.planHash === planHash && manifest.protocol === plan.protocol && ['live', 'simulated'].includes(manifest.mode), 'Run manifest mismatch');
  const services = runner.createServices(runtime, new runtime.FileSourceStorage(path.join(directory, 'state')));
- const records = [], lines = ['# 主题教学首次回答审阅包', '', '以下是模型首次输出和暂定参考要点；HTTP 成功、JSON 合法与教学质量分别记录。独立审阅尚未完成，不提供教学通过率。', '',
+ const records = [], answers = [], lines = ['# 主题教学首次回答审阅包', '', '以下是模型首次输出和暂定参考要点；HTTP 成功、JSON 合法与教学质量分别记录。独立审阅尚未完成，不提供教学通过率。', '',
   `运行模式：${manifest.mode}；配置模型：${manifest.profile.model}；插件：${manifest.pluginVersion}。`, `计划摘要：${planHash}`, '', '## 逐题记录', ''];
  try {
   for (const sample of inputs.samples) {
@@ -45,8 +45,9 @@ async function inspect(directory, planDirectory, planHash) {
      const parent = before.nodes.find(n => n.id === mapped.get(step.parent));
      check(step.newBranch || !parent.branchId ? !before.graph.branches.some(b => b.id === node.branchId) : node.branchId === parent.branchId, 'Branch continuation changed');
     }
-    const expected = runner.requestData(runtime.topicTeachingRequest(before, planned, new AbortController().signal));
-    check(same(runner.requestData(runtime.topicTeachingRequest(before, requestCommit.event.node, new AbortController().signal)), expected), 'Wrong step or ancestry in actual journal');
+    check(requestCommit.event.promptVersion === inputs.promptVersion, 'Recorded teaching rules differ from frozen inputs');
+    const expected = runner.requestData(runtime.topicTeachingRequest(before, planned, new AbortController().signal, requestCommit.event.promptVersion));
+    check(same(runner.requestData(runtime.topicTeachingRequest(before, requestCommit.event.node, new AbortController().signal, requestCommit.event.promptVersion)), expected), 'Wrong step or ancestry in actual journal');
     mapped.set(step.id, node.id);
     let receipt = null;
     for (const [file, hash] of [['teaching-request.json', record.backendHash], ['request.json', record.requestHash], ['response.txt', record.responseHash]]) {
@@ -69,6 +70,7 @@ async function inspect(directory, planDirectory, planHash) {
     check(same(record.contextIds, node.attempts[0].contextIds) && same(record.usage, runner.usage(receipt?.raw?.usage)), 'Context or usage mismatch');
     check(record.mode === manifest.mode && record.independentReview === 'pending' && record.id === step.id && record.sampleId === sample.id, 'Record identity or review status changed');
     records.push(record);
+    answers.push({ id: step.id, question: JSON.parse(expected.prompt).question, title: node.title, content: node.content });
     const rubric = spec.samples.find(s => s.id === sample.id).steps.find(q => q.id === step.id);
     lines.push(`工程状态：${record.state}；祖先：${record.contextIds.join(', ') || '无'}；响应模型：${record.reportedModel || '未报告'}。`, '', '实际问题：', '', fence(JSON.parse(expected.prompt).question), '',
      '首次回答（保持原样）：', '', fence(node.status === 'done' ? node.title + '\n\n' + node.content : node.attempts[0].result?.response || '未收到有效正文'), '',
@@ -88,7 +90,7 @@ async function inspect(directory, planDirectory, planHash) {
     summary.answered === records.filter(r => r.state === 'answered').length && same(summary.remaining, ids.slice(records.length)), 'Run summary differs from retained records');
   }
   lines.push('## 复核参考', '', ...spec.references.map(ref => `- [${ref.id}](${ref.url})：${ref.supports}`), '', '这些文档用于复核，没有提供给被测模型。开发者自查不能替代独立教学审阅。', '');
-  return { manifest, records, text: lines.join('\n') };
+  return { manifest, records, answers, inputs, spec, text: lines.join('\n') };
  } finally { await services.service.dispose(); services.topics.dispose(); }
 }
 async function report(directory, planDirectory, planHash, output) {
