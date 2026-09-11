@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "baselineId": "topic-t1-transfer-v1",
+  "baselineHash": "d7036716f5bbc195b64d3ad530a1661c34848cde819e05af5d006aa15a0b2f43",
+  "instructionHash": "58826d844fd7612e2b8b01d8b0ba108deec0874cd5c1075bd9ca7fbbf4b2648e",
+  "inputHash": "81e65e392ac74401170837a67e32f15a0169f06089cf2a22c14e4fca4aa0fa69",
+  "planHash": "1a94403a53f9466259f346d85ba967c90e4bdf34e57abc5bc57331b0daa28c7a",
+  "runtimeHash": "81f041fc5fee2c53551c3c3fcab330f3b69770bdfed21357a59b570bf7b773b9",
+  "runnerHash": "86cc6bb3ed790c2f1a13f0fc225b68aa8429b976f4f3d43c20817efbeeeed279",
+  "suiteRegistryHash": "8baf34d2a2ee924adf2bd994ad3343b392ebdb942cc281a85ec131eda66d9f4e",
+  "pluginVersion": "0.56.1",
+  "pluginHash": "9e92b893d65c72cde3252597081c2244de0bc5e4deb29ef197b0a48518474cca",
+  "executionDate": "2026-09-11",
+  "mode": "live",
+  "promptVersion": "topic-teaching-v2",
+  "configuredModel": "deepseek-flash",
+  "reportedModels": [
+    "deepseek-flash"
+  ],
+  "upstreamModelIdentity": "not_independently_verified",
+  "providerRoute": "existing_openai_compatible_loopback_proxy",
+  "sampleCount": 2,
+  "questionCount": 8,
+  "requestsRetained": 8,
+  "responsesRetained": 8,
+  "answered": 8,
+  "attemptOrdinal": 3,
+  "continuationReason": "user_reported_balance_replenished",
+  "previousObservations": [
+    "t1-transfer-v1-deepseek-model-observation.json",
+    "t1-transfer-v1-deepseek-attempt-2-model-observation.json"
+  ],
+  "automaticRetries": 0,
+  "modelAnswerStatus": "recorded_not_reviewed",
+  "independentReviewStatus": "pending",
+  "independentlyReviewedQuestions": 0,
+  "teachingPassRate": null,
+  "usage": {
+    "input": 9351,
+    "output": 19646,
+    "total": 28997,
+    "cachedInput": 4608,
+    "monetaryCost": null,
+    "source": "proxy_reported_not_independently_calibrated"
+  },
+  "usageWarnings": {
+    "textEqualsCompletionWithAdditionalReasoning": [],
+    "outputExceedsRequestedMaxTokens": []
+  },
+  "questions": [
+    {
+      "id": "S01",
+      "sampleId": "statistics-beginner",
+      "state": "answered",
+      "contextSteps": [],
+      "teachingRequestHash": "e4b30cb6c0ad0666b64397c3e5b9f10a20f46ab6c21a0efcde7064d9eb97e92d",
+      "requestHash": "af77ca4010fd2f3f7e5944ca91d6305a1373574cf812c6f0b394a9a3fb43ae39",
+      "responseHash": "430bb0240201ee3714dbddab5417f7c50279dfa716b66ad12379cb66d7c66206",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 913,
+        "output": 1983,
+        "total": 2896,
+        "cachedInput": 512,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "S02",
+      "sampleId": "statistics-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "S01"
+      ],
+      "teachingRequestHash": "ab5c3535b1cb3cdaaba1bd1c942f2faf35b0080a30a8b4c361c0092f4922d761",
+      "requestHash": "d07c8eb1700a51f47b801b7320975d6ed97c60d9e2c420fb860d5f9d7813eae2",
+      "responseHash": "e3d64ca958bb3b983b9fcca8698376f2b3148742d54ef0bedff7046e05a3e89b",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1163,
+        "output": 3420,
+        "total": 4583,
+        "cachedInput": 512,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "S03",
+      "sampleId": "statistics-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "S01"
+      ],
+      "teachingRequestHash": "a22801fbe81610c8f3e963e731d6443d23be66e3c74c1a7820469318713c2672",
+      "requestHash": "8081b114dafa7268d35b6bf2cded9927cfca9eb1a0f2b2e45065a752a91bcf70",
+      "responseHash": "a6e72449fe75c31c287b1e7854f3f81d149bb81ca8554ad28b20816791efda73",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1177,
+        "output": 1491,
+        "total": 2668,
+        "cachedInput": 640,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "S04",
+      "sampleId": "statistics-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "S01"
+      ],
+      "teachingRequestHash": "f2d264acfcf079b47125bc96213f78f4fa2cac7b9bfa57557a0d0a068eeba4fe",
+      "requestHash": "f794764fc591365da183628184194d345b23a0f6efaa42209d4030e82940fec3",
+      "responseHash": "4d4fbeec6b9391e748342f972490758d77429bb73898d9248cb28db65599cec4",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1169,
+        "output": 3123,
+        "total": 4292,
+        "cachedInput": 640,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "P01",
+      "sampleId": "python-iteration",
+      "state": "answered",
+      "contextSteps": [],
+      "teachingRequestHash": "d2c9c254914c90355da4f5b383b6f0fe0b013f7826b81a8afb69608956176fdf",
+      "requestHash": "814cfb584a19de8eeb4e822482e2cc5072e98d95d24a79f86455159cb157b1a4",
+      "responseHash": "f1b57c84ca1626bed3ba2887b5eefa7ba167cb994d68247fd5e5a5047081ef57",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 932,
+        "output": 2259,
+        "total": 3191,
+        "cachedInput": 512,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "P02",
+      "sampleId": "python-iteration",
+      "state": "answered",
+      "contextSteps": [
+        "P01"
+      ],
+      "teachingRequestHash": "19ab8b070ee365ad86491dea641c782384c9fb4b0be278fca1d1a0498b20f792",
+      "requestHash": "ad9461bc9223cfc52c0c0a24e328f41f823716226cf7456c338141536b8fa163",
+      "responseHash": "8271fe2df47a1dd3f9c14658c6cb2c4ef2f8abdd7420d8d03160868ac205760f",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1331,
+        "output": 2141,
+        "total": 3472,
+        "cachedInput": 512,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "P03",
+      "sampleId": "python-iteration",
+      "state": "answered",
+      "contextSteps": [
+        "P01"
+      ],
+      "teachingRequestHash": "f6d050ca3e012064e2612ba454052c8b815cfb45352202b856910891d3096671",
+      "requestHash": "cf83cc3ff18d0c75d3e08bad02ae10cec86264e84fd0461e7d6bd5962ef99ec5",
+      "responseHash": "7a398910c91b96ab83e5ca478689f52f1c52382bafabca91445cd3acb705c64f",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1330,
+        "output": 1272,
+        "total": 2602,
+        "cachedInput": 640,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "P04",
+      "sampleId": "python-iteration",
+      "state": "answered",
+      "contextSteps": [
+        "P01"
+      ],
+      "teachingRequestHash": "4bb7d62dff1cefaa19103cf10e2e21e2a25f0542d3a89334c8eb523977fd7638",
+      "requestHash": "1e8c0ccb790a95d2fa5756c9bc7f6b9a043e37d869918be7dceba47e6f4c1fd7",
+      "responseHash": "2de0a2784b695a7a7532b19efdbfe25801bc974d3d444ca5b629193f48c0a4bd",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1336,
+        "output": 3957,
+        "total": 5293,
+        "cachedInput": 640,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    }
+  ]
+}

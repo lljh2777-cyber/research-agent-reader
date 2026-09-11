@@ -1,0 +1,87 @@
+{
+  "version": 1,
+  "baselineId": "topic-t1-transfer-v1",
+  "baselineHash": "d7036716f5bbc195b64d3ad530a1661c34848cde819e05af5d006aa15a0b2f43",
+  "instructionHash": "58826d844fd7612e2b8b01d8b0ba108deec0874cd5c1075bd9ca7fbbf4b2648e",
+  "inputHash": "81e65e392ac74401170837a67e32f15a0169f06089cf2a22c14e4fca4aa0fa69",
+  "planHash": "1a94403a53f9466259f346d85ba967c90e4bdf34e57abc5bc57331b0daa28c7a",
+  "runtimeHash": "81f041fc5fee2c53551c3c3fcab330f3b69770bdfed21357a59b570bf7b773b9",
+  "runnerHash": "86cc6bb3ed790c2f1a13f0fc225b68aa8429b976f4f3d43c20817efbeeeed279",
+  "suiteRegistryHash": "8baf34d2a2ee924adf2bd994ad3343b392ebdb942cc281a85ec131eda66d9f4e",
+  "pluginVersion": "0.56.1",
+  "pluginHash": "9e92b893d65c72cde3252597081c2244de0bc5e4deb29ef197b0a48518474cca",
+  "executionDate": "2026-09-11",
+  "mode": "live",
+  "promptVersion": "topic-teaching-v2",
+  "configuredModel": "deepseek-flash",
+  "reportedModels": [],
+  "upstreamModelIdentity": "not_independently_verified",
+  "providerRoute": "existing_openai_compatible_loopback_proxy",
+  "attemptOrdinal": 2,
+  "continuationReason": "user_requested_continue",
+  "previousObservation": "t1-transfer-v1-deepseek-model-observation.json",
+  "previousRequestHash": "af77ca4010fd2f3f7e5944ca91d6305a1373574cf812c6f0b394a9a3fb43ae39",
+  "sampleCount": 2,
+  "questionCount": 8,
+  "requestsRetained": 1,
+  "responsesRetained": 0,
+  "answered": 0,
+  "failed": 1,
+  "notStarted": [
+    "S02",
+    "S03",
+    "S04",
+    "P01",
+    "P02",
+    "P03",
+    "P04"
+  ],
+  "automaticRetries": 0,
+  "modelAnswerStatus": "stopped_after_failure",
+  "failureEvidence": "request_recorded_transport_invoked_no_response_receipt",
+  "failureDiagnosis": {
+    "cause": "insufficient_balance",
+    "httpStatus": 402,
+    "message": "Insufficient Balance",
+    "source": "read_only_local_gateway_request_log",
+    "correlation": "same_model_and_request_start_time_window_unique_match_per_attempt",
+    "matchedAttempts": [
+      1,
+      2
+    ],
+    "errorHash": "a00c4a12749ac4093ce2cc2bd5914a413415fb76107f9d4c4644b19bf63a123a"
+  },
+  "serverOutcome": "http_402_reported_by_gateway",
+  "independentReviewStatus": "pending",
+  "independentlyReviewedQuestions": 0,
+  "teachingPassRate": null,
+  "usage": {
+    "input": null,
+    "output": null,
+    "total": null,
+    "cachedInput": null,
+    "monetaryCost": null,
+    "source": "not_reported"
+  },
+  "questions": [
+    {
+      "id": "S01",
+      "sampleId": "statistics-beginner",
+      "state": "failed",
+      "contextSteps": [],
+      "teachingRequestHash": "e4b30cb6c0ad0666b64397c3e5b9f10a20f46ab6c21a0efcde7064d9eb97e92d",
+      "requestHash": "af77ca4010fd2f3f7e5944ca91d6305a1373574cf812c6f0b394a9a3fb43ae39",
+      "responseHash": null,
+      "reportedModel": null,
+      "finishReason": null,
+      "usage": {
+        "input": null,
+        "output": null,
+        "total": null,
+        "cachedInput": null,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    }
+  ]
+}

@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### DeepSeek transfer completion — evaluation record
+
+- 只读网关日志将两次迁移题失败定位到上游 HTTP 402 `Insufficient Balance`，补充[余额诊断](docs/topic-model-deepseek-flash.md#2026-09-11-补测与余额诊断)，保留原始未知原因记录。
+- 用户确认充值后，以相同冻结题单和配置完成第三次迁移运行的八题；累计十九次尝试、十七份有效回答和两次保留失败，无运行内自动重试。
+- [八题对照](docs/topic-model-deepseek-transfer.md)显示随机分配与迭代状态解释改善，也暴露自定义迭代器协议混淆和其他条件遗漏。DeepSeek 成为学习预览优先候选，独立审阅仍待完成。
+- 文档和观察检查、旧材料保护检查通过；插件代码、教学规则、默认模型、部署与上游预算配置不变。
+
 ### deepseek-flash teaching trial — evaluation record
 
 - 用现有 deepseek-flash 配置完成相同 v2 规则下的九题首次回答，与 qwen 原答只读比较；核心概念解释整体改善，仍有能力承诺和重复反向条件遗漏，详见[试用报告](docs/topic-model-deepseek-flash.md)。
