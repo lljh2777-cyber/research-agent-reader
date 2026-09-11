@@ -5,11 +5,13 @@ import type { LibraryObjectSummary, LibraryPaper } from "../library/types";
 import type { LearningEntry } from "../learning/entry";
 import { PAPER_READING_STATES, readingStateBlockReason, ReadingStateEditor, type ReadingStateHost } from "../library/reading-state-editor";
 import { PrimaryNoteEditor, primaryNoteCandidates, savedPrimaryNote } from "../library/primary-note-editor";
+import type { LibraryCodeLink } from "../library/code-links";
 
 export const PAPER_LIBRARY_VIEW_TYPE = "research-paper-library";
 export interface PaperLibraryHost extends ReadingStateHost {
 	inspectPaperLibrary(signal?: AbortSignal, verifyMineruPath?: string): Promise<LibraryReadResult>;
 	openLibraryObject(item: LibraryObjectSummary, read: boolean, signal: AbortSignal): Promise<void>;
+	openLibraryCodeLink(paperKey: string, link: LibraryCodeLink, signal: AbortSignal): Promise<void>;
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
 }
 
@@ -131,12 +133,30 @@ export class PaperLibraryView extends ItemView {
 		for (const diagnostic of data.diagnostics.filter(item => paper.diagnosticIds.includes(item.id))) detail.createEl("p", { text: diagnostic.message, cls: "rar-library-warning" });
 		this.renderReadingState(detail, paper, data);
 		this.renderPrimaryNote(detail, paper, data);
+		this.renderCodeLinks(detail, paper, data);
 		for (const [kind, title] of [["source", "原文与版本"], ["session", "阅读会话"], ["note", "论文笔记"], ["annotation", "批注"], ["acquisition", "获取记录"]] as const) {
 			const objects = paper.objects.filter(item => item.kind === kind); if (!objects.length) continue;
 			const section = detail.createEl("section", { cls: "rar-library-section" }); section.createEl("h3", { text: `${title} · ${objects.length}` });
 			for (const item of objects) this.renderObject(section, item, paper);
 		}
 		if (paper.objects.every(item => item.kind === "record")) detail.createEl("p", { text: "已保存书目信息，尚无关联原文、阅读会话或笔记。" });
+	}
+	private renderCodeLinks(parent: HTMLElement, paper: LibraryPaper, data: LibraryReadResult): void {
+		const section = parent.createEl("section", { cls: "rar-library-section rar-library-code-links", attr: { "aria-label": "关联代码笔记" } });
+		section.createEl("h3", { text: "关联代码笔记" });
+		section.createEl("p", { text: "依据 Obsidian 链接缓存，与论文笔记直接相连；不代表论文官方实现或代码已运行。", cls: "rar-library-muted" });
+		for (const issue of data.codeLinks?.issues || []) section.createEl("p", { text: issue, cls: "rar-library-warning" });
+		const rows = data.codeLinks?.byPaper[paper.key] || [];
+		if (!rows.length) section.createEl("p", { text: paper.association === "conflict" ? "文献身份存在冲突，暂不展示代码关联。" : !data.codeLinks ? "代码关联尚未读取，请刷新文献库。" : "本次缓存中未找到直接关联。可在代码笔记中链接论文笔记，或在代码学习导出时选择关联笔记，再刷新文献库。", cls: "rar-library-muted" });
+		for (const row of rows.slice(0, 100)) {
+			const card = section.createEl("article", { cls: "rar-library-card" });
+			card.createEl("strong", { text: row.kind === "code-export" ? "代码学习导出" : "代码项目／脚本笔记" });
+			card.createEl("code", { text: row.path, cls: "rar-library-path" });
+			card.createEl("p", { text: `${row.direction === "from-paper" ? "论文笔记链接到此处" : "此处链接到论文笔记"}：${row.notePath}`, cls: "rar-library-muted" });
+			const open = this.button(card, "打开代码笔记", () => { void this.run(signal => this.host.openLibraryCodeLink(paper.key, row, signal)); });
+			open.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord || this.browser.state.phase !== "ready";
+		}
+		if (rows.length > 100) section.createEl("p", { text: `共 ${rows.length} 条关联，当前展示前 100 条。`, cls: "rar-library-muted" });
 	}
 	private renderReadingState(parent: HTMLElement, paper: LibraryPaper, data: LibraryReadResult): void {
 		const section = parent.createEl("section", { cls: "rar-library-section rar-library-reading-state", attr: { "aria-label": "人工阅读状态" } });

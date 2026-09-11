@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Paper-linked code notes — 0.61.0
+
+- 文献详情展示直接相连的代码项目／脚本笔记与代码学习导出，标明完整路径和链接方向。只读 Obsidian 缓存，明确缓存延迟和关联范围，不推断官方实现。
+- 打开前重新核对关联和文件存在性，支持取消；身份冲突、缺失或变动时不选择同名替代。定向回归和原生文件跳转验收通过。
+- 测试库更新至 `0.61.0`，正式内容保持不变；范围见 [R1 代码关联记录](docs/library-code-links-r1.md)。下一步为混合来源库整体验收。
+
 ### Dashboard pending work and recent curation — 0.60.0
 
 - 首页只读汇总未完成任务、待审阅、需复查／恢复及最近三条修订；明确保存状态、统计不完整与读取上限，不在首页恢复遗留任务或调用模型。

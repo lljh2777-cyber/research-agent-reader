@@ -17,6 +17,7 @@ import type { LibraryIdentifiers, LibraryObject, LibraryProjection, LibrarySourc
 export type LibraryReadStorage = Pick<SourceStorage, "read" | "list">;
 export interface LibraryReadIssue { area: "sources" | "notes" | "annotations" | "sessions" | "records"; path: string; message: string; blocksRecords?: boolean; }
 export interface LibraryReadResult extends LibraryProjection {
+	codeLinks?: import("./code-links").LibraryCodeLinks;
 	readIssues: LibraryReadIssue[];
 	recordStates: PaperRecordStatus[];
 	stats: { filesRead: number; bytesRead: number; directoriesRead: number; objects: number; elapsedMs: number };

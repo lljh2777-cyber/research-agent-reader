@@ -47,6 +47,7 @@ import { SourceIntakeService } from "./papers/source-intake";
 import { createVaultCatalog, sourceIndexIO } from "./papers/vault-catalog";
 import { FileSourceStorage } from "./sources/storage";
 import { readDashboardCuration, type CurationNavigation } from "./services/dashboard-curation";
+import { libraryCodeLinks, codeLinkStillPresent, type LibraryCodeLink } from "./library/code-links";
 import { openSourceSave } from "./papers/source-save-modal";
 import { JatsIntakeService } from "./jats/intake";
 import { openJatsSave } from "./jats/modal";
@@ -2689,11 +2690,23 @@ export default class AgentDashboardPlugin extends Plugin {
 		return path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader");
 	}
 	/** Explicit read-only inspection; never initializes reading recovery or models. */
-	inspectPaperLibrary(signal?: AbortSignal, verifyMineruPath?: string) {
-		return readPaperLibrary(new FileSourceStorage(this.getActiveVaultRoot()), new FileSourceStorage(this.readingPluginDirectory()), {
+	async inspectPaperLibrary(signal?: AbortSignal, verifyMineruPath?: string) {
+		const result = await readPaperLibrary(new FileSourceStorage(this.getActiveVaultRoot()), new FileSourceStorage(this.readingPluginDirectory()), {
 			vaultRoot: this.getActiveVaultRoot(), parseYaml, signal,
 			...(verifyMineruPath !== undefined ? { verifyMineruPath, verifyMineru: libraryMineruVerifier(this.app, signal) } : {}),
 		});
+		signal?.throwIfAborted();
+		try {
+			result.codeLinks = libraryCodeLinks(result.papers, this.app.vault.getMarkdownFiles().map(file => ({ path: file.path, codeExport: this.app.metadataCache.getFileCache(file)?.frontmatter?.reading_source_kind === "code" })), this.app.metadataCache.resolvedLinks);
+		} catch (error) { result.codeLinks = { byPaper: {}, issues: ["代码关联读取失败：" + String(error)] }; }
+		return result;
+	}
+	async openLibraryCodeLink(paperKey: string, link: LibraryCodeLink, signal: AbortSignal): Promise<void> {
+		signal.throwIfAborted(); const fresh = await this.inspectPaperLibrary(signal); signal.throwIfAborted();
+		if (!codeLinkStillPresent(link, fresh.codeLinks?.byPaper[paperKey] || [])) throw new Error("代码关联已变化或无法读取，请刷新后重新选择");
+		const file = this.app.vault.getAbstractFileByPath(link.path);
+		if (!(file instanceof TFile)) throw new Error("代码笔记已缺失，请刷新文献库");
+		signal.throwIfAborted(); await this.app.workspace.getLeaf("tab").openFile(file);
 	}
 	activatePaperLibrary(): Promise<void> {
 		const operation = this.libraryOpenings.then(async () => {
