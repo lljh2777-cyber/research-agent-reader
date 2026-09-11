@@ -6,13 +6,15 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 [主题学习 T0](docs/topic-learning-development.md)已交付独立会话、路线生成／编辑／确认与持久恢复的底层服务，`pnpm test:topic-learning` 可运行定向检查。尚未接入插件界面，当前不能直接从主题开始学习；对话、导图和导出在 R1 首批导航后的 T1 交付。
 
-[R0 工程开发已收尾](docs/r0-closeout.md)：交付[文献聚合与只读查询](docs/library-r0.md)、[人工决定持久记录](docs/library-records-r0.md)、[旧资料兼容及有限范围性能基线](docs/library-compatibility-r0.md)，并保存 [3 篇论文共 18 题的固定样本](docs/reading-quality-baseline-r0.md)和[首次真实问答记录](docs/reading-quality-runner-r0.md)。独立人工科学审阅仍待完成，未将模型质量或 R0 总体验收标为通过。`pnpm test:r0` 可运行专用工程回归；T0 后继续 R1 首批导航与两类学习入口契约，现有首页和插件版本保持不变。
+[R1 首批导航](docs/library-navigation-r1.md)已在 `0.53.0` 交付：从工作台的「文献库」搜索和筛选记录，打开详情、指定原文、阅读会话与笔记；旧 MinerU 可按需核验单个包。保留待关联和来源缺口，页面浏览不调用模型。下一步接入 T1 主题创建与路线编辑界面，R1 人工状态编辑随后继续。
+
+[R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
 > Public release status: `0.31.0` beta is published at
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.52.2`; the beta
+The `codex/research-learning-map` development branch is at `0.53.0`; the beta
 release link above remains the published release.
 
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。

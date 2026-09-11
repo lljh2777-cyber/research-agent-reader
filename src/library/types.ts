@@ -66,6 +66,8 @@ export interface LibraryNoteObject extends LibraryObjectBase {
 }
 export interface LibraryAnnotationObject extends LibraryObjectBase {
 	kind: "annotation";
+	/** File containing the annotation; separate from the original source path. */
+	annotationPath?: string;
 	/** Missing on legacy records; do not infer content identity from file placement. */
 	roles?: LibraryContentRole[];
 	binding?: LibrarySourceBinding;
@@ -107,6 +109,7 @@ export interface LibraryObjectSummary extends LibraryObjectRef {
 	acquisitionPhase?: AcquisitionPhase;
 	binding?: LibrarySourceBinding;
 	annotationProvenance?: LibraryAnnotationProvenance;
+	annotationPath?: string;
 }
 export type LibraryDiagnosticCode = "identifier_conflict" | "paper_id_conflict" | "citekey_conflict" | "citekey_collision" | "source_unavailable" | "primary_note_missing" | "source_binding" | "record_conflict";
 export interface LibraryDiagnostic {

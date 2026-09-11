@@ -17,6 +17,10 @@ import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { AcquisitionService } from "./fulltext/service";
 import { readPaperLibrary } from "./library/reader";
+import { libraryNavigation } from "./library/browser";
+import type { LibraryObjectSummary } from "./library/types";
+import { PaperLibraryView, PAPER_LIBRARY_VIEW_TYPE } from "./views/paper-library";
+import { documentLearningEntry, type LearningEntry } from "./learning/entry";
 import { libraryMineruVerifier } from "./library/mineru-verifier";
 import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/record-store";
 import { PaperRecordService, type PaperRecordEdit } from "./library/record-service";
@@ -317,6 +321,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private assistantModal?: ReadingAssistantModal;
 	private readingEngine?: ReadingEngine;
 	private readingOpenings: Promise<void> = Promise.resolve();
+	private libraryOpenings: Promise<void> = Promise.resolve();
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private knowledgeService: KnowledgeRetrievalService | null = null;
 	private knowledgeModels: BgeModels | null = null;
@@ -442,6 +447,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(CODE_PRACTICE_VIEW_TYPE, (leaf) => new CodePracticeView(leaf, this));
 		this.registerView(QUERY_WIKI_VIEW_TYPE, (leaf) => new QueryWikiView(leaf, this));
 		this.registerView(READING_VIEW_TYPE, (leaf) => new ReadingWorkspaceView(leaf, this));
+		this.registerView(PAPER_LIBRARY_VIEW_TYPE, (leaf) => new PaperLibraryView(leaf, this));
+		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
 		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ domain: "code" }); } });
 		this.addCommand({ id: "open-knowledge-maintenance", name: "打开知识库维护", callback: () => this.openKnowledgeMaintenance() });
@@ -2671,6 +2678,37 @@ export default class AgentDashboardPlugin extends Plugin {
 			...(verifyMineruPath !== undefined ? { verifyMineruPath, verifyMineru: libraryMineruVerifier(this.app, signal) } : {}),
 		});
 	}
+	activatePaperLibrary(): Promise<void> {
+		const operation = this.libraryOpenings.then(async () => {
+			const existing = this.app.workspace.getLeavesOfType(PAPER_LIBRARY_VIEW_TYPE)[0];
+			if (existing) await existing.loadIfDeferred();
+			const leaf = existing || this.app.workspace.getLeaf("tab");
+			if (!existing) await leaf.setViewState({ type: PAPER_LIBRARY_VIEW_TYPE, active: true });
+			await this.app.workspace.revealLeaf(leaf);
+		}); this.libraryOpenings = operation.catch(() => undefined); return operation;
+	}
+	activateLearningSpace(entry: LearningEntry = { kind: "document" }): Promise<void> {
+		return this.activateReadingWorkspace(documentLearningEntry(entry));
+	}
+	async openLibraryObject(item: LibraryObjectSummary, read: boolean, signal: AbortSignal): Promise<void> {
+		signal.throwIfAborted();
+		const fresh = await this.inspectPaperLibrary(signal, item.source?.format === "mineru" ? item.source.path : undefined);
+		const target = libraryNavigation(item, fresh, read); signal.throwIfAborted();
+		if (target.kind === "session") {
+			const service = this.getReadingWorkspace(); await service.ready(); signal.throwIfAborted();
+			const source = service.repository.get(target.sessionId).source, expected = item.reading!.source;
+			if (source.kind !== expected.kind || source.path !== expected.path || source.fingerprint !== expected.fingerprint) throw new Error("会话来源已变化，请刷新后重试");
+			await this.activateLearningSpace({ kind: "document", reading: { sessionId: target.sessionId } }); return;
+		}
+		if (target.kind === "source" && target.read) {
+			const kind = { pdf: "pdf", mineru: "article", jats: "structured", markdown: "article" }[target.format] as "pdf" | "article" | "structured";
+			await this.activateLearningSpace({ kind: "document", reading: { source: { kind, path: target.path } } }); return;
+		}
+		if (target.kind === "source" && (target.format === "mineru" || target.format === "jats")) { await this.activateMineruReaderView(target.path); return; }
+		const file = this.app.vault.getAbstractFileByPath(normalizePath(target.path));
+		if (!(file instanceof TFile)) throw new Error("所选文件已不存在，请刷新文献库");
+		signal.throwIfAborted(); await this.app.workspace.getLeaf("tab").openFile(file);
+	}
 	private paperRecords(): PaperRecordService {
 		return new PaperRecordService(new JournalPaperRecordStore(new FileSourceStorage(this.readingPluginDirectory())), () => this.inspectPaperLibrary());
 	}
@@ -3566,7 +3604,9 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	activateReadingWorkspace(entry?: import("./reading/entry").ReadingEntry): Promise<void> {
 		const operation = this.readingOpenings.then(async () => {
-			const service = this.getReadingWorkspace(); await service.ready(); const domain = readingEntryDomain(entry, service.repository.sessions.values());
+			const service = this.getReadingWorkspace(); await service.ready();
+			if (entry?.sessionId) service.repository.get(entry.sessionId);
+			const domain = readingEntryDomain(entry, service.repository.sessions.values());
 			const leaves = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE); for (const leaf of leaves) await leaf.loadIfDeferred();
 			const existing = leaves.find(leaf => leaf.view instanceof ReadingWorkspaceView && leaf.view.getReadingDomain() === domain);
 			const leaf = existing || this.app.workspace.getLeaf("tab");
@@ -3660,6 +3700,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE).forEach((leaf) => {
 				if (leaf !== preferredLeaf) leaf.detach();
 			});
+			await this.app.workspace.revealLeaf(preferredLeaf);
 			await preferredLeaf.setViewState({
 				type: MINERU_READER_VIEW_TYPE,
 				active: true,
@@ -3670,6 +3711,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		}
 		const existing = this.consolidateMineruReaderLeaves();
 		const leaf = existing || this.app.workspace.getLeaf("tab");
+		// Markdown rendering can wait for visibility, including in a newly created tab.
+		await this.app.workspace.revealLeaf(leaf);
 		if (!existing) {
 			await leaf.setViewState({
 				type: MINERU_READER_VIEW_TYPE,

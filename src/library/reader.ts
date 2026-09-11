@@ -163,7 +163,7 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 			if (record.provenance.sourceRevision) {
 				if (binding.state !== "changed") binding.reason = "旧批注保留来源版本；仓库标识及版本算法尚未确认，保持独立";
 			}
-			objects.push({ kind: "annotation", id: name + "#" + record.id, title: record.section || record.selectedText.slice(0, 80), identifiers: {},
+			objects.push({ kind: "annotation", id: name + "#" + record.id, annotationPath: name, title: record.section || record.selectedText.slice(0, 80), identifiers: {},
 				roles: record.roles, provenance: record.provenance, binding });
 		}
 	});

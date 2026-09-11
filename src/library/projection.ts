@@ -73,6 +73,7 @@ function summarize(item: LibraryObject): LibraryObjectSummary {
 		: { state: "unreviewed" };
 	if (item.kind === "annotation" && item.roles) result.roles = [...item.roles];
 	if (item.kind === "annotation" && item.provenance) result.annotationProvenance = { ...item.provenance };
+	if (item.kind === "annotation" && item.annotationPath) result.annotationPath = item.annotationPath;
 	if (item.kind === "acquisition") result.acquisitionPhase = item.phase;
 	if ((item.kind === "session" || item.kind === "annotation") && item.binding) result.binding = { ...item.binding };
 	return result;

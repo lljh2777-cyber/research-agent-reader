@@ -74,6 +74,7 @@ interface DashboardHost extends PluginHost {
 	activateCodePracticeView(): Promise<void>;
 	openFulltextAcquisition(mode?: "production" | "demo", jobId?: string): void;
 	activateReadingWorkspace(entry?: ReadingEntry): Promise<void>;
+	activatePaperLibrary(): Promise<void>;
 	getReadingWorkspace?(): ReadingWorkspaceService;
 	supportsFast(model: string): boolean;
 	lightPaperIngestAvailable(): { ready: boolean; reason: string };
@@ -331,6 +332,12 @@ export class DashboardView extends ItemView {
 		const rail = parent.createEl("nav", { cls: "agent-dashboard-action-rail", attr: { "aria-label": "研究知识库操作" } });
 		const primary = rail.createDiv({ cls: "agent-dashboard-primary-actions" });
 		const secondary = rail.createDiv({ cls: "agent-dashboard-secondary-actions", attr: { "aria-label": "辅助工具" } });
+		const library = primary.createEl("button", { cls: "agent-dashboard-action-button is-primary", attr: { type: "button", "aria-label": "文献库" } });
+		library.dataset.actionId = "paper-library";
+		setIcon(library.createSpan({ cls: "agent-dashboard-action-icon" }), "library-big");
+		library.createSpan({ cls: "agent-dashboard-action-label", text: "文献库" });
+		library.createSpan({ cls: "agent-dashboard-action-state", text: "原文版本、阅读会话与笔记" });
+		library.onclick = () => { void this.plugin.activatePaperLibrary().catch(error => new Notice(String(error))); };
 		const mainIds = ["paper-ingest", "pdf-xray", "vault-retrieval"];
 		const descriptions: Record<string, string> = { "paper-ingest": "导入论文，整理原文与初始笔记", "pdf-xray": "沿主线阅读，带着问题探索", "vault-retrieval": "从已有文献中查找依据与答案" };
 		const actions = this.currentData.actions.filter(action => action.showInRail !== false);

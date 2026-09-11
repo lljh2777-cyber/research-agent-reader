@@ -6729,3 +6729,44 @@ body.agent-dashboard-mineru-resizing {
 .rar-jats-table { border-collapse: collapse; margin-block: 12px; }
 .rar-jats-table :is(th, td) { border: 1px solid var(--background-modifier-border); padding: 6px 10px; vertical-align: top; }
 .rar-jats-figure-link { margin-block: 8px; }
+
+/* Read-only paper library. The pane width, rather than the desktop window, controls stacking. */
+.rar-library { container-type: inline-size; padding: 20px; overflow: auto; }
+.rar-library [hidden] { display: none !important; }
+.rar-library-header { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.rar-library h1 { margin: 0; font-size: 1.6em; }
+.rar-library-header p { margin: 8px 0 16px; }
+.rar-library-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.rar-library-actions button { height: auto; min-height: 32px; white-space: normal; }
+.rar-library-tools { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 12px; }
+.rar-library-tools input { flex: 1 1 220px; min-width: 0; }
+.rar-library-tools select { max-width: 100%; }
+.rar-library-status { color: var(--text-muted); font-size: var(--font-ui-small); overflow-wrap: anywhere; padding-bottom: 14px; }
+.rar-library-status details { margin-top: 8px; }
+.rar-library-status details p { margin: 8px 0; }
+.rar-library-status details[open] { max-height: 220px; overflow: auto; }
+.rar-library-body { display: grid; grid-template-columns: minmax(240px, 32%) minmax(0, 1fr); gap: 20px; align-items: start; }
+.rar-library-sidebar, .rar-library-detail { min-width: 0; }
+.rar-library-summary { font-size: var(--font-ui-small); color: var(--text-muted); margin: 0 0 8px; }
+.rar-library-list { display: flex; flex-direction: column; gap: 6px; max-height: 72vh; overflow-y: auto; padding: 2px; }
+.rar-library-row { display: flex; flex-direction: column; align-items: stretch; gap: 7px; height: auto; padding: 12px; text-align: left; white-space: normal; overflow-wrap: anywhere; box-shadow: none; border: 1px solid var(--background-modifier-border); }
+.rar-library-row[aria-pressed="true"] { background: var(--background-modifier-active-hover); border-color: var(--interactive-accent); }
+.rar-library-row-title { font-weight: 600; line-height: 1.45; }
+.rar-library-row-context { color: var(--text-faint); font-size: var(--font-ui-smaller); line-height: 1.45; }
+.rar-library-muted { color: var(--text-muted); font-size: var(--font-ui-small); line-height: 1.5; }
+.rar-library-detail { border-left: 1px solid var(--background-modifier-border); padding-left: 20px; overflow-wrap: anywhere; }
+.rar-library-detail h2 { margin: 0 0 12px; line-height: 1.45; font-size: 1.25em; }
+.rar-library-identifiers, .rar-library-path { font-size: var(--font-ui-small); overflow-wrap: anywhere; word-break: break-word; }
+.rar-library-path { display: block; margin-top: 8px; white-space: pre-wrap; }
+.rar-library-warning { border-left: 3px solid var(--text-warning); padding-left: 10px; color: var(--text-muted); font-size: var(--font-ui-small); }
+.rar-library-section { margin-top: 22px; }
+.rar-library-section h3 { font-size: 1em; margin: 0 0 10px; }
+.rar-library-card { padding: 14px; margin-bottom: 12px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-secondary); }
+.rar-library-card h4 { margin: 0 0 10px; font-weight: 600; font-size: var(--font-ui-medium); }
+.rar-library-empty { padding: 40px 8px; color: var(--text-muted); line-height: 1.6; }
+@container (max-width: 650px) {
+  .rar-library-body { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+  .rar-library-list { max-height: 260px; }
+  .rar-library-detail { padding: 18px 0 0; border-left: none; border-top: 1px solid var(--background-modifier-border); }
+  .rar-library-empty { padding: 8px 0; }
+}

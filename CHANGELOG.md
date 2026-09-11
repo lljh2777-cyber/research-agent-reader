@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Paper library navigation — 0.53.0
+
+- 工作台新增文献库与独立命令，支持搜索、筛选、分页展示、详情、原文版本、指定会话、笔记及批注；不把待关联条目当成已确认论文。
+- 打开来源前重新核对指纹与版本，旧 MinerU 支持单包核验；缺失会话不回落到其他最近会话。来源校验、生成进度与人工理解状态分别展示。
+- 单次扫描可取消，失败保留上次结果，迟到结果及关闭后的回调不会更新界面；430 px 面板上下排列。学习入口显式区分资料／主题，主题 UI 尚未开放。
+- 在测试库完成原生点击与重载恢复，零模型调用，897 个受保护文件不变；[实现与验证记录](docs/library-navigation-r1.md)说明真实和模拟场景。R1 人工状态与主要笔记编辑仍待完成。
+
 ### Topic learning T0 — session and route foundations
 
 - 将主题学习纳入开发路线，区分资料阅读和主题学习的来源要求、入口、状态与保存资格；R0 科学审阅保持待完成，既有阅读证据规则未放宽。
