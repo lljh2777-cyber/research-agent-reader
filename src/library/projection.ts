@@ -67,6 +67,7 @@ function summarize(item: LibraryObject): LibraryObjectSummary {
 		...(item.paperId ? { paperId: item.paperId } : {}), ...(item.citekey ? { citekey: item.citekey } : {}) };
 	if (item.kind === "source") { result.source = structuredClone(item.source); result.capabilities = librarySourceCapabilities(item.source); }
 	if (item.kind === "session") result.reading = libraryReadingProgress(item.session);
+	if (item.kind === "note") result.contentHash = item.contentHash;
 	if (item.kind === "note") result.noteReview = item.review
 		? { state: item.review.reviewedHash === item.contentHash ? "reviewed" : "stale", reviewedAt: item.review.reviewedAt }
 		: { state: "unreviewed" };
@@ -88,21 +89,22 @@ function paper(items: LibraryObject[], conflicts: LibraryDiagnostic[], issues: M
 	const paperId = sorted.find(item => item.paperId)?.paperId;
 	const citekey = sorted.find(item => item.citekey)?.citekey;
 	const record = sorted.find((item): item is LibraryRecordObject => item.kind === "record");
-	const primary = record?.primaryNoteId;
+	const primary = record?.decisionConflict ? undefined : record?.primaryNoteId;
 	const hasPrimary = primary && sorted.some(item => item.kind === "note" && item.id === primary);
 	const diagnostics = [...conflicts];
 	for (const item of sorted) if (item.kind === "source" && item.source.verification.state !== "verified") {
 		diagnostics.push(diagnostic("source_unavailable", item.source.verification.reason || "原文尚未通过核验", [item]));
 	}
 	for (const item of sorted) if ((item.kind === "session" || item.kind === "annotation") && item.binding && item.binding.state !== "matched") diagnostics.push(diagnostic("source_binding", item.binding.reason, [item]));
-	if (primary && !hasPrimary) diagnostics.push(diagnostic("primary_note_missing", "主要论文笔记尚未关联或需要重新核对", [record]));
+	if (record?.decisionConflict) diagnostics.push(diagnostic("record_conflict", "人工决定存在并发冲突，尚未选择保留的版本", [record]));
+	if (record && primary && !hasPrimary) diagnostics.push(diagnostic("primary_note_missing", "主要论文笔记尚未关联或需要重新核对", [record]));
 	for (const issue of diagnostics) issues.set(issue.id, issue);
 	return {
 		key: "row-" + objectDigest(sorted.map(ref)),
 		association: conflicts.length ? "conflict" : paperId || ID_KINDS.some(kind => identifiers[kind]) ? "identified" : "unidentified",
 		...(paperId ? { paperId } : {}), ...(citekey ? { citekey } : {}),
 		title: [...sorted].sort((a, b) => priority[a.kind] - priority[b.kind] || order(refKey(a), refKey(b))).find(item => item.title.trim())?.title || "未命名文献",
-		identifiers, objects: sorted.map(summarize), readingState: record?.readingState || "unmarked",
+		identifiers, objects: sorted.map(summarize), readingState: record?.decisionConflict ? "unmarked" : record?.readingState || "unmarked",
 		...(hasPrimary ? { primaryNoteId: primary } : {}), diagnosticIds: diagnostics.map(issue => issue.id),
 	};
 }

@@ -1,12 +1,12 @@
 import { parseYaml, type App, TFile } from "obsidian";
 import { parseAcquisitionInput } from "../fulltext/contracts";
 import { readTrustedVaultFile, type VaultFilesystemAdapter } from "../runtime/trusted-vault-fs";
-import { SourceCatalog, type LegacySource } from "./catalog";
+import { SourceCatalog, type LegacySource, type CatalogIdentityRecord } from "./catalog";
 import { safeCitekey, type ResolvedIdentity } from "./identity";
 import { FileSourceStorage } from "../sources/storage";
 import type { SourceIndexIO } from "./source-intake";
 
-export function createVaultCatalog(app:App,root:string):SourceCatalog {
+export function createVaultCatalog(app:App,root:string,recordIdentities?:()=>Promise<CatalogIdentityRecord[]>):SourceCatalog {
 	return new SourceCatalog(new FileSourceStorage(root),async()=>{
 		const files=app.vault.getMarkdownFiles().filter(f=>/^wiki\/sources\/[^/]+\.md$|^papers\/[^/]+\/article\.md$|^Clippings\/.+\.md$/i.test(f.path));
 		if(files.length>2000 || files.reduce((n,f)=>n+f.stat.size,0)>64*1024*1024)throw new Error("旧文献目录超过查重预算");
@@ -24,7 +24,7 @@ export function createVaultCatalog(app:App,root:string):SourceCatalog {
 			if(kind==="wiki"&&/^papers\/[^/]+\/article\.md$/.test(metadata.source_path||""))records.push({path:metadata.source_path,kind:"mineru",identifiers,title:String(metadata.title||""),citekey});
 		}
 		return records;
-	});
+	},recordIdentities);
 }
 export function sourceIndexIO(app:App,root:string):SourceIndexIO {
 	const storage=new FileSourceStorage(root),filePath="papers/index.md";

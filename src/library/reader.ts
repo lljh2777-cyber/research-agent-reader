@@ -11,12 +11,14 @@ import { structuredFingerprint } from "../reading/structured-source";
 import { readingCategory } from "../reading/catalog";
 import type { ReadingSession } from "../reading/types";
 import { projectLibrary } from "./projection";
+import { listPaperRecordIds, readPaperRecord, type PaperRecordStatus } from "./record-store";
 import type { LibraryIdentifiers, LibraryObject, LibraryProjection, LibrarySourceObject, LibrarySourceBinding } from "./types";
 
 export type LibraryReadStorage = Pick<SourceStorage, "read" | "list">;
-export interface LibraryReadIssue { area: "sources" | "notes" | "annotations" | "sessions"; path: string; message: string; }
+export interface LibraryReadIssue { area: "sources" | "notes" | "annotations" | "sessions" | "records"; path: string; message: string; blocksRecords?: boolean; }
 export interface LibraryReadResult extends LibraryProjection {
 	readIssues: LibraryReadIssue[];
+	recordStates: PaperRecordStatus[];
 	stats: { filesRead: number; bytesRead: number; directoriesRead: number; objects: number; elapsedMs: number };
 	/** Any read failure or unsupported legacy object is visible; this is not an integrity badge. */
 	complete: boolean;
@@ -42,7 +44,7 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 	let exhausted: Error | undefined;
 	const checkScan = () => { options.signal?.throwIfAborted(); if (exhausted) throw exhausted; };
 	const budgetExceeded = (): never => { exhausted = new Error("文献读取超过总预算，请缩小范围或显式增加读取预算"); throw exhausted; };
-	const issue = (area: LibraryReadIssue["area"], name: string, error: unknown) => { checkScan(); issues.push({ area, path: name, message: message(error) }); };
+	const issue = (area: LibraryReadIssue["area"], name: string, error: unknown, blocksRecords = true) => { checkScan(); issues.push({ area, path: name, message: message(error), ...(blocksRecords ? {} : { blocksRecords: false }) }); };
 	const meter = (reader: LibraryReadStorage): SourceStorage => ({
 		async list(name) { checkScan(); if (++stats.directoriesRead > 4096) budgetExceeded(); return [...await reader.list(name)].sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0); },
 		async read(name, max = 256 * 1024) {
@@ -123,7 +125,7 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 					const fingerprint = bytesDigest(Buffer.concat([article, manifest]));
 					if (!afterArticle || !afterManifest || bytesDigest(Buffer.concat([afterArticle, afterManifest])) !== fingerprint) throw new Error("旧原文在扫描期间变化");
 					item.source.verification = { state: "verified", fingerprint };
-				} else issue("sources", name, "未提供 MinerU 完整验证器；保留为未核验来源");
+				} else issue("sources", name, "未提供 MinerU 完整验证器；保留为未核验来源", false);
 			} catch (error) { item.source.verification = { state: "invalid", reason: message(error) }; issue("sources", name, error); }
 			addSource(item);
 		}
@@ -188,6 +190,22 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 		} catch (error) { issue("sessions", directory, error); }
 	}
 	checkScan();
+	const recordStates: PaperRecordStatus[] = [];
+	try {
+		for (const paperId of await listPaperRecordIds(p)) {
+			const state = await readPaperRecord(p, paperId); checkScan();
+			recordStates.push({ paperId, heads: state.heads, pending: state.pending, blocked: state.errors.length > 0 });
+			for (const error of state.errors) issue("records", "paper-records/" + paperId, error);
+			if (state.heads.length > 1) issue("records", "paper-records/" + paperId, "文献人工记录存在并发冲突，需选择保留的决定", false);
+			if (state.pending.length) issue("records", "paper-records/" + paperId, "存在未提交的人工记录尝试，已保留并忽略", false);
+			if (state.current) objects.push(state.current.record);
+			else if (!state.errors.length && state.heads.length > 1) {
+				const { primaryNoteId: ignored, ...identity } = state.revisions[0].record;
+				objects.push({ ...identity, readingState: "unmarked", decisionConflict: true });
+			}
+		}
+	} catch (error) { issue("records", "paper-records", error); }
+	checkScan();
 	const result = projectLibrary(objects); stats.objects = objects.length; stats.elapsedMs = Math.round(performance.now() - started);
-	return { ...result, readIssues: issues, stats, complete: issues.length === 0 };
+	return { ...result, readIssues: issues, recordStates, stats, complete: issues.length === 0 };
 }

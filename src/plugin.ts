@@ -17,6 +17,8 @@ import { createHash } from "node:crypto";
 import { hostname } from "node:os";
 import { AcquisitionService } from "./fulltext/service";
 import { readPaperLibrary } from "./library/reader";
+import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/record-store";
+import { PaperRecordService, type PaperRecordEdit } from "./library/record-service";
 import { AcquisitionRepository } from "./fulltext/repository";
 import { FileAcquisitionStorage } from "./fulltext/file-storage";
 import { DemoAcquisitionBackend } from "./fulltext/demo-backend";
@@ -2115,7 +2117,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	getJatsIntakeService():JatsIntakeService {
 		if(this.acquisitionClosing)throw new Error("插件已关闭");return this.jatsIntakeService ||= new JatsIntakeService({deviceId:this.getAcquisitionService().deviceId,catalog:this.getSourceCatalog(),journal:new FileSourceStorage(this.readingPluginDirectory()),index:sourceIndexIO(this.app,this.getActiveVaultRoot()),read:id=>this.getAcquisitionService().previewJats(id),link:async(id,key)=>{await this.getAcquisitionService().linkSourcePackage(id,key);const adapter=this.app.vault.adapter as typeof this.app.vault.adapter&{reconcileInternalFile?(path:string):void|Promise<void>};await adapter.reconcileInternalFile?.(`papers/${key}/article.md`);}});
 	}
-	getSourceCatalog() { return createVaultCatalog(this.app,this.getActiveVaultRoot()); }
+	getSourceCatalog() { return createVaultCatalog(this.app,this.getActiveVaultRoot(),()=>readPaperRecordIdentities(new FileSourceStorage(this.readingPluginDirectory()))); }
 	getSourceIntakeService():SourceIntakeService {
 		if(this.acquisitionClosing)throw new Error("插件已关闭");
 		return this.sourceIntakeService ||= new SourceIntakeService({deviceId:this.getAcquisitionService().deviceId,catalog:this.getSourceCatalog(),journal:new FileSourceStorage(this.readingPluginDirectory()),index:sourceIndexIO(this.app,this.getActiveVaultRoot()),
@@ -2667,6 +2669,11 @@ export default class AgentDashboardPlugin extends Plugin {
 			vaultRoot: this.getActiveVaultRoot(), parseYaml, signal,
 		});
 	}
+	private paperRecords(): PaperRecordService {
+		return new PaperRecordService(new JournalPaperRecordStore(new FileSourceStorage(this.readingPluginDirectory())), () => this.inspectPaperLibrary());
+	}
+	preparePaperRecord(paperId: string) { return this.paperRecords().prepare(paperId); }
+	savePaperRecord(edit: PaperRecordEdit) { return this.paperRecords().save(edit); }
 	getLearningLibrary(): LearningLibrary {
 		if (!this.learningLibrary) { this.getKnowledgeService(); this.learningLibrary = new LearningLibrary(this.app, this.getReadingWorkspace(), new FileVectorStorage(this.readingPluginDirectory(), "learning-index"), this.knowledgeModels!, () => this.settings.knowledgeRetrievalMode); }
 		return this.learningLibrary;

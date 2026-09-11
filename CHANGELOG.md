@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Persistent paper decisions — 0.52.0
+
+- 新增人工阅读状态和主要笔记选择的准备／保存接口；复用已有 `paperId`，编辑凭据包含归组、修订头和笔记哈希，旧凭据或错误笔记不能直接保存。
+- 插件目录使用追加修订和内容绑定的提交标记，支持重新加载、未提交尝试后的重试，以及保留双方历史的并发选择；损坏的已提交记录明确阻止写入。
+- 来源入库纳入已保存身份及传递关联，原文包缺失后仍能沿用 ID，并阻止精确标识、ID 和 citekey 冲突。
+- 40 个内存场景、隔离磁盘及独立进程恢复测试通过；原生查询和拒绝路径保持 879 个受保护文件不变。文献详情及编辑控件留待 R1，完整验收与限制见 [R0 人工记录](docs/library-records-r0.md)。
+
 ### Paper library read adapters — 0.51.3
 
 - 新增显式只读查询，适配来源包、磁盘阅读会话、Wiki 与本插件批注；不初始化阅读恢复、分配文献身份、访问模型或网络。

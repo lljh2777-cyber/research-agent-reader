@@ -35,6 +35,8 @@ export interface LibraryRecordObject extends LibraryObjectBase {
 	paperId: string;
 	readingState?: PaperReadingState;
 	primaryNoteId?: string;
+	/** Read projection only: a conflicted journal has identity, but no selected human decision. */
+	decisionConflict?: true;
 }
 export interface LibrarySourceObject extends LibraryObjectBase { kind: "source"; source: LibrarySourceDescription; }
 export interface LibrarySessionObject extends LibraryObjectBase {
@@ -91,11 +93,13 @@ export interface LibraryObjectSummary extends LibraryObjectRef {
 	capabilities?: LibrarySourceCapabilities;
 	reading?: LibraryReadingProgress;
 	noteReview?: { state: "unreviewed" | "reviewed" | "stale"; reviewedAt?: string };
+	/** Fingerprint of the actual note read, used to detect edits during selection. */
+	contentHash?: string;
 	roles?: LibraryContentRole[];
 	acquisitionPhase?: AcquisitionPhase;
 	binding?: LibrarySourceBinding;
 }
-export type LibraryDiagnosticCode = "identifier_conflict" | "paper_id_conflict" | "citekey_conflict" | "citekey_collision" | "source_unavailable" | "primary_note_missing" | "source_binding";
+export type LibraryDiagnosticCode = "identifier_conflict" | "paper_id_conflict" | "citekey_conflict" | "citekey_collision" | "source_unavailable" | "primary_note_missing" | "source_binding" | "record_conflict";
 export interface LibraryDiagnostic {
 	id: string;
 	code: LibraryDiagnosticCode;
