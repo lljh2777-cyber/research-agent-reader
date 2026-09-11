@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### R1 acceptance checkpoint — 0.61.0
+
+- 新增 `pnpm test:r1`，统一运行 12 组无批量清理的定向回归；产品版本与行为不变。
+- 混合来源隔离路由、版本变更拒绝、真实笔记与指定 PDF 历史会话、空库／失败／取消及窄面板检查通过。记录历史打开的时间字段写入，保留首次文件保护断言失败结果。
+- [R1 验收记录](docs/r1-acceptance.md)明确真实 PDF/JATS 新来源包原生端到端覆盖仍待补齐，不把模拟样本计作全文渲染通过。
+
 ### Paper-linked code notes — 0.61.0
 
 - 文献详情展示直接相连的代码项目／脚本笔记与代码学习导出，标明完整路径和链接方向。只读 Obsidian 缓存，明确缓存延迟和关联范围，不推断官方实现。
