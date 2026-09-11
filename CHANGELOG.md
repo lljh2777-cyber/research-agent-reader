@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### deepseek-flash teaching trial — evaluation record
+
+- 用现有 deepseek-flash 配置完成相同 v2 规则下的九题首次回答，与 qwen 原答只读比较；核心概念解释整体改善，仍有能力承诺和重复反向条件遗漏，详见[试用报告](docs/topic-model-deepseek-flash.md)。
+- 迁移题 S01 调用传输后未收到响应，保留失败并停止，其余七题未开始；不补写回答或将计划十七题记成全部成功。
+- 仅新增观察和文档；教学规则、默认模型、插件 `0.56.1`、测试库和既有运行材料保持不变，独立教学审阅仍待完成。
+
 ### Topic transfer questions and factual review — development tooling
 
 - 新增统计推理与 Python 迭代器两组八题，使用已冻结且未修改的 v2 规则完成首次真实答题。参考要点与模型输入分开保存，旧 v1 / v2 九题和历史观察保持原样。
