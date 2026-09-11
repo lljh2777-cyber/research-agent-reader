@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Human paper reading state — 0.57.0
+
+- 文献详情增加人工阅读状态编辑，支持未标记、未开始、正在阅读、用户标记已读和待回看；只有明确保存才追加记录，列表展示同一状态。阅读完成不代表讲解完成、节点理解、笔记审阅或 X-Ray 通过。
+- 编辑绑定准备时的文献和记录凭据，保留主要笔记选择；外部更新、身份不明和并发冲突阻止覆盖。取消与关闭隔离迟到响应，保存失败保留草稿，提交成功与后续目录刷新失败分别提示。
+- 定向回归、类型检查、生产构建和发布结构检查通过；原生验收使用库外隔离样本，覆盖五态切换、失败重试、重载恢复和 430 px 面板。测试库部署到 `0.57.0`，897 个受保护文件不变，无模型调用。
+- 范围与限制见 [R1 人工阅读状态](docs/library-reading-state-r1.md)。主要笔记选择与 R1 整体收尾继续排在后续；主题预览和独立审阅门槛保持原样。
+
 ### DeepSeek transfer completion — evaluation record
 
 - 只读网关日志将两次迁移题失败定位到上游 HTTP 402 `Insufficient Balance`，补充[余额诊断](docs/topic-model-deepseek-flash.md#2026-09-11-补测与余额诊断)，保留原始未知原因记录。

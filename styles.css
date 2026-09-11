@@ -6831,6 +6831,9 @@ body.agent-dashboard-mineru-resizing {
 .rar-library-warning { border-left: 3px solid var(--text-warning); padding-left: 10px; color: var(--text-muted); font-size: var(--font-ui-small); }
 .rar-library-section { margin-top: 22px; }
 .rar-library-section h3 { font-size: 1em; margin: 0 0 10px; }
+.rar-library-reading-state { padding: 14px; border: 1px solid var(--background-modifier-border); border-radius: 8px; }
+.rar-library-reading-state select { min-width: 0; max-width: 100%; }
+.rar-library-reading-state p { margin: 10px 0; }
 .rar-library-card { padding: 14px; margin-bottom: 12px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-secondary); }
 .rar-library-card h4 { margin: 0 0 10px; font-weight: 600; font-size: var(--font-ui-medium); }
 .rar-library-empty { padding: 40px 8px; color: var(--text-muted); line-height: 1.6; }
