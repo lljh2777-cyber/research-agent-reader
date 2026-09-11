@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Topic learning T0 — session and route foundations
+
+- 将主题学习纳入开发路线，区分资料阅读和主题学习的来源要求、入口、状态与保存资格；R0 科学审阅保持待完成，既有阅读证据规则未放宽。
+- 新增无文件依赖的主题会话、显式路线生成、手动调整和确认服务；独立追加修订保存，覆盖取消、迟到结果、恢复、存储失败和并发诊断。模型路线明确来源于一般知识，不登记为文献。
+- 新增 `pnpm test:topic-learning`，使用内存模拟与保留的隔离文件样本。尚未接入主题 UI、正文讲解、导图和导出，未调用真实模型或部署插件；版本保持 `0.52.2`。后续步骤见[主题学习开发流程](docs/topic-learning-development.md)。
+
 ### R0 engineering closeout — 0.52.2 baseline
 
 - 汇总 R0 工程验收矩阵、已知问题与 R1 只读导航边界，修正路线中“尚未运行真实问答”等过时状态；18 题独立人工科学审阅仍保持待完成，不将工程收尾计作科学通过。

@@ -2,9 +2,11 @@
 
 Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据为基础的科研文献阅读与知识沉淀：保存可靠来源、逐步理解论文、核对依据，并将有价值的阅读内容整理为可复用笔记。
 
-未来开发以[开发路线：阅读与知识沉淀](docs/development-roadmap.md)为准：先补齐文献关联与状态，接通文献详情、统一添加、摘录和知识整理，再独立推进存储迁移、翻译与专题对照。路线中的规划功能尚未实现；下文记录当前能力。
+未来开发以[开发路线：科研阅读、主题学习与知识沉淀](docs/development-roadmap.md)为准：接通文献详情、统一添加、摘录和知识整理，再独立推进存储迁移、翻译与专题对照。新增主题学习扩展，允许从主题、目标与基础开始，使用对话和思维导图学习一般知识；资料阅读继续保持原文证据规则。
 
-[R0 工程开发已收尾](docs/r0-closeout.md)：交付[文献聚合与只读查询](docs/library-r0.md)、[人工决定持久记录](docs/library-records-r0.md)、[旧资料兼容及有限范围性能基线](docs/library-compatibility-r0.md)，并保存 [3 篇论文共 18 题的固定样本](docs/reading-quality-baseline-r0.md)和[首次真实问答记录](docs/reading-quality-runner-r0.md)。独立人工科学审阅仍待完成，未将模型质量或 R0 总体验收标为通过。`pnpm test:r0` 可运行专用工程回归；下一步是 R1 只读文献列表与详情，现有首页和插件版本保持不变。
+[主题学习 T0](docs/topic-learning-development.md)已交付独立会话、路线生成／编辑／确认与持久恢复的底层服务，`pnpm test:topic-learning` 可运行定向检查。尚未接入插件界面，当前不能直接从主题开始学习；对话、导图和导出在 R1 首批导航后的 T1 交付。
+
+[R0 工程开发已收尾](docs/r0-closeout.md)：交付[文献聚合与只读查询](docs/library-r0.md)、[人工决定持久记录](docs/library-records-r0.md)、[旧资料兼容及有限范围性能基线](docs/library-compatibility-r0.md)，并保存 [3 篇论文共 18 题的固定样本](docs/reading-quality-baseline-r0.md)和[首次真实问答记录](docs/reading-quality-runner-r0.md)。独立人工科学审阅仍待完成，未将模型质量或 R0 总体验收标为通过。`pnpm test:r0` 可运行专用工程回归；T0 后继续 R1 首批导航与两类学习入口契约，现有首页和插件版本保持不变。
 
 > Public release status: `0.31.0` beta is published at
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
