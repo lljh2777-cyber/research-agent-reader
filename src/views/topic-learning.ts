@@ -10,6 +10,7 @@ export interface TopicLearningHost {
 	getTopicModels(): Array<{ id: string; name: string; model: string }>;
 	createTopicBackend(profileId: string): ReadingBackend;
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
+	activateTopicStudy(topicId: string, confirmedRevision?: string): Promise<void>;
 }
 
 /** Route preview only: no teaching nodes, evidence claims or automatic model requests. */
@@ -63,6 +64,7 @@ export class TopicLearningView extends ItemView {
 		const discard = root.querySelector<HTMLButtonElement>('[data-topic-action="discard"]'); if (discard) { discard.hidden = !c.dirty && !c.stale; discard.disabled = c.busy; }
 		disable("save-plan", !c.editable || c.intentDirty || !c.draft.plan || !c.dirty);
 		disable("confirm", !c.editable || c.dirty || !c.current?.session.plan || Boolean(c.current?.session.confirmation));
+		disable("study", !c.editable || c.dirty || !c.current?.session.confirmation);
 		disable("generate", !c.editable || c.dirty || Boolean(c.current?.session.confirmation) || !this.host.getTopicModels().some(m => m.id === this.profileId));
 		disable("add-unit", !c.editable || c.intentDirty || (c.draft.plan?.modules.length || 0) >= 12);
 		disable("copy-revision", c.busy || c.dirty); disable("copy-draft", c.busy || !intent.topic.trim() || !intent.goal.trim());
@@ -85,7 +87,7 @@ export class TopicLearningView extends ItemView {
 		const c = this.controller, header = this.contentEl.createDiv("rar-topic-header"), title = header.createDiv();
 		title.createEl("h1", { text: "主题路线" }); title.createEl("p", { text: "预览 · 先安排想学的内容，再逐步深入。", cls: "rar-topic-muted" });
 		this.button(header, "从资料开始", "document", () => { void this.host.activateLearningSpace({ kind: "document" }).catch(e => { c.message = String(e); this.render(); }); }, c.busy);
-		this.contentEl.createEl("p", { text: "无需添加资料即可保存目标和安排路线。模型生成使用一般知识；讲解、对话与思维导图将在后续版本开放。", cls: "rar-topic-intro" });
+		this.contentEl.createEl("p", { text: "无需添加资料即可保存目标和安排路线。确认后可打开讲解与导图的开发预览；模型使用一般知识，尚未完成独立教学审阅。", cls: "rar-topic-intro" });
 		const status = this.contentEl.createDiv({ cls: "rar-topic-status", attr: { role: "status", "aria-live": "polite" } });
 		const phases = { idle: "", loading: "正在读取已保存主题…", saving: "正在保存…", generating: "正在生成路线，可取消；不会自动重试。" };
 		if (phases[c.phase]) status.createEl("p", { text: phases[c.phase] });
@@ -126,6 +128,7 @@ export class TopicLearningView extends ItemView {
 		form.createEl("p", { text: "目标变化后需要重新安排路线；已保存的旧路线仍可在历史版本中查看。", cls: "rar-topic-muted", attr: { "data-topic-reset-hint": "" } }).hidden = !resets;
 		this.button(intentActions, "恢复已保存内容", "discard", () => { void c.select(c.draft.id, true); }, c.busy).hidden = !c.dirty && !c.stale;
 		if (c.stale) this.button(intentActions, "本地目标另存为新主题", "copy-draft", () => { void c.copyDraft(); }, c.busy || !intent.topic.trim() || !intent.goal.trim());
+		if (c.draft.id) this.button(intentActions, "查看学习记录", "study-history", () => { void this.host.activateTopicStudy(c.draft.id).catch(e => { c.message = String(e); this.render(); }); }, c.busy);
 		if (c.current) this.renderPlan(editor);
 		this.renderHistory(editor);
 		if (field) {
@@ -172,6 +175,7 @@ export class TopicLearningView extends ItemView {
 		this.button(actions, "添加单元", "add-unit", () => c.addModule(), !c.editable || c.intentDirty || (c.draft.plan?.modules.length || 0) >= 12);
 		this.button(actions, "保存路线", "save-plan", () => { void c.savePlan(); }, !c.editable || c.intentDirty || !c.draft.plan || !c.dirty);
 		this.button(actions, "确认路线", "confirm", () => { void c.confirm(); }, !c.editable || c.dirty || !c.current?.session.plan || Boolean(confirmed));
+		this.button(actions, "打开学习预览", "study", () => { void this.host.activateTopicStudy(c.draft.id, c.current!.digest).catch(e => { c.message = String(e); this.render(); }); }, !c.editable || c.dirty || !confirmed);
 		section.createEl("p", { text: "有未保存修改；表单草稿随当前标签页保留，请保存后确认或切换主题。", cls: "rar-topic-muted", attr: { "data-topic-dirty-hint": "" } }).hidden = !c.dirty;
 	}
 	private renderHistory(parent: HTMLElement): void {

@@ -24,6 +24,9 @@ import { documentLearningEntry, type LearningEntry } from "./learning/entry";
 import { TopicLearningService } from "./topic-learning/service";
 import { TopicSessionStore } from "./topic-learning/store";
 import { TopicLearningView, TOPIC_LEARNING_VIEW_TYPE } from "./views/topic-learning";
+import { TopicStudyService } from "./topic-learning/study-service";
+import { TopicStudyStore } from "./topic-learning/study-store";
+import { TopicStudyView, TOPIC_STUDY_VIEW_TYPE } from "./views/topic-study";
 import { libraryMineruVerifier } from "./library/mineru-verifier";
 import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/record-store";
 import { PaperRecordService, type PaperRecordEdit } from "./library/record-service";
@@ -327,6 +330,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	private libraryOpenings: Promise<void> = Promise.resolve();
 	private topicOpenings: Promise<void> = Promise.resolve();
 	private topicLearning?: TopicLearningService;
+	private topicStudy?: TopicStudyService;
+	private topicStudyOpenings: Promise<void> = Promise.resolve();
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
 	private knowledgeService: KnowledgeRetrievalService | null = null;
 	private knowledgeModels: BgeModels | null = null;
@@ -454,6 +459,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(READING_VIEW_TYPE, (leaf) => new ReadingWorkspaceView(leaf, this));
 		this.registerView(PAPER_LIBRARY_VIEW_TYPE, (leaf) => new PaperLibraryView(leaf, this));
 		this.registerView(TOPIC_LEARNING_VIEW_TYPE, (leaf) => new TopicLearningView(leaf, this));
+		this.registerView(TOPIC_STUDY_VIEW_TYPE, (leaf) => new TopicStudyView(leaf, this));
 		this.addCommand({ id: "open-topic-planning", name: "打开主题路线（预览）", callback: () => { void this.activateLearningSpace({ kind: "topic" }).catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
@@ -578,6 +584,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	async onunload(): Promise<void> {
 		this.topicLearning?.dispose();
+		await this.topicStudy?.dispose();
 		this.acquisitionClosing = true; for (const modal of this.fulltextPreviews) modal.close();
 		for(const modal of [...this.acquisitionDialogs])modal.close();
 		await this.sourceIntakeService?.dispose();
@@ -2709,6 +2716,15 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.activateReadingWorkspace(documentLearningEntry(entry));
 	}
 	getTopicLearning(): TopicLearningService { return this.topicLearning ||= new TopicLearningService(new TopicSessionStore(new FileSourceStorage(this.readingPluginDirectory()))); }
+	getTopicStudy(): TopicStudyService { return this.topicStudy ||= new TopicStudyService(new TopicStudyStore(new FileSourceStorage(this.readingPluginDirectory())), this.getTopicLearning()); }
+	activateTopicStudy(topicId: string, confirmedRevision?: string): Promise<void> {
+		const operation = this.topicStudyOpenings.then(async () => {
+			const route = confirmedRevision ? await this.getTopicStudy().start(topicId, confirmedRevision) : "";
+			const existing = this.app.workspace.getLeavesOfType(TOPIC_STUDY_VIEW_TYPE)[0]; if (existing) await existing.loadIfDeferred();
+			const leaf = existing || this.app.workspace.getLeaf("tab"); if (!existing) await leaf.setViewState({ type: TOPIC_STUDY_VIEW_TYPE, active: true });
+			await this.app.workspace.revealLeaf(leaf); if (leaf.view instanceof TopicStudyView) await leaf.view.openStudy(topicId, route);
+		}); this.topicStudyOpenings = operation.catch(() => undefined); return operation;
+	}
 	getTopicModels(): Array<{ id: string; name: string; model: string }> { return this.getVerifiedProviderProfiles().map(({ id, name, model }) => ({ id, name, model })); }
 	createTopicBackend(profileId: string): ReadingBackend {
 		const profile = this.getVerifiedProviderProfiles().find(p => p.id === profileId);

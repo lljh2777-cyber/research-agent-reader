@@ -101,7 +101,7 @@ export class TopicWorkspaceController {
 		await this.operation("saving", async () => {
 			const r = this.requireCurrent(); if (this.dirty) throw new Error("请先保存修改，再确认路线。");
 			const saved = await this.service.confirmPlan(r.session.id, r.digest);
-			this.message = "路线已确认。确认表示接受学习安排，讲解与导图将在后续版本开放。"; await this.accept(saved);
+			this.message = "路线已确认，可打开学习开发预览；确认表示接受学习安排，不表示已掌握。"; await this.accept(saved);
 		});
 	}
 	async generate(makeBackend: () => ReadingBackend): Promise<void> {

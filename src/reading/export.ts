@@ -1,13 +1,12 @@
 import { TFile, type App } from "obsidian";
-import { derivePassiveMineruMarkdown, validateModelNoteBodyMarkdown } from "../security/safe-markdown";
+import { safeLearningMarkdown } from "../learning/presentation";
 import { sanitizeQueryNoteFilename } from "../services/query-note";
 import { contentHash, inKnowledgeScope } from "../retrieval/chunks";
 import type { ReadingSession } from "./types";
 import { codeFence } from "../code-reading/quote";
 
 export function safeReadingMarkdown(text: string): string {
-	const passive = derivePassiveMineruMarkdown(text).replace(/!\[([^\]\n]*)\]\([^\n]*?\)/g, (_, alt: string) => "（图像：" + alt.replace(/[\[\]<>]/g, "") + "；请从证据窗口查看）");
-	if (validateModelNoteBodyMarkdown(passive).length) throw new Error("回答包含无法安全显示的 Markdown"); return passive;
+	return safeLearningMarkdown(text, "请从证据窗口查看");
 }
 export function readingPathCode(value: string): string {
 	const longest = Math.max(0, ...(value.match(/`+/g) || []).map((item) => item.length)); const fence = "`".repeat(longest + 1);
