@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Topic transfer questions and factual review — development tooling
+
+- 新增统计推理与 Python 迭代器两组八题，使用已冻结且未修改的 v2 规则完成首次真实答题。参考要点与模型输入分开保存，旧 v1 / v2 九题和历史观察保持原样。
+- 准备工具支持显式选择题组；运行器按冻结题数限制调用、按清单展示状态，兼容旧九题历史。登记文件绑定摘要，报告拒绝新运行清单题号缺失或与计划不符。
+- 核对旧答的预测／目标、梯度方向、清梯度、模型选择和资料承诺问题。新题仍有事实与条件错误，独立审阅待完成，详见 [T1.3D](docs/topic-quality-t13d.md)。插件保持 `0.56.1`。
+- 下一步继续 R1 人工阅读状态与主要笔记选择；主题学习保持预览，不以其他功能交付解除质量门槛。
+
 ### Versioned topic teaching and comparison — 0.56.1
 
 - 新请求使用教学规则 v2，强调当前问题、概念条件和步骤职责；请求历史与新导出记录规则版本。保留 v1 规则、旧日志摘要和原导出字节，支持混合版本继续学习及显式重试，未知版本拒绝读取。

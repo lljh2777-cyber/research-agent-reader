@@ -2,6 +2,7 @@
 // Explicit local benchmark. Never mutates plugin configuration or resumes a paid request.
 const fs = require('node:fs'), path = require('node:path');
 const io = require('./reading-quality-io.cjs');
+const suites = require('./topic-quality-suites.cjs');
 const { isDeepStrictEqual: same } = require('node:util');
 const active = new Map(), PROTOCOL = 'topic-quality-run-1';
 const fail = message => { throw Error(message); };
@@ -9,11 +10,22 @@ const json = (root, file) => JSON.parse(io.readFile(root, file));
 function loadPlan(directory, expectedHash, checkSource = true) {
  const { planHash, ...plan } = json(directory, 'plan.json');
  const inputs = json(directory, 'inputs.json'), spec = json(directory, 'specification.json');
+ const suite = Object.hasOwn(suites, spec.id) ? suites[spec.id] : null;
+ const samples = spec.samples?.map(s => ({ id: s.id, intent: s.intent, plan: s.plan,
+  steps: s.steps.map(q => q.action === 'next' ? { id: q.id, action: q.action } : { id: q.id, action: q.action, parent: q.parent, question: q.question, newBranch: q.newBranch }) }));
+ const ids = samples?.flatMap(s => s.steps.map(q => q.id));
+ if (!suite || !Array.isArray(samples) || samples.length !== suite.samples || !ids || ids.length !== suite.questions ||
+  new Set(ids).size !== ids.length || ids.some(id => typeof id !== 'string' || !/^[A-Z]\d{2}$/.test(id)) ||
+  samples.some(s => typeof s.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(s.id)) || new Set(samples.map(s => s.id)).size !== samples.length ||
+  !same(inputs.samples, samples) || inputs.promptVersion !== suite.prompt) fail('Invalid frozen question inventory');
  if (!/^[a-f0-9]{64}$/.test(expectedHash || '') || planHash !== expectedHash || io.sha(JSON.stringify(plan)) !== planHash || plan.protocol !== PROTOCOL ||
   io.sha(JSON.stringify(inputs)) !== plan.inputHash || io.sha(JSON.stringify(spec)) !== plan.baselineHash ||
-  io.sha(io.readFile(directory, 'runtime.cjs')) !== plan.runtimeHash || plan.questionCount !== 9 || plan.sampleCount !== 2) fail('Frozen plan or runtime changed');
+  io.sha(io.readFile(directory, 'runtime.cjs')) !== plan.runtimeHash ||
+  plan.questionCount !== suite.questions || plan.sampleCount !== suite.samples ||
+  plan.baselineId !== undefined && plan.baselineId !== spec.id) fail('Frozen plan or runtime changed');
  if (checkSource) {
   if (io.sha(fs.readFileSync(__filename)) !== plan.runnerHash) fail('Runner changed; prepare a new plan');
+  if (plan.suiteRegistryHash !== undefined && io.sha(fs.readFileSync(path.join(__dirname, 'topic-quality-suites.cjs'))) !== plan.suiteRegistryHash) fail('Suite registry changed; prepare a new plan');
   for (const source of plan.sources) if (io.sha(io.readFile(io.ROOT, source.file)) !== source.sha256) fail('Teaching source changed; prepare a new baseline');
  }
  // Prepared runtime is local executable code, just like the runner; hash binds it to the explicit plan.
@@ -170,18 +182,22 @@ function startInObsidian(app, options) {
  const directory = io.privateTarget(outputDirectory, [planDirectory, vault]); fs.mkdirSync(directory);
  const store = diskStore(directory);
  store.save('manifest.json', { protocol: PROTOCOL, mode: 'live', planHash, profile, pluginVersion: plugin.manifest.version, pluginHash: loaded.plan.pluginHash,
-  runnerHash: loaded.plan.runnerHash, startedAt: new Date().toISOString(), independentReview: 'pending' });
+  runnerHash: loaded.plan.runnerHash, questionIds: loaded.inputs.samples.flatMap(s => s.steps.map(q => q.id)), startedAt: new Date().toISOString(), independentReview: 'pending' });
  const state = path.join(directory, 'state'); fs.mkdirSync(state);
  const controller = new AbortController(); active.set(directory, controller);
  run({ loaded, profile, storage: new loaded.runtime.FileSourceStorage(state), store, makeBackend: hooks => obsidianBackend(plugin, selected, hooks), signal: controller.signal, mode: 'live' })
   .catch(() => { try { store.save('interrupted.json', { state: 'storage_or_preflight_failure', automaticRetry: false, independentReview: 'pending' }); } catch { /* Retain earlier artifacts. */ } })
   .finally(() => active.delete(directory));
- return { started: true, directory, model: profile.model, maximumCalls: 9 };
+ return { started: true, directory, model: profile.model, maximumCalls: loaded.plan.questionCount };
 }
 function cancel(directory) { const c = active.get(path.resolve(directory)); if (!c) return false; c.abort(); return true; }
 function status(directory) {
  const running = active.has(path.resolve(directory));
- const questions = ['M01', 'M02', 'M03', 'M04', 'M05', 'M06', 'N01', 'N02', 'N03'].map(id => ({ id,
+ // Pre-T1.3D runs have no questionIds and used the original nine-question suite.
+ const manifest = json(directory, 'manifest.json');
+ const ids = manifest.questionIds === undefined ? ['M01', 'M02', 'M03', 'M04', 'M05', 'M06', 'N01', 'N02', 'N03'] : manifest.questionIds;
+ if (!Array.isArray(ids) || !ids.length || ids.length > 40 || new Set(ids).size !== ids.length || ids.some(id => typeof id !== 'string' || !/^[A-Z]\d{2}$/.test(id))) fail('Invalid question inventory');
+ const questions = ids.map(id => ({ id,
   state: fs.existsSync(path.join(directory, id, 'result.json')) ? json(directory, id + '/result.json').state : fs.existsSync(path.join(directory, id, 'started.json')) ? running ? 'running' : 'incomplete_outcome_unknown' : 'not_started' }));
  return { running, questions, hasSummary: fs.existsSync(path.join(directory, 'summary.json')) };
 }

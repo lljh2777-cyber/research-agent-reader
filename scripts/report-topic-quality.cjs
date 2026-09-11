@@ -10,6 +10,7 @@ async function inspect(directory, planDirectory, planHash) {
  const loaded = runner.loadPlan(planDirectory, planHash, false), { runtime, inputs, plan, spec } = loaded;
  const manifest = json(directory, 'manifest.json');
  check(manifest.planHash === planHash && manifest.protocol === plan.protocol && ['live', 'simulated'].includes(manifest.mode), 'Run manifest mismatch');
+ check(manifest.questionIds === undefined && plan.suiteRegistryHash === undefined || same(manifest.questionIds, inputs.samples.flatMap(s => s.steps.map(q => q.id))), 'Run question inventory mismatch');
  const services = runner.createServices(runtime, new runtime.FileSourceStorage(path.join(directory, 'state')));
  const records = [], answers = [], lines = ['# 主题教学首次回答审阅包', '', '以下是模型首次输出和暂定参考要点；HTTP 成功、JSON 合法与教学质量分别记录。独立审阅尚未完成，不提供教学通过率。', '',
   `运行模式：${manifest.mode}；配置模型：${manifest.profile.model}；插件：${manifest.pluginVersion}。`, `计划摘要：${planHash}`, '', '## 逐题记录', ''];

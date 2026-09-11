@@ -13,11 +13,12 @@ const selected = { id: 'test', name: 'Simulated', type: 'openai-compatible', mod
 const profile = runner.profileInfo(selected, loaded.runtime);
 let tests = 0;
 async function test(name, fn) { await fn(); tests++; console.log('PASS ' + name); }
-function fixture(name) {
+function fixture(name, runLoaded = loaded) {
  const directory = path.join(root, name); fs.mkdirSync(directory); fs.mkdirSync(path.join(directory, 'state'));
  const store = runner.diskStore(directory);
- store.save('manifest.json', { protocol: loaded.plan.protocol, planHash: prepared.planHash, profile, mode: 'simulated', pluginVersion: '0.56.0' });
- return { directory, store, storage: new loaded.runtime.FileSourceStorage(path.join(directory, 'state')), controller: new AbortController() };
+ store.save('manifest.json', { protocol: runLoaded.plan.protocol, planHash: runLoaded.plan.planHash, profile, mode: 'simulated', pluginVersion: runLoaded.plan.pluginVersion,
+  questionIds: runLoaded.inputs.samples.flatMap(s => s.steps.map(q => q.id)) });
+ return { directory, store, loaded: runLoaded, storage: new runLoaded.runtime.FileSourceStorage(path.join(directory, 'state')), controller: new AbortController() };
 }
 function raw(answer = JSON.stringify({ title: '工程模拟', content: '模拟回答，仅用于工程测试。\n```\n# 无需执行\n```' }), finish = 'stop') {
  return { model: 'test-model', choices: [{ message: { content: answer }, finish_reason: finish }], usage: { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30, completion_tokens_details: { text_tokens: 20, reasoning_tokens: 5 } } };
@@ -37,7 +38,7 @@ async function execute(f, behavior = {}, source = selected) {
   const body = raw(behavior.answer, behavior.finish);
   return { status: behavior.status || 200, text: JSON.stringify(body), json: body };
  });
- const summary = await runner.run({ loaded, profile: runner.profileInfo(source, loaded.runtime), storage: f.storage, store: f.store, signal: f.controller.signal, mode: 'simulated',
+ const summary = await runner.run({ loaded: f.loaded, profile: runner.profileInfo(source, f.loaded.runtime), storage: f.storage, store: f.store, signal: f.controller.signal, mode: 'simulated',
   makeBackend: hooks => behavior.backend ? behavior.backend(hooks, p) : runner.obsidianBackend(p, source, hooks) });
  return { summary, calls, p };
 }
@@ -138,6 +139,42 @@ async function execute(f, behavior = {}, source = selected) {
   assert.throws(() => fs.mkdirSync(complete.directory));
   assert.throws(() => io.privateTarget(path.join(io.ROOT, 'forbidden')));
   assert.throws(() => io.privateTarget(path.join(prepared.directory, 'forbidden'), [prepared.directory]));
+ });
+ await test('new eight-question suite uses frozen inventory, actual services and isolated main contexts', async () => {
+  const preparedNew = require('../scripts/prepare-topic-quality-run.cjs').prepareRun(path.join(root, 'transfer-plan'), 'topic-t1-transfer-v1');
+  const transferred = runner.loadPlan(preparedNew.directory, preparedNew.planHash);
+  assert.equal(transferred.plan.questionCount, 8); assert.equal(transferred.runtime.TOPIC_TEACHING_RULES, loaded.runtime.TOPIC_TEACHING_RULES);
+  const f = fixture('transfer', transferred), ids = ['S01', 'S02', 'S03', 'S04', 'P01', 'P02', 'P03', 'P04'];
+  assert.deepEqual(runner.status(f.directory).questions.map(q => q.id), ids);
+  assert(runner.status(f.directory).questions.every(q => q.state === 'not_started'));
+  const { summary, calls } = await execute(f); assert.equal(calls, 8); assert.equal(summary.answered, 8);
+  const reviewed = await reporter.inspect(f.directory, preparedNew.directory, preparedNew.planHash);
+  assert.deepEqual(reviewed.records.map(r => r.id), ids);
+  for (const id of ['S03', 'S04', 'P03', 'P04']) {
+   const wire = fs.readFileSync(path.join(f.directory, id, 'teaching-request.json'), 'utf8');
+   assert.equal(JSON.parse(JSON.parse(wire).prompt).context.length, 1);
+   assert(!/expectedPoints|mustNotClaim|psu-association|independentReview/.test(wire));
+  }
+  assert(runner.status(f.directory).questions.every(q => q.state === 'answered'));
+  const restored = require('node:child_process').execFileSync(process.execPath, ['-e', 'require(process.argv[1]).inspect(process.argv[2],process.argv[3],process.argv[4]).then(r=>console.log(r.records.length)).catch(()=>process.exit(1))',
+   path.resolve(__dirname, '../scripts/report-topic-quality.cjs'), f.directory, preparedNew.directory, preparedNew.planHash], { encoding: 'utf8', windowsHide: true });
+  assert.equal(restored.trim(), '8');
+  const file = path.join(f.directory, 'manifest.json'), bytes = fs.readFileSync(file), manifest = JSON.parse(bytes);
+  delete manifest.questionIds; fs.writeFileSync(file, JSON.stringify(manifest));
+  await assert.rejects(reporter.inspect(f.directory, preparedNew.directory, preparedNew.planHash), /inventory/);
+  fs.writeFileSync(file, bytes);
+ });
+ await test('legacy inventory fallback and malformed inventories fail without reading question paths', async () => {
+  const f = fixture('legacy-status'), file = path.join(f.directory, 'manifest.json'), manifest = JSON.parse(fs.readFileSync(file));
+  delete manifest.questionIds; fs.writeFileSync(file, JSON.stringify(manifest));
+  assert.equal(runner.status(f.directory).questions.length, 9);
+  for (const questionIds of [null, [], ['../M01'], ['M01','M01'], ['S01']]) {
+   fs.writeFileSync(file, JSON.stringify({ ...manifest, questionIds }));
+   if (questionIds?.length !== 1 || questionIds[0] !== 'S01') assert.throws(() => runner.status(f.directory));
+   else await assert.rejects(reporter.inspect(f.directory, prepared.directory, prepared.planHash), /inventory/);
+  }
+  assert.throws(() => require('../scripts/prepare-topic-quality-run.cjs').prepareRun(path.join(root, 'wrong-rules'), 'topic-t1-v1'), /current production/);
+  assert(!fs.existsSync(path.join(root, 'wrong-rules')));
  });
  console.log(`TOPIC_QUALITY_RUNNER_OK: ${tests} groups; retained ${root}`);
 })().catch(e => { console.error(e); process.exitCode = 1; });

@@ -3,8 +3,9 @@
 const fs = require('node:fs'), path = require('node:path'), esbuild = require('esbuild');
 const io = require('./reading-quality-io.cjs');
 const baseline = require('./topic-quality-baseline.cjs');
-function prepareRun(output) {
- const { spec, frozen, result } = baseline.frozenBaseline();
+function prepareRun(output, baselineId) {
+ const { spec, frozen, result } = baseline.frozenBaseline(baselineId);
+ if (result.inputs.promptVersion !== baseline.frozenBaseline().result.inputs.promptVersion) throw Error('Selected baseline must use current production teaching rules; replay older rules from their retained plan');
  const built = esbuild.buildSync({ stdin: { contents: [
   'export { FileSourceStorage } from "./src/sources/storage";',
   'export { TopicSessionStore } from "./src/topic-learning/store";',
@@ -25,13 +26,14 @@ function prepareRun(output) {
  io.save(directory, 'review.md', result.review, true);
  const manifest = { protocol: 'topic-quality-run-1', baselineId: spec.id, ...frozen, runtimeHash: io.sha(runtime), sources,
   pluginVersion: require('../manifest.json').version, pluginHash: io.sha(fs.readFileSync(path.join(io.ROOT, 'main.js'))),
-  runnerHash: io.sha(fs.readFileSync(path.join(__dirname, 'topic-quality-runner.cjs'))) };
+  runnerHash: io.sha(fs.readFileSync(path.join(__dirname, 'topic-quality-runner.cjs'))),
+  suiteRegistryHash: io.sha(fs.readFileSync(path.join(__dirname, 'topic-quality-suites.cjs'))) };
  const planHash = io.sha(JSON.stringify(manifest));
  io.save(directory, 'plan.json', { ...manifest, planHash });
  return { directory, planHash, questions: frozen.questionCount };
 }
 module.exports = { prepareRun };
 if (require.main === module) {
- try { if (!path.isAbsolute(process.argv[2] || '')) throw Error('Usage: node scripts/prepare-topic-quality-run.cjs <new absolute directory>'); console.log(JSON.stringify(prepareRun(process.argv[2]))); }
+ try { if (!path.isAbsolute(process.argv[2] || '')) throw Error('Usage: node scripts/prepare-topic-quality-run.cjs <new absolute directory> [baseline ID]'); console.log(JSON.stringify(prepareRun(process.argv[2], process.argv[3]))); }
  catch (e) { console.error(String(e)); process.exitCode = 1; }
 }
