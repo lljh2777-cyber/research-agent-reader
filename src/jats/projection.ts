@@ -4,6 +4,7 @@ import { bytesDigest, objectDigest } from "../papers/identity";
 import { child,children,childNodes,descendants,localName,parseXml,xmlText,type XmlNode } from "./xml";
 
 import { JATS_CONVERTER, JATS_LEGACY_CONVERTER, jatsConverter } from "./converter-version";
+import { formulaTex } from "./tex";
 export { JATS_CONVERTER } from "./converter-version";
 export interface JatsAsset {ref:string;path?:string;issue?:string;}
 export interface JatsBlock {id:string;kind:"title"|"section"|"paragraph"|"list"|"figure"|"table"|"formula"|"reference";xmlPath:string;xmlId?:string;sourceStart:number;sourceEnd:number;start:number;end:number;label:string;level:number;caption?:string;table?:Array<Array<{text:string;header:boolean;rowspan:number;colspan:number}>>;}
@@ -27,7 +28,14 @@ export function jatsFront(root:XmlNode) {
 export function graphicReferences(bytes:Uint8Array,converter=JATS_CONVERTER):string[] {
 	jatsConverter(converter);
 	const root=parseXml(bytes),refs=new Set<string>();
-	const visit=(n:XmlNode)=>{if(["sub-article","response","supplementary-material"].includes(localName(n)))return;if(["graphic","inline-graphic"].includes(localName(n))){const ref=n.attrs["xlink:href"]||n.attrs.href;if(ref)refs.add(ref);}for(const c of childNodes(n))visit(c);};
+	const visit=(n:XmlNode,renderFormulas=true)=>{
+		const name=localName(n);if(["sub-article","response","supplementary-material"].includes(name))return;
+		if(["graphic","inline-graphic"].includes(name)){const ref=n.attrs["xlink:href"]||n.attrs.href;if(ref)refs.add(ref);}
+		// These regions are flattened by the existing caption/table/reference renderer.
+		const rendered=renderFormulas&&!["fig","table-wrap","ref","title","label"].includes(name);
+		const selected=converter===JATS_CONVERTER&&rendered&&["inline-formula","disp-formula"].includes(name)?formulaTex(n):undefined;
+		for(const c of childNodes(n))if(c!==selected?.alternatives)visit(c,rendered);
+	};
 	for(const abstract of children(jatsFront(root).meta,"abstract"))visit(abstract);for(const part of [child(root,"body"),child(root,"back"),...(converter===JATS_LEGACY_CONVERTER?[]:children(root,"floats-group"))])if(part)visit(part);return [...refs];
 }
 export function projectJats(bytes:Uint8Array,identity:ResolvedIdentity,assets:JatsAsset[],converter=JATS_CONVERTER):JatsProjection {
@@ -43,7 +51,7 @@ export function projectJats(bytes:Uint8Array,identity:ResolvedIdentity,assets:Ja
 	let bodyPartial=false;
 	const issue=(s:string,body=true)=>{if(body)bodyPartial=true;if(!issues.includes(s)){if(issues.length>=200)throw new Error("JATS 缺口过多");issues.push(s.slice(0,500));}};
 	const mathCommands=new Set("frac dfrac tfrac sqrt sum prod int iint iiint lim log ln exp sin cos tan cot sec csc arcsin arccos arctan sinh cosh tanh min max inf sup det dim gcd mod bmod pmod alpha beta gamma delta epsilon varepsilon zeta eta theta vartheta iota kappa lambda mu nu xi pi varpi rho varrho sigma varsigma tau upsilon phi varphi chi psi omega Gamma Delta Theta Lambda Xi Pi Sigma Upsilon Phi Psi Omega times cdot div pm mp le leq ge geq ne neq approx sim simeq equiv propto in notin subset subseteq supset supseteq cup cap setminus forall exists partial nabla infty lto to mapsto rightarrow leftarrow Rightarrow Leftarrow leftrightarrow Leftrightarrow ldots cdots vdots ddots left right big Big bigg Bigg lvert rvert langle rangle lbrace rbrace vert Vert overline underline hat widehat bar vec dot ddot tilde widetilde text mathrm mathbf mathit mathsf mathtt mathcal mathbb boldsymbol operatorname overbrace underbrace overset underset begin end quad qquad thinspace enspace displaystyle textstyle scriptstyle scriptscriptstyle limits nolimits hline cr backslash percent lt gt".split(" "));
-	const formula=(n:XmlNode):string=>{const tex=descendants(n,"tex-math")[0];if(tex){const original=xmlText(tex),value=original.replace(/^\$+|\$+$/g,"");if(value.length>10000||/[`$<>]/.test(value)||[...value.matchAll(/\\([A-Za-z]+)/g)].some(m=>!mathCommands.has(m[1]))){issue("公式包含不支持的指令或分隔符："+n.path);return escape(original);}return "$"+value+"$";}
+	const formula=(n:XmlNode):string=>{const selected=converter===JATS_CONVERTER?formulaTex(n):undefined;if(selected)return "$"+selected.value+"$";const tex=descendants(n,"tex-math")[0];if(tex){const original=xmlText(tex),value=original.replace(/^\$+|\$+$/g,"");if(converter===JATS_CONVERTER||value.length>10000||/[`$<>]/.test(value)||[...value.matchAll(/\\([A-Za-z]+)/g)].some(m=>!mathCommands.has(m[1]))){issue("公式包含不支持的指令或分隔符："+n.path);return escape(original);}return "$"+value+"$";}
 		const math=descendants(n,"math")[0];if(math){issue("MathML 以文本顺序展示，布局可能缺失："+n.path);return escape(xmlText(math));}issue("公式缺少可显示的 TeX / MathML："+n.path);return escape(xmlText(n));};
 	const inline=(n:XmlNode):string=>n.children.map(c=>{
 		if(typeof c==="string")return escape(c.replace(/\s+/g," "));const name=localName(c);

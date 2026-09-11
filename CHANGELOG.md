@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### JATS publisher formulas and alternative assets — 0.52.2
+
+- 新增 `rar-jats-3`，受限识别公式外的出版文档壳并保留数学正文；仅在实际采用 TeX 时免除同组备用图片要求，未知公式继续报告缺口。
+- DESeq2 从转换阻塞恢复为部分可用，Sopa 的 18 处公式和 18 项备用图片缺口消除；未展开补充材料仍需明确接受。旧转换器、已保存包和阅读定位保留。
+- 原质量基线固定 v2，新增独立观察新版结果的工具；实际 MathJax 检查 118 处公式，测试库 897 个受保护文件不变。验收范围见 [R0 JATS 公式修复](docs/jats-formulas-r0.md)，模型答题与独立科学审阅仍待完成。
+
 ### R0 scientific reading samples — development tools
 
 - 固定 3 篇 CC BY 全文、18 个问题、来源字节摘要及 PDF/JATS 原文锚点，提供只创建新文件的来源捕获、离线核验、模型输入与人工复核包导出工具。

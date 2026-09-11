@@ -3,7 +3,7 @@
 const assert = require("node:assert/strict");
 const { loadReading } = require("./reading-test-helpers");
 const f = require("./jats-fixtures.cjs"), wiki = require("./jats-wiki-fixtures.cjs");
-const { projectJats, graphicReferences } = loadReading("jats/projection.ts");
+const { projectJats, graphicReferences, JATS_CONVERTER } = loadReading("jats/projection.ts");
 const { boundJatsWikiReader } = loadReading("jats/wiki-evidence.ts");
 const { JatsIntakeService } = loadReading("jats/intake.ts");
 const { loadJatsSource, verifyLoadedJatsSource, decodeJatsManifest } = loadReading("sources/jats-package.ts");
@@ -34,7 +34,7 @@ async function check(name, run) { try { await run(); checks.push(name); } catch 
 			signal.throwIfAborted(); policy.budget.received += xml.length; await sink.write(xml); progress(xml.length);
 		};
 		const acquired = await x.acquire(), catalog = new wiki.SourceCatalog(f.storage());
-		assert.equal(acquired.snapshot.artifact.converter, "rar-jats-2"); assert.equal(acquired.snapshot.validation.assetCheck, "complete");
+		assert.equal(acquired.snapshot.artifact.converter, JATS_CONVERTER); assert.equal(acquired.snapshot.validation.assetCheck, "complete");
 		assert.ok(x.calls.some(url => url.endsWith("fig1.png")));
 		const intake = new JatsIntakeService({ deviceId: f.sha("device"), catalog, journal: f.storage(), index: f.index(), read: async () => acquired, link: async () => {} });
 		try {
