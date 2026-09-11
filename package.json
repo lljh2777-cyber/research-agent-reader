@@ -36,6 +36,7 @@
 		"benchmark:library": "node --expose-gc tests/benchmark_library.js 100 && node --expose-gc tests/benchmark_library.js 500 && node --expose-gc tests/benchmark_library.js 1000",
 		"test:quality-baseline": "node tests/test_reading_quality_baseline.js",
 		"test:quality-runner": "node tests/test_reading_quality_runner.js",
+		"test:r0": "pnpm test:library && pnpm test:jats && pnpm test:quality-baseline && pnpm test:quality-runner",
 		"test:jats": "node tests/test_jats_projection.js && node tests/test_jats_tex.js && node tests/test_jats_acquisition.js && node tests/test_jats_intake.js && node tests/test_jats_storage.js && node tests/test_jats_reading.js && node tests/test_jats_wiki.js && node tests/test_jats_curation.js && node tests/test_fulltext_review.js"
 	},
 	"engines": {

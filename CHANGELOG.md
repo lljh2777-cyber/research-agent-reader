@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### R0 engineering closeout — 0.52.2 baseline
+
+- 汇总 R0 工程验收矩阵、已知问题与 R1 只读导航边界，修正路线中“尚未运行真实问答”等过时状态；18 题独立人工科学审阅仍保持待完成，不将工程收尾计作科学通过。
+- 新增 `pnpm test:r0`，串联 16 个定向测试入口。原生两次查询一致、取消有效、供应商请求为零，900 个受保护文件及布局不变；[收尾记录](docs/r0-closeout.md)保留 5 个旧包未核验、性能范围及用量口径限制。
+- 未修改插件运行逻辑或重新部署，版本保持 `0.52.2`；历史来源、参考要点和首次模型响应保持原样。
+
 ### R0 live fixed-evidence QA — development tools
 
 - 新增固定输入准备、PDF 页图像渲染、显式模型答题和复核报告工具。每题保留实际请求、首次响应与图像摘要，失败即停，无自动重试；输出只创建在仓库、原文、计划及 Vault 之外。
