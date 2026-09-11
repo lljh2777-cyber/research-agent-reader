@@ -4,10 +4,14 @@ import { safeLearningMarkdown } from "../learning/presentation";
 import type { ReadingBackend } from "../reading/types";
 import { TopicStudyController } from "../topic-learning/study-workspace";
 import type { TopicStudyService } from "../topic-learning/study-service";
-import type { TopicStudyNode } from "../topic-learning/study";
+import { UNDERSTANDING_LABELS, type TopicUnderstanding, type TopicStudyNode } from "../topic-learning/study";
+import type { TopicStudyExports } from "../topic-learning/export";
+import { TopicExportModal } from "./topic-export";
 export const TOPIC_STUDY_VIEW_TYPE = "research-topic-study";
 export interface TopicStudyHost {
 	getTopicStudy(): TopicStudyService;
+	getTopicExports(): TopicStudyExports;
+	openTopicExport(path: string): Promise<void>;
 	getTopicModels(): Array<{ id: string; name: string; model: string }>;
 	createTopicBackend(profileId: string): ReadingBackend;
 	activateLearningSpace(entry: { kind: "topic"; sessionId: string }): Promise<void>;
@@ -17,6 +21,7 @@ export class TopicStudyView extends ItemView {
 	private profileId = ""; private closed = false; private renderer = new Component(); private renderId = 0;
 	private restoring: Promise<void> = Promise.resolve();
 	private mapSelection?: string; private focusMap = false;
+	private exportModal?: TopicExportModal;
 	constructor(leaf: WorkspaceLeaf, private readonly host: TopicStudyHost) { super(leaf); this.controller = new TopicStudyController(host.getTopicStudy(), () => { this.render(); this.persist(); }); }
 	getViewType(): string { return TOPIC_STUDY_VIEW_TYPE; }
 	getDisplayText(): string { return "主题学习（开发预览）"; }
@@ -27,7 +32,7 @@ export class TopicStudyView extends ItemView {
 	}
 	async openStudy(topicId: string, route: string): Promise<void> { await this.restoring; await this.controller.open(topicId, route); }
 	async onOpen(): Promise<void> { this.renderer.load(); this.render(); }
-	async onClose(): Promise<void> { this.closed = true; this.controller.dispose(); this.renderer.unload(); this.contentEl.empty(); }
+	async onClose(): Promise<void> { this.closed = true; this.exportModal?.close(); this.controller.dispose(); this.renderer.unload(); this.contentEl.empty(); }
 	private persist(): void { if (!this.closed) this.app.workspace.requestSaveLayout(); }
 	private button(root: HTMLElement, text: string, action: string, run: () => void, disabled = false): HTMLButtonElement {
 		const b = root.createEl("button", { text, attr: { type: "button", "data-study-action": action } }); b.disabled = disabled; b.onclick = run; return b;
@@ -41,7 +46,7 @@ export class TopicStudyView extends ItemView {
 		const header = this.contentEl.createDiv("rar-study-header"), title = header.createDiv(); title.createEl("h1", { text: s?.session.intent.topic || "主题学习" });
 		title.createEl("p", { text: "开发预览 · 一般知识讲解，尚未完成独立教学审阅。", cls: "rar-study-muted" });
 		this.button(header, "返回路线", "plan", () => { void this.host.activateLearningSpace({ kind: "topic", sessionId: c.topicId }).catch(e => { c.message = String(e); this.render(); }); }, c.busy);
-		this.contentEl.createEl("p", { text: "这里使用模型一般知识，不代表已核验的论文或库内证据。生成讲解不表示已经掌握；理解标记、导出与教学验收在后续阶段接入。", cls: "rar-study-intro" });
+		this.contentEl.createEl("p", { text: "这里使用模型一般知识，不代表已核验的论文或库内证据。理解状态由你手动标记，生成讲解不表示已经掌握。", cls: "rar-study-intro" });
 		const tools = this.contentEl.createDiv("rar-study-tools"), routes = tools.createEl("label", { cls: "rar-study-field" }); routes.createSpan({ text: "已固定的学习路线" });
 		const picker = routes.createEl("select", { attr: { "aria-label": "选择学习记录" } }); picker.createEl("option", { value: "", text: "选择已经开始的学习记录" });
 		for (const r of c.routes) picker.createEl("option", { value: r.digest, text: `${r.title} · ${r.goal.slice(0, 60)} · ${r.digest.slice(0, 6)}` });
@@ -63,6 +68,9 @@ export class TopicStudyView extends ItemView {
 		const lastMain = s.nodes.find(n => n.id === s.graph.mainIds[s.graph.mainIds.length - 1]);
 		this.button(controls, s.graph.mainIds.length ? "讲解下一主线单元" : "生成第 1 单元讲解", "next", () => this.generate({ kind: "next" }), c.busy || !this.modelReady || s.graph.mainIds.length >= s.session.plan!.modules.length || Boolean(lastMain && lastMain.status !== "done"));
 		this.button(controls, "返回主线位置", "return-main", () => c.returnToMain(), c.busy || !s.graph.mainIds.length);
+		this.button(controls, "导出学习记录", "export", () => {
+			this.exportModal?.close(); this.exportModal = new TopicExportModal(this.app, this.host.getTopicExports(), c.topicId, c.route, c.ui.selectedId, path => this.host.openTopicExport(path)); this.exportModal.open();
+		}, c.busy || !c.selected || !s.nodes.some(n => n.status === "done"));
 		this.contentEl.createEl("p", { text: "点击生成会将固定路线、当前问题及选定祖先对话发送给所选模型；每次只生成一轮。", cls: "rar-study-muted" });
 		const body = this.contentEl.createDiv("rar-study-body"), conversation = body.createDiv("rar-study-conversation"), map = body.createDiv("rar-study-map-panel");
 		conversation.createEl("h2", { text: c.selected?.branchId ? "支线对话" : "主线对话" });
@@ -95,6 +103,11 @@ export class TopicStudyView extends ItemView {
 		}
 		history.createEl("p", { text: "未报告不等于零消耗；失败或中断的请求也可能产生费用。", cls: "rar-study-muted" });
 		if (node.status !== "done") return;
+		const understanding = article.createEl("label", { cls: "rar-study-field" }); understanding.createSpan({ text: "我的理解（用户自评）" });
+		const mark = understanding.createEl("select", { attr: { "aria-label": "我的理解" } });
+		for (const [value, text] of Object.entries(UNDERSTANDING_LABELS)) mark.createEl("option", { value, text });
+		mark.value = node.understanding?.state || "unmarked"; mark.disabled = c.busy; mark.onchange = () => { void c.mark(mark.value as TopicUnderstanding); };
+		if (node.understanding) understanding.createSpan({ text: "用户标记于 " + new Date(node.understanding.date).toLocaleString(), cls: "rar-study-muted" });
 		const field = article.createEl("label", { cls: "rar-study-field" }); field.createSpan({ text: "针对这里的问题" });
 		const input = field.createEl("textarea", { attr: { rows: "3", maxlength: "2000", "aria-label": "主题追问" } }); input.value = c.ui.drafts[node.id] || ""; input.disabled = c.busy;
 		const actions = article.createDiv("rar-study-tools"), last = c.study!.graph.branches.find(b => b.id === node.branchId)?.nodeIds.slice(-1)[0];
@@ -119,7 +132,7 @@ export class TopicStudyView extends ItemView {
 			if (parent) { const line = this.contentEl.doc.createElementNS(svg.namespaceURI, "path"), x = parent.x + LEARNING_MAP.width / 2, y = parent.y + LEARNING_MAP.height; line.setAttribute("d", `M ${x} ${y} L ${point.x + LEARNING_MAP.width / 2} ${point.y}`); svg.appendChild(line); }
 			const card = canvas.createDiv("rar-study-map-node"); card.style.left = point.x + "px"; card.style.top = point.y + "px"; card.dataset.studyNode = node.id;
 			const b = this.button(card, node.title, "map-select", () => c.select(node.id), c.busy); b.setAttribute("aria-pressed", String(c.ui.selectedId === node.id));
-			card.createSpan({ text: (node.branchId ? "支线" : "主线") + " · " + (node.status === "done" ? "已讲解" : "未完成"), cls: "rar-study-muted" });
+			card.createSpan({ text: (node.branchId ? "支线" : "主线") + " · " + (node.status === "done" ? "自评：" + UNDERSTANDING_LABELS[node.understanding?.state || "unmarked"] : "未完成"), cls: "rar-study-muted" });
 			if (node.branchId) this.button(card, c.ui.collapsed.includes(node.branchId) ? `展开支线（其余 ${point.hiddenCount} 轮）` : "折叠支线", "collapse", () => c.toggle(node.branchId!), c.busy);
 		}
 		viewport.scrollLeft = c.ui.mapX; viewport.scrollTop = c.ui.mapY;

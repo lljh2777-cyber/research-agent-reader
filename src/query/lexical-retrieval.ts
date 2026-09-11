@@ -1,4 +1,5 @@
 import { TFile, type App } from "obsidian";
+import { isTopicExportPath } from "../topic-learning/export-path";
 
 const MAX_INDEX_FILES = 5000;
 const MAX_INDEX_BODY_CHARS = 24_000;
@@ -181,6 +182,8 @@ export class LexicalVaultRetriever {
 		return vault.getMarkdownFiles()
 			.filter((file): file is TFile => file instanceof TFile
 				&& !String(file.path || "").startsWith(".")
+				&& !isTopicExportPath(String(file.path || ""))
+				&& this.app.metadataCache?.getFileCache?.(file)?.frontmatter?.type !== "topic-learning-record"
 				&& String(file.path || "").toLowerCase().endsWith(".md"));
 	}
 

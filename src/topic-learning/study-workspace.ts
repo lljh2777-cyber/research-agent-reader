@@ -1,7 +1,7 @@
 import type { ReadingBackend } from "../reading/types";
 import { learningAncestors } from "../learning/graph";
 import { TOPIC_HASH, TOPIC_ID } from "./contracts";
-import type { TopicStudy } from "./study";
+import { UNDERSTANDING_LABELS, type TopicStudy, type TopicUnderstanding } from "./study";
 import type { TopicStudyService } from "./study-service";
 
 export interface TopicStudyUI { selectedId: string; mainFocusId: string; collapsed: string[]; drafts: Record<string, string>; zoom: number; mapX: number; mapY: number; }
@@ -69,6 +69,13 @@ export class TopicStudyController {
 	returnToMain(): void { this.select(this.ui.mainFocusId || this.study?.graph.mainIds.slice(-1)[0] || ""); }
 	toggle(branchId: string): void { if (this.busy) return; this.ui.collapsed = this.ui.collapsed.includes(branchId) ? this.ui.collapsed.filter(id => id !== branchId) : [...this.ui.collapsed, branchId]; this.notify(); }
 	clearDrafts(): void { if (!this.busy) { this.ui.drafts = {}; this.notify(); } }
+	async mark(state: TopicUnderstanding): Promise<void> {
+		if (this.busy || this.closed || !this.study || !this.selected) return;
+		const { head } = this.study, id = this.selected.id; this.busy = true; this.message = "正在保存理解标记…"; this.notify();
+		try { await this.service.mark(this.topicId, this.route, head, id, state); await this.reload(); this.message = "已保存用户标记：" + UNDERSTANDING_LABELS[state] + "。这不是事实核验结果。"; }
+		catch (e) { this.message = String(e); try { await this.reload(); } catch { /* Preserve the marking error. */ } }
+		finally { this.busy = false; this.notify(); }
+	}
 	async generate(action: Parameters<TopicStudyService["generate"]>[3], makeBackend: () => ReadingBackend): Promise<void> {
 		if (this.busy || this.closed || !this.study) return;
 		const head = this.study.head, parentDraft = action.kind === "ask" ? this.ui.drafts[action.parentId] : undefined;

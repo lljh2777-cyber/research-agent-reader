@@ -26,6 +26,7 @@ import { TopicSessionStore } from "./topic-learning/store";
 import { TopicLearningView, TOPIC_LEARNING_VIEW_TYPE } from "./views/topic-learning";
 import { TopicStudyService } from "./topic-learning/study-service";
 import { TopicStudyStore } from "./topic-learning/study-store";
+import { TopicStudyExports, TOPIC_EXPORT_ROOT } from "./topic-learning/export";
 import { TopicStudyView, TOPIC_STUDY_VIEW_TYPE } from "./views/topic-study";
 import { libraryMineruVerifier } from "./library/mineru-verifier";
 import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/record-store";
@@ -2717,6 +2718,12 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	getTopicLearning(): TopicLearningService { return this.topicLearning ||= new TopicLearningService(new TopicSessionStore(new FileSourceStorage(this.readingPluginDirectory()))); }
 	getTopicStudy(): TopicStudyService { return this.topicStudy ||= new TopicStudyService(new TopicStudyStore(new FileSourceStorage(this.readingPluginDirectory())), this.getTopicLearning()); }
+	getTopicExports(): TopicStudyExports { return new TopicStudyExports(this.getTopicStudy(), new FileSourceStorage(this.getActiveVaultRoot())); }
+	async openTopicExport(exportPath: string): Promise<void> {
+		if (!exportPath.startsWith(TOPIC_EXPORT_ROOT + "/") || !/^wiki\/qa\/topic-learning\/t-[a-f0-9-]+\/[a-f0-9-]+\.md$/.test(exportPath)) throw new Error("主题学习导出路径无效");
+		const adapter = this.app.vault.adapter as typeof this.app.vault.adapter & { reconcileInternalFile?(path: string): void | Promise<void> };
+		await adapter.reconcileInternalFile?.(exportPath); await this.app.workspace.openLinkText(exportPath, "", true);
+	}
 	activateTopicStudy(topicId: string, confirmedRevision?: string): Promise<void> {
 		const operation = this.topicStudyOpenings.then(async () => {
 			const route = confirmedRevision ? await this.getTopicStudy().start(topicId, confirmedRevision) : "";

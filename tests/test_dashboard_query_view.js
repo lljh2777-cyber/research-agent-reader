@@ -334,7 +334,7 @@ assert.strictEqual(plugin.getRunningTaskRun("vault-lint"), null);
 plugin.taskRuns = [];
 
 assert.ok(
-	pluginSource.includes('value: healthScore === null ? "—" : String(healthScore)'),
+	pluginSource.includes('value: healthScore === null ? "尚未体检" : String(healthScore)'),
 	"health metric should use the latest lint report or show no result",
 );
 assert.ok(
@@ -351,7 +351,7 @@ assert.ok(
 	"R code-practice cells should support Alt+- for the assignment operator",
 );
 assert.ok(
-	pluginSource.includes('isRunning ? "点击停止" : "空闲"'),
+	pluginSource.includes('isRunning ? "运行中 · 点击停止"') && pluginSource.includes('this.plugin.stopTaskRun(run.id)'),
 	"running Dashboard actions should expose a manual stop control",
 );
 

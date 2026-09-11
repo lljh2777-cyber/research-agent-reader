@@ -1,7 +1,7 @@
 import type { ReadingBackend } from "../reading/types";
 import { topicPlanDigest } from "./contracts";
 import type { TopicLearningService } from "./service";
-import { nextTopicNode, STUDY_PROMPT_VERSION, studyContext, topicQuestion, type TopicNodeSpec, type TopicStudy, type TopicStudyEvent, type TopicStudyUsage } from "./study";
+import { nextTopicNode, STUDY_PROMPT_VERSION, studyContext, topicQuestion, type TopicNodeSpec, type TopicStudy, type TopicStudyEvent, type TopicStudyUsage, type TopicUnderstanding } from "./study";
 import { TopicStudyStore } from "./study-store";
 import { parseTopicTeaching, topicTeachingRequest } from "./teaching";
 
@@ -21,6 +21,17 @@ export class TopicStudyService {
 		const h = await this.store.read(topicId, route);
 		if (h.errors.length) throw new Error(h.errors.join("；")); if (!h.study) throw new Error("学习记录不存在或尚未提交");
 		if (expected !== undefined && h.study.head !== expected) throw new Error("学习记录已变化，请重新读取"); return h.study;
+	}
+	async mark(topicId: string, route: string, expected: string, nodeId: string, state: TopicUnderstanding): Promise<void> {
+		const key = topicId + "/" + route;
+		if (this.closed || this.active.has(key)) throw new Error("正在处理当前学习记录，请稍后标记");
+		const controller = new AbortController(), promise = Promise.resolve().then(async () => {
+			controller.signal.throwIfAborted(); const study = await this.get(topicId, route, expected), node = study.nodes.find(n => n.id === nodeId);
+			if (!node || node.status !== "done") throw new Error("请先选择已返回的讲解再标记理解");
+			if ((node.understanding?.state || "unmarked") === state) return;
+			await this.store.append(topicId, route, expected, { type: "understanding", nodeId, answerRequestId: node.attempts.slice(-1)[0]!.requestId, actor: "user", state }, controller.signal);
+		});
+		this.active.set(key, { controller, promise }); try { await promise; } finally { this.active.delete(key); }
 	}
 	async generate(topicId: string, route: string, expected: string, action: { kind: "next" } | { kind: "ask"; parentId: string; question: string; newBranch: boolean } | { kind: "retry"; nodeId: string }, makeBackend: () => ReadingBackend, signal?: AbortSignal): Promise<void> {
 		const key = topicId + "/" + route;

@@ -8,11 +8,13 @@ const {TopicSessionStore}=loadReading('topic-learning/store.ts');
 const {TopicLearningService}=loadReading('topic-learning/service.ts');
 const {TopicStudyStore,TOPIC_STUDY_DIRECTORY}=loadReading('topic-learning/study-store.ts');
 const {TopicStudyService}=loadReading('topic-learning/study-service.ts');
+const {TopicStudyExports}=loadReading('topic-learning/export.ts');
 const open=root=>{const io=new FileSourceStorage(root),topics=new TopicLearningService(new TopicSessionStore(io)),store=new TopicStudyStore(io);return{io,topics,store,service:new TopicStudyService(store,topics)}};
 (async()=>{
  if(process.argv[2]==='probe'){
   const f=open(process.argv[3]),expected=JSON.parse(await fs.readFile(path.join(process.argv[3],'expected.json'),'utf8'));
   const h=await f.store.read(expected.session.id,expected.routeDigest);assert.deepEqual(h.study,expected);assert.equal(h.pending.length,1);assert.deepEqual(h.errors,[]);
+  assert.equal(h.study.nodes[0].understanding.state,'revisit');const exports=new TopicStudyExports(f.service,f.io),review=await exports.review(expected.session.id,expected.routeDigest,expected.head,'session','');assert.equal(review.existing,'same');assert.match(review.text,/待回看/);
   console.log('STUDY_RESTART_OK');return;
  }
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'rar-topic-study-')),f=open(root);
@@ -24,6 +26,7 @@ const open=root=>{const io=new FileSourceStorage(root),topics=new TopicLearningS
  const backend=()=>({name:'Mock',model:'file-test',images:false,complete:async r=>{r.onUsage({input:13,output:7});return JSON.stringify({title:'模拟回答',content:'仅用于真实文件恢复验证。'})}});
  let s=await f.service.get(id,route);await f.service.generate(id,route,s.head,{kind:'next'},backend);s=await f.service.get(id,route);
  await f.service.generate(id,route,s.head,{kind:'ask',parentId:s.nodes[0].id,question:'举一个例子？',newBranch:false},backend);s=await f.service.get(id,route);
+ await f.service.mark(id,route,s.head,s.nodes[0].id,'revisit');s=await f.service.get(id,route);const exports=new TopicStudyExports(f.service,f.io);await exports.save(await exports.review(id,route,s.head,'session',''));
  const pending='e-'+require('node:crypto').randomUUID();await f.io.create(`${TOPIC_STUDY_DIRECTORY}/${id}/${route}/${pending}.json`,Buffer.from('{partial'));
  await fs.writeFile(path.join(root,'expected.json'),JSON.stringify(s),{flag:'wx'});
  const names=await fs.readdir(folder),snapshot=await Promise.all(names.map(n=>fs.readFile(path.join(folder,n))));

@@ -6759,6 +6759,11 @@ body.agent-dashboard-mineru-resizing {
 .rar-study-map-node { position: absolute; width: 224px; height: 108px; padding: 8px; display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--background-modifier-border); background: var(--background-primary); border-radius: 8px; }
 .rar-study-map-node > button:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
 .rar-study-map-node > button { flex: 0 0 auto; font-size: var(--font-ui-small); }
+.rar-topic-export { width: min(900px, 92vw); }
+.rar-topic-export-preview { max-height: 55vh; overflow: auto; padding: 16px; margin: 16px 0; border: 1px solid var(--background-modifier-border); overflow-wrap: anywhere; }
+.rar-topic-export-preview table { display: block; max-width: 100%; overflow: auto; }
+.rar-topic-export button { white-space: normal; height: auto; min-height: 32px; }
+.rar-topic-export [hidden] { display: none !important; }
 @container (max-width: 650px) {
   .rar-study-body { grid-template-columns: minmax(0,1fr); }
   .rar-study-map-scroll { height: 360px; }
