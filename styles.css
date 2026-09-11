@@ -6541,6 +6541,8 @@ body.agent-dashboard-mineru-resizing {
 .agent-dashboard-view button.agent-dashboard-action-button.is-running { border-color: color-mix(in srgb, var(--dashboard-accent), transparent 40%); background: var(--dashboard-tint); }
 .agent-dashboard-view button.agent-dashboard-action-button.is-running .agent-dashboard-action-state { color: var(--dashboard-accent); }
 .agent-dashboard-view .agent-dashboard-secondary-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.agent-dashboard-view .agent-dashboard-tools { margin-top: 10px; color: var(--text-muted); font-size: var(--font-ui-small); }
+.agent-dashboard-view .agent-dashboard-tools summary { cursor: pointer; padding: 8px 0; }
 .agent-dashboard-view button.agent-dashboard-action-button.is-secondary { width: auto; display: inline-flex; gap: 7px; min-height: 34px; padding: 6px 11px; border-color: transparent; border-radius: 7px; background: transparent; }
 .agent-dashboard-view .is-secondary .agent-dashboard-action-label { font-size: 12px; font-weight: 500; }
 .agent-dashboard-view .is-secondary .agent-dashboard-action-icon { width: 16px; height: 16px; background: transparent; color: var(--text-muted); }

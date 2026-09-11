@@ -64,7 +64,10 @@ import { readingDashboardState, type ReadingEntry } from "../reading/entry";
 import { recentReading, readingTitle } from "../reading/catalog";
 import type { ReadingWorkspaceService } from "../reading/workspace";
 
+import { dashboardActionGroup } from "../services/dashboard-navigation";
+
 interface DashboardHost extends PluginHost {
+	openKnowledgeMaintenance(): void;
 	subscribeTaskRuns?(listener: (progressOnly?: boolean) => void): () => void;
 	getRunningTaskRun(actionId: string): TaskRun | null;
 	stopTaskRun(runId: string): boolean;
@@ -110,6 +113,7 @@ export class DashboardView extends ItemView {
 	private readonly stoppingRunIds: Set<string>;
 	private runsExpanded = false;
 	private maintenanceExpanded = false;
+	private toolsExpanded = false;
 	private recentSignature = "";
 	private recentExpanded = false;
 	private unsubscribeTaskRuns?: () => void;
@@ -332,13 +336,28 @@ export class DashboardView extends ItemView {
 	renderActions(parent: HTMLElement): void {
 		const rail = parent.createEl("nav", { cls: "agent-dashboard-action-rail", attr: { "aria-label": "研究知识库操作" } });
 		const primary = rail.createDiv({ cls: "agent-dashboard-primary-actions" });
-		const secondary = rail.createDiv({ cls: "agent-dashboard-secondary-actions", attr: { "aria-label": "辅助工具" } });
+		const secondary = rail.createDiv({ cls: "agent-dashboard-secondary-actions", attr: { "aria-label": "常用操作" } });
+		const tools = rail.createEl("details", { cls: "agent-dashboard-tools" });
+		const runningTools = this.currentData.actions.some(action => dashboardActionGroup(action.id) === "tools" && this.plugin.isActionRunning(action.id));
+		tools.open = this.toolsExpanded || runningTools;
+		tools.createEl("summary", { text: "扩展工具：代码、维护与导出" + (runningTools ? " · 有任务运行" : "") });
+		tools.addEventListener("toggle", () => { if (tools.isConnected) this.toolsExpanded = tools.open; });
+		const toolActions = tools.createDiv({ cls: "agent-dashboard-secondary-actions", attr: { "aria-label": "扩展工具" } });
 		const library = primary.createEl("button", { cls: "agent-dashboard-action-button is-primary", attr: { type: "button", "aria-label": "文献库" } });
 		library.dataset.actionId = "paper-library";
 		setIcon(library.createSpan({ cls: "agent-dashboard-action-icon" }), "library-big");
 		library.createSpan({ cls: "agent-dashboard-action-label", text: "文献库" });
 		library.createSpan({ cls: "agent-dashboard-action-state", text: "原文版本、阅读会话与笔记" });
 		library.onclick = () => { void this.plugin.activatePaperLibrary().catch(error => new Notice(String(error))); };
+		for (const [id, label, description, icon, run] of [
+			["learning-space", "阅读空间", "从资料开始，继续对话与导图阅读", "book-open", () => this.plugin.activateLearningSpace({ kind: "document" })],
+			["knowledge-curation", "知识整理", "审阅整理建议，回看修订与索引", "notebook-pen", () => this.plugin.openKnowledgeMaintenance()],
+		] as const) {
+			const button = primary.createEl("button", { cls: "agent-dashboard-action-button is-primary", attr: { type: "button", "aria-label": label } });
+			button.dataset.actionId = id; setIcon(button.createSpan({ cls: "agent-dashboard-action-icon" }), icon);
+			button.createSpan({ cls: "agent-dashboard-action-label", text: label }); button.createSpan({ cls: "agent-dashboard-action-state", text: description });
+			button.onclick = () => { button.disabled = true; void Promise.resolve().then(run).catch(error => new Notice(String(error))).finally(() => { if (button.isConnected) button.disabled = false; }); };
+		}
 		const topic = secondary.createEl("button", { cls: "agent-dashboard-action-button is-secondary", attr: { type: "button", "aria-label": "主题路线（预览）" } });
 		topic.dataset.actionId = "topic-planning";
 		setIcon(topic.createSpan({ cls: "agent-dashboard-action-icon" }), "route");
@@ -349,12 +368,11 @@ export class DashboardView extends ItemView {
 		const actions = this.currentData.actions.filter(action => action.showInRail !== false);
 		const ordered = [...mainIds.flatMap(id => actions.filter(a => a.id === id)), ...actions.filter(a => !mainIds.includes(a.id))];
 		ordered.forEach((action) => {
-			const isPrimary = mainIds.includes(action.id);
 			const isRunning = this.plugin.isActionRunning(action.id);
 			const runningTask = isRunning ? this.plugin.getRunningTaskRun(action.id) : null;
 			const isStopping = Boolean(runningTask && this.stoppingRunIds.has(runningTask.id));
-			const button = (isPrimary ? primary : secondary).createEl("button", {
-				cls: "agent-dashboard-action-button" + (isPrimary ? " is-primary" : " is-secondary"),
+			const button = (dashboardActionGroup(action.id) === "tools" ? toolActions : secondary).createEl("button", {
+				cls: "agent-dashboard-action-button is-secondary",
 				attr: {
 					"aria-label": !action.enabled
 						? `${action.label}，待接入`
@@ -376,7 +394,6 @@ export class DashboardView extends ItemView {
 				cls: "agent-dashboard-action-state",
 				text: !action.enabled ? "待接入" : isStopping ? "停止中" : isRunning ? "运行中 · 点击停止" : descriptions[action.id] || "",
 			});
-			if (isPrimary) setIcon(button.createSpan({ cls: "agent-dashboard-action-arrow", attr: { "aria-hidden": "true" } }), "arrow-up-right");
 			this.registerDomEvent(button, "click", () => {
 				const currentRun = this.plugin.getRunningTaskRun(action.id);
 				if (currentRun) {
@@ -391,7 +408,7 @@ export class DashboardView extends ItemView {
 	private refreshReadingEntry(): void {
 		if (this.closed || !this.plugin.getReadingWorkspace) return;
 		const recent = this.contentEl.querySelector<HTMLElement>(".agent-dashboard-recent"); if (recent) this.refreshRecentReading(recent);
-		for (const [actionId, domain, title] of [["pdf-xray", "paper", "PDF 深读"], ["code-analysis", "code", "代码分析"]] as const) {
+		for (const [actionId, domain, title] of [["pdf-xray", "paper", "文献深读"], ["code-analysis", "code", "代码分析"]] as const) {
 			if (this.plugin.isActionRunning(actionId)) continue;
 			const button = this.contentEl.querySelector<HTMLButtonElement>('[data-action-id="' + actionId + '"]'); if (!button) continue;
 			const state = readingDashboardState(this.plugin.getReadingWorkspace().repository.sessions.values(), domain);

@@ -361,7 +361,7 @@ export class ActionInputModal extends Modal {
 				? section.createEl("p", {
 					cls: "agent-dashboard-action-options-warning",
 					text: this.runner === "light-agent"
-						? "当前无法运行 MinerU 提取。文章 Wiki 可直接读取已确认 PDF 的文字层，或复用已验证的原文包；扫描件无正文时仍需 OCR。"
+						? "当前无法运行 MinerU 提取。论文笔记 可直接读取已确认 PDF 的文字层，或复用已验证的原文包；扫描件无正文时仍需 OCR。"
 						: "未检测到 MinerU CLI。生成原文 Markdown 只需它：npm 全局安装 mineru-open-api 后，在设置 → 工具链与运行环境中配置（无需 Python 或工具包目录）。",
 				})
 				: null;
@@ -530,7 +530,7 @@ export class ActionInputModal extends Modal {
 
 			const wikiOption = this.createCheckboxOption(
 				section,
-				"创建初步文章 Wiki",
+				"创建初步论文笔记",
 				"在 wiki/sources 下 create-only 创建 abstract-level 文章节点，不覆盖已有笔记。",
 				true,
 			);
@@ -538,14 +538,14 @@ export class ActionInputModal extends Modal {
 				cls: "agent-dashboard-action-options-field",
 			});
 			const sourceCopy = sourceField.createDiv();
-			sourceCopy.createEl("strong", { text: "文章 Wiki 内容来源" });
+			sourceCopy.createEl("strong", { text: "论文笔记 内容来源" });
 			sourceCopy.createEl("span", {
 				text: this.runner === "light-agent"
 					? "轻量 Agent 读取查重确认的原文 Markdown：papers 包通过完整验证后复用，Clippings 原文确认身份后复用。未生成原文时仅尝试复用；没有可用原文需先完成转换，提取失败不会静默改用元数据。"
 					: "自动模式优先使用本次或已有的已验证 article.md，否则回退到原始 PDF。",
 			});
 			const sourceSelect = sourceField.createEl("select", {
-				attr: { "aria-label": "文章 Wiki 内容来源" },
+				attr: { "aria-label": "论文笔记 内容来源" },
 			});
 			if (this.runner === "light-agent") {
 				sourceSelect.createEl("option", { text: "仅复用已有原文（papers / Clippings）", attr: { value: "auto" } });
@@ -663,7 +663,7 @@ export class ActionInputModal extends Modal {
 		if (this.action.id === "pdf-xray") {
 			const section = parent.createEl("section", {
 				cls: "agent-dashboard-action-options",
-				attr: { "aria-label": "PDF 深读来源" },
+				attr: { "aria-label": "文献深读来源" },
 			});
 			section.createEl("h3", { text: "深读来源" });
 			section.createEl("p", {
@@ -672,7 +672,7 @@ export class ActionInputModal extends Modal {
 			});
 			const group = section.createDiv({
 				cls: "agent-dashboard-source-choice",
-				attr: { role: "radiogroup", "aria-label": "PDF 深读来源" },
+				attr: { role: "radiogroup", "aria-label": "文献深读来源" },
 			});
 			const groupName = `pdf-xray-source-${Date.now()}`;
 			const pdf = this.createRadioOption(group, groupName, "pdf", "原始 PDF", true);

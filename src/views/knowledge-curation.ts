@@ -156,7 +156,7 @@ export class KnowledgeMaintenanceModal extends Modal {
 	private indexUnsubscribes: Array<() => void> = [];
 	constructor(app: App, private plugin: AgentDashboardPlugin) { super(app); }
 	onOpen(): void {
-		this.titleEl.setText("知识库维护"); this.modalEl.addClass("curation-modal", "curation-maintenance-modal");
+		this.titleEl.setText("知识整理"); this.modalEl.addClass("curation-modal", "curation-maintenance-modal");
 		this.contentEl.createEl("p", { cls: "curation-intro", text: "核对待整理内容、失效依据和修订历史。这里的浏览与检查不调用回答模型。" });
 		const nav = this.contentEl.createDiv("curation-tabs"); for (const [id, title] of [["pending", "待审阅"], ["stale", "需复查"], ["history", "修订记录"], ["indices", "索引"]]) { const button = action(nav, title, () => { this.tab = id; nav.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b === button))); this.render(); }); button.setAttribute("aria-pressed", String(id === this.tab)); }
 		this.counts = this.contentEl.createEl("p", { cls: "curation-status", attr: { role: "status" } }); this.body = this.contentEl.createDiv("curation-maintenance-body");

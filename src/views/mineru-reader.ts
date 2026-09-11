@@ -407,7 +407,7 @@ export class MineruReaderView extends ItemView {
 			this.onWorkspaceEvent(read, "click", () => { void this.plugin.activateReadingWorkspace!({ domain: "paper", source: { kind: "structured", path: readerPackage.articlePath } }).catch(error => new Notice(String(error))); });
 		}
 		if (readerPackage.sourceKind === "jats" && this.plugin.openJatsWiki) {
-			const wiki = header.createEl("button", { text: "文章 Wiki", attr: { "data-jats-action": "wiki" } });
+			const wiki = header.createEl("button", { text: "论文笔记", attr: { "data-jats-action": "wiki" } });
 			this.onWorkspaceEvent(wiki, "click", () => { void this.plugin.openJatsWiki!(readerPackage.articlePath.split("/")[1]).catch(error => new Notice(String(error))); });
 		}
 	}

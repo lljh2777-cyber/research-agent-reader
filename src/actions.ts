@@ -50,7 +50,7 @@ export const ACTIONS: readonly DashboardAction[] = [
 		id: "paper-ingest",
 		label: "文献入库",
 		agent: "paper-intake-pipeline",
-		description: "输入本地 PDF，并选择生成可追溯的原文 Markdown、创建初步文章 Wiki，或同时执行。身份核验、去重和元数据准备始终先执行。",
+		description: "输入本地 PDF，并选择生成可追溯的原文 Markdown、创建初步论文笔记，或同时执行。身份核验、去重和元数据准备始终先执行。",
 		placeholder: "例如：<论文目录>/paper.pdf\n可补充 citekey、DOI、Zotero key 或处理要求",
 		requiresInput: true,
 		writes: true,
@@ -60,7 +60,7 @@ export const ACTIONS: readonly DashboardAction[] = [
 	},
 	{
 		id: "pdf-xray",
-		label: "PDF 深读",
+		label: "文献深读",
 		agent: "paper_xray",
 		description: "选择从原始 PDF 或已有 MinerU article.md 深读，再输入来源路径和核验目标。只有完整检查全文证据后才允许升级为 x-ray。",
 		placeholder: "例如：<论文目录>/example.pdf\n或 papers/example/article.md\n重点核验方法、图 2、数据来源与局限性",

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Dashboard primary and secondary navigation — 0.59.0
+
+- 工作台以文献库、阅读空间、知识整理为三个主入口；入库、深读和检索等保持可见，代码分析、练习、体检和导出进入扩展区。有工具任务运行时自动展开，保留指定任务的停止入口。
+- 统一当前入口的“文献深读／论文笔记”文案，保留旧 action ID、命令、请求字段与历史。原有最近阅读和任务结果继续展示。
+- 工程回归及原生入口、派发、运行状态、430 px 布局验收通过；测试库更新至 `0.59.0`，897 个受保护文件和 13 个原有标签页不变，无模型调用。范围见 [R1 首页记录](docs/dashboard-home-r1.md)。待处理摘要、最近整理和关联代码仍待补齐，不宣告 R1 整体完成。
+
 ### Primary paper note selection — 0.58.0
 
 - 文献详情新增主要笔记选择、更换、明确清除与打开入口；只列出同一文献的候选，以完整路径区分同名笔记，不自动选择唯一候选。
