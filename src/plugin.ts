@@ -33,6 +33,8 @@ import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/re
 import { PaperRecordService, type PaperRecordEdit } from "./library/record-service";
 import { MetadataIntakeService } from "./library/metadata-intake";
 import { MetadataIntakeModal } from "./views/metadata-intake";
+import { LocalPdfIntakeService } from "./papers/local-pdf-intake";
+import { LocalPdfIntakeModal } from "./views/local-pdf-intake";
 import { IdentityResolver } from "./fulltext/identity-resolver";
 import { AcquisitionRepository } from "./fulltext/repository";
 import { FileAcquisitionStorage } from "./fulltext/file-storage";
@@ -469,6 +471,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.addCommand({ id: "open-topic-planning", name: "打开主题路线（预览）", callback: () => { void this.activateLearningSpace({ kind: "topic" }).catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "add-paper-metadata", name: "添加文献信息（无需模型）", callback: () => this.openMetadataIntake() });
+		this.addCommand({ id: "add-local-pdf", name: "添加本地 PDF（核对、保存与恢复）", callback: () => this.openLocalPdfIntake() });
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
 		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ domain: "code" }); } });
 		this.addCommand({ id: "open-knowledge-maintenance", name: "打开知识库维护", callback: () => this.openKnowledgeMaintenance() });
@@ -595,6 +598,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.acquisitionClosing = true; for (const modal of this.fulltextPreviews) modal.close();
 		for(const modal of [...this.acquisitionDialogs])modal.close();
 		await this.metadataIntake?.dispose();
+		await this.localPdfIntake?.dispose();
 		await this.sourceIntakeService?.dispose();
 		await this.jatsIntakeService?.dispose();
 		await this.jatsWikiService?.dispose();
@@ -2714,6 +2718,24 @@ export default class AgentDashboardPlugin extends Plugin {
 		signal.throwIfAborted(); await this.app.workspace.getLeaf("tab").openFile(file);
 	}
 	private metadataIntake?: MetadataIntakeService;
+	private localPdfIntake?: LocalPdfIntakeService;
+	getLocalPdfIntake(): LocalPdfIntakeService {
+		if (this.acquisitionClosing) throw new Error("插件已关闭");
+		const directory = this.readingPluginDirectory();
+		return this.localPdfIntake ||= new LocalPdfIntakeService({
+			deviceId: createHash("sha256").update(hostname() + "\n" + path.resolve(directory).toLowerCase()).digest("hex"),
+			resolver: new IdentityResolver(new HttpsSourceTransport()), catalog: this.getSourceCatalog(),
+			journal: new FileSourceStorage(directory), index: sourceIndexIO(this.app, this.getActiveVaultRoot()),
+			render: (source, page, signal) => renderAuthorizedPdfIdentityPage({ path: source.path, directory: path.dirname(source.path), originalFileName: path.basename(source.path), size: source.snapshot.artifact.byteLength, sha256: source.snapshot.artifact.sha256, retainFiles: true }, page, { signal, bytes: source.bytes }),
+			link: async (_id, key) => { const adapter = this.app.vault.adapter as typeof this.app.vault.adapter & { reconcileInternalFile?(path: string): void | Promise<void> }; await adapter.reconcileInternalFile?.(`papers/${key}/source.pdf`); },
+		});
+	}
+	openLocalPdfIntake(): void {
+		try {
+			const modal = new LocalPdfIntakeModal(this.app, this.getLocalPdfIntake(), this.getActiveVaultRoot(), id => this.activatePaperLibrary(id));
+			if (this.trackAcquisitionDialog(modal)) modal.open();
+		} catch (error) { new Notice(String(error)); }
+	}
 	getMetadataIntake(): MetadataIntakeService {
 		if (this.acquisitionClosing) throw new Error("插件已关闭");
 		return this.metadataIntake ||= new MetadataIntakeService(new IdentityResolver(new HttpsSourceTransport()), this.getSourceCatalog(), new JournalPaperRecordStore(new FileSourceStorage(this.readingPluginDirectory())));

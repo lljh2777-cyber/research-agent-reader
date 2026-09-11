@@ -15,6 +15,7 @@ export interface PaperLibraryHost extends ReadingStateHost {
 	openLibraryCodeLink(paperKey: string, link: LibraryCodeLink, signal: AbortSignal): Promise<void>;
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
 	openMetadataIntake(): void;
+	openLocalPdfIntake(): void;
 }
 
 export class PaperLibraryView extends ItemView {
@@ -37,6 +38,7 @@ export class PaperLibraryView extends ItemView {
 	private refreshButton?: HTMLButtonElement;
 	private spaceButton?: HTMLButtonElement;
 	private addButton?: HTMLButtonElement;
+	private localPdfButton?: HTMLButtonElement;
 	private cancelButton?: HTMLButtonElement;
 	constructor(leaf: WorkspaceLeaf, private readonly host: PaperLibraryHost) {
 		super(leaf);
@@ -79,6 +81,7 @@ export class PaperLibraryView extends ItemView {
 		heading.createEl("h1", { text: "文献库" }); heading.createEl("p", { text: "找到资料，继续阅读，回看已保存的笔记。", cls: "rar-library-muted" });
 		const actions = header.createDiv("rar-library-actions");
 		this.addButton = this.button(actions, "添加文献信息", () => this.host.openMetadataIntake());
+		this.localPdfButton = this.button(actions, "添加本地 PDF", () => this.host.openLocalPdfIntake());
 		this.spaceButton = this.button(actions, "阅读空间", () => { void this.run(signal => { signal.throwIfAborted(); return this.host.activateLearningSpace({ kind: "document" }); }); });
 		this.refreshButton = this.button(actions, "刷新文献库", () => { if (this.editingRecord) return; this.message = ""; void this.browser.refresh(); });
 		this.cancelButton = this.button(actions, "取消扫描", () => { if (this.action) this.action.abort(); else this.browser.cancel(); });
@@ -108,6 +111,7 @@ export class PaperLibraryView extends ItemView {
 		this.refreshButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
 		this.spaceButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
 		this.addButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
+		this.localPdfButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
 		this.cancelButton!.hidden = !this.browser.busy && !this.action;
 		this.cancelButton!.setText(this.action ? "取消打开" : "取消扫描");
 		this.cancelButton!.disabled = !this.action && state.phase !== "loading";

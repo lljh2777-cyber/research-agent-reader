@@ -6818,6 +6818,17 @@ body.agent-dashboard-mineru-resizing {
 .rar-metadata-intake [hidden] { display: none !important; }
 .rar-metadata-intake input { width: 100%; margin-bottom: 12px; }
 .rar-metadata-intake button { height: auto; min-height: 32px; white-space: normal; margin-block: 6px; }
+.rar-local-pdf-intake { overflow-wrap: anywhere; }
+.rar-local-pdf-intake [hidden] { display: none !important; }
+.rar-local-pdf-fields { display: flex; flex-direction: column; gap: 8px; margin-block: 16px; }
+.rar-local-pdf-fields label { margin-top: 8px; font-weight: 600; }
+.rar-local-pdf-fields :is(input, select) { width: 100%; min-width: 0; max-width: 100%; }
+.rar-local-pdf-intake button { height: auto; min-height: 32px; white-space: normal; margin-block: 6px; }
+.rar-local-pdf-intake input[type="number"] { width: 90px; }
+.rar-local-pdf-intake > details { margin-top: 24px; }
+.rar-local-pdf-page { display: block; width: 100%; height: auto; margin: 14px 0; border: 1px solid var(--background-modifier-border); }
+.rar-local-pdf-record { border-top: 1px solid var(--background-modifier-border); padding-block: 10px; }
+.rar-local-pdf-record p { margin-block: 8px; }
 .rar-library-actions button { height: auto; min-height: 32px; white-space: normal; }
 .rar-library-tools { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 12px; }
 .rar-library-tools input { flex: 1 1 220px; min-width: 0; }
