@@ -7,6 +7,7 @@ import { PAPER_READING_STATES, readingStateBlockReason, ReadingStateEditor, type
 import { PrimaryNoteEditor, primaryNoteCandidates, savedPrimaryNote } from "../library/primary-note-editor";
 import type { LibraryCodeLink } from "../library/code-links";
 import { renderBibliography } from "./bibliography";
+import { continuationBlockReason } from "../library/paper-continuation";
 
 export const PAPER_LIBRARY_VIEW_TYPE = "research-paper-library";
 export interface PaperLibraryHost extends ReadingStateHost {
@@ -15,6 +16,7 @@ export interface PaperLibraryHost extends ReadingStateHost {
 	openLibraryCodeLink(paperKey: string, link: LibraryCodeLink, signal: AbortSignal): Promise<void>;
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
 	openPaperIntake(): void;
+	continuePaperIntake(paper: LibraryPaper, kind: "local" | "fulltext", signal: AbortSignal): Promise<void>;
 }
 
 export class PaperLibraryView extends ItemView {
@@ -66,7 +68,7 @@ export class PaperLibraryView extends ItemView {
 		const matches = this.browser.state.result?.papers.filter(paper => paper.paperId === paperId) || [];
 		if (matches.length !== 1) throw new Error("已保存记录未能唯一定位，请查看文献库读取提示");
 		if (this.editingRecord || this.action) throw new Error("请先结束当前文献操作后再打开记录");
-		this.query = Object.values(matches[0].identifiers)[0] || ""; this.filter = "all"; this.selectedKey = matches[0].key; this.renderShell(); this.saveView();
+		this.query = Object.values(matches[0].identifiers)[0] || ""; this.filter = "all"; this.selectedKey = matches[0].key; this.message = ""; this.renderShell(); this.saveView();
 	}
 	private button(parent: HTMLElement, text: string, run: () => void): HTMLButtonElement {
 		const button = parent.createEl("button", { text, attr: { type: "button" } }); button.onclick = run; return button;
@@ -104,7 +106,7 @@ export class PaperLibraryView extends ItemView {
 			this.selectedKey = data?.papers.find(paper => paper.objects.some(item => item.kind === anchor.kind && item.id === anchor.id))?.key || this.selectedKey;
 			this.selectionAfterScan = undefined; this.saveView();
 		}
-		this.contentEl.setAttribute("aria-busy", String(this.browser.busy || [this.readingEditor.state.phase, this.primaryEditor.state.phase].some(phase => phase === "preparing" || phase === "saving")));
+		this.contentEl.setAttribute("aria-busy", String(this.browser.busy || Boolean(this.action) || [this.readingEditor.state.phase, this.primaryEditor.state.phase].some(phase => phase === "preparing" || phase === "saving")));
 		this.refreshButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
 		this.spaceButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
 		this.addButton!.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord;
@@ -124,8 +126,8 @@ export class PaperLibraryView extends ItemView {
 		const papers = filterLibrary(data?.papers || [], this.query, this.filter);
 		this.summary.setText(`${papers.length} 条匹配记录`); this.list.empty();
 		for (const paper of papers.slice(0, this.limit)) {
-			const row = this.button(this.list, "", () => { if (this.editingRecord) return; this.selectedKey = paper.key; this.message = ""; this.renderResults(); this.saveView(); });
-			row.disabled = this.editingRecord;
+			const row = this.button(this.list, "", () => { if (this.editingRecord || this.action) return; this.selectedKey = paper.key; this.message = ""; this.renderResults(); this.saveView(); });
+			row.disabled = this.editingRecord || Boolean(this.action);
 			row.className = "rar-library-row"; row.dataset.paperKey = paper.key; row.setAttribute("aria-pressed", String(paper.key === this.selectedKey));
 			row.createSpan({ text: paper.title, cls: "rar-library-row-title" });
 			row.createSpan({ text: `${associationLabel(paper)} · ${paper.objects.length} 项内容`, cls: "rar-library-muted" });
@@ -148,6 +150,15 @@ export class PaperLibraryView extends ItemView {
 		const bibliography = paper.objects.find(item => item.kind === "record" && item.bibliography)?.bibliography;
 		if (bibliography) renderBibliography(detail, bibliography);
 		for (const diagnostic of data.diagnostics.filter(item => paper.diagnosticIds.includes(item.id))) detail.createEl("p", { text: diagnostic.message, cls: "rar-library-warning" });
+		const intake = detail.createEl("section", { cls: "rar-library-section", attr: { "aria-label": "补充原文与继续处理" } });
+		intake.createEl("h3", { text: "补充原文与继续处理" });
+		const reason = continuationBlockReason(paper, data);
+		intake.createEl("p", { text: reason || "沿用已保存的书目信息。可添加原文，或在下一窗口继续此文献的获取、核对与登记。", cls: "rar-library-muted" });
+		const actions = intake.createDiv("rar-library-actions");
+		for (const [kind, label] of [["fulltext", "查找全文 / 继续获取"], ["local", "添加本地 PDF / 恢复登记"]] as const) {
+			const button = this.button(actions, label, () => { void this.run(signal => this.host.continuePaperIntake(paper, kind, signal)); });
+			button.disabled = Boolean(reason) || this.browser.busy || Boolean(this.action) || this.editingRecord || this.browser.state.phase !== "ready";
+		}
 		this.renderReadingState(detail, paper, data);
 		this.renderPrimaryNote(detail, paper, data);
 		this.renderCodeLinks(detail, paper, data);

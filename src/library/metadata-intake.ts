@@ -4,6 +4,7 @@ import type { SourceCatalog, CatalogPlan } from "../papers/catalog";
 import type { ResolvedIdentity } from "../papers/identity";
 import type { PaperRecordStore } from "./record-store";
 import type { SourcePackageManifest } from "../sources/package";
+import { objectDigest } from "../papers/identity";
 
 export interface MetadataPreview {
 	identity: ResolvedIdentity;
@@ -60,6 +61,17 @@ export class MetadataIntakeService {
 			return { paperId, reused: false };
 		});
 		this.queue = operation.catch(() => undefined); return operation;
+	}
+	/** Read the persisted bibliography again; preparing a continuation never writes a record. */
+	async savedContext(context: PaperIntakeContext, signal: AbortSignal): Promise<PaperIntakeContext> {
+		const expected = structuredClone(context); this.available(signal);
+		const state = await this.store.read(expected.paperId); this.available(signal);
+		if (state.errors.length || !state.current?.record.bibliography || state.heads.length !== 1) throw new Error("已保存书目信息无法唯一核验，请重新核对记录");
+		const identity = decodeIdentity(state.current.record.bibliography);
+		if (objectDigest(identity) !== objectDigest(expected.identity)) throw new Error("已保存书目信息发生变化，请刷新文献库");
+		const plan = await this.catalog.associate(identity); this.available(signal);
+		if (plan.existingPaperId !== expected.paperId) throw new Error("文献关联已变化，请重新核对");
+		return { identity, paperId: expected.paperId };
 	}
 	/** Recheck the private query result, never trust mutated UI metadata or a guessed paperId. */
 	async context(preview: MetadataPreview, signal: AbortSignal, savedPaperId?: string): Promise<PaperIntakeContext> {

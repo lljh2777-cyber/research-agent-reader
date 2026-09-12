@@ -3,7 +3,7 @@ import { decodeIdentity, parseAcquisitionInput } from "../fulltext/contracts";
 import type { IdentityResolver } from "../fulltext/identity-resolver";
 import type { PdfLoader } from "../fulltext/file-validator";
 import { decodeLocalPdfSnapshot, type LocalPdfSnapshot } from "../sources/pdf-snapshot";
-import { canonicalJson, objectDigest, type ResolvedIdentity } from "./identity";
+import { canonicalJson, identityRelation, objectDigest, type ResolvedIdentity } from "./identity";
 import { prepareLocalPdf, rereadLocalPdf, type readLocalPdfFile } from "./local-pdf";
 import { SourceIntakeService, type SourceIntakeDeps, type SourceSavePlan } from "./source-intake";
 
@@ -56,7 +56,8 @@ export class LocalPdfIntakeService {
 			|| typeof c.packageKey !== "string" || !/^[a-z0-9_-]+--pdf--[a-f0-9]{24,64}$/.test(c.packageKey) || !/^p-[a-f0-9-]{36}$/.test(c.paperId)) throw new Error("完成记录无法核验");
 		return c;
 	}
-	async history(): Promise<LocalPdfHistory[]> {
+	async history(identity?: ResolvedIdentity): Promise<LocalPdfHistory[]> {
+		const selected = identity && decodeIdentity(identity);
 		this.available(); const files = await this.deps.journal.list(root);
 		const records = files.filter(f => !f.directory && /^s-[a-f0-9-]{36}\.json$/.test(f.name));
 		if (records.length > 200) throw new Error("本地 PDF 添加记录超过 200 条，请先整理");
@@ -64,10 +65,12 @@ export class LocalPdfIntakeService {
 		for (const file of records) {
 			this.available(); const id = file.name.slice(0, -5);
 			try {
-				const operation = await this.readOperation(id), bytes = await this.deps.journal.read(`${root}/${id}.saved.json`);
+				const operation = await this.readOperation(id);
+				if (selected && identityRelation(selected.identifiers, operation.snapshot.identity.identifiers) !== "same") continue;
+				const bytes = await this.deps.journal.read(`${root}/${id}.saved.json`);
 				if (bytes) this.completion(JSON.parse(Buffer.from(bytes).toString("utf8")), operation);
 				result.push({ id, title: operation.snapshot.identity.title, fileName: operation.snapshot.origin.fileName, createdAt: operation.snapshot.createdAt, state: bytes ? "saved" : "pending", error: "" });
-			} catch (error) { result.push({ id, title: "无法读取的本地记录", fileName: "", createdAt: "", state: "unavailable", error: message(error) }); }
+			} catch (error) { result.push({ id, title: selected ? "本地记录无法核验归属" : "无法读取的本地记录", fileName: "", createdAt: "", state: "unavailable", error: message(error) }); }
 		}
 		this.available(); return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
 	}
@@ -85,10 +88,14 @@ export class LocalPdfIntakeService {
 			return this.activate(this.decode({ schemaVersion: 1, deviceId: this.deps.deviceId, path: filePath, snapshot: selected.snapshot }, selected.snapshot.id), filePath, current);
 		});
 	}
-	async resume(id: string, signal: AbortSignal, selectedPath?: string): Promise<SourceSavePlan> {
+	async resume(id: string, signal: AbortSignal, selectedPath?: string, context?: { identity: ResolvedIdentity; paperId: string }): Promise<SourceSavePlan> {
+		const expected = context && { identity: decodeIdentity(context.identity), paperId: context.paperId };
 		return this.request(signal, async current => {
 			const operation = await this.readOperation(id); this.available(current);
-			return this.activate(operation, selectedPath || operation.path, current);
+			if (expected && identityRelation(expected.identity.identifiers, operation.snapshot.identity.identifiers) !== "same") throw new Error("此添加记录不属于所选文献");
+			const plan = await this.activate(operation, selectedPath || operation.path, current);
+			if (expected && plan.paperId !== expected.paperId) { this.cancel(plan.requestId); throw new Error("恢复记录的文献关联已变化，请重新核对"); }
+			return plan;
 		});
 	}
 	/** Continue a saved paper without a second metadata request; the catalog still owns association. */

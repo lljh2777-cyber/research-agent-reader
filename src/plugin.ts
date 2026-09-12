@@ -32,6 +32,8 @@ import { libraryMineruVerifier } from "./library/mineru-verifier";
 import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/record-store";
 import { PaperRecordService, type PaperRecordEdit } from "./library/record-service";
 import { MetadataIntakeService, type PaperIntakeContext, type MetadataSource } from "./library/metadata-intake";
+import { savedPaperContext } from "./library/paper-continuation";
+import type { LibraryPaper } from "./library/types";
 import { loadSourcePackage } from "./sources/package";
 import { MetadataIntakeModal } from "./views/metadata-intake";
 import { LocalPdfIntakeService } from "./papers/local-pdf-intake";
@@ -2753,6 +2755,15 @@ export default class AgentDashboardPlugin extends Plugin {
 			});
 			if (this.trackAcquisitionDialog(modal)) modal.open();
 		} catch (error) { new Notice(String(error)); }
+	}
+	async continuePaperIntake(paper: LibraryPaper, kind: "local" | "fulltext", signal: AbortSignal): Promise<void> {
+		const expected = structuredClone(paper); signal.throwIfAborted();
+		const fresh = await this.inspectPaperLibrary(signal); signal.throwIfAborted();
+		const context = await this.getMetadataIntake().savedContext(savedPaperContext(expected, fresh), signal);
+		signal.throwIfAborted();
+		if (kind === "local") this.showLocalPdfIntake(context);
+		else if (kind === "fulltext") this.showFulltextAcquisition("production", undefined, context.identity);
+		else throw new Error("不支持的文献处理入口");
 	}
 	private async openIntakeSource(source: MetadataSource, signal: AbortSignal): Promise<void> {
 		signal.throwIfAborted(); const scan = await this.inspectPaperLibrary(signal);

@@ -32,7 +32,7 @@ export class LocalPdfIntakeModal extends Modal {
 	onOpen(): void {
 		this.closed = false; this.contentEl.empty(); this.contentEl.addClass("rar-local-pdf-intake");
 		this.contentEl.createEl("h2", { text: "添加本地 PDF" });
-		this.contentEl.createEl("p", { text: "查询书目信息并核对原文后保存。PDF 在本机读取，不上传；文献标识会发送至 Europe PMC / Crossref。无需模型。" });
+		this.contentEl.createEl("p", { text: this.paper ? "沿用已确认书目信息，核对原文后保存。PDF 在本机读取，不上传。无需模型。" : "查询书目信息并核对原文后保存。PDF 在本机读取，不上传；文献标识会发送至 Europe PMC / Crossref。无需模型。" });
 		const files = this.contentEl.createDiv("rar-local-pdf-fields");
 		files.createEl("label", { text: "本地 PDF（最多 64 MiB）" });
 		this.file = files.createEl("input", { type: "text", placeholder: "选择文件，或输入 PDF 绝对路径", attr: { "aria-label": "本地 PDF 路径", maxlength: "4096" } });
@@ -54,12 +54,13 @@ export class LocalPdfIntakeModal extends Modal {
 			const plan = this.paper ? await this.service.prepareForPaper(this.file.value.trim(), this.paper, this.version.value as LocalPdfSnapshot["version"], signal)
 				: await this.service.prepare(this.file.value.trim(), this.identifier.value, this.version.value as LocalPdfSnapshot["version"], signal);
 			await this.preview(plan, signal);
-		}, "正在查询书目信息并检查 PDF…"); };
+		}, this.paper ? "正在核对已确认文献并检查 PDF…" : "正在查询书目信息并检查 PDF…"); };
 		this.cancel = actions.createEl("button", { text: "取消核对" });
 		this.cancel.onclick = () => { this.reset(); this.status.setText("核对已取消，尚未保存"); this.controls(); };
 		this.status = this.contentEl.createDiv({ attr: { role: "status", "aria-live": "polite" } });
 		this.result = this.contentEl.createDiv();
-		const history = this.contentEl.createEl("details"); history.createEl("summary", { text: "本地 PDF 添加记录与恢复" });
+		const history = this.contentEl.createEl("details"); history.createEl("summary", { text: this.paper ? "此文献的本地 PDF 记录与恢复" : "本地 PDF 添加记录与恢复" });
+		if (this.paper) history.open = true;
 		history.createEl("p", { text: "点击保存后才保留记录。未完成的添加可继续；文件移动后可重新选择相同内容。记录仅限当前设备，完成状态代表当时登记成功，继续时会重新校验。" });
 		this.records = history.createDiv(); this.controls(); void this.history();
 	}
@@ -138,8 +139,8 @@ export class LocalPdfIntakeModal extends Modal {
 	}
 	private async history(): Promise<void> {
 		try {
-			const records = await this.service.history(); if (this.closed) return;
-			this.records.empty(); if (!records.length) this.records.createEl("p", { text: "尚无本地 PDF 添加记录。" });
+			const records = await this.service.history(this.paper?.identity); if (this.closed) return;
+			this.records.empty(); if (!records.length) this.records.createEl("p", { text: this.paper ? "此文献暂无可匹配的本地 PDF 添加记录。" : "尚无本地 PDF 添加记录。" });
 			for (const record of records) {
 				const row = this.records.createDiv("rar-local-pdf-record");
 				row.createEl("p", { text: `${record.state === "saved" ? "已完成登记" : record.state === "pending" ? "待继续" : "无法恢复"} · ${record.title}` });
@@ -150,7 +151,7 @@ export class LocalPdfIntakeModal extends Modal {
 					const button = actions.createEl("button", { text: reselect ? "重新选择相同 PDF" : "继续核对与登记" });
 					button.onclick = () => { void this.run(async signal => {
 						const selected = reselect ? await this.picker("") : undefined; if (signal.aborted || reselect && !selected) return;
-						const plan = await this.service.resume(record.id, signal, selected); await this.preview(plan, signal);
+						const plan = await this.service.resume(record.id, signal, selected, this.paper); await this.preview(plan, signal);
 					}, "正在恢复并核验原文件…"); };
 				}
 			} this.controls();
