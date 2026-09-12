@@ -6871,3 +6871,17 @@ body.agent-dashboard-mineru-resizing {
   .rar-library-detail { padding: 18px 0 0; border-left: none; border-top: 1px solid var(--background-modifier-border); }
   .rar-library-empty { padding: 8px 0; }
 }
+.rar-excerpt-modal { width: min(1060px, 94vw); }
+.rar-excerpt-modal .modal-content { overflow: auto; }
+.rar-excerpt-grid { display: grid; grid-template-columns: minmax(180px, 0.8fr) minmax(0, 1.4fr); gap: 20px; margin-top: 16px; }
+.rar-excerpt-list, .rar-excerpt-detail { min-width: 0; overflow-wrap: anywhere; }
+.rar-excerpt-list { max-height: 65vh; overflow: auto; }
+.rar-excerpt-row { display: flex; flex-direction: column; gap: 6px; width: 100%; height: auto; white-space: normal; text-align: left; margin-bottom: 8px; padding: 12px; }
+.rar-excerpt-row small { color: var(--text-muted); }
+.rar-excerpt-row[aria-pressed="true"] { box-shadow: inset 3px 0 0 var(--interactive-accent); background: var(--background-secondary); }
+.rar-excerpt-detail blockquote, .rar-excerpt-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; margin: 10px 0; }
+.rar-excerpt-detail textarea { display: block; width: 100%; min-height: 100px; margin-top: 8px; }
+.rar-excerpt-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.rar-excerpt-actions input { flex: 1; min-width: 160px; }
+.rar-excerpt-actions button { height: auto; min-height: 32px; white-space: normal; }
+@media (max-width: 650px) { .rar-excerpt-grid { grid-template-columns: minmax(0, 1fr); } .rar-excerpt-list { max-height: 28vh; } }

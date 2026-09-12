@@ -17,6 +17,7 @@ export interface PaperLibraryHost extends ReadingStateHost {
 	openLibraryCodeLink(paperKey: string, link: LibraryCodeLink, signal: AbortSignal): Promise<void>;
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
 	openPaperIntake(): void;
+	openExcerptBrowser(): void;
 	queryManualPaper(item: LibraryObjectSummary, signal: AbortSignal): Promise<void>;
 	continuePaperIntake(paper: LibraryPaper, kind: "local" | "fulltext", signal: AbortSignal): Promise<void>;
 	processLibrarySource(item: LibraryObjectSummary, signal: AbortSignal): Promise<void>;
@@ -84,6 +85,7 @@ export class PaperLibraryView extends ItemView {
 		heading.createEl("h1", { text: "文献库" }); heading.createEl("p", { text: "找到资料，继续阅读，回看已保存的笔记。", cls: "rar-library-muted" });
 		const actions = header.createDiv("rar-library-actions");
 		this.addButton = this.button(actions, "添加文献", () => this.host.openPaperIntake());
+		this.button(actions, "摘录", () => this.host.openExcerptBrowser());
 		this.spaceButton = this.button(actions, "阅读空间", () => { void this.run(signal => { signal.throwIfAborted(); return this.host.activateLearningSpace({ kind: "document" }); }); });
 		this.refreshButton = this.button(actions, "刷新文献库", () => { if (this.editingRecord) return; this.message = ""; void this.browser.refresh(); });
 		this.cancelButton = this.button(actions, "取消扫描", () => { if (this.action) this.action.abort(); else this.browser.cancel(); });

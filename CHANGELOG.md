@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Excerpt browsing and guarded personal notes — 0.70.0
+
+- 文献库、命令面板及已有摘录小窗接通可搜索的摘录列表，显示原句、历史上下文、版本与个人备注。
+- 保存备注在文件写入回调内核对完整版本，外部修改时保留草稿；失败可重试，保留来源、AI 字段和额外正文。
+- 回到原文重新核对准确位置、文本版本和编辑器内容，来源变化停止定位；修复自动阅读器接管 Markdown 后选区失效。
+- 原生桌面／窄视口、三个入口、冲突与失败恢复通过；范围、文件保护与后续开发见 [R3.2 记录](docs/excerpts-r32.md)。
+
 ### R1 native source closeout — 0.61.1
 
 - 修复阅读器复用标签时仍显示上一篇文献标题：加载、成功与失败状态同步刷新标签，关闭及过期加载继续隔离。

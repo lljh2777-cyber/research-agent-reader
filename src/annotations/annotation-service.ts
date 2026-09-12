@@ -621,7 +621,7 @@ export class AnnotationService {
 		record: AnnotationRecord,
 		draft: AnnotationDraft,
 	): Promise<AnnotationRecord> {
-		if (record.excerpt) throw new Error("首批摘录请打开摘录文档修改个人备注，原文凭据保持不变");
+		if (record.excerpt) throw new Error("请从摘录列表编辑个人备注，原文凭据保持不变");
 		const latest = await this.loadAnnotation(record.annotationPath, record.id);
 		if (!latest) throw new Error("批注记录不存在或已被修改");
 		const updated: AnnotationRecord = {

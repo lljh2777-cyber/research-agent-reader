@@ -153,6 +153,8 @@ import { KnowledgeCurationModal, KnowledgeMaintenanceModal } from "./views/knowl
 import { serializeActionRequest } from "./runtime/action-request";
 import type { DashboardActionOptions } from "./actions";
 import { AnnotationPopover } from "./annotations/annotation-popover";
+import { ExcerptBrowser } from "./annotations/excerpt-browser";
+import type { ExcerptRef } from "./annotations/excerpt-library";
 import { AnnotationService } from "./annotations/annotation-service";
 import type { AnnotationRecord, AnnotationSelection } from "./annotations/types";
 import {
@@ -353,6 +355,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private curationWriter?: CurationWriter;
 	private curationModals = new Set<Modal>();
 	private annotationPopover: AnnotationPopover | null = null;
+	private excerptBrowser?: ExcerptBrowser;
 	private annotationChip: HTMLElement | null = null;
 	private persistence?: DashboardPersistence;
 	private readonly cliModelDiscoveryCache = new Map<
@@ -476,6 +479,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(TOPIC_STUDY_VIEW_TYPE, (leaf) => new TopicStudyView(leaf, this));
 		this.addCommand({ id: "open-topic-planning", name: "打开主题路线（预览）", callback: () => { void this.activateLearningSpace({ kind: "topic" }).catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
+		this.addCommand({ id: "open-excerpts", name: "打开摘录（原句与个人备注）", callback: () => this.openExcerptBrowser() });
 		this.addCommand({ id: "add-paper-metadata", name: "添加文献信息（无需模型）", callback: () => this.openMetadataIntake() });
 		this.addCommand({ id: "add-paper", name: "添加文献（书目信息、全文与本地 PDF）", callback: () => this.openPaperIntake() });
 		this.addCommand({ id: "add-local-pdf", name: "添加本地 PDF（核对、保存与恢复）", callback: () => this.openLocalPdfIntake() });
@@ -618,6 +622,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.knowledgeService?.dispose();
 		await this.readingWorkspace?.dispose();
 		this.annotationPopover?.close();
+		this.excerptBrowser?.dispose();
 		this.hideAnnotationChip();
 		await this.flushScheduledSettingsSave();
 		await this.agentLoopService.shutdown().catch((error) => {
@@ -725,6 +730,12 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationChip = null;
 	}
 
+	openExcerptBrowser(ref?: ExcerptRef): void {
+		if (this.excerptBrowser) { new Notice("摘录窗口已打开，请先完成当前操作"); return; }
+		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true));
+		this.excerptBrowser = modal; modal.open();
+	}
+
 	private openAnnotationPopover(options: {
 		anchorRect: DOMRect;
 		selection?: AnnotationSelection;
@@ -737,6 +748,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			service: this.annotationService,
 			...options,
 			onArchive: (record) => this.archiveAnnotation(record),
+			onOpenExcerpt: (record) => this.openExcerptBrowser(record),
 			onClose: () => {
 				if (this.annotationPopover === popover) this.annotationPopover = null;
 			},
@@ -3912,9 +3924,16 @@ export default class AgentDashboardPlugin extends Plugin {
 		const normalizedPath = normalizePath(articlePath);
 		const file = this.app.vault.getAbstractFileByPath(normalizedPath);
 		if (!(file instanceof TFile)) return;
+		await this.openSourceMarkdownFile(file);
+	}
+
+	private async openSourceMarkdownFile(file: TFile, sourceMode = false): Promise<WorkspaceLeaf> {
+		const normalizedPath = normalizePath(file.path);
 		this.readerAutoOpenBypass.add(normalizedPath);
 		try {
-			await this.app.workspace.getLeaf("tab").openFile(file);
+			const leaf = this.app.workspace.getLeaf("tab");
+			await leaf.openFile(file, sourceMode ? { active: true, state: { mode: "source" } } : undefined);
+			return leaf;
 		} finally {
 			window.setTimeout(() => this.readerAutoOpenBypass.delete(normalizedPath), 1000);
 		}

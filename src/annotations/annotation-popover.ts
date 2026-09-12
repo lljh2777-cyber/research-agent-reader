@@ -22,6 +22,7 @@ interface AnnotationPopoverOptions {
 	selection?: AnnotationSelection;
 	record?: AnnotationRecord;
 	onArchive: (record: AnnotationRecord) => Promise<void>;
+	onOpenExcerpt?: (record: AnnotationRecord) => void;
 	onClose?: () => void;
 }
 
@@ -40,6 +41,7 @@ export class AnnotationPopover extends Component {
 	private readonly selection?: AnnotationSelection;
 	private record?: AnnotationRecord;
 	private readonly onArchive: (record: AnnotationRecord) => Promise<void>;
+	private readonly onOpenExcerpt?: (record: AnnotationRecord) => void;
 	private readonly onClose?: () => void;
 	private element: HTMLDivElement | null = null;
 	private cancelGeneration: (() => void) | null = null;
@@ -61,6 +63,7 @@ export class AnnotationPopover extends Component {
 		this.selection = options.selection;
 		this.record = options.record;
 		this.onArchive = options.onArchive;
+		this.onOpenExcerpt = options.onOpenExcerpt;
 		this.onClose = options.onClose;
 	}
 
@@ -318,8 +321,13 @@ export class AnnotationPopover extends Component {
 			void this.service.getExcerptStatus(record).then(text => { if (!this.closed && this.record === record && status.isConnected) status.setText(text); }, () => { if (status.isConnected) status.setText("暂时无法核对原文，保留历史摘录"); });
 			this.renderTextSection(element, "个人备注", record.manualText, "没有填写个人备注");
 			const context = element.createEl("details"); context.createEl("summary", { text: "保存时的原文上下文" }); context.createEl("pre", { text: record.excerpt!.context, attr: { style: "white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto" } });
-			element.createEl("p", { text: "可打开摘录文档编辑个人备注；请保留原文片段、位置和版本凭据。" });
-			const open = this.renderFooter(element).createEl("button", { text: "打开摘录文档", attr: { type: "button" } });
+			element.createEl("p", { text: "打开摘录列表，可回到原文或编辑个人备注。" });
+			const footer = this.renderFooter(element);
+			if (this.onOpenExcerpt) {
+				const browse = footer.createEl("button", { text: "查看摘录与编辑备注", attr: { type: "button" } });
+				browse.onclick = () => { this.close(); this.onOpenExcerpt?.(record); };
+			}
+			const open = footer.createEl("button", { text: "打开摘录文档", attr: { type: "button" } });
 			open.onclick = () => { this.close(); void this.service.openAnnotationDocument(record).catch(error => new Notice(displayError(error))); };
 			this.position(); return;
 		}
