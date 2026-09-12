@@ -38,7 +38,7 @@ export class LibraryBrowserController {
 }
 export const paperStateLabel = (state: PaperReadingState): string => ({ unmarked: "阅读状态未标记", not_started: "未开始阅读", reading: "正在阅读", completed: "用户标记已读", revisit: "待回看" })[state];
 export const sourceFormatLabel = (format: string): string => ({ pdf: "PDF", mineru: "MinerU 正文", jats: "JATS 正文", markdown: "Markdown", unknown: "未知格式" }[format] || format);
-export const associationLabel = (paper: LibraryPaper): string => paper.association === "conflict" ? "关联有冲突" : paper.association === "unidentified" ? "待关联" : "已有标识";
+export const associationLabel = (paper: LibraryPaper): string => paper.association === "conflict" ? "关联有冲突" : paper.objects.some(item => item.manualBibliography) ? "人工条目 · 未核验" : paper.association === "unidentified" ? "待关联" : "已有标识";
 export function libraryRowContext(paper: LibraryPaper): string {
 	const labels = { source: "原文", session: "阅读会话", note: "论文笔记", annotation: "批注", record: "书目信息", acquisition: "获取记录" };
 	const kinds = [...new Set(paper.objects.map(item => labels[item.kind]))].join("、");
@@ -52,7 +52,7 @@ export function filterLibrary(papers: readonly LibraryPaper[], query: string, fi
 		if (filter === "sources" && !paper.objects.some(item => item.source)) return false;
 		if (filter === "sessions" && !paper.objects.some(item => item.reading)) return false;
 		if (filter === "issues" && paper.association === "identified" && !paper.diagnosticIds.length) return false;
-		const haystack = [paper.title, paper.citekey, ...Object.values(paper.identifiers), ...paper.objects.flatMap(item => [item.title, item.id, item.source?.path])].join("\n").toLocaleLowerCase();
+		const haystack = [paper.title, paper.citekey, ...Object.values(paper.identifiers), ...paper.objects.flatMap(item => [item.title, item.id, item.source?.path, item.manualBibliography?.reference, ...(item.manualBibliography?.authors || []), item.manualBibliography?.year])].join("\n").toLocaleLowerCase();
 		return terms.every(term => haystack.includes(term));
 	});
 }

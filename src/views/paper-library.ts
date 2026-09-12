@@ -7,6 +7,7 @@ import { PAPER_READING_STATES, readingStateBlockReason, ReadingStateEditor, type
 import { PrimaryNoteEditor, primaryNoteCandidates, savedPrimaryNote } from "../library/primary-note-editor";
 import type { LibraryCodeLink } from "../library/code-links";
 import { renderBibliography } from "./bibliography";
+import { renderManualBibliography } from "./manual-bibliography";
 import { continuationBlockReason } from "../library/paper-continuation";
 
 export const PAPER_LIBRARY_VIEW_TYPE = "research-paper-library";
@@ -16,6 +17,7 @@ export interface PaperLibraryHost extends ReadingStateHost {
 	openLibraryCodeLink(paperKey: string, link: LibraryCodeLink, signal: AbortSignal): Promise<void>;
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
 	openPaperIntake(): void;
+	queryManualPaper(item: LibraryObjectSummary, signal: AbortSignal): Promise<void>;
 	continuePaperIntake(paper: LibraryPaper, kind: "local" | "fulltext", signal: AbortSignal): Promise<void>;
 	processLibrarySource(item: LibraryObjectSummary, signal: AbortSignal): Promise<void>;
 }
@@ -150,6 +152,12 @@ export class PaperLibraryView extends ItemView {
 		if (identifiers.length) detail.createEl("p", { text: identifiers.join(" · "), cls: "rar-library-identifiers" });
 		const bibliography = paper.objects.find(item => item.kind === "record" && item.bibliography)?.bibliography;
 		if (bibliography) renderBibliography(detail, bibliography);
+		const manual = paper.objects.find(item => item.kind === "record" && item.manualBibliography);
+		if (manual?.manualBibliography) {
+			renderManualBibliography(detail, manual.manualBibliography);
+			const query = this.button(detail, "重新查询书目信息", () => { void this.run(signal => this.host.queryManualPaper(manual, signal)); });
+			query.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord || this.browser.state.phase !== "ready" || paper.association === "conflict";
+		}
 		for (const diagnostic of data.diagnostics.filter(item => paper.diagnosticIds.includes(item.id))) detail.createEl("p", { text: diagnostic.message, cls: "rar-library-warning" });
 		const intake = detail.createEl("section", { cls: "rar-library-section", attr: { "aria-label": "补充原文与继续处理" } });
 		intake.createEl("h3", { text: "补充原文与继续处理" });
@@ -168,7 +176,7 @@ export class PaperLibraryView extends ItemView {
 			const section = detail.createEl("section", { cls: "rar-library-section" }); section.createEl("h3", { text: `${title} · ${objects.length}` });
 			for (const item of objects) this.renderObject(section, item, paper);
 		}
-		if (paper.objects.every(item => item.kind === "record")) detail.createEl("p", { text: "已保存书目信息，尚无关联原文、阅读会话或笔记。" });
+		if (paper.objects.every(item => item.kind === "record")) detail.createEl("p", { text: manual ? "已保存人工条目，尚无已核验的书目信息或关联原文。" : "已保存书目信息，尚无关联原文、阅读会话或笔记。" });
 	}
 	private renderCodeLinks(parent: HTMLElement, paper: LibraryPaper, data: LibraryReadResult): void {
 		const section = parent.createEl("section", { cls: "rar-library-section rar-library-code-links", attr: { "aria-label": "关联代码笔记" } });

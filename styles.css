@@ -6821,6 +6821,9 @@ body.agent-dashboard-mineru-resizing {
 .rar-metadata-intake [hidden] { display: none !important; }
 .rar-metadata-intake input { width: 100%; margin-bottom: 12px; }
 .rar-metadata-intake button { height: auto; min-height: 32px; white-space: normal; margin-block: 6px; margin-inline-end: 8px; }
+.rar-manual-field { display: grid; gap: 6px; margin: 12px 0; }
+.rar-manual-field textarea { width: 100%; min-height: 64px; resize: vertical; }
+.rar-manual-notes { white-space: pre-wrap; }
 .rar-local-pdf-intake { overflow-wrap: anywhere; }
 .rar-local-pdf-intake [hidden] { display: none !important; }
 .rar-local-pdf-fields { display: flex; flex-direction: column; gap: 8px; margin-block: 16px; }

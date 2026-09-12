@@ -1,6 +1,7 @@
 import { decodeInput } from "../fulltext/contracts";
 import { identityRelation, objectDigest, safeCitekey } from "../papers/identity";
 import { readingCategory } from "../reading/catalog";
+import { validateManualBinding } from "./manual-record";
 import type { ReadingSession } from "../reading/types";
 import type {
 	LibraryDiagnostic, LibraryDiagnosticCode, LibraryIdentifiers, LibraryObject, LibraryObjectRef,
@@ -25,6 +26,7 @@ function checkObject(item: LibraryObject): void {
 	if (item.paperId !== undefined && !/^p-[a-f0-9-]{36}$/.test(item.paperId)) throw new Error("文献聚合 paperId 无效");
 	if (item.citekey !== undefined && !safeCitekey(item.citekey)) throw new Error("文献聚合 citekey 无效");
 	if (item.kind === "record" && (!item.paperId || item.id !== item.paperId)) throw new Error("文献记录必须使用已有 paperId");
+	if (item.kind === "record") validateManualBinding(item);
 	if (item.kind === "record" && item.readingState !== undefined && !["unmarked", "not_started", "reading", "completed", "revisit"].includes(item.readingState)) throw new Error("文献人工阅读状态无效");
 	if (item.kind === "note" && (!/^[a-f0-9]{64}$/.test(item.contentHash) || item.review && (!/^[a-f0-9]{64}$/.test(item.review.reviewedHash) || !Number.isFinite(Date.parse(item.review.reviewedAt))))) throw new Error("论文笔记审阅记录缺少有效内容指纹或时间");
 	if (item.kind === "session" && item.id !== item.session.id) throw new Error("阅读会话引用不一致");
@@ -67,6 +69,7 @@ function summarize(item: LibraryObject): LibraryObjectSummary {
 		...(item.paperId ? { paperId: item.paperId } : {}), ...(item.citekey ? { citekey: item.citekey } : {}) };
 	if (item.kind === "source") { result.source = structuredClone(item.source); result.capabilities = librarySourceCapabilities(item.source); }
 	if (item.kind === "record" && item.bibliography) result.bibliography = structuredClone(item.bibliography);
+	if (item.kind === "record" && item.manualBibliography) result.manualBibliography = structuredClone(item.manualBibliography);
 	if (item.kind === "session") result.reading = libraryReadingProgress(item.session);
 	if (item.kind === "note") result.contentHash = item.contentHash;
 	if (item.kind === "note") result.noteReview = item.review
@@ -104,7 +107,7 @@ function paper(items: LibraryObject[], conflicts: LibraryDiagnostic[], issues: M
 	for (const issue of diagnostics) issues.set(issue.id, issue);
 	return {
 		key: "row-" + objectDigest(sorted.map(ref)),
-		association: conflicts.length ? "conflict" : paperId || ID_KINDS.some(kind => identifiers[kind]) ? "identified" : "unidentified",
+		association: conflicts.length ? "conflict" : record?.manualBibliography ? "unidentified" : paperId || ID_KINDS.some(kind => identifiers[kind]) ? "identified" : "unidentified",
 		...(paperId ? { paperId } : {}), ...(citekey ? { citekey } : {}),
 		title: [...sorted].sort((a, b) => priority[a.kind] - priority[b.kind] || order(refKey(a), refKey(b))).find(item => item.title.trim())?.title || "未命名文献",
 		identifiers, objects: sorted.map(summarize), readingState: record?.decisionConflict ? "unmarked" : record?.readingState || "unmarked",

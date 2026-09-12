@@ -6,6 +6,7 @@ import type { LibraryPaper } from "./types";
 
 /** Details are a read projection; recheck the saved identity before opening a writer. */
 export function continuationBlockReason(paper: LibraryPaper, data: LibraryReadResult): string | undefined {
+	if (paper.objects.some(item => item.manualBibliography)) return "人工条目尚未核验。可重新查询书目并核对结果；不会直接按手填线索下载或关联原文。";
 	if (!paper.paperId || paper.association !== "identified") return "文献身份尚未唯一确认，请先核对关联。";
 	if (data.readIssues.some(issue => issue.area !== "annotations" && issue.blocksRecords !== false)) return "文献目录读取不完整，请处理读取提示后刷新。";
 	const state = data.recordStates.find(record => record.paperId === paper.paperId);

@@ -5,6 +5,9 @@ import type { ResolvedIdentity } from "../papers/identity";
 import type { PaperRecordStore } from "./record-store";
 import type { SourcePackageManifest } from "../sources/package";
 import { objectDigest } from "../papers/identity";
+import { randomUUID } from "node:crypto";
+import { manualPaperFields, type ManualPaperInput } from "./manual-record";
+import type { LibraryRecordObject, LibraryObjectSummary } from "./types";
 
 export interface MetadataPreview {
 	identity: ResolvedIdentity;
@@ -13,6 +16,7 @@ export interface MetadataPreview {
 	sources: MetadataSource[];
 }
 export interface MetadataSaved { paperId: string; reused: boolean; }
+export interface ManualMetadataPreview { title: string; manualBibliography: NonNullable<LibraryRecordObject["manualBibliography"]>; }
 export interface MetadataSource { packageKey: string; paperId: string; path: string; label: string; manifestDigest: string; }
 export interface PaperIntakeContext { identity: ResolvedIdentity; paperId: string; }
 const sourceView = (m: SourcePackageManifest): MetadataSource => ({ packageKey: m.packageKey, paperId: m.paperId,
@@ -22,10 +26,41 @@ const sourceView = (m: SourcePackageManifest): MetadataSource => ({ packageKey: 
 /** Read-only preview followed by explicit, serialized create. No acquisition job or model. */
 export class MetadataIntakeService {
 	private previews = new WeakMap<MetadataPreview, { identity: ResolvedIdentity; plan: CatalogPlan }>();
+	private manualPreviews = new WeakMap<ManualMetadataPreview, LibraryRecordObject>();
 	private queue: Promise<unknown> = Promise.resolve();
 	private closed = false;
 	constructor(private readonly resolver: Pick<IdentityResolver, "resolve">, private readonly catalog: SourceCatalog, private readonly store: PaperRecordStore) {}
 	private available(signal: AbortSignal): void { signal.throwIfAborted(); if (this.closed) throw new Error("插件已关闭，文献信息操作已停止"); }
+	prepareManual(input: ManualPaperInput): ManualMetadataPreview {
+		if (this.closed) throw new Error("插件已关闭，手工登记已停止");
+		const fields = manualPaperFields(input), paperId = "p-" + randomUUID();
+		const preview = { title: fields.title, manualBibliography: fields.manualBibliography! };
+		this.manualPreviews.set(preview, { kind: "record", id: paperId, paperId, identifiers: {}, readingState: "unmarked", ...structuredClone(fields) });
+		return preview;
+	}
+	saveManual(preview: ManualMetadataPreview, signal: AbortSignal): Promise<MetadataSaved> {
+		const record = this.manualPreviews.get(preview);
+		if (!record) return Promise.reject(new Error("手工预览已失效，请重新核对"));
+		const operation = this.queue.then(async () => {
+			this.available(signal); const state = await this.store.read(record.paperId); this.available(signal);
+			if (state.errors.length || state.heads.length > 1) throw new Error("手工记录无法唯一核验，保留历史并停止保存");
+			if (state.revisions.length) {
+				if (!state.current || objectDigest(state.current.record) !== objectDigest(record)) throw new Error("手工记录已变化，请在文献库核对");
+				return { paperId: record.paperId, reused: true };
+			}
+			await this.store.append(structuredClone(record), []);
+			return { paperId: record.paperId, reused: false };
+		});
+		this.queue = operation.catch(() => undefined); return operation;
+	}
+	async manualReference(expected: LibraryObjectSummary, signal: AbortSignal): Promise<{ title: string; reference: string }> {
+		const item = structuredClone(expected); this.available(signal);
+		if (item.kind !== "record" || !item.paperId || !item.manualBibliography) throw new Error("请选择已保存的人工条目");
+		const state = await this.store.read(item.paperId); this.available(signal);
+		if (state.errors.length || !state.current?.record.manualBibliography || state.heads.length !== 1 || state.current.record.title !== item.title
+			|| objectDigest(state.current.record.manualBibliography) !== objectDigest(item.manualBibliography)) throw new Error("人工条目已变化或无法核验，请刷新后重选");
+		return { title: state.current.record.title, reference: state.current.record.manualBibliography!.reference };
+	}
 	async prepare(raw: string, signal: AbortSignal): Promise<MetadataPreview> {
 		this.available(signal);
 		const input = parseAcquisitionInput(raw);

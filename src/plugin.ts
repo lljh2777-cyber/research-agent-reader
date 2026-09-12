@@ -2753,14 +2753,18 @@ export default class AgentDashboardPlugin extends Plugin {
 		const modal = new LocalPdfIntakeModal(this.app, this.getLocalPdfIntake(), this.getActiveVaultRoot(), id => this.activatePaperLibrary(id), undefined, paper);
 		if (!this.trackAcquisitionDialog(modal)) throw new Error("插件已关闭"); modal.open();
 	}
-	openPaperIntake(): void {
+	openPaperIntake(initial?: { title: string; reference: string }): void {
 		try {
 			const modal = new MetadataIntakeModal(this.app, this.getMetadataIntake(), id => this.activatePaperLibrary(id), {
 				local: context => this.showLocalPdfIntake(context), fulltext: context => this.showFulltextAcquisition("production", undefined, context.identity),
 				source: (source, signal) => this.openIntakeSource(source, signal),
-			});
+			}, initial);
 			if (this.trackAcquisitionDialog(modal)) modal.open();
 		} catch (error) { new Notice(String(error)); }
+	}
+	async queryManualPaper(item: LibraryObjectSummary, signal: AbortSignal): Promise<void> {
+		const initial = await this.getMetadataIntake().manualReference(item, signal); signal.throwIfAborted();
+		this.openPaperIntake(initial);
 	}
 	async continuePaperIntake(paper: LibraryPaper, kind: "local" | "fulltext", signal: AbortSignal): Promise<void> {
 		const expected = structuredClone(paper); signal.throwIfAborted();

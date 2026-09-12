@@ -43,6 +43,7 @@ export interface LibraryRecordObject extends LibraryObjectBase {
 	paperId: string;
 	/** Provider metadata confirmed at intake; not a scientific review or source version. */
 	bibliography?: ResolvedIdentity;
+	manualBibliography?: import("./manual-record").ManualBibliography;
 	readingState?: PaperReadingState;
 	primaryNoteId?: string;
 	/** Read projection only: a conflicted journal has identity, but no selected human decision. */
@@ -101,6 +102,7 @@ export interface LibraryObjectSummary extends LibraryObjectRef {
 	title: string;
 	identifiers: LibraryIdentifiers;
 	bibliography?: ResolvedIdentity;
+	manualBibliography?: import("./manual-record").ManualBibliography;
 	paperId?: string;
 	citekey?: string;
 	source?: LibrarySourceDescription;
