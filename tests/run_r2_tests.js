@@ -8,7 +8,7 @@ const tests = [
  "test_paper_intake.js", "test_paper_continuation.js", "test_saved_pdf_processing.js",
  "test_source_agent.js", "test_fulltext_intake_safety.js",
  "test_ingest_pdf_draft.js", "test_ingest_requests.js", "test_ingest_task_lifecycle.js",
- "test_ingest_registration.js", "test_jats_wiki.js", "test_trusted_note_create.js",
+ "test_ingest_registration.js", "test_jats_wiki.js", "test_trusted_note_create.js", "test_library_mineru_origin.js",
 ];
 for (const name of tests) execFileSync(process.execPath, [path.join(__dirname, name)], { stdio: "inherit", windowsHide: true });
 console.log(`R2_REGRESSION_OK (${tests.length} suites; simulated services, no external requests)`);

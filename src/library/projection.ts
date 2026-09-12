@@ -101,6 +101,7 @@ function paper(items: LibraryObject[], conflicts: LibraryDiagnostic[], issues: M
 	for (const item of sorted) if (item.kind === "source" && item.source.verification.state !== "verified") {
 		diagnostics.push(diagnostic("source_unavailable", item.source.verification.reason || "原文尚未通过核验", [item]));
 	}
+	for (const item of sorted) if (item.kind === "source" && item.source.pdfOrigin?.state === "unresolved") diagnostics.push(diagnostic("source_binding", item.source.pdfOrigin.reason, [item]));
 	for (const item of sorted) if ((item.kind === "session" || item.kind === "annotation") && item.binding && item.binding.state !== "matched") diagnostics.push(diagnostic("source_binding", item.binding.reason, [item]));
 	if (record?.decisionConflict) diagnostics.push(diagnostic("record_conflict", "人工决定存在并发冲突，尚未选择保留的版本", [record]));
 	if (record && primary && !hasPrimary) diagnostics.push(diagnostic("primary_note_missing", "主要论文笔记尚未关联或需要重新核对", [record]));

@@ -316,6 +316,7 @@ export class PaperLibraryView extends ItemView {
 			const source = item.source, verification = source.verification;
 			card.createEl("p", { text: `${sourceFormatLabel(source.format)} · ${verification.state === "verified" ? "本次来源校验通过" : verification.reason}`, cls: "rar-library-muted" });
 			card.createEl("code", { text: source.path, cls: "rar-library-path" });
+			if (source.pdfOrigin) card.createEl("p", { text: source.pdfOrigin.reason + (source.pdfOrigin.state === "matched" ? `（${source.pdfOrigin.sourceIds.length} 份匹配 PDF）` : ""), cls: source.pdfOrigin.state === "matched" ? "rar-library-muted" : "rar-library-warning" });
 			if (source.sourceVersionId) card.createEl("p", { text: "来源版本：" + source.sourceVersionId, cls: "rar-library-path" });
 			if (source.projectionId) card.createEl("p", { text: "正文投影：" + source.projectionId, cls: "rar-library-path" });
 			if (item.capabilities?.openOriginal.available) open("打开原文");

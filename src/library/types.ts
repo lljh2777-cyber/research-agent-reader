@@ -27,6 +27,14 @@ interface LibraryObjectBase extends LibraryObjectRef {
 export type LibrarySourceVerification =
 	| { state: "verified"; fingerprint: string }
 	| { state: "unverified" | "missing" | "invalid"; reason: string };
+export interface LibraryPdfOrigin {
+	state: "matched" | "unresolved";
+	sha256: string;
+	byteLength: number;
+	/** All matching packages; equal bytes do not choose an origin/version among copies. */
+	sourceIds: string[];
+	reason: string;
+}
 export interface LibrarySourceDescription {
 	format: "pdf" | "mineru" | "jats" | "markdown" | "unknown";
 	path: string;
@@ -34,6 +42,8 @@ export interface LibrarySourceDescription {
 	manifestDigest?: string;
 	sourceVersionId?: string;
 	projectionId?: string;
+	/** Read-only input association; never substitutes for verification of converted contents. */
+	pdfOrigin?: LibraryPdfOrigin;
 	/** A committed original is independent of availability and acquisition success. */
 	saved: boolean;
 	verification: LibrarySourceVerification;

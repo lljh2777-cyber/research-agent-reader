@@ -11,6 +11,7 @@ import { structuredFingerprint } from "../reading/structured-source";
 import { readingCategory } from "../reading/catalog";
 import type { ReadingSession } from "../reading/types";
 import { projectLibrary } from "./projection";
+import { matchMineruOrigin, pdfOriginKey, type LibraryPdfCandidate } from "./mineru-origin";
 import { listPaperRecordIds, readPaperRecord, type PaperRecordStatus } from "./record-store";
 import type { LibraryIdentifiers, LibraryObject, LibraryProjection, LibrarySourceObject, LibrarySourceBinding } from "./types";
 
@@ -100,6 +101,7 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 	const addSource = (item: LibrarySourceObject) => { sources.set(item.source.path, item); objects.push(item); };
 	try {
 		const inventory = await new SourceCatalog(v).inspect();
+		const pdfIndex = new Map<string, LibraryPdfCandidate[]>();
 		checkScan();
 		if (options.verifyMineruPath && !inventory.legacyArticles.includes(options.verifyMineruPath)) issue("sources", options.verifyMineruPath, "所选旧 MinerU 包不存在或已改为其他来源类型");
 		for (const entry of inventory.packages) {
@@ -117,14 +119,27 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 				if (loaded.manifest.digest !== m.digest) throw new Error("原文清单在扫描期间变化");
 				item.source.verification = { state: "verified", fingerprint: m.packageKind === "pdf-source" ? m.files[0].sha256 : structuredFingerprint({ version: 1, format: "jats", manifest: m }) };
 			} catch (error) { item.source.verification = { state: "invalid", reason: message(error) }; issue("sources", name, error); }
+			if (m.packageKind === "pdf-source") {
+				const key = pdfOriginKey(m.files[0].sha256, m.files[0].byteLength);
+				if (!pdfIndex.has(key)) pdfIndex.set(key, []);
+				pdfIndex.get(key)!.push({ manifest: m, verified: item.source.verification.state === "verified" });
+			}
 			addSource(item);
 		}
 		for (const name of inventory.legacyArticles) {
-			const item: LibrarySourceObject = { kind: "source", id: name, title: fileName(name.replace(/\/article.md$/, "")), identifiers: {}, source: { format: "mineru", path: name, saved: true, verification: { state: "unverified", reason: "旧 MinerU 包尚未完整核验" } } };
+			const item: LibrarySourceObject = { kind: "source", id: name, title: fileName(name.replace(/\/article.md$/, "")), identifiers: {}, source: { format: "mineru", path: name, saved: true, verification: { state: "unverified", reason: "MinerU 包尚未完整核验" } } };
 			try {
 				const article = await v.read(name, 16 * 1024 * 1024), manifest = await v.read(name.replace(/article.md$/, "_extraction/manifest.json"), 2 * 1024 * 1024);
 				if (!article || !manifest) throw new Error("旧原文或提取清单缺失");
 				const text = decode(article); markdown.set(name, text); Object.assign(item, metadata(text));
+				const association = matchMineruOrigin(manifest, article, pdfIndex, item);
+				if (association) {
+					item.source.pdfOrigin = association.origin;
+					if (association.identity) {
+						const { identity, paperId, citekey } = association.identity;
+						Object.assign(item, { title: identity.title, identifiers: { ...identity.identifiers }, paperId, citekey });
+					}
+				}
 				if (options.verifyMineru && (!options.verifyMineruPath || options.verifyMineruPath === name)) {
 					await options.verifyMineru(name, { read: v.read, list: v.list }); checkScan();
 					const afterArticle = await v.read(name, 16 * 1024 * 1024), afterManifest = await v.read(name.replace(/article.md$/, "_extraction/manifest.json"), 2 * 1024 * 1024);

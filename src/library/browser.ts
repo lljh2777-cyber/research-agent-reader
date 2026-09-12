@@ -1,5 +1,6 @@
 import type { LibraryReadResult } from "./reader";
 import type { LibraryObjectSummary, LibraryPaper, PaperReadingState } from "./types";
+import { objectDigest } from "../papers/identity";
 
 export type LibraryFilter = "all" | "sources" | "sessions" | "issues";
 export interface LibraryBrowserState { phase: "idle" | "loading" | "ready" | "failed" | "cancelled"; result?: LibraryReadResult; error: string; }
@@ -67,6 +68,8 @@ export function libraryNavigation(expected: LibraryObjectSummary, fresh: Library
 		if (!source || !old || source.verification.state !== "verified" || old.verification.state !== "verified") throw new Error("请先核验此原文");
 		if (source.path !== old.path || source.format !== old.format || source.verification.fingerprint !== old.verification.fingerprint
 			|| source.sourceVersionId !== old.sourceVersionId || source.projectionId !== old.projectionId) throw new Error("所选原文版本已变化，请刷新后重新选择");
+		if (objectDigest(source.pdfOrigin || null) !== objectDigest(old.pdfOrigin || null)
+			|| source.pdfOrigin && (item.paperId !== expected.paperId || objectDigest(item.identifiers) !== objectDigest(expected.identifiers))) throw new Error("转换包的 PDF 来源关联已变化，请刷新后重新选择");
 		const capability = read ? item.capabilities?.interactiveReading : item.capabilities?.openOriginal;
 		if (!capability?.available || source.format === "unknown") throw new Error(capability?.reason || "此来源暂不可打开");
 		return { kind: "source", path: source.path, format: source.format, read };
