@@ -155,7 +155,7 @@ function filterTarget(select: HTMLSelectElement, path: string): void { if (![...
 export class KnowledgeMaintenanceModal extends Modal {
 	private tab = "pending"; private body!: HTMLElement; private counts!: HTMLElement; private closed = false; private unsubscribes: Array<() => void> = [];
 	private indexUnsubscribes: Array<() => void> = [];
-	constructor(app: App, private plugin: AgentDashboardPlugin, private entry: CurationNavigation = {}) { super(app); this.tab = entry.revisionId ? "history" : entry.tab || "pending"; }
+	constructor(app: App, private plugin: AgentDashboardPlugin, private entry: CurationNavigation = {}) { super(app); this.tab = entry.revisionId ? "history" : entry.reviewId ? "activity" : entry.tab || "pending"; }
 	onOpen(): void {
 		this.titleEl.setText("知识整理"); this.modalEl.addClass("curation-modal", "curation-maintenance-modal");
 		this.contentEl.createEl("p", { cls: "curation-intro", text: "核对待整理内容、失效依据和修订历史。这里的浏览与检查不调用回答模型。" });
@@ -173,7 +173,8 @@ export class KnowledgeMaintenanceModal extends Modal {
 		if (service.errors.length) detail(this.body, "无法加载的记录（原文件保留）", service.errors.join("\n"));
 		if (this.tab !== "history") {
 			if (this.tab === "activity") this.body.createEl("p", { text: "全部已加载整理批次；遗留生成记录在打开后可能标记为中断。", cls: "curation-status" });
-			const records = [...service.reviews.values()].filter(r => this.tab === "activity" || (this.tab === "stale" ? ["stale", "failed", "interrupted"].includes(r.state) : r.state === "generating" || r.state === "ready" && r.suggestions.some(s => s.decision === "pending"))).sort((a, b) => b.updated.localeCompare(a.updated));
+			const records = [...service.reviews.values()].filter(r => (!this.entry.reviewId || r.id === this.entry.reviewId) && (this.tab === "activity" || (this.tab === "stale" ? ["stale", "failed", "interrupted"].includes(r.state) : r.state === "generating" || r.state === "ready" && r.suggestions.some(s => s.decision === "pending")))).sort((a, b) => b.updated.localeCompare(a.updated));
+			if (this.entry.reviewId) this.body.createEl("p", { text: records.length ? "正在查看所选整理批次；点击上方分类可查看全部。" : "所选整理批次已缺失或无法读取，未选择其他记录。", cls: "curation-status" });
 			for (const record of records) { const row = this.body.createEl("article", { cls: "curation-record" }); row.createEl("strong", { text: record.context.title }); row.createEl("p", { text: record.context.target.path + " · " + new Date(record.updated).toLocaleString() }); if (record.error) row.createEl("p", { cls: "reading-error", text: record.error });
 				action(row, record.state === "generating" ? "查看进度" : "审阅建议", () => { this.close(); this.plugin.openKnowledgeCuration(record.context.sessionId, record.context.nodeIds[0], record); });
 				if (record.state === "generating") action(row, "停止生成", () => service.stop(record.context.key));

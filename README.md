@@ -18,7 +18,7 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.70.0`; the beta
+The `codex/research-learning-map` development branch is at `0.71.0`; the beta
 release link above remains the published release.
 
 `0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；不为保存书目信息生成论文笔记。跨阶段待处理中心按路线归 R3。
@@ -40,6 +40,8 @@ release link above remains the published release.
 `0.69.0` 接通 [R3.1 无模型保存摘录](docs/excerpts-r31.md)：在原文 Markdown 中划选文字，点击“批注 → 保存摘录”，保留原句、上下文、文本版本和可选个人备注。相同版本与位置复用已有文件，原文变化时提示复查；重新划选可找回摘录，也可打开独立摘录文档编辑备注。当前支持 `papers/`、`Clippings/` 下的 Markdown，PDF 原生选区、摘录列表及后续整理继续开发。新增 `pnpm test:r3` 专项入口。
 
 `0.70.0` 补齐 [R3.2 摘录列表与个人备注编辑](docs/excerpts-r32.md)：在“文献库 → 摘录”搜索原句、来源或备注，查看历史上下文并回到原文的准确选区。备注保存检查整个文件是否被修改；冲突时保留草稿，重新读取可对照最新备注。原文变化停止定位，历史记录继续保留。下一步开发跨阶段待处理中心，R3 尚未整体收尾。
+
+`0.71.0` 接通 [R3.3 待处理中心](docs/pending-center-r33.md)：从首页、文献库“待处理”或同名命令查看书目、全文获取、入库转换、摘录和审阅复查记录。支持搜索、分阶段筛选与刷新，返回前重新核对准确对象；读取不完整时列出提示，不推断缺少全文或转换正文。中心只读取保存记录，续办和审阅仍在原功能完成。下一步接入摘录补充到已有笔记的预览与受控写入。
 
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。
 

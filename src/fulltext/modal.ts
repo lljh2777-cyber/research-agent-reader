@@ -65,6 +65,7 @@ export class FulltextAcquisitionModal extends Modal {
 		const jobs = this.service.list().filter(job => !this.confirmedIdentity || identityRelation(this.confirmedIdentity.identifiers,
 			job.identity?.identifiers || job.confirmedIdentity?.identifiers || { [job.request.input.kind]: job.request.input.value }) === "same");
 		this.jobsEl.createEl("h3", { text: this.confirmedIdentity ? "此文献的获取记录" : this.service.mode === "demo" ? "演示记录" : "获取记录" });
+		if (this.selectedId && !jobs.some(job => job.id === this.selectedId)) { this.jobsEl.createEl("p", { text: "所选获取记录已缺失或无法读取，未选择其他记录。", cls: "rar-fulltext-error" }); return; }
 		if (this.confirmedIdentity) this.jobsEl.createEl("p", { text: "按精确文献标识筛选。继续旧记录会保留当时的来源、版本选择和书目信息；也可在上方开始新的查找。" });
 		if (!jobs.length) this.jobsEl.createEl("p", { text: this.confirmedIdentity ? "此文献暂无可匹配的获取记录。" : "暂无获取记录", cls: "rar-fulltext-muted" });
 		const visible = jobs.slice(0,50); const selected = jobs.find(job => job.id === this.selectedId); if (selected && !visible.some(job => job.id === selected.id)) visible.unshift(selected);

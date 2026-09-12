@@ -68,6 +68,7 @@ import { dashboardActionGroup } from "../services/dashboard-navigation";
 import { emptyCurationSummary, type CurationNavigation, type DashboardCurationSummary } from "../services/dashboard-curation";
 
 interface DashboardHost extends PluginHost {
+	openPendingCenter(): void;
 	openKnowledgeMaintenance(entry?: CurationNavigation): void;
 	readDashboardCuration(): Promise<DashboardCurationSummary>;
 	subscribeTaskRuns?(listener: (progressOnly?: boolean) => void): () => void;
@@ -320,6 +321,7 @@ export class DashboardView extends ItemView {
 		const actions = panel.createDiv("agent-dashboard-secondary-actions");
 		const link = (text: string, run: () => void, id: string) => { const b = actions.createEl("button", { text, cls: "agent-dashboard-text-action", attr: { type: "button", "data-summary-action": id } }); b.onclick = run; };
 		const tasks = this.currentData.agentRuns.filter(run => run.runId && ["failed", "interrupted", "queued", "running"].includes(run.status));
+		link("打开待处理中心", () => this.plugin.openPendingCenter(), "center");
 		link(`未完成任务 ${tasks.length}`, () => { this.runsFilter = "open"; this.runsExpanded = true; this.renderDashboard(); this.contentEl.querySelector(".agent-dashboard-tasks")?.scrollIntoView({ block: "start" }); }, "tasks");
 		link(`待审阅 ${summary.pending} 批`, () => this.plugin.openKnowledgeMaintenance({ tab: "pending" }), "pending");
 		link(`需复查／恢复 ${summary.revisit + summary.unfinished} 条`, () => this.plugin.openKnowledgeMaintenance({ tab: "stale" }), "stale");

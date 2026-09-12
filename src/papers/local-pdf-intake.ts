@@ -6,6 +6,7 @@ import { decodeLocalPdfSnapshot, type LocalPdfSnapshot } from "../sources/pdf-sn
 import { canonicalJson, identityRelation, objectDigest, type ResolvedIdentity } from "./identity";
 import { prepareLocalPdf, rereadLocalPdf, type readLocalPdfFile } from "./local-pdf";
 import { SourceIntakeService, type SourceIntakeDeps, type SourceSavePlan } from "./source-intake";
+import type { SourceStorage } from "../sources/storage";
 
 interface LocalOperation { schemaVersion: 1; deviceId: string; path: string; snapshot: LocalPdfSnapshot; }
 interface Completion { schemaVersion: 1; operationDigest: string; packageKey: string; paperId: string; }
@@ -19,6 +20,41 @@ const root = "local-pdf-intake", idPattern = /^s-[a-f0-9-]{36}$/;
 const encode = (value: unknown) => Buffer.from(canonicalJson(value), "utf8");
 const exact = (raw: unknown, keys: string[]) => raw && typeof raw === "object" && !Array.isArray(raw) && Object.keys(raw).length === keys.length && Object.keys(raw).every(k => keys.includes(k));
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
+
+/** The shared history decoder uses no source service, provider, recovery or external PDF reads. */
+export async function readLocalPdfHistory(journal: Pick<SourceStorage, "read" | "list">, deviceId: string, identity?: ResolvedIdentity, signal?: AbortSignal): Promise<LocalPdfHistory[]> {
+	const selected = identity && decodeIdentity(identity); signal?.throwIfAborted();
+	const records = (await journal.list(root)).filter(f => !f.directory && /^s-[a-f0-9-]{36}\.json$/.test(f.name));
+	if (records.length > 200) throw new Error("本地 PDF 添加记录超过 200 条，请先整理");
+	const result: LocalPdfHistory[] = [];
+	for (const file of records) {
+		signal?.throwIfAborted(); const id = file.name.slice(0, -5);
+		try {
+			const raw = await journal.read(`${root}/${id}.json`); if (!raw) throw new Error("本地 PDF 添加记录不存在");
+			const operation = decodeLocalOperation(JSON.parse(Buffer.from(raw).toString("utf8")), id, deviceId);
+			if (selected && identityRelation(selected.identifiers, operation.snapshot.identity.identifiers) !== "same") continue;
+			const bytes = await journal.read(`${root}/${id}.saved.json`);
+			if (bytes) decodeLocalCompletion(JSON.parse(Buffer.from(bytes).toString("utf8")), operation);
+			result.push({ id, title: operation.snapshot.identity.title, fileName: operation.snapshot.origin.fileName, createdAt: operation.snapshot.createdAt, state: bytes ? "saved" : "pending", error: "" });
+		} catch (error) { signal?.throwIfAborted(); result.push({ id, title: selected ? "本地记录无法核验归属" : "无法读取的本地记录", fileName: "", createdAt: "", state: "unavailable", error: message(error) }); }
+	}
+	signal?.throwIfAborted(); return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+}
+function decodeLocalOperation(raw: unknown, id: string, deviceId: string): LocalOperation {
+	const r = raw as LocalOperation;
+	if (!idPattern.test(id) || !exact(r, ["schemaVersion", "deviceId", "path", "snapshot"]) || r.schemaVersion !== 1
+		|| r.deviceId !== deviceId || typeof r.path !== "string" || r.path.length > 4096 || /[\x00-\x1f]/.test(r.path)
+		|| !path.isAbsolute(r.path) || path.extname(r.path).toLowerCase() !== ".pdf") throw new Error("记录损坏或属于另一设备，未接管");
+	const snapshot = decodeLocalPdfSnapshot(r.snapshot);
+	if (snapshot.id !== id || snapshot.origin.fileName !== path.basename(r.path)) throw new Error("本地记录与文件快照不一致");
+	return { ...r, snapshot };
+}
+function decodeLocalCompletion(raw: unknown, operation: LocalOperation): Completion {
+	const c = raw as Completion;
+	if (!exact(c, ["schemaVersion", "operationDigest", "packageKey", "paperId"]) || c.schemaVersion !== 1 || c.operationDigest !== objectDigest(operation)
+		|| typeof c.packageKey !== "string" || !/^[a-z0-9_-]+--pdf--[a-f0-9]{24,64}$/.test(c.packageKey) || !/^p-[a-f0-9-]{36}$/.test(c.paperId)) throw new Error("完成记录无法核验");
+	return c;
+}
 
 /** Device-bound, create-only local operation records. No PDF copy or journal write until Save. */
 export class LocalPdfIntakeService {
@@ -36,13 +72,7 @@ export class LocalPdfIntakeService {
 	}
 	private available(signal?: AbortSignal): void { signal?.throwIfAborted(); if (this.closed) throw new Error("插件已关闭，本地 PDF 操作已停止"); }
 	private decode(raw: unknown, id: string): LocalOperation {
-		const r = raw as LocalOperation;
-		if (!idPattern.test(id) || !exact(r, ["schemaVersion", "deviceId", "path", "snapshot"]) || r.schemaVersion !== 1
-			|| r.deviceId !== this.deps.deviceId || typeof r.path !== "string" || r.path.length > 4096 || /[\x00-\x1f]/.test(r.path)
-			|| !path.isAbsolute(r.path) || path.extname(r.path).toLowerCase() !== ".pdf") throw new Error("记录损坏或属于另一设备，未接管");
-		const snapshot = decodeLocalPdfSnapshot(r.snapshot);
-		if (snapshot.id !== id || snapshot.origin.fileName !== path.basename(r.path)) throw new Error("本地记录与文件快照不一致");
-		return { ...r, snapshot };
+		return decodeLocalOperation(raw, id, this.deps.deviceId);
 	}
 	private async readOperation(id: string): Promise<LocalOperation> {
 		if (!idPattern.test(id)) throw new Error("本地记录标识无效");
@@ -51,28 +81,10 @@ export class LocalPdfIntakeService {
 		return this.decode(JSON.parse(Buffer.from(bytes).toString("utf8")), id);
 	}
 	private completion(raw: unknown, operation: LocalOperation): Completion {
-		const c = raw as Completion;
-		if (!exact(c, ["schemaVersion", "operationDigest", "packageKey", "paperId"]) || c.schemaVersion !== 1 || c.operationDigest !== objectDigest(operation)
-			|| typeof c.packageKey !== "string" || !/^[a-z0-9_-]+--pdf--[a-f0-9]{24,64}$/.test(c.packageKey) || !/^p-[a-f0-9-]{36}$/.test(c.paperId)) throw new Error("完成记录无法核验");
-		return c;
+		return decodeLocalCompletion(raw, operation);
 	}
 	async history(identity?: ResolvedIdentity): Promise<LocalPdfHistory[]> {
-		const selected = identity && decodeIdentity(identity);
-		this.available(); const files = await this.deps.journal.list(root);
-		const records = files.filter(f => !f.directory && /^s-[a-f0-9-]{36}\.json$/.test(f.name));
-		if (records.length > 200) throw new Error("本地 PDF 添加记录超过 200 条，请先整理");
-		const result: LocalPdfHistory[] = [];
-		for (const file of records) {
-			this.available(); const id = file.name.slice(0, -5);
-			try {
-				const operation = await this.readOperation(id);
-				if (selected && identityRelation(selected.identifiers, operation.snapshot.identity.identifiers) !== "same") continue;
-				const bytes = await this.deps.journal.read(`${root}/${id}.saved.json`);
-				if (bytes) this.completion(JSON.parse(Buffer.from(bytes).toString("utf8")), operation);
-				result.push({ id, title: operation.snapshot.identity.title, fileName: operation.snapshot.origin.fileName, createdAt: operation.snapshot.createdAt, state: bytes ? "saved" : "pending", error: "" });
-			} catch (error) { result.push({ id, title: selected ? "本地记录无法核验归属" : "无法读取的本地记录", fileName: "", createdAt: "", state: "unavailable", error: message(error) }); }
-		}
-		this.available(); return result.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || a.id.localeCompare(b.id));
+		this.available(); const result = await readLocalPdfHistory(this.deps.journal, this.deps.deviceId, identity); this.available(); return result;
 	}
 	private async request<T>(signal: AbortSignal, run: (signal: AbortSignal) => Promise<T>): Promise<T> {
 		this.available(signal); const controller = new AbortController(), abort = () => controller.abort();

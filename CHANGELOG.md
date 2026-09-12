@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Read-only cross-stage pending center — 0.71.0
+
+- 首页、文献库和命令面板接通待处理中心，按五个阶段搜索与筛选已保存记录；独立读取失败、达到上限和未核验来源明确提示。
+- 返回前重新检查记录凭据和准确目标，过期或缺失时停止，不选择同名替代；本地添加、全文获取与知识整理支持返回指定记录。
+- 复用既有只读适配器，不初始化恢复服务；不完整扫描不推断全文和转换缺口，已获取结果按保存包与文献身份核对。
+- 定向回归、原生三个入口、失败取消、准确返回、重载和窄视口验收通过；983 个受保护文件不变，原十四个标签页恢复。范围与模拟边界见 [R3.3 记录](docs/pending-center-r33.md)。
+
 ### Excerpt browsing and guarded personal notes — 0.70.0
 
 - 文献库、命令面板及已有摘录小窗接通可搜索的摘录列表，显示原句、历史上下文、版本与个人备注。

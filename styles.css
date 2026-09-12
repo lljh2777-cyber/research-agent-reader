@@ -6885,3 +6885,13 @@ body.agent-dashboard-mineru-resizing {
 .rar-excerpt-actions input { flex: 1; min-width: 160px; }
 .rar-excerpt-actions button { height: auto; min-height: 32px; white-space: normal; }
 @media (max-width: 650px) { .rar-excerpt-grid { grid-template-columns: minmax(0, 1fr); } .rar-excerpt-list { max-height: 28vh; } }
+.rar-pending-modal { width: min(960px, 94vw); }
+.rar-pending-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.rar-pending-tools input { flex: 1; min-width: 160px; }
+.rar-pending-tools select { max-width: 100%; }
+.rar-pending-tools button[hidden] { display: none; }
+.rar-pending-modal p, .rar-pending-modal h3 { overflow-wrap: anywhere; }
+.rar-pending-row { padding: 16px 0; border-top: 1px solid var(--background-modifier-border); }
+.rar-pending-row h3 { margin: 8px 0; }
+.rar-pending-row small { color: var(--text-muted); }
+.rar-pending-row button { white-space: normal; height: auto; min-height: 32px; }

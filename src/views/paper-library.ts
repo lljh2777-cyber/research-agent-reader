@@ -18,6 +18,7 @@ export interface PaperLibraryHost extends ReadingStateHost {
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
 	openPaperIntake(): void;
 	openExcerptBrowser(): void;
+	openPendingCenter(): void;
 	queryManualPaper(item: LibraryObjectSummary, signal: AbortSignal): Promise<void>;
 	continuePaperIntake(paper: LibraryPaper, kind: "local" | "fulltext", signal: AbortSignal): Promise<void>;
 	processLibrarySource(item: LibraryObjectSummary, signal: AbortSignal): Promise<void>;
@@ -77,6 +78,15 @@ export class PaperLibraryView extends ItemView {
 	private button(parent: HTMLElement, text: string, run: () => void): HTMLButtonElement {
 		const button = parent.createEl("button", { text, attr: { type: "button" } }); button.onclick = run; return button;
 	}
+	async revealObject(ref: import("../library/types").LibraryObjectRef, signal?: AbortSignal): Promise<void> {
+		if (this.closed || this.editingRecord || this.action) throw new Error("请先完成当前文献操作");
+		const expected = { ...ref }; signal?.throwIfAborted(); await this.browser.refresh(); signal?.throwIfAborted();
+		if (this.closed || this.editingRecord || this.action || this.browser.state.phase !== "ready") throw new Error("文献库尚未完成读取，请刷新后重试");
+		const matches = this.browser.state.result!.papers.filter(p => p.objects.some(o => o.kind === expected.kind && o.id === expected.id));
+		if (matches.length !== 1) throw new Error("所选对象已缺失或无法唯一定位，未选择其他同名对象");
+		this.query = ""; this.filter = "all"; this.selectedKey = matches[0].key; this.message = "正在查看所选待处理对象：" + expected.id;
+		this.renderShell(); this.saveView();
+	}
 	private saveView(): void { this.app.workspace.requestSaveLayout(); }
 	private renderShell(): void {
 		if (this.closed) return;
@@ -86,6 +96,7 @@ export class PaperLibraryView extends ItemView {
 		const actions = header.createDiv("rar-library-actions");
 		this.addButton = this.button(actions, "添加文献", () => this.host.openPaperIntake());
 		this.button(actions, "摘录", () => this.host.openExcerptBrowser());
+		this.button(actions, "待处理", () => this.host.openPendingCenter());
 		this.spaceButton = this.button(actions, "阅读空间", () => { void this.run(signal => { signal.throwIfAborted(); return this.host.activateLearningSpace({ kind: "document" }); }); });
 		this.refreshButton = this.button(actions, "刷新文献库", () => { if (this.editingRecord) return; this.message = ""; void this.browser.refresh(); });
 		this.cancelButton = this.button(actions, "取消扫描", () => { if (this.action) this.action.abort(); else this.browser.cancel(); });

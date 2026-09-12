@@ -154,7 +154,12 @@ import { serializeActionRequest } from "./runtime/action-request";
 import type { DashboardActionOptions } from "./actions";
 import { AnnotationPopover } from "./annotations/annotation-popover";
 import { ExcerptBrowser } from "./annotations/excerpt-browser";
+import { ExcerptLibraryService } from "./annotations/excerpt-library";
 import type { ExcerptRef } from "./annotations/excerpt-library";
+import { PendingCenterModal } from "./views/pending-center";
+import { readPendingCenter, pendingDestination, type PendingItem } from "./services/pending-center";
+import { readLocalPdfHistory } from "./papers/local-pdf-intake";
+import type { SavedCurationPending } from "./services/dashboard-curation";
 import { AnnotationService } from "./annotations/annotation-service";
 import type { AnnotationRecord, AnnotationSelection } from "./annotations/types";
 import {
@@ -356,6 +361,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private curationModals = new Set<Modal>();
 	private annotationPopover: AnnotationPopover | null = null;
 	private excerptBrowser?: ExcerptBrowser;
+	private pendingCenter?: PendingCenterModal;
 	private annotationChip: HTMLElement | null = null;
 	private persistence?: DashboardPersistence;
 	private readonly cliModelDiscoveryCache = new Map<
@@ -480,6 +486,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.addCommand({ id: "open-topic-planning", name: "打开主题路线（预览）", callback: () => { void this.activateLearningSpace({ kind: "topic" }).catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-excerpts", name: "打开摘录（原句与个人备注）", callback: () => this.openExcerptBrowser() });
+		this.addCommand({ id: "open-pending-center", name: "打开待处理中心", callback: () => this.openPendingCenter() });
 		this.addCommand({ id: "add-paper-metadata", name: "添加文献信息（无需模型）", callback: () => this.openMetadataIntake() });
 		this.addCommand({ id: "add-paper", name: "添加文献（书目信息、全文与本地 PDF）", callback: () => this.openPaperIntake() });
 		this.addCommand({ id: "add-local-pdf", name: "添加本地 PDF（核对、保存与恢复）", callback: () => this.openLocalPdfIntake() });
@@ -623,6 +630,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.readingWorkspace?.dispose();
 		this.annotationPopover?.close();
 		this.excerptBrowser?.dispose();
+		this.pendingCenter?.close();
 		this.hideAnnotationChip();
 		await this.flushScheduledSettingsSave();
 		await this.agentLoopService.shutdown().catch((error) => {
@@ -728,6 +736,34 @@ export default class AgentDashboardPlugin extends Plugin {
 	private hideAnnotationChip(): void {
 		this.annotationChip?.remove();
 		this.annotationChip = null;
+	}
+
+	openPendingCenter(): void {
+		if (this.pendingCenter) { new Notice("待处理中心已打开"); return; }
+		const modal = new PendingCenterModal(this.app, this, () => { if (this.pendingCenter === modal) this.pendingCenter = undefined; });
+		this.pendingCenter = modal; modal.open();
+	}
+	inspectPendingCenter(signal: AbortSignal) {
+		const directory = this.readingPluginDirectory(), io = new FileSourceStorage(directory);
+		const deviceId = createHash("sha256").update(hostname() + "\n" + path.resolve(directory).toLowerCase()).digest("hex");
+		return readPendingCenter({
+			library: s => this.inspectPaperLibrary(s), acquisitions: new FileAcquisitionStorage(directory, "production"),
+			local: s => readLocalPdfHistory(io, deviceId, undefined, s), excerpts: s => new ExcerptLibraryService(this.app).list(s),
+			curation: async s => { const entries: SavedCurationPending[] = []; const summary = await readDashboardCuration(io, row => entries.push(row), s); return { entries, issues: summary.issues }; },
+			tasks: () => this.getTaskRuns(),
+		}, signal);
+	}
+	async openPendingItem(item: PendingItem, signal: AbortSignal): Promise<void> {
+		const expected = structuredClone(item); signal.throwIfAborted();
+		const target = pendingDestination(expected, await this.inspectPendingCenter(signal)); signal.throwIfAborted();
+		if (target.kind === "library") { await this.activatePaperLibrary(undefined, target.object, signal); return; }
+		if (target.kind === "excerpt") { if (this.excerptBrowser) throw new Error("请先完成已打开摘录窗口中的操作"); this.openExcerptBrowser(target.ref); return; }
+		if (target.kind === "acquisition") { this.showFulltextAcquisition("production", target.id); return; }
+		if (target.kind === "local") { this.showLocalPdfIntake(undefined, target.id); return; }
+		if (target.kind === "review") { this.openKnowledgeMaintenance({ tab: "activity", reviewId: target.id }); return; }
+		if (target.kind === "revision") { this.openKnowledgeMaintenance({ tab: "history", revisionId: target.id }); return; }
+		const run = this.getTaskRun(target.id); if (!run) throw new Error("入库任务已缺失，请刷新");
+		new TaskResultModal(this.app, this, run, null).open();
 	}
 
 	openExcerptBrowser(ref?: ExcerptRef): void {
@@ -2761,8 +2797,8 @@ export default class AgentDashboardPlugin extends Plugin {
 			this.showLocalPdfIntake();
 		} catch (error) { new Notice(String(error)); }
 	}
-	private showLocalPdfIntake(paper?: PaperIntakeContext): void {
-		const modal = new LocalPdfIntakeModal(this.app, this.getLocalPdfIntake(), this.getActiveVaultRoot(), id => this.activatePaperLibrary(id), undefined, paper);
+	private showLocalPdfIntake(paper?: PaperIntakeContext, historyId?: string): void {
+		const modal = new LocalPdfIntakeModal(this.app, this.getLocalPdfIntake(), this.getActiveVaultRoot(), id => this.activatePaperLibrary(id), undefined, paper, historyId);
 		if (!this.trackAcquisitionDialog(modal)) throw new Error("插件已关闭"); modal.open();
 	}
 	openPaperIntake(initial?: { title: string; reference: string }): void {
@@ -2827,13 +2863,16 @@ export default class AgentDashboardPlugin extends Plugin {
 			if (this.trackAcquisitionDialog(modal)) modal.open();
 		} catch (error) { new Notice(String(error)); }
 	}
-	activatePaperLibrary(paperId?: string): Promise<void> {
+	activatePaperLibrary(paperId?: string, object?: import("./library/types").LibraryObjectRef, signal?: AbortSignal): Promise<void> {
 		const operation = this.libraryOpenings.then(async () => {
+			signal?.throwIfAborted();
 			const existing = this.app.workspace.getLeavesOfType(PAPER_LIBRARY_VIEW_TYPE)[0];
 			if (existing) await existing.loadIfDeferred();
 			const leaf = existing || this.app.workspace.getLeaf("tab");
 			if (!existing) await leaf.setViewState({ type: PAPER_LIBRARY_VIEW_TYPE, active: true });
 			await this.app.workspace.revealLeaf(leaf);
+			signal?.throwIfAborted();
+			if (object && leaf.view instanceof PaperLibraryView) await leaf.view.revealObject(object, signal);
 			if (paperId && leaf.view instanceof PaperLibraryView) await leaf.view.revealPaper(paperId);
 		}); this.libraryOpenings = operation.catch(() => undefined); return operation;
 	}

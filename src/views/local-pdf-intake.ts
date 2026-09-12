@@ -28,7 +28,7 @@ export class LocalPdfIntakeModal extends Modal {
 	private readonly paper?: PaperIntakeContext;
 	constructor(app: App, private readonly service: LocalPdfIntakeService, private readonly vaultRoot: string,
 		private readonly openPaper: (paperId: string) => Promise<void>,
-		private readonly picker = (current: string) => chooseSystemSource("pdf", false, current, vaultRoot), paper?: PaperIntakeContext) { super(app); this.paper = paper && structuredClone(paper); }
+		private readonly picker = (current: string) => chooseSystemSource("pdf", false, current, vaultRoot), paper?: PaperIntakeContext, private readonly historyId?: string) { super(app); this.paper = paper && structuredClone(paper); }
 	onOpen(): void {
 		this.closed = false; this.contentEl.empty(); this.contentEl.addClass("rar-local-pdf-intake");
 		this.contentEl.createEl("h2", { text: "添加本地 PDF" });
@@ -60,6 +60,7 @@ export class LocalPdfIntakeModal extends Modal {
 		this.status = this.contentEl.createDiv({ attr: { role: "status", "aria-live": "polite" } });
 		this.result = this.contentEl.createDiv();
 		const history = this.contentEl.createEl("details"); history.createEl("summary", { text: this.paper ? "此文献的本地 PDF 记录与恢复" : "本地 PDF 添加记录与恢复" });
+		history.open = Boolean(this.historyId);
 		if (this.paper) history.open = true;
 		history.createEl("p", { text: "点击保存后才保留记录。未完成的添加可继续；文件移动后可重新选择相同内容。记录仅限当前设备，完成状态代表当时登记成功，继续时会重新校验。" });
 		this.records = history.createDiv(); this.controls(); void this.history();
@@ -139,8 +140,9 @@ export class LocalPdfIntakeModal extends Modal {
 	}
 	private async history(): Promise<void> {
 		try {
-			const records = await this.service.history(this.paper?.identity); if (this.closed) return;
+			const records = (await this.service.history(this.paper?.identity)).filter(record => !this.historyId || record.id === this.historyId); if (this.closed) return;
 			this.records.empty(); if (!records.length) this.records.createEl("p", { text: this.paper ? "此文献暂无可匹配的本地 PDF 添加记录。" : "尚无本地 PDF 添加记录。" });
+			if (this.historyId) this.records.createEl("p", { text: records.length ? "正在查看所选本地添加记录：" + this.historyId : "所选记录已缺失或无法读取，未选择其他记录。" });
 			for (const record of records) {
 				const row = this.records.createDiv("rar-local-pdf-record");
 				row.createEl("p", { text: `${record.state === "saved" ? "已完成登记" : record.state === "pending" ? "待继续" : "无法恢复"} · ${record.title}` });
