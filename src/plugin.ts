@@ -47,7 +47,8 @@ import { acquisitionTaskRun } from "./fulltext/task-run";
 import { HttpsSourceTransport } from "./fulltext/transport";
 import { PmcAcquisitionBackend } from "./fulltext/pmc-backend";
 import { AcquiredPdfPreview } from "./fulltext/pdf-preview";
-import { openAcquiredIntake } from "./fulltext/intake-modal";
+import { openAcquiredIntake, openSavedPdfIntake } from "./fulltext/intake-modal";
+import { readSavedPdf as loadSavedPdf, decodeSavedPdfRef, type SavedPdfRef } from "./papers/saved-pdf";
 import { TaskResultModal } from "./modals/task-result";
 import { validateAcquiredIntake } from "./fulltext/intake-adapter";
 import { decodeIntakeRef, type AcquisitionIntakeRef } from "./fulltext/contracts";
@@ -67,7 +68,7 @@ import { matchStructuredReference, validateStructuredReference, structuredLocati
 import { renderAuthorizedPdfIdentityPage } from "./agent/pdf-identity";
 import { catalogIntake, legacyCatalogAssociation } from "./papers/agent-intake";
 import type { AcquisitionMode } from "./fulltext/contracts";
-import { IngestRecords, validateIngestRequest } from "./agent/ingest-records";
+import { IngestRecords, validateIngestRequestForTask } from "./agent/ingest-records";
 import { openIngestContinuation } from "./views/ingest-continuation";
 import { IngestRegistrationController } from "./views/ingest-registration";
 import { ingestSteps, normalizeIngestProgress, type IngestProgress } from "./agent/ingest-progress";
@@ -328,7 +329,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		getVaultRoot: () => this.getActiveVaultRoot(),
 		runMineruCommand: (request) => this.runMineruProcess(request),
 		confirmPaperIdentity: (request) => requestHumanIdentityConfirmation(this.app, request),
-		prepareSourceIntake:(options,authorized,signal)=>catalogIntake(this.app,this.getSourceCatalog(),this.getAcquisitionService(),options,authorized,signal),
+		prepareSourceIntake:(options,authorized,signal)=>catalogIntake(this.app,this.getSourceCatalog(),options.acquisitionSource?this.getAcquisitionService():undefined,options,authorized,signal,this.getActiveVaultRoot()),
+		verifySavedSource:(options,signal)=>this.validateSavedPdfIntake(options,signal),
 		legacySourceAssociation:identity=>legacyCatalogAssociation(this.getSourceCatalog(),identity),
 	});
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
@@ -419,6 +421,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			&& oldRun.status !== "queued"
 			&& !oldRun.cleanupPending
 			&& !oldRun.acquisitionSource
+			&& !oldRun.savedPdfSource
 		));
 		const protectedOverflow = overflow.filter((oldRun) => !evictable.includes(oldRun));
 		if (!evictable.length) {
@@ -2352,9 +2355,11 @@ export default class AgentDashboardPlugin extends Plugin {
 		summary: string,
 		executionConfig: ExecutionConfig | null = null,
 		acquisitionSource?: AcquisitionIntakeRef,
+		savedPdfSource?: SavedPdfRef,
 	): Promise<TaskRun> {
 		return this.withTaskRunMutation(async () => {
 			if (acquisitionSource && action.id !== "paper-ingest") throw new Error("获取快照只能绑定文献入库任务");
+			if (savedPdfSource && (action.id !== "paper-ingest" || acquisitionSource)) throw new Error("已保存原文只能单独绑定文献入库任务");
 			// Check inside the save queue: two open intake dialogs must not both start.
 			if (action.id === "paper-ingest" && this.isActionRunning(action.id)) {
 				throw new Error("文献入库正在运行，请在控制台查看或停止当前任务");
@@ -2362,6 +2367,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const now = new Date().toISOString();
 			const run: TaskRun = {
 				...(acquisitionSource?{acquisitionSource:decodeIntakeRef(acquisitionSource)}:{}),
+				...(savedPdfSource?{savedPdfSource:decodeSavedPdfRef(savedPdfSource)}:{}),
 				id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
 				actionId: action.id,
 				label: action.label,
@@ -2374,7 +2380,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				exitCode: null,
 				output: "",
 				error: "",
-				...(action.id === "paper-ingest" ? { ingestProgress: executionConfig?.backend === "direct-api"
+				...(action.id === "paper-ingest" ? { ingestProgress: executionConfig?.backend === "direct-api" || savedPdfSource || acquisitionSource
 					? { steps: ["prepare"], stage: "prepare", detail: "正在准备入库请求", waiting: false } as IngestProgress
 					: { steps: ["cli"], stage: "cli", detail: "正在执行，等待 CLI 阶段回报", waiting: false } as IngestProgress } : {}),
 			};
@@ -2384,7 +2390,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			// Commit the new history before reclaiming any old sidecar. A failed
 			// start save restores the previous history and leaves every old output.
 			try {
-				await this.persistTaskRunRetention(candidates, acquisitionSource?Math.max(limit,candidates.length):limit);
+				await this.persistTaskRunRetention(candidates, acquisitionSource||savedPdfSource?Math.max(limit,candidates.length):limit);
 			} catch (error) {
 				this.taskRuns = originalRuns;
 				throw error;
@@ -2458,7 +2464,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				try {
 					await this.persistTaskRunRetention(
 						beforeRetention,
-						completedRun.acquisitionSource?Math.max(this.settings.taskHistoryLimit,beforeRetention.length):this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit,
+						completedRun.acquisitionSource||completedRun.savedPdfSource?Math.max(this.settings.taskHistoryLimit,beforeRetention.length):this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit,
 					);
 				} catch (error) {
 					// The sidecar is already durable. Restore the in-memory completion;
@@ -2764,6 +2770,28 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (kind === "local") this.showLocalPdfIntake(context);
 		else if (kind === "fulltext") this.showFulltextAcquisition("production", undefined, context.identity);
 		else throw new Error("不支持的文献处理入口");
+	}
+	async readSavedPdf(ref: SavedPdfRef, signal: AbortSignal) {
+		if (this.acquisitionClosing) throw new Error("插件已关闭");
+		const source = await loadSavedPdf(this.getSourceCatalog(), this.getActiveVaultRoot(), ref, signal);
+		if (this.acquisitionClosing) throw new Error("插件已关闭"); return source;
+	}
+	async validateSavedPdfIntake(options: PaperIngestFlowOptions, signal = new AbortController().signal): Promise<void> {
+		if (!options.savedPdfSource) return;
+		if (options.identityMode !== "source-v2" || options.acquisitionSource) throw new Error("所选 PDF 的处理凭据不一致");
+		const source = await this.readSavedPdf(options.savedPdfSource, signal);
+		if (path.resolve(options.sourcePdfPath) !== path.resolve(source.path)) throw new Error("处理路径与所选 PDF 原文包不一致");
+	}
+	async processLibrarySource(item: LibraryObjectSummary, signal: AbortSignal): Promise<void> {
+		const expected = structuredClone(item); signal.throwIfAborted();
+		const fresh = await this.inspectPaperLibrary(signal); libraryNavigation(expected, fresh); signal.throwIfAborted();
+		const source = expected.source;
+		if (!source?.packageKey || !source.manifestDigest) throw new Error("此原文没有可处理的来源凭据");
+		const loaded = await loadSourcePackage(this.getSourceCatalog().storage, source.packageKey); signal.throwIfAborted();
+		if (loaded.manifest.digest !== source.manifestDigest || loaded.manifest.paperId !== expected.paperId) throw new Error("所选原文清单或文献归属已变化，请刷新后重选");
+		if (loaded.manifest.packageKind === "jats-source") { await openJatsWiki(this, source.packageKey, undefined, signal, source.manifestDigest); return; }
+		const m = loaded.manifest;
+		await openSavedPdfIntake(this, { packageKey: m.packageKey, manifestDigest: m.digest, paperId: m.paperId, sha256: m.files[0].sha256, byteLength: m.files[0].byteLength }, undefined, signal);
 	}
 	private async openIntakeSource(source: MetadataSource, signal: AbortSignal): Promise<void> {
 		signal.throwIfAborted(); const scan = await this.inspectPaperLibrary(signal);
@@ -3123,8 +3151,9 @@ export default class AgentDashboardPlugin extends Plugin {
 	async getIngestRegistrationAvailability(notePath: string): Promise<{ eligible: boolean; reason: string }> { return (this.ingestRegistration ||= new IngestRegistrationController(this)).availability(notePath); }
 	getIngestRecords(): IngestRecords { return this.ingestRecords ||= new IngestRecords(this.readingPluginDirectory()); }
 	async readIngestPdf(run: TaskRun): Promise<void> {
-		const request = validateIngestRequest(await this.getIngestRecords().read("request", run.id), run.id);
+		const request = validateIngestRequestForTask(await this.getIngestRecords().read("request", run.id), run);
 		if (request.options.acquisitionSource) await validateAcquiredIntake(this.getAcquisitionService(), request.options);
+		await this.validateSavedPdfIntake(request.options);
 		await this.activateReadingWorkspace({ source: { kind: "pdf", path: request.options.sourcePdfPath }, backend: request.profileId });
 	}
 	async continuePaperIngest(run: TaskRun): Promise<void> { await openIngestContinuation(this, run); }
@@ -3134,8 +3163,12 @@ export default class AgentDashboardPlugin extends Plugin {
 		profileId: string,
 		hooks: { onEvent?: (event: DashboardProcessEvent) => void } = {},
 	): Promise<AgentLoopRunOutcome> {
+		options = structuredClone(options);
+		await this.validateSavedPdfIntake(options);
 		const steps = ingestSteps(options);
 		const boundSource = this.taskRuns.find(run => run.id === runId)?.acquisitionSource;
+		const boundPdf = this.taskRuns.find(run => run.id === runId)?.savedPdfSource;
+		if (boundPdf && (!options.savedPdfSource || JSON.stringify(decodeSavedPdfRef(boundPdf)) !== JSON.stringify(decodeSavedPdfRef(options.savedPdfSource)))) throw new Error("处理请求与任务绑定的原文包不一致");
 		if (boundSource && (!options.acquisitionSource || JSON.stringify(decodeIntakeRef(boundSource)) !== JSON.stringify(decodeIntakeRef(options.acquisitionSource)))) throw new Error("入库请求与任务绑定的获取快照不一致");
 		if(options.acquisitionSource){if(this.acquisitionClosing)throw new Error("插件已关闭，入库未启动");await validateAcquiredIntake(this.getAcquisitionService(),options);if(this.acquisitionClosing)throw new Error("插件已关闭，入库未启动");}
 		this.updateIngestProgress(runId, { steps, stage: "prepare", detail: "正在准备授权 PDF 与入库参数", waiting: false });

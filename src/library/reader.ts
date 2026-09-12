@@ -110,7 +110,7 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 			}
 			const name = entry.path + (m.packageKind === "pdf-source" ? "/source.pdf" : "/article.md");
 			const item: LibrarySourceObject = { kind: "source", id: name, paperId: m.paperId, citekey: m.citekey, identifiers: { ...m.identity.identifiers }, title: m.identity.title,
-				source: { format: m.packageKind === "pdf-source" ? "pdf" : "jats", path: name, packageKey: m.packageKey, sourceVersionId: m.sourceVersionId,
+				source: { format: m.packageKind === "pdf-source" ? "pdf" : "jats", path: name, packageKey: m.packageKey, manifestDigest: m.digest, sourceVersionId: m.sourceVersionId,
 					...(m.packageKind === "jats-source" ? { projectionId: m.projectionId } : {}), saved: true, verification: { state: "unverified", reason: "等待完整原文核验" } } };
 			try {
 				const loaded = await loadSourcePackage(v, m.packageKey);

@@ -3,6 +3,8 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import type { PaperIngestFlowOptions } from "./paper-ingest-flow";
 import { decodeIntakeRef } from "../fulltext/contracts";
+import { decodeSavedPdfRef } from "../papers/saved-pdf";
+import type { TaskRun } from "../types/contracts";
 
 export interface IngestRequest { version: 1; runId: string; profileId: string; options: PaperIngestFlowOptions; }
 export function validateIngestRequest(value: unknown, runId: string): IngestRequest {
@@ -14,17 +16,27 @@ export function validateIngestRequest(value: unknown, runId: string): IngestRequ
 		if (typeof o[field] !== "boolean") throw new Error("入库选项无效");
 	if (!/\.pdf$/i.test(o.sourcePdfPath) || !["auto", "pdf", "article"].includes(o.articleWikiSource) || !["auto", "vlm", "pipeline", "html"].includes(o.mineruModel)
 		|| !Number.isFinite(o.mineruTimeoutSeconds) || o.mineruTimeoutSeconds < 60 || o.mineruTimeoutSeconds > 1800) throw new Error("入库来源或解析参数无效");
-	if(o.identityMode!==undefined && (o.identityMode!=="source-v2" || !o.acquisitionSource))throw new Error("来源身份模式与快照不一致");
-	const copy=structuredClone(r); if(o.acquisitionSource!==undefined)copy.options.acquisitionSource=decodeIntakeRef(o.acquisitionSource); return copy;
+	if(o.acquisitionSource && o.savedPdfSource || o.savedPdfSource && o.identityMode!=="source-v2"
+		|| o.identityMode!==undefined && (o.identityMode!=="source-v2" || !o.acquisitionSource && !o.savedPdfSource))throw new Error("来源身份模式与快照不一致");
+	const copy=structuredClone(r); if(o.acquisitionSource!==undefined)copy.options.acquisitionSource=decodeIntakeRef(o.acquisitionSource);
+	if(o.savedPdfSource!==undefined)copy.options.savedPdfSource=decodeSavedPdfRef(o.savedPdfSource); return copy;
+}
+
+export function validateIngestRequestForTask(value: unknown, task: Pick<TaskRun, "id" | "savedPdfSource" | "acquisitionSource">): IngestRequest {
+	const request = validateIngestRequest(value, task.id);
+	if (task.savedPdfSource && (!request.options.savedPdfSource || JSON.stringify(decodeSavedPdfRef(task.savedPdfSource)) !== JSON.stringify(decodeSavedPdfRef(request.options.savedPdfSource)))) throw new Error("处理请求与任务绑定的原文包不一致");
+	if (task.acquisitionSource && (!request.options.acquisitionSource || JSON.stringify(decodeIntakeRef(task.acquisitionSource)) !== JSON.stringify(decodeIntakeRef(request.options.acquisitionSource)))) throw new Error("处理请求与任务绑定的获取快照不一致");
+	return request;
 }
 
 /** Private request and write journals; neither credentials nor model-supplied paths. */
 export class IngestRecords {
 	private queue: Promise<unknown> = Promise.resolve();
 	constructor(private pluginDirectory: string) {}
-	private async file(kind: "request" | "registration", id: string): Promise<string> {
-		const root = path.join(this.pluginDirectory, "ingest-records"); await fs.mkdir(root, { recursive: true });
-		if ((await fs.lstat(root)).isSymbolicLink()) throw new Error("入库记录目录不能是符号链接");
+	private async file(kind: "request" | "registration", id: string, write = false): Promise<string> {
+		const root = path.join(this.pluginDirectory, "ingest-records"); if(write)await fs.mkdir(root, { recursive: true });
+		try { if ((await fs.lstat(root)).isSymbolicLink()) throw new Error("入库记录目录不能是符号链接"); }
+		catch(error) { if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error; }
 		return path.join(root, kind + "-" + createHash("sha256").update(id).digest("hex") + ".json");
 	}
 	async read(kind: "request" | "registration", id: string): Promise<unknown | null> {
@@ -34,7 +46,7 @@ export class IngestRecords {
 	}
 	write(kind: "request" | "registration", id: string, value: unknown): Promise<void> {
 		const text = JSON.stringify(value); const task = this.queue.then(async () => {
-			if (Buffer.byteLength(text) > 16 * 1024 * 1024) throw new Error("入库记录过大"); const file = await this.file(kind, id);
+			if (Buffer.byteLength(text) > 16 * 1024 * 1024) throw new Error("入库记录过大"); const file = await this.file(kind, id, true);
 			for (const target of [file, file + ".pending"]) { try { const stat = await fs.lstat(target); if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("记录路径无效"); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; } }
 			const handle = await fs.open(file + ".pending", "w", 0o600); try { await handle.writeFile(text, "utf8"); await handle.sync(); } finally { await handle.close(); }
 			await fs.rename(file + ".pending", file);

@@ -1,4 +1,5 @@
 import type { DashboardSettings } from "./settings";
+import { decodeSavedPdfRef } from "../papers/saved-pdf";
 import type {
 	ExecutionConfig,
 	LintReport,
@@ -126,6 +127,7 @@ export function normalizeTaskRunArtifacts(value: unknown): TaskRunArtifacts | un
 }
 
 function acquisitionReference(value:unknown):TaskRun["acquisitionSource"] {try{return decodeIntakeRef(value);}catch{return undefined;}}
+function savedPdfReference(value:unknown):TaskRun["savedPdfSource"] {try{return decodeSavedPdfRef(value);}catch{return undefined;}}
 export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 	if (!Array.isArray(value)) return [];
 	const boundedLimit = Math.max(5, Math.min(100, limit));
@@ -149,6 +151,7 @@ export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 			completionPending: source.completionPending === true || undefined,
 			artifacts: normalizeTaskRunArtifacts(source.artifacts),
 			acquisitionSource: source.actionId==="paper-ingest"?acquisitionReference(source.acquisitionSource):undefined,
+			savedPdfSource: source.actionId==="paper-ingest"?savedPdfReference(source.savedPdfSource):undefined,
 			ingestProgress: normalizeIngestProgress(source.ingestProgress),
 		};
 	});
@@ -163,6 +166,7 @@ function selectTaskRunsForPersistence(taskRuns: TaskRun[], limit: number): TaskR
 		|| run.cleanupPending === true
 		|| run.completionPending === true
 		|| !!run.acquisitionSource
+		|| !!run.savedPdfSource
 	));
 	return [...primary, ...exceptional].slice(0, 300);
 }

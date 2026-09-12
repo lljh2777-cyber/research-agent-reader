@@ -84,6 +84,7 @@ export interface TaskRunArtifacts {
 
 export interface TaskRun {
 	acquisitionSource?: import("../fulltext/contracts").AcquisitionIntakeRef;
+	savedPdfSource?: import("../papers/saved-pdf").SavedPdfRef;
 	ingestProgress?: import("../agent/ingest-progress").IngestProgress;
 	id: string;
 	actionId: string;

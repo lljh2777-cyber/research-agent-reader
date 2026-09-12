@@ -6697,6 +6697,9 @@ body.agent-dashboard-mineru-resizing {
 .rar-fulltext-modal [hidden] { display: none !important; }
 .rar-fulltext-modal h3 { overflow-wrap: anywhere; }
 .rar-fulltext-modal select { max-width: 100%; }
+.rar-pdf-process-path { display: block; overflow-wrap: anywhere; }
+.rar-pdf-process-model { display: grid; gap: 8px; margin-top: 16px; }
+.rar-pdf-process-modal details button { display: block; max-width: 100%; height: auto; white-space: normal; overflow-wrap: anywhere; margin: 8px 0; text-align: left; }
 .rar-fulltext-choice { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0; }
 .rar-fulltext-choice input[type="checkbox"] { flex: 0 0 auto; margin-top: 3px; }
 .rar-fulltext-notes { display: block; width: 100%; min-height: 80px; resize: vertical; }

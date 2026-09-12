@@ -88,6 +88,7 @@ export interface AgentLoopServiceDeps {
 	}): Promise<{ exitCode: number; stdout: string; stderr: string }>;
 	confirmPaperIdentity(request: HumanIdentityConfirmationRequest): Promise<HumanIdentityConfirmationReceipt | null>;
 	prepareSourceIntake?(options:PaperIngestFlowOptions,authorized:AuthorizedPdfSnapshot,signal:AbortSignal):Promise<DeterministicIntake>;
+	verifySavedSource?(options:PaperIngestFlowOptions,signal:AbortSignal):Promise<void>;
 	legacySourceAssociation?(identity:PaperIngestIdentity):Promise<{citekey?:string;notes:string[]}>;
 }
 
@@ -228,8 +229,10 @@ export class AgentLoopService {
 		hooks: { onEvent?: (event: DashboardProcessEvent) => void } = {},
 	): Promise<AgentLoopRunOutcome> {
 		const settings = this.deps.getSettings();
-		const resolved = this.deps.getProvider(profileId);
-		if (!resolved) {
+		options = structuredClone(options);
+		const modelFree = options.identityMode === "source-v2" && !options.createArticleWiki && options.createArticleMarkdown;
+		const resolved = modelFree ? null : this.deps.getProvider(profileId);
+		if (!resolved && !modelFree) {
 			throw new Error("Direct API 配置不存在或尚未通过连接测试");
 		}
 
@@ -289,6 +292,10 @@ export class AgentLoopService {
 		emitStatus("running", "轻量 Agent 已启动");
 
 		try {
+			if (options.savedPdfSource) {
+				if (!this.deps.verifySavedSource) throw new Error("已保存原文校验服务不可用");
+				await this.deps.verifySavedSource(options, abortController.signal);
+			}
 			const retriever = this.deps.getLexicalRetriever();
 			if (!retriever) throw new Error("知识库检索组件不可用");
 			const toolDeps = this.buildToolDeps(settings, retriever, abortController.signal);
@@ -300,7 +307,7 @@ export class AgentLoopService {
 			// deadline remains the hard upper bound inside runBoundedAgentLoop.
 			const providerTurnTimeoutMs = Math.max(
 				60_000,
-				Math.min(120_000, resolved.provider.config.timeoutSeconds * 1000),
+				Math.min(120_000, (resolved?.provider.config.timeoutSeconds || 60) * 1000),
 			);
 			const isCancelled = (): boolean => state.cancelled;
 			// Raw remaining budget — never padded back up to a minimum, so the
@@ -317,8 +324,8 @@ export class AgentLoopService {
 			if (options.sourcePdfPath) {
 				authorizedPdfSnapshot = await createAuthorizedPdfSnapshot(options.sourcePdfPath, {
 					signal: abortController.signal,
-					expected: options.acquisitionSource,
-					retainFiles: !!options.acquisitionSource,
+					expected: options.savedPdfSource || options.acquisitionSource,
+					retainFiles: !!(options.acquisitionSource || options.savedPdfSource),
 				});
 			}
 			const localPdfEvidence = await extractLocalPdfIdentityEvidence(authorizedPdfSnapshot?.path || "", {
@@ -352,8 +359,8 @@ export class AgentLoopService {
 					candidateTitle: options.identityCandidateTitle,
 					candidateDoi: options.identityCandidateDoi,
 				}),
-				provider: resolved.provider,
-				model: resolved.model,
+				provider: resolved!.provider,
+				model: resolved!.model,
 				maxTokens,
 				maxSteps: maxStepsPerPhase,
 				timeoutMs: loopTimeout(),
@@ -486,6 +493,7 @@ export class AgentLoopService {
 
 			// ---- Phase 2: MinerU extraction (deterministic, authorized PDF only) ----
 			if (options.createArticleMarkdown && !state.existingSourcePath) {
+				if (options.savedPdfSource) await this.deps.verifySavedSource!(options, abortController.signal);
 				advanceStage("extract", "running", "MinerU 正在解析、校验并发布原文包；服务未提供页级进度");
 				if (!ensureBudget()) {
 					return this.finish(state, options, profileId, resolved, emitStatus);
@@ -545,8 +553,8 @@ export class AgentLoopService {
 					),
 					user: buildDraftUserMessage(identity.citekey, identity.title),
 					tools: usePdf ? [createBoundPdfReadTool(authorizedPdfSnapshot!, identity.title)] : buildDraftTools(toolDeps, draftArticlePath),
-					provider: resolved.provider,
-					model: resolved.model,
+					provider: resolved!.provider,
+					model: resolved!.model,
 					maxTokens,
 					maxSteps: Math.min(maxStepsPerPhase, 8),
 					timeoutMs: loopTimeout(),
@@ -589,6 +597,7 @@ export class AgentLoopService {
 						state.draft.title_zh = resolvedTitleZh;
 						try {
 							advanceStage("save", "running", "正在校验并保存文章 Wiki");
+							if (options.savedPdfSource) await this.deps.verifySavedSource!(options, abortController.signal);
 							const receipt = await commitSourceNote(
 								toolDeps.vault,
 								identity.citekey,
@@ -682,6 +691,7 @@ export class AgentLoopService {
 				{
 					signal: abortController.signal,
 					timeoutMs,
+					verifySourceBeforePublish: options.savedPdfSource ? () => this.deps.verifySavedSource!(options, abortController.signal) : undefined,
 					validateBeforeCommit: (articleMarkdown) => {
 						if (!articleMarkdownTitleMatches(articleMarkdown, identity.title)) {
 							throw new MineruPreCommitValidationError(
@@ -689,7 +699,7 @@ export class AgentLoopService {
 							);
 						}
 					},
-					retainStaging: !!options.acquisitionSource,
+					retainStaging: !!(options.acquisitionSource || options.savedPdfSource),
 				},
 			);
 			const vaultRoot = this.deps.getVaultRoot();
@@ -843,7 +853,7 @@ export class AgentLoopService {
 		state: IngestState,
 		options: PaperIngestFlowOptions,
 		profileId: string,
-		resolved: { profileName: string; model: string },
+		resolved: { profileName: string; model: string } | null,
 		emitStatus: (status: string, label: string) => void,
 	): AgentLoopRunOutcome {
 		const conflicts = [...state.conflicts];
@@ -929,10 +939,8 @@ export class AgentLoopService {
 			filesWritten: [...result.filesWritten],
 			artifacts,
 			executionConfig: {
-				backend: "direct-api",
-				providerId: profileId,
-				providerName: resolved.profileName,
-				model: resolved.model,
+				...(resolved ? { backend: "direct-api" as const, providerId: profileId, providerName: resolved.profileName } : { modelSource: "无需模型" }),
+				model: resolved?.model || "",
 				reasoningEffort: null,
 				serviceTier: null,
 			},

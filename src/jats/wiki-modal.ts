@@ -1,8 +1,11 @@
 import { Modal, Notice } from "obsidian";
 import type AgentDashboardPlugin from "../plugin";
 
-export async function openJatsWiki(plugin: AgentDashboardPlugin, key: string, requestId?: string): Promise<void> {
+export async function openJatsWiki(plugin: AgentDashboardPlugin, key: string, requestId?: string, signal?: AbortSignal, expectedManifestDigest?: string): Promise<void> {
+	signal?.throwIfAborted();
 	const service = plugin.getJatsWikiService(); await service.ready(); const context = await service.inspect(key);
+	signal?.throwIfAborted();
+	if (expectedManifestDigest && context.source.manifest.digest !== expectedManifestDigest) throw new Error("所选 JATS 原文版本已变化，请刷新后重选");
 	const modal = new Modal(plugin.app); let closed = false, busy = false, current = requestId || service.list(key)[0]?.request.id || "", revision = 0, uiError = "", wikiExists = !!context.existing;
 	if (!plugin.trackAcquisitionDialog(modal)) throw new Error("插件已关闭");
 	modal.modalEl.addClass("rar-fulltext-modal", "rar-jats-wiki-modal"); modal.setTitle("JATS 文章 Wiki");
@@ -57,5 +60,5 @@ export async function openJatsWiki(plugin: AgentDashboardPlugin, key: string, re
 		finally { busy = false; if (!closed) await show(); }
 	};
 	const unsubscribe = service.subscribe(() => { update(); if (!busy) void show(); }); const close = modal.onClose.bind(modal); modal.onClose = () => { closed = true; revision++; unsubscribe(); close(); };
-	await show(); modal.open();
+	await show(); if (signal?.aborted || closed) { modal.close(); signal?.throwIfAborted(); return; } modal.open();
 }

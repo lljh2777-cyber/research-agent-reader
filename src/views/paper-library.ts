@@ -17,6 +17,7 @@ export interface PaperLibraryHost extends ReadingStateHost {
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
 	openPaperIntake(): void;
 	continuePaperIntake(paper: LibraryPaper, kind: "local" | "fulltext", signal: AbortSignal): Promise<void>;
+	processLibrarySource(item: LibraryObjectSummary, signal: AbortSignal): Promise<void>;
 }
 
 export class PaperLibraryView extends ItemView {
@@ -310,6 +311,10 @@ export class PaperLibraryView extends ItemView {
 			if (source.sourceVersionId) card.createEl("p", { text: "来源版本：" + source.sourceVersionId, cls: "rar-library-path" });
 			if (source.projectionId) card.createEl("p", { text: "正文投影：" + source.projectionId, cls: "rar-library-path" });
 			if (item.capabilities?.openOriginal.available) open("打开原文");
+			if (source.packageKey && source.manifestDigest && verification.state === "verified" && (source.format === "pdf" || source.format === "jats")) {
+				const process = this.button(actions, source.format === "pdf" ? "转换正文 / 生成初始笔记" : "生成 / 恢复初始笔记", () => { void this.run(signal => this.host.processLibrarySource(item, signal)); });
+				process.disabled = this.browser.busy || Boolean(this.action) || this.editingRecord || this.browser.state.phase !== "ready";
+			}
 			if (item.capabilities?.interactiveReading.available) open("开始／继续阅读", true);
 			else if (verification.state === "verified") card.createEl("p", { text: item.capabilities?.interactiveReading.reason || "此格式暂未接入交互阅读", cls: "rar-library-muted" });
 			if (source.format === "mineru" && verification.state === "unverified") {

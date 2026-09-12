@@ -1,11 +1,11 @@
 import { Modal, type App } from "obsidian";
-import type { PdfSnapshot } from "../fulltext/contracts";
+import type { PdfSourceSnapshot } from "../sources/pdf-snapshot";
 import type { AuthorizedPdfPageRaster } from "../agent/pdf-identity";
 import { bytesDigest } from "./identity";
 import { sourceConfirmation, validateSourceConfirmation, type PdfDisplayedEvidence, type SourceConfirmation } from "./confirmation";
 
 /** V2 has a source-neutral record, an actual raster presenter and a separate validator. */
-export function confirmSourceIdentity(app:App,requestId:string,snapshot:PdfSnapshot,signal:AbortSignal,render:(page:number)=>Promise<AuthorizedPdfPageRaster>):Promise<SourceConfirmation|null> {
+export function confirmSourceIdentity(app:App,requestId:string,snapshot:PdfSourceSnapshot,signal:AbortSignal,render:(page:number)=>Promise<AuthorizedPdfPageRaster>):Promise<SourceConfirmation|null> {
 	if(signal.aborted)return Promise.resolve(null);
 	return new Promise(resolve=>{
 		const modal=new Modal(app);let settled=false,generation=0,evidence:PdfDisplayedEvidence|undefined;

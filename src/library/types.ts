@@ -31,6 +31,7 @@ export interface LibrarySourceDescription {
 	format: "pdf" | "mineru" | "jats" | "markdown" | "unknown";
 	path: string;
 	packageKey?: string;
+	manifestDigest?: string;
 	sourceVersionId?: string;
 	projectionId?: string;
 	/** A committed original is independent of availability and acquisition success. */

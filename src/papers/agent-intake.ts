@@ -11,15 +11,16 @@ import { SourceCatalog } from "./catalog";
 import { identityRelation, objectDigest, safeCitekey } from "./identity";
 import { loadPdfSource } from "../sources/pdf-package";
 import { loadSourcePackage } from "../sources/package";
+import { readSavedPdf } from "./saved-pdf";
 
 export interface DeterministicIntake {identity:PaperIngestIdentity;sourcePath:string;analysisPath:string;extractionPackageKey:string;confirmation:SourceConfirmation;}
 export function conversionOptions(options:PaperIngestFlowOptions) {
 	return {mode:"precision-extract",formats:["md","json"],model:options.mineruModel,language:options.mineruLanguage,ocr:options.mineruOcr,formula:options.mineruFormula,table:options.mineruTable,pages:normalizePagesValue(options.mineruPages)||null,include_source_pdf:options.mineruIncludeSourcePdf};
 }
-export async function catalogIntake(app:App,catalog:SourceCatalog,acquisition:AcquisitionService,options:PaperIngestFlowOptions,authorized:AuthorizedPdfSnapshot,signal:AbortSignal):Promise<DeterministicIntake> {
-	if(!options.acquisitionSource)throw new Error("v2 入库缺少来源快照");
-	const {snapshot,bytes}=await acquisition.preview(options.acquisitionSource.jobId);
-	if(authorized.sha256!==snapshot.artifact.sha256 || authorized.size!==snapshot.artifact.byteLength || snapshot.id!==options.acquisitionSource.snapshotId)throw new Error("v2 身份与授权 PDF 不一致");
+export async function catalogIntake(app:App,catalog:SourceCatalog,acquisition:AcquisitionService|undefined,options:PaperIngestFlowOptions,authorized:AuthorizedPdfSnapshot,signal:AbortSignal,vaultRoot=""):Promise<DeterministicIntake> {
+	if(!options.acquisitionSource && !options.savedPdfSource || options.acquisitionSource && options.savedPdfSource)throw new Error("v2 入库需要唯一来源快照");
+	const {snapshot,bytes}=options.savedPdfSource ? await readSavedPdf(catalog,vaultRoot,options.savedPdfSource,signal) : await acquisition!.preview(options.acquisitionSource!.jobId);
+	if(authorized.sha256!==snapshot.artifact.sha256 || authorized.size!==snapshot.artifact.byteLength || options.acquisitionSource && snapshot.id!==options.acquisitionSource.snapshotId)throw new Error("v2 身份与授权 PDF 不一致");
 	const plan=await catalog.prepare(snapshot),analysis=plan.legacy.filter(p=>p.kind==="wiki");if(new Set(analysis.map(p=>p.path)).size>1)throw new Error("同论文存在多个 Wiki，请先核对");
 	let sourcePath="";let total=0;const projectionOptions=conversionOptions(options);
 	// Reuse a validated fixed projection only with the same source and requested parameters.

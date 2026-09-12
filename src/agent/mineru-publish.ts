@@ -81,6 +81,8 @@ export interface MineruPublishContext {
 	timeoutMs: number;
 	/** Synchronous, read-only gate over the exact same-volume copy to commit. */
 	validateBeforeCommit?(articleMarkdown: string): void;
+	/** Revalidate the saved original after remote work, before synchronous atomic publication. */
+	verifySourceBeforePublish?(): Promise<void>;
 }
 
 /** Identity/evidence conflicts are distinct from CLI and filesystem failures. */
@@ -1461,6 +1463,8 @@ export async function publishMineruPackage(
 
 		// Re-resolve immediately before creating same-volume staging: a papers/
 		// junction introduced during the long remote extraction must fail closed.
+		await context.verifySourceBeforePublish?.();
+		if (context.signal.aborted) throw new Error("任务已取消");
 		const commitPapersRoot = ensureTrustedPapersRoot(deps.vaultRoot);
 		const commitPapersStats = fs.statSync(commitPapersRoot, { bigint: true });
 		if (realPathSync(commitPapersRoot) !== publishLock.papersIdentity.realPath
