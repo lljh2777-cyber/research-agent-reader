@@ -1,6 +1,7 @@
 import { App, MarkdownView, TFile, type WorkspaceLeaf } from "obsidian";
 import { readAnnotationRecords } from "./annotation-service";
 import { excerptMatches, excerptRevision, prepareExcerpt } from "./excerpt";
+import { openPdfExcerpt, pdfExcerptStatus } from "./native-pdf-excerpt";
 import type { AnnotationRecord } from "./types";
 
 export interface ExcerptRef { annotationPath: string; id: string; }
@@ -18,7 +19,7 @@ export const canOrganizeExcerpt = (record: AnnotationRecord): boolean => ["none"
 export function readExcerptSnapshot(content: string, ref: ExcerptRef): ExcerptSnapshot {
 	if (!validPath(ref.annotationPath) || ref.annotationPath !== ROOT + ref.id + ".md" || content.length > MAX_FILE) throw new Error("摘录路径或文件大小不符合读取范围");
 	const parsed = readAnnotationRecords(content, ref.annotationPath), record = parsed.records[0];
-	if (parsed.errors.length || parsed.records.length !== 1 || record.id !== ref.id || !record.excerpt || !record.sourceAnchor) throw new Error("摘录凭据损坏或存在重复记录，请打开文档检查");
+	if (parsed.errors.length || parsed.records.length !== 1 || record.id !== ref.id || !(record.excerpt || record.pdfExcerpt) || !record.sourceAnchor) throw new Error("摘录凭据损坏或存在重复记录，请打开文档检查");
 	const markers = ["annotation-start " + record.id + " -->", "annotation-meta ", "manual-start -->", "manual-end -->", "ai-start -->", "ai-end -->", "annotation-end " + record.id + " -->"];
 	let previous = -1;
 	for (const marker of markers) {
@@ -103,6 +104,7 @@ export class ExcerptLibraryService {
 		const latest = await this.load(snapshot.record, signal);
 		if (latest.digest !== snapshot.digest) return "摘录文档已变化，请重新读取后核对来源与最新备注";
 		const record = latest.record;
+		if (record.pdfExcerpt) return pdfExcerptStatus(this.app, record, signal);
 		const file = this.app.vault.getAbstractFileByPath(record.sourcePath);
 		if (!(file instanceof TFile)) return "原文已缺失；保留历史摘录，需复查";
 		if (file.stat?.size > 32 * 1024 * 1024) return "原文超过核对上限，保留历史摘录，需复查";
@@ -140,6 +142,12 @@ export class ExcerptLibraryService {
 	}
 	async openSource(ref: ExcerptRef, signal?: AbortSignal): Promise<void> {
 		const snapshot = await this.load(ref, signal), record = snapshot.record;
+		if (record.pdfExcerpt) {
+			await openPdfExcerpt(this.app, record, async () => {
+				if ((await this.load(record, signal)).digest !== snapshot.digest) throw new Error("摘录在打开期间变化，请重新读取");
+			}, signal);
+			return;
+		}
 		const file = this.app.vault.getAbstractFileByPath(record.sourcePath);
 		if (!(file instanceof TFile)) throw new Error("原文已缺失；请保留历史摘录并复查来源");
 		if (file.stat?.size > 32 * 1024 * 1024) throw new Error("原文超过定位核对上限");

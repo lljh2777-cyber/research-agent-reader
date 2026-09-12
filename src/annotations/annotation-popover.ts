@@ -143,12 +143,13 @@ export class AnnotationPopover extends Component {
 		const element = this.reset();
 		this.renderHeader(element, this.selection?.selectedText || "", "选择批注方式");
 		const actions = element.createDiv({ cls: "agent-annotation-choice-list" });
-		if (this.selection?.sourceRevision && supportsExcerpt(this.selection.sourcePath)) {
+		if (this.selection?.pdfExcerpt || (this.selection?.sourceRevision && supportsExcerpt(this.selection.sourcePath))) {
 			const excerpt = actions.createEl("button", { cls: "agent-annotation-choice", attr: { type: "button" } });
 			const icon = excerpt.createSpan({ cls: "agent-annotation-choice-icon" }); setIcon(icon, "bookmark-plus");
 			const label = excerpt.createDiv(); label.createEl("strong", { text: "保存摘录" }); label.createSpan({ text: "保留原句、上下文和个人备注，无需模型" });
 			excerpt.addEventListener("click", () => this.renderExcerpt());
 		}
+		if (this.selection?.pdfExcerpt) { this.position(); return; }
 		const manual = actions.createEl("button", {
 			cls: "agent-annotation-choice",
 			attr: { type: "button" },
@@ -176,7 +177,7 @@ export class AnnotationPopover extends Component {
 	private renderExcerpt(): void {
 		const element = this.reset(); this.renderHeader(element, this.selection?.selectedText || "", "保存摘录");
 		element.createEl("blockquote", { text: this.selection?.selectedText || "", attr: { style: "overflow-wrap:anywhere;max-height:150px;overflow:auto;flex-shrink:0" } });
-		element.createEl("p", { text: "保存到批注文档，保留当前 Markdown 文本版本。相同版本、相同位置的摘录会复用，已有备注保持不变。" });
+		element.createEl("p", { text: this.selection?.pdfExcerpt ? `保存 PDF 第 ${this.selection.pdfExcerpt.page} 页（文件页码）的文字、上下文与文件版本。相同位置会复用，已有备注保持不变。` : "保存到批注文档，保留当前 Markdown 文本版本。相同版本、相同位置的摘录会复用，已有备注保持不变。" });
 		const label = element.createEl("label", { cls: "agent-annotation-field" }); label.createSpan({ text: "个人备注（可留空）" });
 		const input = label.createEl("textarea", { attr: { rows: "4", maxlength: "10000" } });
 		input.addEventListener("input", () => { input.dataset.dirty = input.value ? "true" : "false"; });
@@ -315,12 +316,12 @@ export class AnnotationPopover extends Component {
 		if (!this.record) return;
 		const element = this.reset();
 		this.renderHeader(element, this.record.selectedText, sectionLabel(this.record.section));
-		if (this.record.excerpt) {
+		if (this.record.excerpt || this.record.pdfExcerpt) {
 			element.createEl("blockquote", { text: this.record.selectedText, attr: { style: "overflow-wrap:anywhere;max-height:150px;overflow:auto;flex-shrink:0" } });
 			const record = this.record, status = element.createEl("p", { text: "正在核对摘录来源…", attr: { role: "status" } });
 			void this.service.getExcerptStatus(record).then(text => { if (!this.closed && this.record === record && status.isConnected) status.setText(text); }, () => { if (status.isConnected) status.setText("暂时无法核对原文，保留历史摘录"); });
 			this.renderTextSection(element, "个人备注", record.manualText, "没有填写个人备注");
-			const context = element.createEl("details"); context.createEl("summary", { text: "保存时的原文上下文" }); context.createEl("pre", { text: record.excerpt!.context, attr: { style: "white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto" } });
+			const context = element.createEl("details"); context.createEl("summary", { text: "保存时的原文上下文" }); context.createEl("pre", { text: (record.pdfExcerpt || record.excerpt)!.context, attr: { style: "white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto" } });
 			element.createEl("p", { text: "打开摘录列表，可回到原文或编辑个人备注。" });
 			const footer = this.renderFooter(element);
 			if (this.onOpenExcerpt) {

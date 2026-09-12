@@ -91,7 +91,7 @@ export class ExcerptBrowser extends Modal {
 			for (const issue of this.data.issues.slice(0, 100)) details.createEl("p", { text: issue });
 			if (this.data.issues.length > 100) details.createEl("p", { text: "这里只展示前 100 条提示，其余文档保持不变。" });
 		}
-		if (!matches.length) this.listEl.createEl("p", { text: this.data.entries.length ? "没有匹配的摘录，请调整搜索词。" : "尚无可读取的摘录。可在原文 Markdown 中划选文字，点击“批注 → 保存摘录”。" });
+		if (!matches.length) this.listEl.createEl("p", { text: this.data.entries.length ? "没有匹配的摘录，请调整搜索词。" : "尚无可读取的摘录。可在原文 Markdown 或原生 PDF 文字层中划选文字，点击“批注 → 保存摘录”。" });
 		for (const entry of matches.slice(0, this.limit)) {
 			const row = this.button(this.listEl, "", () => {
 				if (this.dirty || this.busy) return;
@@ -114,13 +114,14 @@ export class ExcerptBrowser extends Modal {
 		this.detailEl.createEl("h3", { text: "原文摘录" });
 		this.detailEl.createEl("blockquote", { text: record.selectedText });
 		this.detailEl.createEl("p", { text: record.sourcePath });
+		if (record.pdfExcerpt) this.detailEl.createEl("p", { text: `PDF 第 ${record.pdfExcerpt.page} / ${record.pdfExcerpt.pageCount} 页（文件页码）` });
 		this.detailEl.createEl("p", { text: "整理状态：" + excerptOrganizationLabel(record), cls: "rar-excerpt-state" });
 		this.detailEl.createEl("p", { text: "整理完成表示当前摘录已处理，由你手动标记；原文变化或无法核对时仍需复查。", cls: "rar-library-muted" });
 		const sourceStatus = this.detailEl.createEl("p", { text: "正在核对原文…", attr: { role: "status" } });
 		const check = this.statusAction = new AbortController();
 		void this.service.status(snapshot, check.signal).then(text => { if (!check.signal.aborted && sourceStatus.isConnected) sourceStatus.setText(text); }, error => { if (!check.signal.aborted && sourceStatus.isConnected) sourceStatus.setText("暂时无法核对：" + String(error)); });
 		const context = this.detailEl.createEl("details"); context.createEl("summary", { text: "保存时的上下文与文本版本" });
-		context.createEl("pre", { text: record.excerpt!.context }); context.createEl("code", { text: record.excerpt!.digest });
+		context.createEl("pre", { text: (record.pdfExcerpt || record.excerpt)!.context }); context.createEl("code", { text: (record.pdfExcerpt || record.excerpt)!.digest });
 		this.detailEl.createEl("h3", { text: "已保存的个人备注" }); this.detailEl.createEl("pre", { text: record.manualText || "尚未填写" });
 		const label = this.detailEl.createEl("label", { text: "编辑个人备注" });
 		const input = label.createEl("textarea", { attr: { rows: "5", maxlength: "10000", "aria-label": "编辑个人备注" } }); input.value = this.draft;
@@ -152,7 +153,8 @@ export class ExcerptBrowser extends Modal {
 				});
 			}); button.dataset.requiresClean = "true";
 		} else this.detailEl.createEl("p", { text: "此摘录有关联归档任务，请在原归档功能处理其状态。" });
-		if (this.curate) this.button(navigation, "补充到已有笔记", () => {
+		if (record.pdfExcerpt) this.detailEl.createEl("p", { text: "PDF 摘录现支持保存、备注与原页定位；补充到知识笔记将在后续提供。", cls: "rar-library-muted" });
+		if (this.curate && !record.pdfExcerpt) this.button(navigation, "补充到已有笔记", () => {
 			if (this.dirty || this.busy) { this.message("请先保存或放弃备注草稿后再整理摘录。"); return; }
 			this.curate!({ annotationPath: record.annotationPath, id: record.id }); this.close();
 		});
@@ -168,7 +170,7 @@ export class ExcerptBrowser extends Modal {
 				await this.app.workspace.getLeaf("tab").openFile(file); signal.throwIfAborted(); this.dispose();
 			});
 		});
-		if (this.history) {
+		if (this.history && !record.pdfExcerpt) {
 			const section = this.detailEl.createEl("section", { cls: "rar-excerpt-history", attr: { "aria-label": "摘录整理历史" } });
 			section.createEl("h3", { text: "整理历史" });
 			const status = section.createEl("p", { text: "正在读取保存记录…", attr: { role: "status" } });

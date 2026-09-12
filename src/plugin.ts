@@ -671,8 +671,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	/**
-	 * Floating 批注 chip for any text selection inside a Markdown view — the
-	 * reader, reading mode, and Live Preview/source mode alike. Editor-mode
+	 * Floating 批注 chip inside Markdown views and native PDF text layers.
+	 * Markdown supports the reader, reading and editor modes. Editor-mode
 	 * selections have no native DOM selection, so their anchor rectangle comes
 	 * from the editor coordinates.
 	 */
@@ -686,7 +686,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const anchorElement = range.startContainer instanceof Element
 				? range.startContainer
 				: range.startContainer.parentElement;
-			if (!anchorElement?.closest(".markdown-source-view, .markdown-reading-view")) return;
+			if (!anchorElement?.closest(".markdown-source-view, .markdown-reading-view, .pdf-viewer-container .textLayer")) return;
 			if (anchorElement.closest(".agent-annotation-popover, input, textarea, button, pre, code")) {
 				return;
 			}
@@ -705,6 +705,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		const top = Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - 44));
 		chip.style.left = `${left}px`;
 		chip.style.top = `${top}px`;
+		button.addEventListener("mousedown", event => event.preventDefault());
 		button.addEventListener("click", (event) => {
 			event.stopPropagation();
 			this.hideAnnotationChip();

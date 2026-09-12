@@ -12,6 +12,8 @@ import { getCliBackendLabel, isCliBackendId, type CliBackendId } from "../config
 import { generateDirectExplanation } from "./direct-explanation";
 import { objectDigest } from "../papers/identity";
 import { excerptMatches, excerptRevision, prepareExcerpt, supportsExcerpt, validExcerpt } from "./excerpt";
+import { supportsPdfExcerpt, validPdfExcerpt, pdfExcerptId } from "./pdf-excerpt";
+import { captureNativePdfSelection, hasNativePdfSelection, verifyPdfSelection, pdfExcerptStatus } from "./native-pdf-excerpt";
 import {
 	getClaudeDefaultModelLabel,
 	getOpenCodeDefaultModelLabel,
@@ -41,6 +43,7 @@ interface AnnotationMeta {
 	section: string;
 	sourceAnchor?: AnnotationRecord["sourceAnchor"];
 	excerpt?: AnnotationRecord["excerpt"];
+	pdfExcerpt?: AnnotationRecord["pdfExcerpt"];
 	aiProvider: string;
 	aiModel: string;
 	createdAt: string;
@@ -191,6 +194,9 @@ function parseMeta(raw: string): AnnotationMeta | null {
 	try {
 		const value = JSON.parse(match[1]) as Partial<AnnotationMeta>;
 		const sourceAnchor = parseSourceAnchor(value.sourceAnchor);
+		if (value.pdfExcerpt !== undefined && (value.excerpt !== undefined || !supportsPdfExcerpt(String(value.sourcePath || ""))
+			|| !validPdfExcerpt(value.pdfExcerpt, sourceAnchor, String(value.selectedText || ""))
+			|| value.id !== pdfExcerptId(String(value.sourcePath), value.pdfExcerpt, sourceAnchor!.start, sourceAnchor!.end))) return null;
 		if (value.excerpt !== undefined && (!supportsExcerpt(String(value.sourcePath || "")) || !validExcerpt(value.excerpt, sourceAnchor, String(value.selectedText || "")))) return null;
 		const status = String(value.archiveStatus || "none");
 		return {
@@ -200,6 +206,7 @@ function parseMeta(raw: string): AnnotationMeta | null {
 			section: String(value.section || ""),
 			sourceAnchor,
 			...(value.excerpt ? { excerpt: value.excerpt } : {}),
+			...(value.pdfExcerpt ? { pdfExcerpt: value.pdfExcerpt } : {}),
 			aiProvider: String(value.aiProvider || ""),
 			aiModel: String(value.aiModel || ""),
 			createdAt: String(value.createdAt || ""),
@@ -270,6 +277,7 @@ export class AnnotationService {
 	}
 
 	canCaptureSelection(): boolean {
+		if (hasNativePdfSelection(this.app)) return true;
 		if (this.canCaptureDomSelection()) return true;
 		return this.canCaptureEditorSelection();
 	}
@@ -303,6 +311,7 @@ export class AnnotationService {
 	}
 
 	async captureSelection(): Promise<AnnotationSelection> {
+		if (hasNativePdfSelection(this.app)) return captureNativePdfSelection(this.app);
 		if (this.canCaptureDomSelection()) return this.captureFromDom();
 		return this.captureFromEditor();
 	}
@@ -490,12 +499,13 @@ export class AnnotationService {
 
 	/** Create-only excerpt, scoped by exact text revision and occurrence. No source edits or model dependency. */
 	async createExcerpt(selection: AnnotationSelection, manualText = "", signal?: AbortSignal): Promise<AnnotationRecord> {
-		selection = { ...selection, sourceRevision: selection.sourceRevision && { ...selection.sourceRevision } };
+		selection = { ...selection, sourceRevision: selection.sourceRevision && { ...selection.sourceRevision }, pdfExcerpt: selection.pdfExcerpt && { ...selection.pdfExcerpt } };
 		if (manualText.length > 10000 || manualText.includes("<!-- agent-dashboard:")) throw new Error("个人备注过长或包含批注控制标记，未保存");
 		signal?.throwIfAborted();
 		const source = this.app.vault.getAbstractFileByPath(selection.sourcePath);
-		if (!(source instanceof TFile) || source.extension !== "md") throw new Error("原文 Markdown 不存在");
-		const content = await this.app.vault.read(source), prepared = prepareExcerpt(selection, content);
+		if (!(source instanceof TFile) || (selection.pdfExcerpt ? source.extension.toLowerCase() !== "pdf" : source.extension !== "md")) throw new Error("摘录原文不存在");
+		const content = selection.pdfExcerpt ? "" : await this.app.vault.read(source);
+		const prepared = selection.pdfExcerpt ? await verifyPdfSelection(this.app, selection, signal) : prepareExcerpt(selection, content);
 		const annotationPath = `${ANNOTATION_FOLDER}/${prepared.id}.md`;
 		const reuse = async (): Promise<AnnotationRecord | null> => {
 			if (!this.app.vault.getAbstractFileByPath(annotationPath)) return null;
@@ -504,16 +514,20 @@ export class AnnotationService {
 			const parsed = readAnnotationRecords(await this.app.vault.read(file), annotationPath), record = parsed.records[0];
 			if (parsed.errors.length || parsed.records.length !== 1 || record.id !== prepared.id || record.sourcePath !== selection.sourcePath
 				|| record.selectedText !== selection.selectedText || record.sourceAnchor?.start !== selection.sourceStart || record.sourceAnchor?.end !== selection.sourceEnd
-				|| objectDigest(record.excerpt || null) !== objectDigest(prepared.receipt)) throw new Error("已有摘录凭据冲突，原文件保持不变");
+				|| objectDigest(record.pdfExcerpt || record.excerpt || null) !== objectDigest(prepared.receipt)) throw new Error("已有摘录凭据冲突，原文件保持不变");
 			return record;
 		};
 		const existing = await reuse(); signal?.throwIfAborted(); if (existing) return existing;
 		await this.ensureFolder(ANNOTATION_FOLDER); signal?.throwIfAborted();
-		prepareExcerpt(selection, await this.app.vault.read(source)); signal?.throwIfAborted();
+		if (selection.pdfExcerpt) await verifyPdfSelection(this.app, selection, signal);
+		else prepareExcerpt(selection, await this.app.vault.read(source));
+		signal?.throwIfAborted();
+		if (source.path !== selection.sourcePath || this.app.vault.getAbstractFileByPath(selection.sourcePath) !== source) throw new Error("原文在保存前已移动或替换，请重新选择");
 		const now = new Date().toISOString(), record: AnnotationRecord = {
 			id: prepared.id, annotationPath, sourcePath: selection.sourcePath, selectedText: selection.selectedText,
-			section: currentHeading(content, selection.sourceStart), sourceAnchor: { start: selection.sourceStart, end: selection.sourceEnd, prefix: selection.prefix, suffix: selection.suffix },
-			excerpt: prepared.receipt, manualText: manualText.trim(), aiText: "", aiProvider: "", aiModel: "", createdAt: now, updatedAt: now,
+			section: selection.pdfExcerpt ? `PDF 第 ${selection.pdfExcerpt.page} 页（文件页码）` : currentHeading(content, selection.sourceStart), sourceAnchor: { start: selection.sourceStart, end: selection.sourceEnd, prefix: selection.prefix, suffix: selection.suffix },
+			...(prepared.receipt.algorithm === "pdf-bytes-sha256" ? { pdfExcerpt: prepared.receipt } : { excerpt: prepared.receipt }),
+			manualText: manualText.trim(), aiText: "", aiProvider: "", aiModel: "", createdAt: now, updatedAt: now,
 			archiveStatus: "none", archiveTargets: [], archiveRunId: "", archiveError: "",
 		};
 		try { await this.app.vault.create(annotationPath, this.renderNewDocument(record)); }
@@ -523,6 +537,7 @@ export class AnnotationService {
 	}
 
 	async getExcerptStatus(record: AnnotationRecord): Promise<string> {
+		if (record.pdfExcerpt) return pdfExcerptStatus(this.app, record);
 		const file = this.app.vault.getAbstractFileByPath(record.sourcePath);
 		if (!(file instanceof TFile)) return "原文已缺失；保留历史摘录，需复查";
 		return excerptMatches(record, await this.app.vault.read(file)) ? "当前 Markdown 文本与保存时一致；未据此核验 PDF、图片或科学结论" : "原文版本已变化；保留历史摘录，需复查";
@@ -532,6 +547,7 @@ export class AnnotationService {
 		selection: AnnotationSelection,
 		draft: AnnotationDraft,
 	): Promise<AnnotationRecord> {
+		if (selection.pdfExcerpt) throw new Error("PDF 选区请使用保存摘录");
 		const sourceFile = this.app.vault.getAbstractFileByPath(selection.sourcePath);
 		if (!(sourceFile instanceof TFile)) throw new Error("原始 Markdown 文件不存在");
 		const detached = usesDetachedAnnotations(sourceFile.path);
@@ -586,6 +602,11 @@ export class AnnotationService {
 		if (!usesDetachedAnnotations(selection.sourcePath)) return null;
 		const sourceFile = this.app.vault.getAbstractFileByPath(selection.sourcePath);
 		if (!(sourceFile instanceof TFile)) return null;
+		if (selection.pdfExcerpt) {
+			const prepared = await verifyPdfSelection(this.app, selection);
+			const excerpt = await this.loadAnnotation(`${ANNOTATION_FOLDER}/${prepared.id}.md`, prepared.id);
+			return excerpt?.pdfExcerpt && excerpt.sourcePath === selection.sourcePath && objectDigest(excerpt.pdfExcerpt) === objectDigest(prepared.receipt) ? excerpt : null;
+		}
 		if (selection.sourceRevision) {
 			const prepared = prepareExcerpt(selection, await this.app.vault.read(sourceFile));
 			const excerpt = await this.loadAnnotation(`${ANNOTATION_FOLDER}/${prepared.id}.md`, prepared.id);
@@ -621,7 +642,7 @@ export class AnnotationService {
 		record: AnnotationRecord,
 		draft: AnnotationDraft,
 	): Promise<AnnotationRecord> {
-		if (record.excerpt) throw new Error("请从摘录列表编辑个人备注，原文凭据保持不变");
+		if (record.excerpt || record.pdfExcerpt) throw new Error("请从摘录列表编辑个人备注，原文凭据保持不变");
 		const latest = await this.loadAnnotation(record.annotationPath, record.id);
 		if (!latest) throw new Error("批注记录不存在或已被修改");
 		const updated: AnnotationRecord = {
@@ -929,6 +950,7 @@ export class AnnotationService {
 			section: record.section,
 			sourceAnchor: record.sourceAnchor,
 			...(record.excerpt ? { excerpt: record.excerpt } : {}),
+			...(record.pdfExcerpt ? { pdfExcerpt: record.pdfExcerpt } : {}),
 			aiProvider: record.aiProvider,
 			aiModel: record.aiModel,
 			createdAt: record.createdAt,
@@ -938,7 +960,7 @@ export class AnnotationService {
 			archiveRunId: record.archiveRunId,
 			archiveError: record.archiveError,
 		};
-		const title = record.selectedText.replace(/\s+/g, " ").slice(0, 90).replace(/[#\r\n]/g, "");
+		const title = record.pdfExcerpt ? `PDF 第 ${record.pdfExcerpt.page} 页摘录` : record.selectedText.replace(/\s+/g, " ").slice(0, 90).replace(/[#\r\n]/g, "");
 		const targets = record.archiveTargets.length
 			? record.archiveTargets.map((target) => `[[${normalizeArchiveTarget(target)}]]`).join("、")
 			: "无";
@@ -951,18 +973,20 @@ export class AnnotationService {
 		// Source context can contain HTML comments or annotation marker text.
 		// JSON escapes preserve the exact anchor without terminating this comment.
 		const serializedMeta = JSON.stringify(meta).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");
-		const contextHtml = (record.excerpt?.context || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+		const escaped = (value: string): string => value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+		const contextHtml = escaped(record.pdfExcerpt?.context || record.excerpt?.context || "");
 		return [
 			`${BLOCK_START}${record.id} -->`,
 			`## ${title || "批注"}`,
 			`${META_PREFIX}${serializedMeta} -->`,
 			"",
-			`- 原文：${record.selectedText}`,
+			record.pdfExcerpt ? `原文：\n\n<pre>${escaped(record.selectedText)}</pre>\n` : `- 原文：${record.selectedText}`,
 			`- 来源：${sourceReference(record.sourcePath)}`,
 			record.section ? `- 章节：${record.section}` : "",
 			`- 创建：${record.createdAt}`,
 			`- 更新：${record.updatedAt}`,
 			...(record.excerpt ? ["", "### 保存时的原文上下文", "仅记录当前 Markdown 文本版本，原文包与科学证据需另行核验。", `文本版本：\`${record.excerpt.digest}\``, "", `<pre>${contextHtml}</pre>`] : []),
+			...(record.pdfExcerpt ? ["", "### 保存时的原文上下文", "记录 PDF 文件版本与页内文字层；保留换行，科学结论需另行审阅。", `PDF 第 ${record.pdfExcerpt.page} / ${record.pdfExcerpt.pageCount} 页（文件页码）`, `文件版本：\`${record.pdfExcerpt.digest}\``, "", `<pre>${contextHtml}</pre>`] : []),
 			"",
 			"### 手动批注",
 			MANUAL_START,

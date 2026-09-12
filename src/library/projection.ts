@@ -149,10 +149,12 @@ export function projectLibrary(input: readonly LibraryObject[]): LibraryProjecti
 		parents[root(i)] = root(target.i);
 	}
 	for (let i = 0; i < items.length; i++) {
-		const item = items[i]; if (item.kind !== "annotation" || item.provenance?.format !== "dashboard-excerpt-1" || item.binding?.state !== "matched") continue;
+		const item = items[i]; if (item.kind !== "annotation" || !item.provenance || !["dashboard-excerpt-1", "dashboard-pdf-excerpt-1"].includes(item.provenance.format) || item.binding?.state !== "matched") continue;
 		const target = sources.get(refKey({ kind: "source", id: item.binding.sourceId || "" }));
 		if (!target || target.item.kind !== "source" || target.item.source.verification.state !== "verified" || target.item.source.path !== item.provenance.sourcePath
-			|| target.item.source.format === "pdf" || target.item.source.verification.fingerprint !== item.binding.fingerprint) throw new Error("摘录与当前已核验来源绑定不一致");
+			|| (target.item.source.format === "pdf") !== (item.provenance.format === "dashboard-pdf-excerpt-1")
+			|| item.provenance.format === "dashboard-pdf-excerpt-1" && item.provenance.sourceRevision !== item.binding.fingerprint
+			|| target.item.source.verification.fingerprint !== item.binding.fingerprint) throw new Error("摘录与当前已核验来源绑定不一致");
 		parents[root(i)] = root(target.i);
 	}
 	const groups = new Map<number, LibraryObject[]>();

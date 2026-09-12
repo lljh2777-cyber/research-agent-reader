@@ -183,6 +183,13 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 				} else if (source && source.source.verification.state === "verified") {
 					binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "摘录的文本版本与选区一致；科学证据仍需审阅";
 				} else binding.reason = "摘录文本版本一致，原文包尚未通过本次完整核验";
+			} else if (record.provenance.format === "dashboard-pdf-excerpt-1") {
+				if (!source || source.source.format !== "pdf" || source.source.verification.state !== "verified") binding.reason = "PDF 摘录保留独立文件与页内凭据；本次目录未取得已核验的 PDF 来源，需复查关联";
+				else if (source.source.verification.fingerprint !== record.provenance.sourceRevision) {
+					binding.state = "changed"; binding.reason = "摘录对应的 PDF 文件版本已变化，保留历史内容，需复查";
+				} else {
+					binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "PDF 文件版本一致；页内位置可回到原文核对，科学证据仍需审阅";
+				}
 			} else if (record.provenance.sourceRevision) {
 				if (binding.state !== "changed") binding.reason = "旧批注保留来源版本；仓库标识及版本算法尚未确认，保持独立";
 			}

@@ -6,7 +6,7 @@ import type { ReadingEvidence, ReadingLearningState, ReadingSession, ReadingSour
 export type LibraryIdentifiers = ResolvedIdentity["identifiers"];
 export type LibraryContentRole = "original_quote" | "ai_explanation" | "personal_note" | "external_material" | "synthesis";
 export interface LibraryAnnotationProvenance {
-	format: "dashboard-blocks" | "annotation-schema-2" | "dashboard-excerpt-1";
+	format: "dashboard-blocks" | "annotation-schema-2" | "dashboard-excerpt-1" | "dashboard-pdf-excerpt-1";
 	sourcePath: string;
 	/** Preserve external revision and Vault identifiers without assuming their algorithms. */
 	sourceRevision?: string;
