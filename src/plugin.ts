@@ -155,6 +155,7 @@ import { serializeActionRequest } from "./runtime/action-request";
 import type { DashboardActionOptions } from "./actions";
 import { AnnotationPopover } from "./annotations/annotation-popover";
 import { ExcerptBrowser } from "./annotations/excerpt-browser";
+import { excerptHistoryDestination, readExcerptHistory, type ExcerptHistoryEntry } from "./annotations/excerpt-history";
 import { ExcerptLibraryService } from "./annotations/excerpt-library";
 import type { ExcerptRef } from "./annotations/excerpt-library";
 import { PendingCenterModal } from "./views/pending-center";
@@ -769,8 +770,19 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	openExcerptBrowser(ref?: ExcerptRef): void {
 		if (this.excerptBrowser) { new Notice("摘录窗口已打开，请先完成当前操作"); return; }
-		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true), ref => this.showCurationModal(new ExcerptCurationModal(this.app, this, ref)));
+		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true), ref => this.showCurationModal(new ExcerptCurationModal(this.app, this, ref)), {
+			read: (ref, signal) => this.readExcerptHistory(ref, signal), open: (ref, entry, signal) => this.openExcerptHistoryTarget(ref, entry, signal),
+		});
 		this.excerptBrowser = modal; modal.open();
+	}
+	readExcerptHistory(ref: ExcerptRef, signal: AbortSignal) { return readExcerptHistory(new FileSourceStorage(this.readingPluginDirectory()), ref, signal); }
+	async openExcerptHistoryTarget(ref: ExcerptRef, entry: ExcerptHistoryEntry, signal: AbortSignal): Promise<void> {
+		const expected = structuredClone(entry), stable = { ...ref };
+		await new ExcerptLibraryService(this.app).load(stable, signal);
+		const target = excerptHistoryDestination(expected, await this.readExcerptHistory(stable, signal)); signal.throwIfAborted();
+		const file = this.app.vault.getAbstractFileByPath(target);
+		if (!(file instanceof TFile)) throw new Error("整理目标已移动或缺失，保留历史记录；未选择同名笔记");
+		await this.openSourceMarkdownFile(file, true); signal.throwIfAborted();
 	}
 
 	private openAnnotationPopover(options: {

@@ -46,6 +46,30 @@ export function curationNoteText(review: CurationReview, selectedIds: string[]):
 	if (protectedPrefix(text) !== protectedPrefix(context.target.text) || JSON.stringify(text.match(/^#{1,6}\s+.+$/gm)) !== JSON.stringify(context.target.text.match(/^#{1,6}\s+.+$/gm))) throw new Error("修改越过正文边界");
 	return text;
 }
+/** Shared validation for writes and read-only excerpt history. */
+export function validateCurationRevision(revision: CurationRevision, reviews: ReadonlyMap<string, CurationReview>, revisions: ReadonlyMap<string, CurationRevision>): CurationReview {
+	if (revision.version !== 1 || !/^c-[a-f0-9-]{36}$/.test(revision.id) || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(revision.created) || !Array.isArray(revision.suggestionIds)) throw new Error("修订标识无效");
+	const review = reviews.get(revision.reviewId); if (!review || !Array.isArray(revision.writes) || revision.writes.length < 2 || revision.writes.length > 3) throw new Error("修订记录无法校验");
+	const targetPath = review.context.target.path; const indexPath = indices[targetPath.split("/")[1] as keyof typeof indices];
+	if (!curationTarget(targetPath) || revision.writes.filter(w => w.role === "target").length !== 1 || revision.writes.filter(w => w.role === "log").length !== 1 || new Set(revision.writes.map(w => w.path)).size !== revision.writes.length) throw new Error("修订目标无效");
+	for (const write of revision.writes) {
+		if (write.role === "target" ? write.path !== targetPath : write.role === "index" ? write.path !== indexPath : write.role === "log" ? write.path !== "wiki/log.md" : true) throw new Error("修订路径越界");
+		if (typeof write.after !== "string" || write.after.length > 1000000 || contentHash(write.after) !== write.afterHash || (write.before === null ? write.beforeHash !== null : typeof write.before !== "string" || contentHash(write.before) !== write.beforeHash)) throw new Error("修订内容指纹错误");
+		if (write.role !== "log" && write.before === null) throw new Error("本版仅修改已有正式笔记和索引");
+	}
+	const target = revision.writes.find(w => w.role === "target")!;
+	const index = revision.writes.find(w => w.role === "index"); const log = revision.writes.find(w => w.role === "log")!;
+	if (index && (revision.undoOf || index.after !== index.before!.trimEnd() + "\n\n- " + link(targetPath) + "\n")) throw new Error("索引修改与预览规则不一致");
+	if (log.after !== (log.before || "# 知识库维护日志\n") + revisionLog(revision, review, !!index)) throw new Error("日志修改与预览规则不一致");
+	if (!revision.undoOf) {
+		const pending = structuredClone(review); pending.suggestions.forEach(s => { if (revision.suggestionIds.includes(s.id)) s.decision = "pending"; });
+		if (target.before !== review.context.target.text || target.after !== curationNoteText(pending, revision.suggestionIds)) throw new Error("修订与已审阅建议不一致");
+	} else {
+		const record = revisions.get(revision.undoOf); const original = record?.writes.find(w => w.role === "target");
+		if (!original || record?.state !== "applied" || record.undoOf || record.reviewId !== review.id || target.before !== original.after || target.after !== original.before) throw new Error("撤销记录不匹配");
+	}
+	return review;
+}
 export class CurationWriter {
 	constructor(private service: CurationService) {}
 	private async read(path: string): Promise<string | null> { const file = this.service.app.vault.getFileByPath(path); return file ? this.service.app.vault.cachedRead(file) : null; }
@@ -73,29 +97,7 @@ export class CurationWriter {
 		});
 	}
 	resume(id: string): Promise<CurationRevision> { return this.service.serial(async () => { await this.service.ready(); const revision = this.service.revisions.get(id); if (!revision) throw new Error("修订记录不存在"); return revision.state === "applied" ? this.finish(revision) : this.execute(revision); }); }
-	private validate(revision: CurationRevision): CurationReview {
-		if (revision.version !== 1 || !/^c-[a-f0-9-]{36}$/.test(revision.id) || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(revision.created) || !Array.isArray(revision.suggestionIds)) throw new Error("修订标识无效");
-		const review = this.service.reviews.get(revision.reviewId); if (!review || !Array.isArray(revision.writes) || revision.writes.length < 2 || revision.writes.length > 3) throw new Error("修订记录无法校验");
-		const targetPath = review.context.target.path; const indexPath = indices[targetPath.split("/")[1] as keyof typeof indices];
-		if (!curationTarget(targetPath) || revision.writes.filter(w => w.role === "target").length !== 1 || revision.writes.filter(w => w.role === "log").length !== 1 || new Set(revision.writes.map(w => w.path)).size !== revision.writes.length) throw new Error("修订目标无效");
-		for (const write of revision.writes) {
-			if (write.role === "target" ? write.path !== targetPath : write.role === "index" ? write.path !== indexPath : write.role === "log" ? write.path !== "wiki/log.md" : true) throw new Error("修订路径越界");
-			if (typeof write.after !== "string" || write.after.length > 1000000 || contentHash(write.after) !== write.afterHash || (write.before === null ? write.beforeHash !== null : typeof write.before !== "string" || contentHash(write.before) !== write.beforeHash)) throw new Error("修订内容指纹错误");
-			if (write.role !== "log" && write.before === null) throw new Error("本版仅修改已有正式笔记和索引");
-		}
-		const target = revision.writes.find(w => w.role === "target")!;
-		const index = revision.writes.find(w => w.role === "index"); const log = revision.writes.find(w => w.role === "log")!;
-		if (index && (revision.undoOf || index.after !== index.before!.trimEnd() + "\n\n- " + link(targetPath) + "\n")) throw new Error("索引修改与预览规则不一致");
-		if (log.after !== (log.before || "# 知识库维护日志\n") + revisionLog(revision, review, !!index)) throw new Error("日志修改与预览规则不一致");
-		if (!revision.undoOf) {
-			const pending = structuredClone(review); pending.suggestions.forEach(s => { if (revision.suggestionIds.includes(s.id)) s.decision = "pending"; });
-			if (target.before !== review.context.target.text || target.after !== curationNoteText(pending, revision.suggestionIds)) throw new Error("修订与已审阅建议不一致");
-		} else {
-			const record = this.service.revisions.get(revision.undoOf); const original = record?.writes.find(w => w.role === "target");
-			if (!original || record?.state !== "applied" || record.undoOf || record.reviewId !== review.id || target.before !== original.after || target.after !== original.before) throw new Error("撤销记录不匹配");
-		}
-		return review;
-	}
+	private validate(revision: CurationRevision): CurationReview { return validateCurationRevision(revision, this.service.reviews, this.service.revisions); }
 	private async finish(revision: CurationRevision): Promise<CurationRevision> {
 		const review = this.validate(revision);
 		if (!revision.undoOf && revision.suggestionIds.some(id => review.suggestions.find(s => s.id === id)?.decision !== "applied")) {

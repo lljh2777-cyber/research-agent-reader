@@ -18,7 +18,7 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.72.0`; the beta
+The `codex/research-learning-map` development branch is at `0.73.0`; the beta
 release link above remains the published release.
 
 `0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；不为保存书目信息生成论文笔记。跨阶段待处理中心按路线归 R3。
@@ -44,6 +44,8 @@ release link above remains the published release.
 `0.71.0` 接通 [R3.3 待处理中心](docs/pending-center-r33.md)：从首页、文献库“待处理”或同名命令查看书目、全文获取、入库转换、摘录和审阅复查记录。支持搜索、分阶段筛选与刷新，返回前重新核对准确对象；读取不完整时列出提示，不推断缺少全文或转换正文。中心只读取保存记录，续办和审阅仍在原功能完成。下一步接入摘录补充到已有笔记的预览与受控写入。
 
 `0.72.0` 接通 [R3.4 摘录补充到已有笔记](docs/excerpt-curation-r34.md)：从摘录详情选择目标笔记与插入段落，明确勾选原句和可选个人备注，核对逐文件预览后确认补充。全过程不调用模型；来源、摘录或目标变化阻止旧预览写入，支持修订恢复和预览撤销。剪藏与个人备注保留独立标注，不自动升级阅读深度或结束整条摘录的待整理状态。
+
+`0.73.0` 补齐 [R3.5 摘录整理历史与完成标记](docs/excerpt-history-r35.md)：摘录详情可查看已保存的补充目标、修订前后内容与撤销记录，并准确打开当前目标笔记。支持手动“标记整理完成／重新待整理”与状态筛选；完成标记不会隐藏来源变化或无法核对的复查项。历史只读，修改备注或状态后，旧的待应用预览须重新核对。下一步接入学习回答摘录，R3 尚未整体收尾。
 
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。
 

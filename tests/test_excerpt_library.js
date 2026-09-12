@@ -5,7 +5,7 @@ class TFile {constructor(p){this.path=p;this.basename=path.posix.basename(p,".md
 class MarkdownView {}
 const mocks={obsidian:{TFile,MarkdownView,Notice:class{},normalizePath:p=>p}};
 const {AnnotationService}=loadReading("annotations/annotation-service.ts",mocks);
-const {ExcerptLibraryService,readExcerptSnapshot,patchExcerptNote}=loadReading("annotations/excerpt-library.ts",mocks);
+const {ExcerptLibraryService,readExcerptSnapshot,patchExcerptNote,patchExcerptOrganization}=loadReading("annotations/excerpt-library.ts",mocks);
 const {excerptRevision}=loadReading("annotations/excerpt.ts");
 async function fixture(eol="\n",source="Clippings/repeated.md"){
  const body=["# Study","","😀 第一处 repeated sentence.","","第二处 repeated sentence.",""].join(eol),start=body.lastIndexOf("repeated sentence"),quote="repeated sentence";
@@ -83,6 +83,19 @@ let count=0;const test=async(name,run)=>{await run();count++;console.log("PASS e
   f.app.workspace.getLeaf=()=>{const leaf=get(),open=leaf.openFile;leaf.openFile=async file=>{await open.call(leaf,file);f.files.get(f.record.annotationPath).text+="\nConcurrent edit";};return leaf;};
   await assert.rejects(f.service.openSource(f.record),/打开期间/);assert.equal(f.selections.length,0);
   f.files.get(f.source).text+="changed";const before=f.files.get(f.source).text;const saved=await f.service.saveNote(await f.service.load(f.record),"historical note edit");assert.equal(saved.record.manualText,"historical note edit");assert.equal(f.files.get(f.source).text,before);
+ });
+ await test("manual completion and reopen preserve source, note, AI, unknown metadata and LF/CRLF",async()=>{
+  for(const eol of ["\n","\r\n"]){const f=await fixture(eol),entry=f.files.get(f.record.annotationPath);entry.text=entry.text.replace('"archiveStatus":','"extra":{"preserve":true},"archiveStatus":')+eol+"Keep this appendix";
+   const before=await f.service.load(f.record),complete=await f.service.setCompleted(before,true);assert.equal(complete.record.archiveStatus,"completed");assert.ok(entry.text.includes("- 状态：整理完成"));assert.ok(entry.text.includes('"extra":{"preserve":true}'));assert.ok(entry.text.endsWith("Keep this appendix"));
+   const strip=r=>{const copy=structuredClone(r);delete copy.updatedAt;delete copy.archiveStatus;return copy;};assert.deepEqual(strip(complete.record),strip(before.record));
+   const unchanged=entry.text;assert.equal(patchExcerptOrganization(unchanged,complete,true,"ignored"),unchanged);const reopened=await new ExcerptLibraryService(f.app).setCompleted(complete,false);assert.equal(reopened.record.archiveStatus,"none");assert.ok(entry.text.includes("- 状态：待整理"));assert.equal(f.files.get(f.source).text,f.body);if(eol==="\r\n")assert.ok(!/(?<!\r)\n/.test(entry.text));
+  }
+ });
+ await test("completion conflicts, cancellation, response loss and existing archive jobs",async()=>{
+  const f=await fixture(),old=await f.service.load(f.record),entry=f.files.get(f.record.annotationPath);entry.text+="\nExternal edit";const before=entry.text;await assert.rejects(f.service.setCompleted(old,true),/其他窗口/);assert.equal(entry.text,before);
+  const fresh=await f.service.load(f.record),c=new AbortController(),process=f.app.vault.process;f.app.vault.process=async(...args)=>{c.abort();return process(...args);};await assert.rejects(f.service.setCompleted(fresh,true,c.signal),/abort/i);assert.equal(entry.text,before);
+  f.app.vault.process=async(...args)=>{await process(...args);throw Error("response lost");};assert.equal((await f.service.setCompleted(fresh,true)).record.archiveStatus,"completed");
+  entry.text=entry.text.replace('"archiveRunId":""','"archiveRunId":"legacy-run"');const archive=entry.text;await assert.rejects(f.service.setCompleted(await f.service.load(f.record),false),/归档任务/);assert.equal(entry.text,archive);
  });
  console.log(`EXCERPT_LIBRARY_OK (${count} groups; memory-only services)`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

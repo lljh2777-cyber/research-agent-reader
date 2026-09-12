@@ -45,9 +45,14 @@ let n=0;const test=async(name,run)=>{await run();n++;console.log('PASS pending c
  });
  await test('excerpt source changes use composite library identities and completed excerpts disappear only when unchanged',async()=>{
   const deps=inputs(),r={id:'ann-excerpt-'+'a'.repeat(48),annotationPath:'wiki/annotations/ann-excerpt-'+'a'.repeat(48)+'.md',sourcePath:'Clippings/test.md',selectedText:'Exact quote',archiveStatus:'completed'};
-  deps.excerpts=async()=>({entries:[{record:r,digest:'a'.repeat(64)}],issues:[]});assert.equal((await readPendingCenter(deps,signal())).items.length,0);
+  deps.excerpts=async()=>({entries:[{record:r,digest:'a'.repeat(64)}],issues:[]});assert.equal((await readPendingCenter(deps,signal())).items[0].category,'review');
+  deps.library=async()=>({...empty(),papers:[paper([{kind:'annotation',id:r.annotationPath+'#'+r.id,binding:{state:'matched',reason:'same bytes'}}])]});
+  assert.equal((await readPendingCenter(deps,signal())).items.length,0);
+  r.archiveStatus='none';const reopened=(await readPendingCenter(deps,signal())).items[0];assert.equal(reopened.category,'excerpt');r.archiveStatus='completed';assert.throws(()=>pendingDestination(reopened,{items:[]}),/变化|完成/);
+  deps.library=async()=>({...empty(),papers:[paper([{kind:'annotation',id:r.annotationPath+'#'+r.id,binding:{state:'unresolved',reason:'missing'}}])]});assert.equal((await readPendingCenter(deps,signal())).items[0].category,'review');
   deps.library=async()=>({...empty(),papers:[paper([{kind:'annotation',id:r.annotationPath+'#'+r.id,binding:{state:'changed',reason:'changed'}}])]});
   const out=await readPendingCenter(deps,signal());assert.equal(out.items.length,1);assert.equal(out.items[0].category,'review');assert.equal(out.items[0].target.ref.id,r.id);
+  deps.curation=async()=>({entries:[{kind:'revisions',id:'c-recovery',path:'wiki/concepts/a.md',state:'recovery',digest:'x'}],issues:[]});assert.equal((await readPendingCenter(deps,signal())).items.length,2);
  });
  await test('partial failures retain independent rows; synchronous adapter failures and cancelled reads are explicit',async()=>{
   const deps=inputs();deps.library=()=>{throw Error('broken library');};deps.excerpts=async()=>{throw Error('broken excerpts');};deps.tasks=()=>[{id:'run-1',actionId:'paper-ingest',status:'failed',label:'Intake',summary:'paper.pdf',startedAt:'',finishedAt:''},{id:'done',actionId:'paper-ingest',status:'done'},{id:'code',actionId:'code-reading',status:'failed'}];

@@ -95,9 +95,10 @@ export async function readPendingCenter(inputs: PendingInputs, signal: AbortSign
 		for (const snapshot of excerpts.value.entries) {
 			const r = snapshot.record;
 			const binding = bindings.get(r.annotationPath + "#" + r.id);
-			if (r.archiveStatus === "completed" && binding?.state !== "changed") continue;
-			add("excerpt:" + r.id, binding?.state === "changed" ? "review" : "excerpt", r.selectedText,
-				binding?.state === "changed" ? "原文版本已变化，请核对历史摘录。" : "摘录尚无完成整理的记录，可先回看原句和个人备注。",
+			if (r.archiveStatus === "completed" && binding?.state === "matched") continue;
+			const unresolvedCompletion = r.archiveStatus === "completed" && binding?.state !== "changed";
+			add("excerpt:" + r.id, binding?.state === "changed" || unresolvedCompletion ? "review" : "excerpt", r.selectedText,
+				binding?.state === "changed" ? "原文版本已变化，请核对历史摘录。" : unresolvedCompletion ? "摘录已标记整理完成，但当前原文无法核对，请复查来源。" : "摘录尚未标记整理完成，可回看原句、个人备注与整理历史。",
 				"查看摘录", r.sourcePath, { kind: "excerpt", ref: { annotationPath: r.annotationPath, id: r.id } }, { digest: snapshot.digest, binding: binding || null });
 		}
 	}

@@ -11,6 +11,8 @@ const MANUAL_START = "<!-- agent-dashboard:manual-start -->", MANUAL_END = "<!--
 const META = /<!-- agent-dashboard:annotation-meta (\{[^\r\n]*\}) -->/g;
 const validPath = (path: string): boolean => /^wiki\/annotations\/ann-excerpt-[a-f0-9]{48}\.md$/.test(path);
 const digest = (text: string): string => excerptRevision(text).digest;
+export const excerptOrganizationLabel = (record: AnnotationRecord): string => ({ none: "待整理", completed: "整理完成", pending: "归档处理中", failed: "归档失败" })[record.archiveStatus];
+export const canOrganizeExcerpt = (record: AnnotationRecord): boolean => ["none", "completed"].includes(record.archiveStatus) && !record.archiveRunId && !record.archiveTargets.length && !record.archiveError;
 
 /** A strict, single-record snapshot. Unknown body text is retained, never regenerated. */
 export function readExcerptSnapshot(content: string, ref: ExcerptRef): ExcerptSnapshot {
@@ -38,17 +40,37 @@ export function patchExcerptNote(content: string, expected: ExcerptSnapshot, man
 	const start = content.indexOf(MANUAL_START) + MANUAL_START.length, end = content.indexOf(MANUAL_END);
 	const eol = content.includes("\r\n") ? "\r\n" : "\n";
 	let next = content.slice(0, start) + eol + note + eol + content.slice(end);
-	next = next.replace(META, (_all, json: string) => {
-		const meta = JSON.parse(json); meta.updatedAt = now;
+	return updateMetadata(next, latest.record, {}, now);
+}
+
+function updateMetadata(content: string, record: AnnotationRecord, patch: Record<string, unknown>, now: string): string {
+	let next = content.replace(META, (_all, json: string) => {
+		const meta = { ...JSON.parse(json), ...patch, updatedAt: now };
 		return "<!-- agent-dashboard:annotation-meta " + JSON.stringify(meta).replace(/</g, "\\u003c").replace(/>/g, "\\u003e") + " -->";
 	});
 	// Update only existing generated timestamps. Preserve extra prose and unknown metadata fields.
 	next = next.replace(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/, (_all, start: string, body: string, end: string) => start + body.replace(/^updated: [^\r\n]*/m, `updated: ${JSON.stringify(now)}`) + end);
-	const old = "- 更新：" + latest.record.updatedAt;
+	const old = "- 更新：" + record.updatedAt;
 	const blockStart = next.indexOf("<!-- agent-dashboard:annotation-start ");
 	const contextStart = next.indexOf("### 保存时的原文上下文", blockStart);
 	const at = next.indexOf(old, blockStart);
 	if (at >= 0 && at < contextStart) next = next.slice(0, at) + "- 更新：" + now + next.slice(at + old.length);
+	return next;
+}
+
+/** A manual work marker, never a scientific review or a completed archive job. */
+export function patchExcerptOrganization(content: string, expected: ExcerptSnapshot, completed: boolean, now: string): string {
+	const latest = readExcerptSnapshot(content, expected.record);
+	if (latest.digest !== expected.digest) throw new Error("摘录已被其他窗口或同步修改，请重新读取后再标记整理状态");
+	if (!canOrganizeExcerpt(latest.record)) throw new Error("此摘录包含归档任务记录，请在原归档功能处理，未更改状态");
+	const archiveStatus = completed ? "completed" : "none";
+	if (latest.record.archiveStatus === archiveStatus) return content;
+	let next = updateMetadata(content, latest.record, { archiveStatus }, now);
+	// Only replace the generated archive status line after the AI section.
+	const start = next.indexOf("<!-- agent-dashboard:ai-end -->") + "<!-- agent-dashboard:ai-end -->".length;
+	const end = next.indexOf("<!-- agent-dashboard:annotation-end ", start);
+	const body = next.slice(start, end).replace(/^(### 归档\r?\n)- 状态：(未归档|已归档|待整理|整理完成)(?=\r?\n|$)/m, "$1- 状态：" + (completed ? "整理完成" : "待整理"));
+	next = next.slice(0, start) + body + next.slice(end);
 	return next;
 }
 
@@ -88,8 +110,14 @@ export class ExcerptLibraryService {
 		return excerptMatches(record, text) ? "Markdown 文本与保存时一致；未据此核验 PDF、图片或科学结论" : "原文版本已变化；保留历史摘录，需复查";
 	}
 	async saveNote(snapshot: ExcerptSnapshot, manualText: string, signal?: AbortSignal): Promise<ExcerptSnapshot> {
+		return this.mutate(snapshot, (content, expected) => patchExcerptNote(content, expected, manualText, new Date().toISOString()), signal);
+	}
+	async setCompleted(snapshot: ExcerptSnapshot, completed: boolean, signal?: AbortSignal): Promise<ExcerptSnapshot> {
+		return this.mutate(snapshot, (content, expected) => patchExcerptOrganization(content, expected, completed, new Date().toISOString()), signal);
+	}
+	private async mutate(snapshot: ExcerptSnapshot, patch: (content: string, expected: ExcerptSnapshot) => string, signal?: AbortSignal): Promise<ExcerptSnapshot> {
 		// Capture primitive inputs before the first asynchronous boundary.
-		const expected = { digest: snapshot.digest, record: { ...snapshot.record } };
+		const expected = structuredClone(snapshot);
 		await this.load(expected.record, signal);
 		const file = this.app.vault.getAbstractFileByPath(expected.record.annotationPath);
 		if (!(file instanceof TFile)) throw new Error("摘录文档已缺失");
@@ -98,16 +126,16 @@ export class ExcerptLibraryService {
 			await this.app.vault.process(file, content => {
 				signal?.throwIfAborted();
 				if (file.path !== expected.record.annotationPath || this.app.vault.getAbstractFileByPath(expected.record.annotationPath) !== file) throw new Error("摘录文档在保存前已移动或替换，未写入");
-				intended = patchExcerptNote(content, expected, manualText, new Date().toISOString());
+				intended = patch(content, expected);
 				return intended;
 			});
 		} catch (error) {
 			// A write can commit before its response fails. Only accept the exact intended file.
-			if (intended !== undefined && await this.app.vault.read(file) === intended) return readExcerptSnapshot(intended, expected.record);
+			if (file.path === expected.record.annotationPath && this.app.vault.getAbstractFileByPath(file.path) === file && intended !== undefined && await this.app.vault.read(file) === intended) return readExcerptSnapshot(intended, expected.record);
 			throw error;
 		}
 		const saved = await this.app.vault.read(file);
-		if (saved !== intended) throw new Error("写入后摘录再次发生变化；草稿已保留，请重新读取核对");
+		if (saved !== intended || file.path !== expected.record.annotationPath || this.app.vault.getAbstractFileByPath(file.path) !== file) throw new Error("写入后摘录再次发生变化；草稿已保留，请重新读取核对");
 		return readExcerptSnapshot(saved, expected.record);
 	}
 	async openSource(ref: ExcerptRef, signal?: AbortSignal): Promise<void> {

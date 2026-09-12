@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Excerpt history and manual completion — 0.73.0
+
+- 摘录详情按精确记录展示整理批次、补充目标、修改前后内容与撤销状态；复用写入侧验证规则，读取历史不初始化恢复服务或调用模型。
+- 新增手动整理完成、重新待整理及状态筛选；整份文件比较保护原句、个人备注、AI 内容和额外字段，旧归档任务继续在原功能处理。
+- 待处理中心只在完成且来源明确一致时移出摘录；来源变化、缺失或无法核对仍列为复查，独立修订恢复事项保留。
+- 9 组新专项及相关回归通过；原生完成状态重载、历史展开、准确返回、异常与窄视口验收，修正多余分页按钮。测试库 983 个受保护文件及原 14 个标签页恢复，隔离范围见 [R3.5 记录](docs/excerpt-history-r35.md)。
+
 ### Manual excerpt curation with guarded revisions — 0.72.0
 
 - 摘录详情可选择已有笔记和插入段落，明确勾选原句与可选个人备注，逐文件预览后确认补充；无需阅读会话或模型。
