@@ -9,6 +9,7 @@ import type {
 	ProviderHttpResponse,
 } from "../types/contracts";
 import type { DashboardSettings } from "../runtime/settings";
+import { resolveNodeExecutable } from "../runtime/node-executable";
 import { runBoundedAgentLoop } from "./loop";
 import { MineruPreCommitValidationError } from "./mineru-publish";
 import {
@@ -540,6 +541,8 @@ export class AgentLoopService {
 				state.notes.push(draftDecision.downgradeNote);
 			}
 			if (draftDecision.run) {
+				// Check the desktop writer before spending a model request on a new note.
+				resolveNodeExecutable();
 				if (!ensureBudget()) {
 					return this.finish(state, options, profileId, resolved, emitStatus);
 				}

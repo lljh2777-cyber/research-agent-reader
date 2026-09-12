@@ -1071,7 +1071,9 @@ function buildSourceNoteMarkdown(
 		"",
 		"## 问题与动机",
 		fields.motivation || "Vault 中未找到足够依据",
-		...(fields.evidenceGaps ? ["", "## 证据缺口", fields.evidenceGaps] : []),
+		"", "## 证据缺口",
+		"本文仅作摘要级概述，尚未逐图核验主要结果及完整的方法与证据链。",
+		...(fields.evidenceGaps ? ["", fields.evidenceGaps] : []),
 	].join("\n");
 	return `${frontmatter}${body}\n`;
 }
@@ -1122,7 +1124,8 @@ export async function commitSourceNote(
 		await createTrustedVaultTextFile(deps.app.vault.adapter, path, content);
 	} catch (createError) {
 		const message = createError instanceof Error ? createError.message : String(createError);
-		throw new Error(`创建笔记失败（已存在同名文件时不会覆盖）：${message.slice(0, 200)}`);
+		const exists = (createError as NodeJS.ErrnoException)?.code === "EEXIST";
+		throw new Error(`${exists ? "已存在同名文件，不会覆盖" : "创建笔记失败"}：${message.slice(0, 200)}`);
 	}
 	const written = (await readTrustedVaultFile(
 		deps.app.vault.adapter,
