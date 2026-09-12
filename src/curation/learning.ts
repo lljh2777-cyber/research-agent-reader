@@ -1,5 +1,6 @@
 import type { App } from "obsidian";
 import { isTopicExportPath } from "../topic-learning/export-path";
+import { isAnswerExcerptPath } from "../learning/answer-excerpt-path";
 import { setTimeout as delay } from "node:timers/promises";
 import { readingCategory, readingTitle } from "../reading/catalog";
 import type { ReadingSession } from "../reading/types";
@@ -26,9 +27,9 @@ export class LearningLibrary {
 		await this.workspace.ready(); const docs: LearningDocument[] = [];
 		for (const session of this.workspace.repository.sessions.values()) { signal?.throwIfAborted(); docs.push(...sessionLearningDocuments(session)); if (docs.length > 10000) throw new Error("学习记录超过一万个节点，当前索引容量不足"); }
 		const excludedSessions = new Set([...this.workspace.repository.sessions.values()].filter(session => readingCategory(session) !== "reading" || session.demo).map(session => session.id));
-		for (const [i, file] of this.app.vault.getMarkdownFiles().filter(file => /^wiki\/qa\/[^\\]+\.md$/i.test(file.path) && !isTopicExportPath(file.path) && !file.path.split("/").some(part => part.startsWith("."))).entries()) {
+		for (const [i, file] of this.app.vault.getMarkdownFiles().filter(file => /^wiki\/qa\/[^\\]+\.md$/i.test(file.path) && !isTopicExportPath(file.path) && !isAnswerExcerptPath(file.path) && !file.path.split("/").some(part => part.startsWith("."))).entries()) {
 			signal?.throwIfAborted(); const metadata = this.app.metadataCache.getFileCache(file)?.frontmatter || {};
-			if (metadata.type === "topic-learning-record" || metadata.demo === true || ["demo", "test"].includes(metadata.purpose) || excludedSessions.has(metadata.reading_session)) continue;
+			if (metadata.type === "learning-answer-excerpt" || metadata.type === "topic-learning-record" || metadata.demo === true || ["demo", "test"].includes(metadata.purpose) || excludedSessions.has(metadata.reading_session)) continue;
 			const raw = await this.app.vault.cachedRead(file); if (raw.length > 250000) throw new Error("学习笔记过长，请缩小学习索引范围：" + file.path);
 			const body = raw.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
 			docs.push(document(file.path, String(metadata.title || file.basename), body, { recordKind: "qa", sourceIdentity: String(metadata.reading_source_fingerprint || "来源未核验") }));

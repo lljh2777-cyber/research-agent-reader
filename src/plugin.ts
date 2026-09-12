@@ -155,6 +155,11 @@ import { serializeActionRequest } from "./runtime/action-request";
 import type { DashboardActionOptions } from "./actions";
 import { AnnotationPopover } from "./annotations/annotation-popover";
 import { ExcerptBrowser } from "./annotations/excerpt-browser";
+import { AnswerExcerptService } from "./learning/answer-excerpts";
+import { readAnswerSnapshot, readingAnswerSnapshot, topicAnswerSnapshot, type AnswerSnapshot } from "./learning/answer-snapshot";
+import { validAnswerExcerptPath } from "./learning/answer-excerpt-path";
+import { AnswerExcerptModal } from "./views/answer-excerpt";
+import { AnswerExcerptBrowser } from "./views/answer-excerpt-browser";
 import { excerptHistoryDestination, readExcerptHistory, type ExcerptHistoryEntry } from "./annotations/excerpt-history";
 import { ExcerptLibraryService } from "./annotations/excerpt-library";
 import type { ExcerptRef } from "./annotations/excerpt-library";
@@ -363,6 +368,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	private curationModals = new Set<Modal>();
 	private annotationPopover: AnnotationPopover | null = null;
 	private excerptBrowser?: ExcerptBrowser;
+	private answerExcerptService?: AnswerExcerptService;
+	private answerExcerptBrowser?: AnswerExcerptBrowser;
 	private pendingCenter?: PendingCenterModal;
 	private annotationChip: HTMLElement | null = null;
 	private persistence?: DashboardPersistence;
@@ -488,6 +495,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.addCommand({ id: "open-topic-planning", name: "打开主题路线（预览）", callback: () => { void this.activateLearningSpace({ kind: "topic" }).catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-excerpts", name: "打开摘录（原句与个人备注）", callback: () => this.openExcerptBrowser() });
+		this.addCommand({ id: "open-answer-excerpts", name: "打开学习回答摘录（AI 内容）", callback: () => this.openAnswerExcerptBrowser() });
 		this.addCommand({ id: "open-pending-center", name: "打开待处理中心", callback: () => this.openPendingCenter() });
 		this.addCommand({ id: "add-paper-metadata", name: "添加文献信息（无需模型）", callback: () => this.openMetadataIntake() });
 		this.addCommand({ id: "add-paper", name: "添加文献（书目信息、全文与本地 PDF）", callback: () => this.openPaperIntake() });
@@ -613,6 +621,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		this.answerExcerptBrowser?.dispose();
 		this.topicLearning?.dispose();
 		await this.topicStudy?.dispose();
 		this.acquisitionClosing = true; for (const modal of this.fulltextPreviews) modal.close();
@@ -772,10 +781,37 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (this.excerptBrowser) { new Notice("摘录窗口已打开，请先完成当前操作"); return; }
 		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true), ref => this.showCurationModal(new ExcerptCurationModal(this.app, this, ref)), {
 			read: (ref, signal) => this.readExcerptHistory(ref, signal), open: (ref, entry, signal) => this.openExcerptHistoryTarget(ref, entry, signal),
-		});
+		}, () => this.openAnswerExcerptBrowser());
 		this.excerptBrowser = modal; modal.open();
 	}
 	readExcerptHistory(ref: ExcerptRef, signal: AbortSignal) { return readExcerptHistory(new FileSourceStorage(this.readingPluginDirectory()), ref, signal); }
+	getAnswerExcerpts(): AnswerExcerptService { return this.answerExcerptService ||= new AnswerExcerptService(this.app, (ref, signal) => readAnswerSnapshot(new FileSourceStorage(this.readingPluginDirectory()), ref, signal)); }
+	openAnswerExcerpt(answer: AnswerSnapshot, range?: { start: number; end: number }): void { this.showCurationModal(new AnswerExcerptModal(this.app, this.getAnswerExcerpts(), answer, path => this.openAnswerExcerptBrowser(path), range)); }
+	openAnswerExcerptBrowser(path?: string): void {
+		if (this.answerExcerptBrowser) { new Notice("学习回答摘录已打开，请先完成当前操作"); return; }
+		const modal = new AnswerExcerptBrowser(this.app, this.getAnswerExcerpts(), async path => {
+			if (!validAnswerExcerptPath(path)) throw new Error("学习摘录路径无效"); const file = this.app.vault.getAbstractFileByPath(path); if (!(file instanceof TFile)) throw new Error("学习摘录文档缺失"); await this.openSourceMarkdownFile(file, true);
+		}, (answer, signal) => this.openAnswerExcerptSource(answer, signal), path, () => { if (this.answerExcerptBrowser === modal) this.answerExcerptBrowser = undefined; });
+		this.answerExcerptBrowser = modal; modal.open();
+	}
+	async openAnswerExcerptSource(answer: AnswerSnapshot, signal: AbortSignal): Promise<void> {
+		const expected = structuredClone(answer); await this.getAnswerExcerpts().verify(expected, signal); const ref = expected.ref;
+		if (ref.kind === "topic") {
+			const existing = this.app.workspace.getLeavesOfType(TOPIC_STUDY_VIEW_TYPE)[0]; if (existing) await existing.loadIfDeferred(); signal.throwIfAborted();
+			const leaf = existing || this.app.workspace.getLeaf("tab"); if (!existing) await leaf.setViewState({ type: TOPIC_STUDY_VIEW_TYPE, active: true }); signal.throwIfAborted();
+			if (!(leaf.view instanceof TopicStudyView)) throw new Error("主题学习页面无法打开");
+			await leaf.view.openStudy(ref.topicId, ref.route); signal.throwIfAborted();
+			const study = leaf.view.controller.study; if (!study || topicAnswerSnapshot(study, ref.nodeId).digest !== expected.digest) throw new Error("页面中的回答版本已变化，未选择其他节点");
+			await this.getAnswerExcerpts().verify(expected, signal); leaf.view.controller.select(ref.nodeId); await this.app.workspace.revealLeaf(leaf);
+		} else {
+			await this.activateReadingWorkspace({ sessionId: ref.sessionId }); signal.throwIfAborted();
+			const current = readingAnswerSnapshot(this.getReadingWorkspace().repository.get(ref.sessionId), ref.nodeId);
+			if (current.digest !== expected.digest) throw new Error("页面中的回答版本已变化，未选择其他节点");
+			await this.getAnswerExcerpts().verify(expected, signal);
+			const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE).map(leaf => leaf.view).find(v => v instanceof ReadingWorkspaceView && v.getState().sessionId === ref.sessionId);
+			if (!(view instanceof ReadingWorkspaceView)) throw new Error("阅读回答页面无法打开"); view.revealLearningNode(ref.nodeId);
+		}
+	}
 	async openExcerptHistoryTarget(ref: ExcerptRef, entry: ExcerptHistoryEntry, signal: AbortSignal): Promise<void> {
 		const expected = structuredClone(entry), stable = { ...ref };
 		await new ExcerptLibraryService(this.app).load(stable, signal);

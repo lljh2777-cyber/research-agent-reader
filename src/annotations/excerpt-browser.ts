@@ -21,7 +21,7 @@ export class ExcerptBrowser extends Modal {
 	private searchEl!: HTMLInputElement;
 	private refreshEl!: HTMLButtonElement;
 	private get dirty(): boolean { return Boolean(this.selected && this.draft !== this.selected.record.manualText); }
-	constructor(app: App, private readonly initial?: ExcerptRef, private readonly didClose?: () => void, openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>, private readonly curate?: (ref: ExcerptRef) => void, private readonly history?: ExcerptHistoryHost) { super(app); this.service = new ExcerptLibraryService(app, openMarkdown); }
+	constructor(app: App, private readonly initial?: ExcerptRef, private readonly didClose?: () => void, openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>, private readonly curate?: (ref: ExcerptRef) => void, private readonly history?: ExcerptHistoryHost, private readonly answers?: () => void) { super(app); this.service = new ExcerptLibraryService(app, openMarkdown); }
 	onOpen(): void {
 		this.closed = false; this.setTitle("摘录"); this.modalEl.addClass("rar-excerpt-modal");
 		this.contentEl.createEl("p", { text: "查找保存的原句与个人备注。选择一条摘录后核对来源；备注可以独立修改。", cls: "rar-library-muted" });
@@ -29,6 +29,7 @@ export class ExcerptBrowser extends Modal {
 		this.searchEl = tools.createEl("input", { type: "search", placeholder: "搜索原句、来源或备注", attr: { "aria-label": "搜索摘录", maxlength: "500" } });
 		this.searchEl.oninput = () => { this.query = this.searchEl.value; this.limit = 50; this.renderList(); };
 		this.refreshEl = this.button(tools, "刷新摘录", () => void this.refresh());
+		if (this.answers) this.button(tools, "学习回答摘录", () => { if (this.dirty || this.busy) { this.message("请先保存或放弃个人备注。"); return; } this.answers!(); this.close(); });
 		const filter = tools.createEl("select", { attr: { "aria-label": "筛选整理状态" } });
 		for (const [value, text] of [["all", "全部状态"], ["pending", "待整理"], ["completed", "整理完成"]]) filter.createEl("option", { value, text });
 		filter.onchange = () => { this.filter = filter.value; this.limit = 50; this.renderList(); };

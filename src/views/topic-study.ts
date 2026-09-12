@@ -7,6 +7,7 @@ import type { TopicStudyService } from "../topic-learning/study-service";
 import { UNDERSTANDING_LABELS, type TopicUnderstanding, type TopicStudyNode } from "../topic-learning/study";
 import type { TopicStudyExports } from "../topic-learning/export";
 import { TopicExportModal } from "./topic-export";
+import { topicAnswerSnapshot, type AnswerSnapshot } from "../learning/answer-snapshot";
 export const TOPIC_STUDY_VIEW_TYPE = "research-topic-study";
 export interface TopicStudyHost {
 	getTopicStudy(): TopicStudyService;
@@ -15,6 +16,8 @@ export interface TopicStudyHost {
 	getTopicModels(): Array<{ id: string; name: string; model: string }>;
 	createTopicBackend(profileId: string): ReadingBackend;
 	activateLearningSpace(entry: { kind: "topic"; sessionId: string }): Promise<void>;
+	openAnswerExcerpt?(answer: AnswerSnapshot): void;
+	openAnswerExcerptBrowser?(): void;
 }
 export class TopicStudyView extends ItemView {
 	readonly controller: TopicStudyController;
@@ -52,6 +55,7 @@ export class TopicStudyView extends ItemView {
 		for (const r of c.routes) picker.createEl("option", { value: r.digest, text: `${r.title} · ${r.goal.slice(0, 60)} · ${r.digest.slice(0, 6)}` });
 		picker.value = c.route; picker.disabled = c.busy; picker.onchange = () => { void c.open(c.topicId, picker.value); };
 		this.button(tools, "重新读取", "refresh", () => { void c.refresh(); }, c.busy);
+		if (this.host.openAnswerExcerptBrowser) this.button(tools, "学习回答摘录", "excerpts", () => this.host.openAnswerExcerptBrowser!(), c.busy);
 		if (c.hasDrafts) this.button(tools, "清空未发送问题", "clear-drafts", () => c.clearDrafts(), c.busy);
 		const status = this.contentEl.createDiv({ cls: "rar-study-status", attr: { role: "status", "aria-live": "polite" } });
 		if (c.busy) status.createEl("p", { text: c.generating ? "正在生成当前节点…" : "正在读取学习记录…" });
@@ -103,6 +107,11 @@ export class TopicStudyView extends ItemView {
 		}
 		history.createEl("p", { text: "未报告不等于零消耗；失败或中断的请求也可能产生费用。", cls: "rar-study-muted" });
 		if (node.status !== "done") return;
+		let excerptAnswer: AnswerSnapshot | undefined;
+		try { excerptAnswer = topicAnswerSnapshot(c.study!, node.id); } catch { /* Preserve viewing even when an old answer cannot supply an excerpt receipt. */ }
+		if (this.host.openAnswerExcerpt && excerptAnswer) this.button(article, "保存回答摘录", "save-excerpt", () => {
+			try { this.host.openAnswerExcerpt!(excerptAnswer!); } catch (e) { c.message = String(e); this.render(); }
+		}, c.busy);
 		const understanding = article.createEl("label", { cls: "rar-study-field" }); understanding.createSpan({ text: "我的理解（用户自评）" });
 		const mark = understanding.createEl("select", { attr: { "aria-label": "我的理解" } });
 		for (const [value, text] of Object.entries(UNDERSTANDING_LABELS)) mark.createEl("option", { value, text });

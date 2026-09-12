@@ -6891,6 +6891,11 @@ body.agent-dashboard-mineru-resizing {
 .rar-excerpt-history code { white-space: pre-wrap; overflow-wrap: anywhere; }
 .rar-excerpt-history button { height: auto; min-height: 32px; white-space: normal; max-width: 100%; }
 .rar-excerpt-history button[hidden] { display: none; }
+.rar-answer-excerpt { width: min(1060px, 94vw); }
+.rar-answer-excerpt textarea { display: block; width: 100%; min-height: 80px; margin: 8px 0; }
+.rar-answer-excerpt pre { max-height: 250px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.rar-answer-excerpt p, .rar-answer-excerpt code { overflow-wrap: anywhere; white-space: pre-wrap; }
+.rar-answer-excerpt button { height: auto; min-height: 32px; white-space: normal; }
 @media (max-width: 650px) { .rar-excerpt-grid { grid-template-columns: minmax(0, 1fr); } .rar-excerpt-list { max-height: 28vh; } }
 .rar-pending-modal { width: min(960px, 94vw); }
 .rar-pending-tools { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }

@@ -11,6 +11,7 @@ export async function readKnowledgeDocuments(app: App, signal?: AbortSignal): Pr
 	for (const [i, file] of files.entries()) {
 		signal?.throwIfAborted(); const text = await app.vault.cachedRead(file); if (text.length > 250000) throw new Error("笔记过长，无法完整建立索引：" + file.path);
 		const metadata = app.metadataCache.getFileCache(file)?.frontmatter || {};
+		if (metadata.type === "learning-answer-excerpt" || /^type: learning-answer-excerpt\r?$/m.test(text.split(/^---\r?$/m)[1] || "")) continue;
 		const sourcePaths = strings(metadata.sources).map((value) => value.replace(/^\[\[|\]\]$/g, "").split(/[|#]/)[0]).map((value) => value.endsWith(".md") ? value : value + ".md").filter((value) => value.startsWith("wiki/sources/") && inKnowledgeScope(value));
 		docs.push({ path: file.path, title: String(metadata.title || file.basename).slice(0, 500), text, hash: contentHash(text), aliases: [...strings(metadata.aliases), ...strings(metadata.tags)],
 			doi: String(metadata.doi || ""), year: String(metadata.year || ""), authors: strings(metadata.authors).join("; "), origins: file.path.startsWith("wiki/sources/") ? [file.path] : sourcePaths,

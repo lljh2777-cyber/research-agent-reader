@@ -10,6 +10,7 @@ import { readingEntryDomain } from "../reading/entry";
 import { layoutReading, READING_MAP } from "../reading/layout";
 import { fitReadingZoom, readingTrail, revealReadingPath, searchReadingNodes } from "../reading/navigation";
 import { resolveReadingQuote } from "../reading/selection";
+import { readingAnswerSnapshot, type AnswerSnapshot } from "../learning/answer-snapshot";
 import { readingCitations, readingSelectionText } from "../reading/presentation";
 import { safeReadingMarkdown } from "../reading/export";
 import { ReadingExportModal } from "./reading-export";
@@ -489,7 +490,10 @@ export class ReadingWorkspaceView extends ItemView {
 		}).catch(() => { content.textContent = node.content; }); }
 		catch { content.textContent = node.content; }
 		const tools = element(article, "div", "reading-answer-tools");
+		let excerptAnswer: AnswerSnapshot | undefined;
+		if (node.status === "done") { try { excerptAnswer = readingAnswerSnapshot(this.session!, node.id); } catch { /* Demo, test or invalid answers cannot become saved learning excerpts. */ } }
 		if (node.status === "done") {
+			if (excerptAnswer) actionButton(tools, "bookmark-plus", "保存回答摘录", () => this.plugin.openAnswerExcerpt(excerptAnswer!));
 			actionButton(tools, "message-square-warning", "核对／重新解释", () => this.openCorrection(node), true);
 			if (node.correction) actionButton(tools, "git-compare", "比较核对版本", () => this.compareCorrection(node));
 			if (node.acceptedCorrectionId) actionButton(tools, "git-pull-request-arrow", "查看已选核对版本", () => this.selectNode(node.acceptedCorrectionId!, true));
@@ -500,8 +504,8 @@ export class ReadingWorkspaceView extends ItemView {
 		}
 		const selectionAction = actionButton(tools, "text-cursor-input", "选中文字后追问", () => this.captureQuote(node, content));
 		selectionAction.disabled = node.status !== "done";
-		content.onmouseup = () => this.showSelectionActions(node, content);
-		content.onkeyup = (event) => { if (event.shiftKey && event.key.startsWith("Arrow")) this.showSelectionActions(node, content); };
+		content.onmouseup = () => this.showSelectionActions(node, content, excerptAnswer);
+		content.onkeyup = (event) => { if (event.shiftKey && event.key.startsWith("Arrow")) this.showSelectionActions(node, content, excerptAnswer); };
 		if (node.evidence.length) {
 			const sources = element(article, "details", "reading-sources"); const summary = element(sources, "summary"); icon(summary, "quote"); element(summary, "span", "", "查看原文依据"); element(summary, "span", "reading-source-count", String(node.evidence.length)); icon(summary, "chevron-down");
 			for (const [index, evidence] of node.evidence.entries()) {
@@ -572,7 +576,7 @@ export class ReadingWorkspaceView extends ItemView {
 		}
 	}
 	private hideSelectionActions(): void { this.selectionBar?.remove(); this.selectionBar = undefined; }
-	private showSelectionActions(node: ReadingNode, content: HTMLElement): void {
+	private showSelectionActions(node: ReadingNode, content: HTMLElement, excerptAnswer?: AnswerSnapshot): void {
 		this.hideSelectionActions(); const selected = window.getSelection();
 		if (node.status !== "done" || !selected?.rangeCount || !selected.toString().trim() || !content.contains(selected.anchorNode) || !content.contains(selected.focusNode)) return;
 		const range = selected.getRangeAt(0).cloneRange();
@@ -583,6 +587,14 @@ export class ReadingWorkspaceView extends ItemView {
 		bar.onpointerdown = (event) => event.preventDefault();
 		actionButton(bar, "message-square-plus", "追问选中文字", () => { this.hideSelectionActions(); this.captureQuote(node, content, range); });
 		actionButton(bar, "message-square-warning", "核对选中文字", () => { this.hideSelectionActions(); this.captureQuote(node, content, range, true); });
+		if (excerptAnswer) actionButton(bar, "bookmark-plus", "保存选中文字为学习摘录", () => {
+			try {
+				const before = range.cloneRange(); before.selectNodeContents(content); before.setEnd(range.startContainer, range.startOffset);
+				const after = range.cloneRange(); after.selectNodeContents(content); after.setStart(range.endContainer, range.endOffset);
+				const quote = resolveReadingQuote(node.id, excerptAnswer.content, readingSelectionText(range).trim(), readingSelectionText(before), readingSelectionText(after));
+				this.plugin.openAnswerExcerpt(excerptAnswer, quote); this.hideSelectionActions();
+			} catch (e) { new Notice(String(e)); }
+		});
 		actionButton(bar, "copy", "复制选中文字", () => this.handle(navigator.clipboard.writeText(readingSelectionText(range)).then(() => { this.hideSelectionActions(); new Notice("已复制选中文字"); })));
 	}
 	private captureQuote(node: ReadingNode, content: HTMLElement, selectedRange?: Range, correction = false): void {
