@@ -156,6 +156,7 @@ import type { DashboardActionOptions } from "./actions";
 import { AnnotationPopover } from "./annotations/annotation-popover";
 import { ExcerptBrowser } from "./annotations/excerpt-browser";
 import { AnswerExcerptService } from "./learning/answer-excerpts";
+import { readAnswerExcerptPending } from "./learning/answer-excerpt-pending";
 import { readAnswerSnapshot, readingAnswerSnapshot, topicAnswerSnapshot, type AnswerSnapshot } from "./learning/answer-snapshot";
 import { validAnswerExcerptPath } from "./learning/answer-excerpt-path";
 import { AnswerExcerptModal } from "./views/answer-excerpt";
@@ -760,6 +761,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		return readPendingCenter({
 			library: s => this.inspectPaperLibrary(s), acquisitions: new FileAcquisitionStorage(directory, "production"),
 			local: s => readLocalPdfHistory(io, deviceId, undefined, s), excerpts: s => new ExcerptLibraryService(this.app).list(s),
+			answerExcerpts: s => readAnswerExcerptPending(this.getAnswerExcerpts(), s),
 			curation: async s => { const entries: SavedCurationPending[] = []; const summary = await readDashboardCuration(io, row => entries.push(row), s); return { entries, issues: summary.issues }; },
 			tasks: () => this.getTaskRuns(),
 		}, signal);
@@ -769,6 +771,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		const target = pendingDestination(expected, await this.inspectPendingCenter(signal)); signal.throwIfAborted();
 		if (target.kind === "library") { await this.activatePaperLibrary(undefined, target.object, signal); return; }
 		if (target.kind === "excerpt") { if (this.excerptBrowser) throw new Error("请先完成已打开摘录窗口中的操作"); this.openExcerptBrowser(target.ref); return; }
+		if (target.kind === "answer-excerpt") { if (this.answerExcerptBrowser) throw new Error("请先完成已打开学习摘录窗口中的操作"); this.openAnswerExcerptBrowser(target.path); return; }
 		if (target.kind === "acquisition") { this.showFulltextAcquisition("production", target.id); return; }
 		if (target.kind === "local") { this.showLocalPdfIntake(undefined, target.id); return; }
 		if (target.kind === "review") { this.openKnowledgeMaintenance({ tab: "activity", reviewId: target.id }); return; }

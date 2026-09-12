@@ -6,11 +6,13 @@ import type { LibraryObjectRef } from "../library/types";
 import type { LocalPdfHistory } from "../papers/local-pdf-intake";
 import type { TaskRun } from "../types/contracts";
 import type { SavedCurationPending } from "./dashboard-curation";
+import type { AnswerExcerptPendingList } from "../learning/answer-excerpt-pending";
 import { objectDigest, identityRelation } from "../papers/identity";
 
-export const PENDING_CATEGORIES = { metadata: "书目与全文", acquisition: "获取与保存", intake: "入库与转换", excerpt: "摘录待整理", review: "审阅与复查" } as const;
+export const PENDING_CATEGORIES = { metadata: "书目与全文", acquisition: "获取与保存", intake: "入库与转换", excerpt: "摘录待整理", learning: "学习摘录", review: "审阅与复查" } as const;
 export type PendingCategory = keyof typeof PENDING_CATEGORIES;
 export type PendingTarget = { kind: "library"; object: LibraryObjectRef } | { kind: "excerpt"; ref: ExcerptRef }
+	| { kind: "answer-excerpt"; path: string }
 	| { kind: "acquisition" | "local" | "task" | "review" | "revision"; id: string };
 export interface PendingItem { key: string; category: PendingCategory; title: string; detail: string; next: string; location: string; target: PendingTarget; revision: string; }
 export interface PendingResult { items: PendingItem[]; issues: string[]; scannedAt: string; }
@@ -21,6 +23,7 @@ export interface PendingInputs {
 	excerpts(signal: AbortSignal): Promise<ExcerptList>;
 	curation(signal: AbortSignal): Promise<{ entries: SavedCurationPending[]; issues: string[] }>;
 	tasks(): TaskRun[];
+	answerExcerpts?(signal: AbortSignal): Promise<AnswerExcerptPendingList>;
 }
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -39,16 +42,17 @@ export async function readPendingAcquisitions(io: PendingInputs["acquisitions"],
 /** Parallel read adapters are isolated: one failed area never reports an empty, complete center. */
 export async function readPendingCenter(inputs: PendingInputs, signal: AbortSignal): Promise<PendingResult> {
 	signal.throwIfAborted();
-	const [library, acquisition, local, excerpts, curation, tasks] = await Promise.allSettled([
+	const [library, acquisition, local, excerpts, curation, tasks, answers] = await Promise.allSettled([
 		Promise.resolve().then(() => inputs.library(signal)), readPendingAcquisitions(inputs.acquisitions, signal), Promise.resolve().then(() => inputs.local(signal)), Promise.resolve().then(() => inputs.excerpts(signal)), Promise.resolve().then(() => inputs.curation(signal)), Promise.resolve().then(() => inputs.tasks()),
+		Promise.resolve().then(() => inputs.answerExcerpts?.(signal) || { entries: [], issues: [] }),
 	]);
 	signal.throwIfAborted();
 	const result: PendingResult = { items: [], issues: [], scannedAt: new Date().toISOString() };
 	const add = (key: string, category: PendingCategory, title: string, detail: string, next: string, location: string, target: PendingTarget, proof: unknown) => {
 		result.items.push({ key, category, title, detail, next, location, target, revision: objectDigest({ target, proof }) });
 	};
-	const labels = ["文献库", "全文获取", "本地添加", "摘录", "知识整理", "入库任务"];
-	[library, acquisition, local, excerpts, curation, tasks].forEach((entry, i) => { if (entry.status === "rejected") result.issues.push(labels[i] + "读取失败：" + message(entry.reason)); });
+	const labels = ["文献库", "全文获取", "本地添加", "摘录", "知识整理", "入库任务", "学习摘录"];
+	[library, acquisition, local, excerpts, curation, tasks, answers].forEach((entry, i) => { if (entry.status === "rejected") result.issues.push(labels[i] + "读取失败：" + message(entry.reason)); });
 	const data = library.status === "fulfilled" ? library.value : undefined;
 	const objects = data?.papers.flatMap(p => p.objects) || [];
 	const bindings = new Map(objects.filter(o => o.kind === "annotation").map(o => [o.id, o.binding]));
@@ -100,6 +104,15 @@ export async function readPendingCenter(inputs: PendingInputs, signal: AbortSign
 			add("excerpt:" + r.id, binding?.state === "changed" || unresolvedCompletion ? "review" : "excerpt", r.selectedText,
 				binding?.state === "changed" ? "原文版本已变化，请核对历史摘录。" : unresolvedCompletion ? "摘录已标记整理完成，但当前原文无法核对，请复查来源。" : "摘录尚未标记整理完成，可回看原句、个人备注与整理历史。",
 				"查看摘录", r.sourcePath, { kind: "excerpt", ref: { annotationPath: r.annotationPath, id: r.id } }, { digest: snapshot.digest, binding: binding || null });
+		}
+	}
+	if (answers.status === "fulfilled") {
+		result.issues.push(...answers.value.issues);
+		for (const { file, source } of answers.value.entries) {
+			const r = file.record;
+			add("answer-excerpt:" + r.id, source.state === "matched" ? "learning" : "review", "学习摘录 · " + r.answer.title,
+				(r.answer.ref.kind === "topic" ? "主题学习" : r.answer.context.kind === "code" ? "代码阅读" : "资料阅读") + " · AI 回答" + (r.humanRevision ? "与人工修订稿" : "") + "。" + (source.state === "matched" ? "尚未标记整理完成，可回看并编辑。" : source.message),
+				"查看学习摘录", r.answer.context.location, { kind: "answer-excerpt", path: file.path }, { digest: file.digest, source });
 		}
 	}
 	if (curation.status === "fulfilled") {

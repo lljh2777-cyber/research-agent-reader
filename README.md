@@ -18,7 +18,7 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.74.0`; the beta
+The `codex/research-learning-map` development branch is at `0.75.0`; the beta
 release link above remains the published release.
 
 `0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；不为保存书目信息生成论文笔记。跨阶段待处理中心按路线归 R3。
@@ -48,6 +48,8 @@ release link above remains the published release.
 `0.73.0` 补齐 [R3.5 摘录整理历史与完成标记](docs/excerpt-history-r35.md)：摘录详情可查看已保存的补充目标、修订前后内容与撤销记录，并准确打开当前目标笔记。支持手动“标记整理完成／重新待整理”与状态筛选；完成标记不会隐藏来源变化或无法核对的复查项。历史只读，修改备注或状态后，旧的待应用预览须重新核对。下一步接入学习回答摘录，R3 尚未整体收尾。
 
 `0.74.0` 接通 [R3.6 学习回答摘录](docs/answer-excerpts-r36.md)：从资料阅读或主题学习的已完成回答保存全文或片段，固定回答版本、模型和准确节点，独立编辑个人备注。支持搜索、重复保存复用、重载找回与返回回答；来源变化和并发修改阻止旧操作。AI 摘录保留学习内容身份，并从知识检索中排除。下一步补齐人工修订稿与待处理联动，R3 继续进行。
+
+`0.75.0` 接通 [R3.7 人工修订稿与待处理联动](docs/answer-revisions-r37.md)：学习摘录保留原始 AI 回答，支持独立人工改写、预览确认及个人备注编辑。可手动标记完成、重新待整理和筛选；修订或备注变化后重新待整理，回答变化或无法核对时仍保留复查项。待处理中心可返回准确摘录。人工内容继续保留独立角色，不自动进入知识检索或正式笔记。
 
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。
 

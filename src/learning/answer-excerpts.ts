@@ -6,17 +6,22 @@ import { ANSWER_EXCERPT_ROOT, validAnswerExcerptPath } from "./answer-excerpt-pa
 import { validateAnswerSnapshot, type AnswerSnapshot, type AnswerRef } from "./answer-snapshot";
 
 export interface AnswerExcerpt {
-	version: 1; id: string; answer: AnswerSnapshot; start: number; end: number; note: string; created: string; updated: string;
+	version: 1 | 2; id: string; answer: AnswerSnapshot; start: number; end: number; note: string; created: string; updated: string;
+	humanRevision?: { text: string; updated: string } | null;
+	organization?: { state: "pending" | "completed"; updated: string };
 }
 export interface AnswerExcerptFile { path: string; digest: string; record: AnswerExcerpt; }
 export interface AnswerExcerptList { entries: AnswerExcerptFile[]; issues: string[]; }
 export type AnswerReader = (ref: AnswerRef, signal?: AbortSignal) => Promise<AnswerSnapshot>;
+export interface AnswerExcerptSourceStatus { state: "matched" | "changed" | "unavailable"; message: string; digest?: string; }
 const MAX_FILE = 2 * 1024 * 1024, MARKER = /<!-- rar-answer-excerpt (\{[^\r\n]*\}) -->/g;
 const fileHash = (text: string): string => excerptRevision(text).digest;
 const pathFor = (id: string): string => `${ANSWER_EXCERPT_ROOT}/${id}.md`;
 const identity = (answer: AnswerSnapshot, start: number, end: number): string => "answer-" + objectDigest({ answer: answer.digest, start, end }).slice(0, 48);
 const fence = (text: string): string => { let width = 3; for (const match of text.matchAll(/`+/g)) width = Math.max(width, match[0].length + 1); const ticks = "`".repeat(width); return ticks + "text\n" + text + "\n" + ticks; };
 export const answerExcerptText = (record: AnswerExcerpt): string => record.answer.content.slice(record.start, record.end);
+export const answerExcerptCompleted = (record: AnswerExcerpt): boolean => record.version === 2 && record.organization?.state === "completed";
+const validDate = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 export function prepareAnswerExcerpt(answer: AnswerSnapshot, start = 0, end = answer.content.length, note = "", date = new Date().toISOString()): AnswerExcerpt {
 	answer = validateAnswerSnapshot(answer);
 	if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > answer.content.length || !answer.content.slice(start, end).trim()) throw new Error("请在这条回答中选择非空文字");
@@ -37,14 +42,21 @@ export function renderAnswerExcerpt(record: AnswerExcerpt): string {
 		"回答版本：" + readingPathCode(a.digest) + "；字符：" + record.start + "–" + record.end + "（UTF-16）", "",
 		"来源位置：" + readingPathCode(a.context.location) + (r.kind === "topic" ? "；路线：" + readingPathCode(r.route) + "；请求：" + readingPathCode(a.context.requestId) + "；教学规则：" + readingPathCode(a.context.rule) : ""), "",
 		...(a.context.correction ? ["此处保留历史回答；已选核对节点：" + readingPathCode(a.context.correction), ""] : []),
-		"## AI 回答片段", "", fence(answerExcerptText(record)), "", "## 个人备注", "", fence(record.note), "",
+		"## AI 回答片段", "", fence(answerExcerptText(record)), "",
+		...(record.version === 2 ? ["## 人工修订稿（基于 AI 回答）", "", "由用户保存，不代表独立核验。原始 AI 回答保留在上方。", "", fence(record.humanRevision?.text || ""), ""] : []),
+		"## 个人备注", "", fence(record.note), "",
+		...(record.version === 2 ? ["## 整理状态", "", answerExcerptCompleted(record) ? "用户标记：整理完成" : "用户标记：待整理", "", "此标记不代表内容已经进入正式笔记或通过科学／教学核验。", ""] : []),
 		"<!-- rar-answer-excerpt " + JSON.stringify(record).replace(/</g, "\\u003c").replace(/>/g, "\\u003e") + " -->", ""].join("\n");
 }
 export function readAnswerExcerpt(text: string, path: string): AnswerExcerptFile {
 	if (!validAnswerExcerptPath(path) || Buffer.byteLength(text) > MAX_FILE) throw new Error("学习摘录路径无效或超过读取上限");
 	const matches = [...text.matchAll(MARKER)]; if (matches.length !== 1) throw new Error("学习摘录凭据缺失或重复，请直接打开文档检查");
 	const r: AnswerExcerpt = JSON.parse(matches[0][1]), expected = prepareAnswerExcerpt(r.answer, r.start, r.end, r.note, r.created);
-	if (r.version !== 1 || r.id !== expected.id || path !== pathFor(r.id) || !Number.isFinite(Date.parse(r.updated)) || new Date(r.updated).toISOString() !== r.updated || r.updated < r.created || text !== renderAnswerExcerpt(r)) throw new Error("学习摘录内容或凭据被修改，请直接打开文档核对；未覆盖用户内容");
+	if (![1, 2].includes(r.version) || r.id !== expected.id || path !== pathFor(r.id) || !validDate(r.updated) || r.updated < r.created) throw new Error("学习摘录内容或凭据被修改，请直接打开文档核对；未覆盖用户内容");
+	if (r.version === 1 ? r.humanRevision !== undefined || r.organization !== undefined
+		: !r.organization || !["pending", "completed"].includes(r.organization.state) || !validDate(r.organization.updated) || r.organization.updated < r.created || r.organization.updated > r.updated
+			|| r.humanRevision !== null && (!r.humanRevision || typeof r.humanRevision.text !== "string" || !r.humanRevision.text.trim() || r.humanRevision.text.length > 20000 || !validDate(r.humanRevision.updated) || r.humanRevision.updated < r.created || r.humanRevision.updated > r.updated)) throw new Error("人工修订或整理状态凭据无效，未修改文件");
+	if (text !== renderAnswerExcerpt(r)) throw new Error("学习摘录内容或凭据被修改，请直接打开文档核对；未覆盖用户内容");
 	return { path, record: structuredClone(r), digest: fileHash(text) };
 }
 
@@ -72,6 +84,14 @@ export class AnswerExcerptService {
 		const stable = validateAnswerSnapshot(answer), latest = await this.answer(stable.ref, signal); signal?.throwIfAborted();
 		if (latest.digest !== stable.digest) throw new Error("回答版本、引用或核对状态已变化，请重新选择回答；历史摘录保留");
 	}
+	async sourceStatus(answer: AnswerSnapshot, signal?: AbortSignal): Promise<AnswerExcerptSourceStatus> {
+		const stable = validateAnswerSnapshot(answer); signal?.throwIfAborted();
+		try {
+			const latest = validateAnswerSnapshot(await this.answer(stable.ref, signal)); signal?.throwIfAborted();
+			return latest.digest === stable.digest ? { state: "matched", digest: latest.digest, message: "与已保存的回答版本一致；未据此核验原文或科学结论。" }
+				: { state: "changed", digest: latest.digest, message: "回答版本、引用或核对状态已变化，请复查历史摘录。" };
+		} catch (error) { signal?.throwIfAborted(); return { state: "unavailable", message: "回答暂时无法核对：" + String(error) }; }
+	}
 	save(input: AnswerExcerpt, signal?: AbortSignal): Promise<{ file: AnswerExcerptFile; reused: boolean; warning?: string }> {
 		const record = structuredClone(input), path = pathFor(record.id), text = renderAnswerExcerpt(record); readAnswerExcerpt(text, path);
 		return this.serial(async () => {
@@ -96,13 +116,30 @@ export class AnswerExcerptService {
 		});
 	}
 	saveNote(input: AnswerExcerptFile, note: string, signal?: AbortSignal): Promise<AnswerExcerptFile> {
+		if (typeof note !== "string" || note.length > 10000) return Promise.reject(new Error("个人备注超过一万字符"));
+		return this.mutate(input, (record, now) => note === record.note ? record : this.reopen({ ...record, note }, now), signal);
+	}
+	saveHumanRevision(input: AnswerExcerptFile, text: string, signal?: AbortSignal): Promise<AnswerExcerptFile> {
+		if (typeof text !== "string" || text.length > 20000) return Promise.reject(new Error("人工修订稿超过两万字符"));
+		if (!text.trim()) text = "";
+		return this.mutate(input, (record, now) => text === (record.humanRevision?.text || "") ? record : this.reopen({ ...record, version: 2, humanRevision: text ? { text, updated: now } : null }, now), signal);
+	}
+	setCompleted(input: AnswerExcerptFile, completed: boolean, signal?: AbortSignal): Promise<AnswerExcerptFile> {
+		if (typeof completed !== "boolean") return Promise.reject(new Error("整理状态无效"));
+		return this.mutate(input, (record, now) => answerExcerptCompleted(record) === completed ? record : { ...record, version: 2, humanRevision: record.humanRevision || null, organization: { state: completed ? "completed" : "pending", updated: now }, updated: now }, signal);
+	}
+	private reopen(record: AnswerExcerpt, now: string): AnswerExcerpt {
+		return { ...record, ...(record.version === 2 ? { humanRevision: record.humanRevision || null, organization: { state: "pending" as const, updated: now } } : {}), updated: now };
+	}
+	private mutate(input: AnswerExcerptFile, edit: (record: AnswerExcerpt, now: string) => AnswerExcerpt, signal?: AbortSignal): Promise<AnswerExcerptFile> {
 		const expected = structuredClone(input);
 		return this.serial(async () => {
 			await this.load(expected.path, signal); const file = this.app.vault.getAbstractFileByPath(expected.path); if (!(file instanceof TFile)) throw new Error("学习摘录缺失");
-			if (typeof note !== "string" || note.length > 10000) throw new Error("个人备注超过一万字符"); let intended: string | undefined;
+			let intended: string | undefined;
 			try { await this.app.vault.process(file, text => {
 				signal?.throwIfAborted(); if (file.path !== expected.path || this.app.vault.getAbstractFileByPath(expected.path) !== file || fileHash(text) !== expected.digest) throw new Error("学习摘录已被其他窗口修改，请重新读取；草稿仍保留");
-				const latest = readAnswerExcerpt(text, expected.path); intended = note === latest.record.note ? text : renderAnswerExcerpt({ ...latest.record, note, updated: new Date(Math.max(Date.now(), Date.parse(latest.record.updated))).toISOString() }); return intended;
+				const latest = readAnswerExcerpt(text, expected.path), next = edit(latest.record, new Date(Math.max(Date.now(), Date.parse(latest.record.updated))).toISOString());
+				const candidate = renderAnswerExcerpt(next); readAnswerExcerpt(candidate, expected.path); intended = candidate; return intended;
 			}); } catch (error) {
 				if (intended === undefined || file.path !== expected.path || this.app.vault.getAbstractFileByPath(expected.path) !== file || await this.app.vault.read(file) !== intended) throw error;
 			}
