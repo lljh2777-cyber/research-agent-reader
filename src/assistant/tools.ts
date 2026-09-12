@@ -1,3 +1,4 @@
+import { overlapsLearningBlock } from "../learning/curated-block";
 import { randomUUID } from "node:crypto";
 import { contentHash, inKnowledgeScope, retrievalPassageText } from "../retrieval/chunks";
 import { readingContext } from "../reading/engine";
@@ -80,12 +81,12 @@ export class AssistantTools {
 						if (this.session.source.kind === "structured") { Object.assign(source, structuredReference(original, this.session.source, 5000)); matchStructuredReference(source, this.session.source, doc.evidence); }
 					} else {
 						if (!inKnowledgeScope(previous.path) || !previous.sourceHash || previous.start === undefined || previous.end === undefined) throw new Error("补充来源缺少可核对的位置或指纹");
-						const raw = await this.deps.readFile(previous.path); if (contentHash(raw) !== previous.sourceHash || previous.start < 0 || previous.end > raw.length || previous.end <= previous.start) throw new Error("知识来源已变化");
+						const raw = await this.deps.readFile(previous.path); if (overlapsLearningBlock(raw, previous.start, previous.end) || contentHash(raw) !== previous.sourceHash || previous.start < 0 || previous.end > raw.length || previous.end <= previous.start) throw new Error("知识来源已变化");
 						source = { kind: "knowledge", path: previous.path, hash: previous.sourceHash, label: previous.label, role: previous.role || "来源层级未标注", text: raw.slice(previous.start, Math.min(previous.end, previous.start + 5000)), start: previous.start, end: Math.min(previous.end, previous.start + 5000) };
 					}
 				} else {
 					const raw = await this.deps.readFile(candidate.path);
-					if (contentHash(raw) !== candidate.hash || candidate.start < 0 || candidate.end > raw.length || candidate.end <= candidate.start || retrievalPassageText(raw.slice(candidate.start, candidate.end)) !== candidate.text) throw new Error("检索来源已变化，请重新检索");
+					if (overlapsLearningBlock(raw, candidate.start, candidate.end) || contentHash(raw) !== candidate.hash || candidate.start < 0 || candidate.end > raw.length || candidate.end <= candidate.start || retrievalPassageText(raw.slice(candidate.start, candidate.end)) !== candidate.text) throw new Error("检索来源已变化，请重新检索");
 					source = { kind: "knowledge", path: candidate.path, hash: candidate.hash, label: candidate.title, role: candidate.role + " · " + candidate.depth, text: raw.slice(candidate.start, Math.min(candidate.end, candidate.start + 5000)), start: candidate.start, end: Math.min(candidate.end, candidate.start + 5000) };
 				}
 				const existing = this.run.sources.find(s => s.path === source.path && s.hash === source.hash && s.text === source.text && s.evidenceId === source.evidenceId);

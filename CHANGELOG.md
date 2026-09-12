@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Curate learning answer excerpts — 0.76.0
+
+- 学习摘录接入已有概念、方法与综合笔记，AI 回答、人工修订和个人备注分别选择，默认不勾选；先预览完整变化，再明确确认。
+- 保存可重新打开的整理批次，复用全文冲突保护、中断恢复和撤销；来源版本或目标变化会阻止旧操作，重复补充不会悄悄追加。
+- 新增独立学习文本块；正式分块、词法、Direct API 证据与助手读取排除这些内容，保留原有证据。学习回答不会成为论文原文引用。
+- 14 组专项及相关回归通过；原生预览、重载、冲突、部分写入恢复、撤销、取消和窄视口通过。原有 984 个受保护文件不变，保留 4 个新验收文件。详见 [R3.8 记录](docs/answer-excerpt-curation-r38.md)。
+
 ### Human answer revisions and pending work — 0.75.0
 
 - 学习摘录新增独立人工修订稿，明确起草、预览再确认保存；原始 AI 回答与个人备注保留，两个未保存草稿独立保护。

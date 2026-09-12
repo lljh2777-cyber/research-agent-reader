@@ -1,3 +1,4 @@
+import { learningBlockRanges } from "../learning/curated-block";
 import { createHash } from "node:crypto";
 import { tokenizeForLexicalRetrieval } from "../query/lexical-retrieval";
 import { EMBEDDING_MODEL, KNOWLEDGE_PREFIXES, type EvidenceRole, type KnowledgeChunk, type KnowledgeDocument } from "./types";
@@ -28,7 +29,13 @@ export function chunkDocument(doc: KnowledgeDocument): KnowledgeChunk[] {
 		trail = trail.slice(0, heading[1].length - 1); trail[heading[1].length - 1] = heading[2]; cursor = offset + line.length;
 	}
 	if (cursor < doc.text.length) sections.push({ start: cursor, end: doc.text.length, heading: trail.filter(Boolean).join(" / ") });
-	for (const section of sections) for (let start = section.start; start < section.end;) {
+	const excluded = learningBlockRanges(doc.text);
+	const eligible = sections.flatMap(section => {
+		const pieces: typeof sections = []; let from = section.start;
+		for (const range of excluded) { if (range.end <= from || range.start >= section.end) continue; if (from < range.start) pieces.push({ ...section, start: from, end: range.start }); from = Math.max(from, range.end); }
+		if (from < section.end) pieces.push({ ...section, start: from }); return pieces;
+	});
+	for (const section of eligible) for (let start = section.start; start < section.end;) {
 		let end = Math.min(section.end, start + 1800);
 		if (end < section.end) { const paragraph = doc.text.lastIndexOf("\n\n", end); if (paragraph > start + 900) end = paragraph; if (/[\uD800-\uDBFF]/.test(doc.text[end - 1])) end--; }
 		const text = retrievalPassageText(doc.text.slice(start, end)); const input = doc.title + "\n" + section.heading + "\n" + text;

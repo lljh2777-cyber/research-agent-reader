@@ -1,3 +1,4 @@
+import { maskLearningBlocks, overlapsLearningBlock } from "../learning/curated-block";
 import { TFile, type App } from "obsidian";
 
 import type { RetrievalTrace, VaultEvidencePacket } from "../query/direct-query-service";
@@ -64,7 +65,7 @@ export async function readVaultEvidencePackets(
 			if (!inKnowledgeScope(hit.path) || trace.knowledge?.scope && !trace.knowledge.scope.includes(hit.path)) continue;
 			const file = resolveVaultFile(app, hit.path); if (!file) continue;
 			let raw = texts.get(hit.path); if (raw === undefined) { try { raw = await app.vault.cachedRead(file); texts.set(hit.path, raw); } catch { continue; } }
-			if (contentHash(raw) !== hit.hash || !Number.isInteger(hit.start) || !Number.isInteger(hit.end) || hit.start < 0 || hit.end > raw.length || hit.end <= hit.start || hit.end - hit.start > 2000) continue;
+			if (overlapsLearningBlock(raw, hit.start, hit.end) || contentHash(raw) !== hit.hash || !Number.isInteger(hit.start) || !Number.isInteger(hit.end) || hit.start < 0 || hit.end > raw.length || hit.end <= hit.start || hit.end - hit.start > 2000) continue;
 			const content = "章节：" + hit.heading + "\n内容角色：" + (ROLE_LABELS[hit.role] || "未标注") + "；深度：" + hit.depth + "；来源类型：" + hit.basis + "\n原始来源：" + (hit.origins.join("、") || "未标注独立来源") + "\n" + raw.slice(hit.start, hit.end);
 			const prior = groups.get(hit.path);
 			if (prior) { if (prior.content.length + content.length < MAX_EVIDENCE_FILE_CHARS) prior.content += "\n\n" + content; }
@@ -98,7 +99,7 @@ export async function readVaultEvidencePackets(
 		} catch {
 			continue;
 		}
-		const content = raw.slice(0, Math.min(MAX_EVIDENCE_FILE_CHARS, remaining));
+		const content = maskLearningBlocks(raw).slice(0, Math.min(MAX_EVIDENCE_FILE_CHARS, remaining));
 		if (!content.trim()) continue;
 		seen.add(resolved.path.toLowerCase());
 		remaining -= content.length;

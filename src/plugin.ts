@@ -161,6 +161,7 @@ import { readAnswerSnapshot, readingAnswerSnapshot, topicAnswerSnapshot, type An
 import { validAnswerExcerptPath } from "./learning/answer-excerpt-path";
 import { AnswerExcerptModal } from "./views/answer-excerpt";
 import { AnswerExcerptBrowser } from "./views/answer-excerpt-browser";
+import { AnswerExcerptCurationModal } from "./views/answer-excerpt-curation";
 import { excerptHistoryDestination, readExcerptHistory, type ExcerptHistoryEntry } from "./annotations/excerpt-history";
 import { ExcerptLibraryService } from "./annotations/excerpt-library";
 import type { ExcerptRef } from "./annotations/excerpt-library";
@@ -794,7 +795,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (this.answerExcerptBrowser) { new Notice("学习回答摘录已打开，请先完成当前操作"); return; }
 		const modal = new AnswerExcerptBrowser(this.app, this.getAnswerExcerpts(), async path => {
 			if (!validAnswerExcerptPath(path)) throw new Error("学习摘录路径无效"); const file = this.app.vault.getAbstractFileByPath(path); if (!(file instanceof TFile)) throw new Error("学习摘录文档缺失"); await this.openSourceMarkdownFile(file, true);
-		}, (answer, signal) => this.openAnswerExcerptSource(answer, signal), path, () => { if (this.answerExcerptBrowser === modal) this.answerExcerptBrowser = undefined; });
+		}, (answer, signal) => this.openAnswerExcerptSource(answer, signal), path, () => { if (this.answerExcerptBrowser === modal) this.answerExcerptBrowser = undefined; }, path => this.openAnswerExcerptCuration(path));
 		this.answerExcerptBrowser = modal; modal.open();
 	}
 	async openAnswerExcerptSource(answer: AnswerSnapshot, signal: AbortSignal): Promise<void> {
@@ -2992,7 +2993,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.learningLibrary;
 	}
 	getCurationService(): CurationService {
-		if (!this.curationService) this.curationService = new CurationService(this.app, this.getReadingWorkspace(), new FileCurationStore(this.readingPluginDirectory()), session => this.createReadingBackend(session, false), (query, options) => this.searchKnowledge(query, options));
+		if (!this.curationService) this.curationService = new CurationService(this.app, this.getReadingWorkspace(), new FileCurationStore(this.readingPluginDirectory()), session => this.createReadingBackend(session, false), (query, options) => this.searchKnowledge(query, options), this.getAnswerExcerpts());
 		return this.curationService;
 	}
 	getCurationWriter(): CurationWriter { return this.curationWriter ||= new CurationWriter(this.getCurationService()); }
@@ -3097,7 +3098,9 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	readDashboardCuration() { return readDashboardCuration(new FileSourceStorage(this.readingPluginDirectory())); }
 	openKnowledgeMaintenance(entry?: CurationNavigation): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this, entry)); }
+	openAnswerExcerptCuration(path: string, review?: CurationReview): void { this.showCurationModal(new AnswerExcerptCurationModal(this.app, this, path, review)); }
 	openKnowledgeCuration(sessionId: string, nodeId: string, review?: CurationReview): void {
+		if (review?.context.answerExcerpt) { this.openAnswerExcerptCuration(review.context.answerExcerpt.snapshot.path, review); return; }
 		if (review?.context.excerpt) { this.showCurationModal(new ExcerptCurationModal(this.app, this, review.context.excerpt.snapshot.record, review)); return; }
 		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") { new Notice("代码学习可导出独立笔记并关联已有笔记，暂不自动整理正式代码页"); return; }
 		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review)); }

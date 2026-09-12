@@ -11,12 +11,15 @@ import type { CurationSearch } from "./selection";
 import { validateStructuredSource } from "../reading/structured-source";
 import { validateStructuredReference } from "../reading/structured-reference";
 import { excerptSuggestion, validateExcerptContext, verifyExcerptCuration } from "./excerpt";
+import { answerExcerptSuggestion, validateAnswerExcerptContext, verifyAnswerExcerptCuration } from "./answer-excerpt";
+import type { AnswerExcerptService } from "../learning/answer-excerpts";
 
 const id = (): string => "c-" + randomUUID(); const now = (): string => new Date().toISOString();
 export function validatedReview(raw: unknown): CurationReview {
 	if (!raw || typeof raw !== "object") throw new Error("整理记录格式错误"); const record = raw as CurationReview; const context = record.context;
 	if (record.version !== 1 || !/^c-[a-f0-9-]{36}$/.test(record.id) || !context || !context.target || !curationTarget(context.target.path) || typeof context.target.text !== "string" || contentHash(context.target.text) !== context.target.hash || !Array.isArray(context.evidence) || !Array.isArray(context.nodeIds) || !Array.isArray(record.suggestions) || !record.usage || !["generating", "ready", "failed", "interrupted", "stale"].includes(record.state)) throw new Error("整理记录结构或指纹错误");
 	const paragraphs = curationParagraphs(context.target.text);
+	if (context.answerExcerpt) { validateAnswerExcerptContext(context); if (record.suggestions.length !== 1 || record.usage.calls !== 0 || record.usage.model !== "") throw new Error("学习摘录整理不能包含模型生成内容"); }
 	if (context.excerpt) { validateExcerptContext(context); if (record.suggestions.length !== 1 || record.usage.calls !== 0 || record.usage.model !== "") throw new Error("摘录整理记录不能包含模型生成内容"); }
 	if (!context.target.paragraphs.every(p => paragraphs.some(original => original.id === p.id && original.text === p.text && original.start === p.start && original.end === p.end))) throw new Error("整理段落定位错误");
 	for (const evidence of context.evidence) if (!evidence || !["paper", "vault"].includes(evidence.kind) || typeof evidence.text !== "string" || typeof evidence.path !== "string" || typeof evidence.hash !== "string" || !Array.isArray(evidence.origins)) throw new Error("整理证据结构错误");
@@ -38,10 +41,14 @@ export class CurationService {
 	changesPending = false;
 	private initialization?: Promise<void>; private listeners = new Set<() => void>(); private operations = new Map<string, Promise<CurationReview>>();
 	private controllers = new Map<string, AbortController>(); private queue: Promise<unknown> = Promise.resolve(); private generationCache = new Map<string, CurationReview>();
-	constructor(readonly app: App, readonly workspace: ReadingWorkspaceService, readonly store: CurationRecordStore, private backendFor: (session: ReadingSession) => ReadingBackend, private search?: CurationSearch) {}
+	constructor(readonly app: App, readonly workspace: ReadingWorkspaceService, readonly store: CurationRecordStore, private backendFor: (session: ReadingSession) => ReadingBackend, private search?: CurationSearch, private answerExcerpts?: AnswerExcerptService) {}
+	async verify(context: CurationContext, targetHash = context.target.hash, signal?: AbortSignal): Promise<void> {
+		if (context.answerExcerpt) return verifyAnswerExcerptCuration(this.app, this.answerExcerpts, context, targetHash, signal);
+		signal?.throwIfAborted(); await verifyCurationContext(this.app, this.workspace, context, targetHash); signal?.throwIfAborted();
+	}
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	get activeCount(): number { return this.operations.size; }
-	noteChange(path: string): void { if ([...this.reviews.values()].some(r => r.context.target.path === path || r.context.excerpt?.snapshot.record.annotationPath === path || r.context.evidence.some(e => e.path === path) || ["article", "structured"].includes(r.context.source.kind) && path.startsWith(r.context.source.path.replace(/article\.md$/, "")))) { this.changesPending = true; this.emit(); } }
+	noteChange(path: string): void { if ([...this.reviews.values()].some(r => r.context.target.path === path || r.context.answerExcerpt?.snapshot.path === path || r.context.excerpt?.snapshot.record.annotationPath === path || r.context.evidence.some(e => e.path === path) || ["article", "structured"].includes(r.context.source.kind) && path.startsWith(r.context.source.path.replace(/article\.md$/, "")))) { this.changesPending = true; this.emit(); } }
 	emit(): void { this.listeners.forEach(listener => { try { listener(); } catch { /* A closed view must not interrupt persistence. */ } }); }
 	ready(): Promise<void> {
 		if (!this.initialization) this.initialization = (async () => {
@@ -67,9 +74,18 @@ export class CurationService {
 			signal?.throwIfAborted(); await this.save(validatedReview(review)); return review;
 		});
 	}
+	async saveAnswerExcerpt(context: CurationContext, signal?: AbortSignal): Promise<CurationReview> {
+		const expected = structuredClone(context);
+		return this.serial(async () => {
+			await this.ready(); await verifyAnswerExcerptCuration(this.app, this.answerExcerpts, expected, expected.target.hash, signal);
+			const cached = this.cached(expected); if (cached) return structuredClone(cached);
+			const stamp = now(), review: CurationReview = { version: 1, id: id(), context: expected, created: stamp, updated: stamp, state: "ready", suggestions: [answerExcerptSuggestion(expected)], usage: { kind: "reported", calls: 0, model: "", input: 0, output: 0, note: "本地学习摘录整理，未调用模型" }, error: "" };
+			signal?.throwIfAborted(); await this.save(validatedReview(review)); return review;
+		});
+	}
 	cached(context: CurationContext): CurationReview | undefined { return [...this.reviews.values()].reverse().filter(review => review.context.key === context.key && review.state === "ready").sort((a, b) => b.updated.localeCompare(a.updated))[0]; }
 	generate(context: CurationContext, force = false, prepared?: (review: CurationReview) => Promise<void>): Promise<CurationReview> {
-		if (context.excerpt) return Promise.reject(new Error("摘录整理使用本地预览，不调用模型"));
+		if (context.excerpt || context.answerExcerpt) return Promise.reject(new Error("摘录整理使用本地预览，不调用模型"));
 		if (this.operations.has(context.key)) { const operation = this.operations.get(context.key)!; return prepared ? operation.then(async review => { await prepared(review); return review; }) : operation; }
 		const controller = new AbortController(); this.controllers.set(context.key, controller);
 		const operation = this.run(context, controller.signal, force, prepared).finally(() => { this.operations.delete(context.key); this.controllers.delete(context.key); this.emit(); });
@@ -108,7 +124,7 @@ export class CurationService {
 		await this.serial(async () => {
 			const existing = this.reviews.get(reviewId); if (!existing || existing.state !== "ready") throw new Error("整理记录尚不可编辑");
 			const review = structuredClone(existing); const index = review.suggestions.findIndex(s => s.id === suggestionId); const before = review.suggestions[index];
-			if (review.context.excerpt && text !== undefined) throw new Error("请在摘录窗口修改个人备注后重新准备，原句不能在整理中改写");
+			if ((review.context.excerpt || review.context.answerExcerpt) && text !== undefined) throw new Error("请在摘录窗口修改内容后重新准备，原句不能在整理中改写");
 			if (!before || before.decision === "applied") throw new Error("已应用的建议需从修订记录撤销");
 			const suggestion: CurationSuggestion = text === undefined ? before : validateSuggestion({ ...before, text }, review.context, index); suggestion.decision = decision;
 			review.suggestions[index] = suggestion; review.updated = now(); await this.save(review);
@@ -118,13 +134,13 @@ export class CurationService {
 		await this.ready(); await this.serial(async () => {
 			for (const record of [...this.reviews.values()]) {
 				if (record.state !== "ready" || record.suggestions.some(s => s.decision === "applied")) continue;
-				try { await verifyCurationContext(this.app, this.workspace, record.context); }
+				try { await this.verify(record.context); }
 				catch (error) { await this.save({ ...record, state: "stale", error: String(error), updated: now() }); }
 			}
 			for (const revision of [...this.revisions.values()].filter(value => value.state === "applied")) {
 				const review = this.reviews.get(revision.reviewId); if (!review) continue;
 				const current = [...this.revisions.values()].filter(value => value.state === "applied" && value.writes.some(write => write.role === "target" && write.path === review.context.target.path)).sort((a, b) => b.created.localeCompare(a.created))[0] || revision;
-				try { await verifyCurationContext(this.app, this.workspace, review.context, current.writes.find(write => write.role === "target")!.afterHash); if (revision.needsReview) await this.saveRevision({ ...revision, needsReview: undefined, updated: now() }); }
+				try { await this.verify(review.context, current.writes.find(write => write.role === "target")!.afterHash); if (revision.needsReview) await this.saveRevision({ ...revision, needsReview: undefined, updated: now() }); }
 				catch (error) { if (revision.needsReview !== String(error)) await this.saveRevision({ ...revision, needsReview: String(error), updated: now() }); }
 			}
 			this.changesPending = false; this.emit();

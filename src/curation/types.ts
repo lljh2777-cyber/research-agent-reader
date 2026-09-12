@@ -10,6 +10,7 @@ export interface CurationCitation { id: string; quote: string; quoteId?: string;
 export interface CurationSuggestion { id: string; kind: SuggestionKind; modelKind?: SuggestionKind; comparison?: { targetQuote: string; evidenceId: string }; paragraphId: string; claim: string; text: string; reason: string; citations: CurationCitation[]; warnings: string[]; applicable: boolean; decision: "pending" | "ignored" | "applied"; }
 export interface CurationUsage { kind: "reported" | "estimated"; input?: number; output?: number; cachedInput?: number; calls: number; model: string; note?: string; }
 export interface CurationContext {
+	answerExcerpt?: { version: 1; snapshot: import("../learning/answer-excerpts").AnswerExcerptFile; paragraphId: string; roles: import("./answer-excerpt").AnswerContentRole[] };
 	/** Independent manual input; an empty sessionId is intentional and never enters the reading repository. */
 	excerpt?: { version: 1; snapshot: import("../annotations/excerpt-library").ExcerptSnapshot; paragraphId: string; includeManual: boolean; sourceMode: "markdown" | "article" | "structured" };
 	ruleVersion?: string;

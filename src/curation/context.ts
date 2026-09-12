@@ -1,3 +1,4 @@
+import { overlapsLearningBlock } from "../learning/curated-block";
 import { parseYaml, type App } from "obsidian";
 import curationSkill from "../../skills/knowledge-curation/SKILL.md";
 import { readingCategory, readingTitle } from "../reading/catalog";
@@ -46,7 +47,7 @@ export async function prepareCuration(app: App, workspace: ReadingWorkspaceServi
 	for (const item of nodes.flatMap(node => node!.evidence).filter(item => item.kind === "vault" && item.sourceHash)) {
 		if (evidence.filter(e => e.kind === "vault").length >= 3 || evidence.some(e => e.path === item.path) || !curationTarget(item.path) || item.path === targetPath) continue;
 		const vaultFile = app.vault.getFileByPath(item.path); if (!vaultFile) continue; const raw = await app.vault.cachedRead(vaultFile);
-		if (contentHash(raw) !== item.sourceHash || item.start === undefined || item.end === undefined || item.start < 0 || item.end > raw.length || item.end <= item.start) continue;
+		if (overlapsLearningBlock(raw, item.start ?? 0, item.end ?? raw.length) || contentHash(raw) !== item.sourceHash || item.start === undefined || item.end === undefined || item.start < 0 || item.end > raw.length || item.end <= item.start) continue;
 		const meta = app.metadataCache.getFileCache(vaultFile)?.frontmatter || {};
 		evidence.push({ id: "K" + (evidence.length + 1), kind: "vault", path: item.path, hash: item.sourceHash!, text: raw.slice(item.start, Math.min(item.end, item.start + 2000)), label: item.label, role: item.role || "来源层级未标注", depth: String(meta.reading_depth || meta.status || "未标注"), origins: item.origins || [], start: item.start, end: Math.min(item.end, item.start + 2000) });
 	}
@@ -74,6 +75,7 @@ export async function prepareCuration(app: App, workspace: ReadingWorkspaceServi
 	signal?.throwIfAborted(); return context;
 }
 export async function verifyCurationContext(app: App, workspace: ReadingWorkspaceService, context: CurationContext, targetHash = context.target.hash): Promise<void> {
+	if (context.answerExcerpt) throw new Error("学习摘录必须通过独立回答核对服务验证");
 	if (context.excerpt) return verifyExcerptCuration(app, context, targetHash);
 	const session = workspace.repository.get(context.sessionId);
 	if (curationLearningHash(session, context.nodeIds) !== context.learningHash) throw new Error("学习内容已变化，请刷新整理范围");

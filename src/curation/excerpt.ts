@@ -28,7 +28,7 @@ export function excerptSuggestion(context: CurationContext): CurationSuggestion 
 /** Manual excerpts have a fixed renderer, never the model suggestion validator or an editable claim. */
 export function validateExcerptContext(context: CurationContext): void {
 	const input = context.excerpt, r = input?.snapshot?.record;
-	if (!input || input.version !== 1 || !r || !r.excerpt || !r.sourceAnchor || !supportsExcerpt(r.sourcePath)
+	if (!input || context.answerExcerpt || input.version !== 1 || !r || !r.excerpt || !r.sourceAnchor || !supportsExcerpt(r.sourcePath)
 		|| !["markdown", "article", "structured"].includes(input.sourceMode) || typeof input.includeManual !== "boolean"
 		|| typeof r.manualText !== "string" || r.manualText.length > 10000 || input.includeManual && !r.manualText.trim()
 		|| !/^ann-excerpt-[a-f0-9]{48}$/.test(r.id) || r.annotationPath !== `wiki/annotations/${r.id}.md` || !/^[a-f0-9]{64}$/.test(input.snapshot.digest)
