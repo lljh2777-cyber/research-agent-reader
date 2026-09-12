@@ -153,8 +153,7 @@ export class ExcerptBrowser extends Modal {
 				});
 			}); button.dataset.requiresClean = "true";
 		} else this.detailEl.createEl("p", { text: "此摘录有关联归档任务，请在原归档功能处理其状态。" });
-		if (record.pdfExcerpt) this.detailEl.createEl("p", { text: "PDF 摘录现支持保存、备注与原页定位；补充到知识笔记将在后续提供。", cls: "rar-library-muted" });
-		if (this.curate && !record.pdfExcerpt) this.button(navigation, "补充到已有笔记", () => {
+		if (this.curate) this.button(navigation, "补充到已有笔记", () => {
 			if (this.dirty || this.busy) { this.message("请先保存或放弃备注草稿后再整理摘录。"); return; }
 			this.curate!({ annotationPath: record.annotationPath, id: record.id }); this.close();
 		});
@@ -170,7 +169,7 @@ export class ExcerptBrowser extends Modal {
 				await this.app.workspace.getLeaf("tab").openFile(file); signal.throwIfAborted(); this.dispose();
 			});
 		});
-		if (this.history && !record.pdfExcerpt) {
+		if (this.history) {
 			const section = this.detailEl.createEl("section", { cls: "rar-excerpt-history", attr: { "aria-label": "摘录整理历史" } });
 			section.createEl("h3", { text: "整理历史" });
 			const status = section.createEl("p", { text: "正在读取保存记录…", attr: { role: "status" } });

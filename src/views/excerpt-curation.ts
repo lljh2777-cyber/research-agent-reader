@@ -43,7 +43,8 @@ export class ExcerptCurationModal extends Modal {
 	private renderSource(): void {
 		this.sourceEl.empty(); const r = this.snapshot!.record;
 		this.sourceEl.createEl("h3", { text: "所选原句" }); this.sourceEl.createEl("blockquote", { text: r.selectedText }); this.sourceEl.createEl("p", { text: r.sourcePath });
-		const context = this.sourceEl.createEl("details"); context.createEl("summary", { text: "保存时的上下文" }); context.createEl("pre", { text: r.excerpt!.context, cls: "curation-text" });
+		if (r.pdfExcerpt) this.sourceEl.createEl("p", { text: `PDF 第 ${r.pdfExcerpt.page} / ${r.pdfExcerpt.pageCount} 页（文件页码）。补充前会核对文件和原页文字；论文来源笔记还须匹配已登记原文包的身份与版本。` });
+		const context = this.sourceEl.createEl("details"); context.createEl("summary", { text: "保存时的上下文" }); context.createEl("pre", { text: (r.pdfExcerpt || r.excerpt)!.context, cls: "curation-text" });
 		this.sourceEl.createEl("p", { text: "个人备注（不作为论文证据）" }); this.sourceEl.createEl("pre", { text: r.manualText || "尚无个人备注", cls: "curation-text" });
 	}
 	private renderChoices(): void {
@@ -87,7 +88,7 @@ export class ExcerptCurationModal extends Modal {
 				if (context.excerpt!.snapshot.digest !== this.snapshot!.digest) throw new Error("摘录或备注已变化，请关闭并重新打开后核对");
 				this.review = await this.plugin.getCurationService().saveExcerpt(context, signal);
 			}
-			signal.throwIfAborted(); const preview = await this.plugin.getCurationWriter().preview(this.review!.id, ["s-0"]); signal.throwIfAborted();
+			signal.throwIfAborted(); const preview = await this.plugin.getCurationWriter().preview(this.review!.id, ["s-0"], undefined, undefined, signal); signal.throwIfAborted();
 			this.preview = preview; this.renderPreview(); this.status.setText("预览已准备；请核对所有文件变化后确认。关闭会保留整理批次，可从知识整理返回。");
 		}));
 		this.status.setText("原句与个人备注已读取；尚未选择补充内容。");

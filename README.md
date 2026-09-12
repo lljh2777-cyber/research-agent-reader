@@ -20,9 +20,11 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 `0.76.0` 新增 [R3.8 学习摘录补充](docs/answer-excerpt-curation-r38.md)：从学习回答摘录分别选择 AI 片段、人工修订与备注，预览后补充到已有概念、方法或综合笔记；保留内容角色，复用修订恢复与撤销。学习文本块排除本插件的正式证据检索，不据此补写论文来源笔记。
 
-`0.77.0` 新增 [R3.9 原生 PDF 摘录](docs/pdf-excerpts-r39.md)：在 PDF 同一页划选文字，点击“批注 → 保存摘录”，保留原句、页内上下文与个人备注；可编辑备注、重载找回并回到准确原页。文件变化时保留历史记录并阻止旧定位。当前尚不支持跨页、扫描图像与 PDF 摘录补充到正式知识页。
+`0.77.0` 新增 [R3.9 原生 PDF 摘录](docs/pdf-excerpts-r39.md)：在 PDF 同一页划选文字，点击“批注 → 保存摘录”，保留原句、页内上下文与个人备注；可编辑备注、重载找回并回到准确原页。文件变化时保留历史记录并阻止旧定位。当前尚不支持跨页或扫描图像。
 
-The `codex/research-learning-map` development branch is at `0.77.0`; the beta
+`0.78.0` 接通 [R3.10 PDF 摘录补充](docs/pdf-excerpt-curation-r310.md)：从摘录详情选择“补充到已有笔记”，明确选择原句、可选备注和插入位置，预览后确认；保留文件页码与来源版本，可重开批次、中断恢复和撤销。未登记 PDF 限于概念、方法和综合笔记；论文来源笔记还须匹配已核验原文包的身份、路径与版本。
+
+The `codex/research-learning-map` development branch is at `0.78.0`; the beta
 release link above remains the published release.
 
 `0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；不为保存书目信息生成论文笔记。跨阶段待处理中心按路线归 R3。

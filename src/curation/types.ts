@@ -12,7 +12,7 @@ export interface CurationUsage { kind: "reported" | "estimated"; input?: number;
 export interface CurationContext {
 	answerExcerpt?: { version: 1; snapshot: import("../learning/answer-excerpts").AnswerExcerptFile; paragraphId: string; roles: import("./answer-excerpt").AnswerContentRole[] };
 	/** Independent manual input; an empty sessionId is intentional and never enters the reading repository. */
-	excerpt?: { version: 1; snapshot: import("../annotations/excerpt-library").ExcerptSnapshot; paragraphId: string; includeManual: boolean; sourceMode: "markdown" | "article" | "structured" };
+	excerpt?: { version: 1; snapshot: import("../annotations/excerpt-library").ExcerptSnapshot; paragraphId: string; includeManual: boolean; sourceMode: "markdown" | "article" | "structured" | "pdf"; pdfSource?: import("./pdf-excerpt").PdfExcerptSource };
 	ruleVersion?: string;
 	selection?: { mode: string; candidates: number; selected: number };
 	key: string; sessionId: string; nodeIds: string[]; learningHash: string; title: string; source: ReadingSource;

@@ -79,24 +79,24 @@ export class CurationWriter {
 	constructor(private service: CurationService) {}
 	private async read(path: string): Promise<string | null> { const file = this.service.app.vault.getFileByPath(path); return file ? this.service.app.vault.cachedRead(file) : null; }
 	private write(path: string, before: string | null, after: string, role: RevisionWrite["role"]): RevisionWrite { return { path, before, after, beforeHash: before === null ? null : contentHash(before), afterHash: contentHash(after), role }; }
-	async preview(reviewId: string, selectedIds: string[], revisionId = "c-" + randomUUID(), created = new Date().toISOString()): Promise<CurationRevision> {
+	async preview(reviewId: string, selectedIds: string[], revisionId = "c-" + randomUUID(), created = new Date().toISOString(), signal?: AbortSignal): Promise<CurationRevision> {
 		await this.service.ready(); const review = this.service.reviews.get(reviewId);
 		if (!review || review.state !== "ready") throw new Error("建议已过期或尚未准备好");
 		if ([...this.service.revisions.values()].some(r => r.reviewId === reviewId && r.suggestionIds.some(id => selectedIds.includes(id)))) throw new Error("这些建议已有修订记录，请从记录查看或恢复，避免重复应用");
-		await this.service.verify(review.context);
+		await this.service.verify(review.context, review.context.target.hash, signal);
 		const target = review.context.target; const after = curationNoteText(review, selectedIds); const writes = [this.write(target.path, target.text, after, "target")];
 		const indexPath = indices[target.path.split("/")[1] as keyof typeof indices]; const indexText = await this.read(indexPath);
 		const stem = target.path.slice(0, -3); const basename = stem.split("/").slice(-1)[0];
 		if (indexText !== null && !["[[" + stem + "]]", "[[" + stem + "|", "[[" + stem + "#", "[[" + basename + "]]", "[[" + basename + "|"] .some(value => indexText.includes(value))) writes.push(this.write(indexPath, indexText, indexText.trimEnd() + "\n\n- " + link(target.path) + "\n", "index"));
 		const log = await this.read("wiki/log.md"); const line = revisionLog({ id: revisionId, created, suggestionIds: selectedIds }, review, writes.some(w => w.role === "index"));
 		writes.push(this.write("wiki/log.md", log, (log || "# 知识库维护日志\n") + line, "log"));
-		return { version: 1, id: revisionId, reviewId, suggestionIds: [...selectedIds], created, updated: created, state: "prepared", writes, error: "" };
+		signal?.throwIfAborted(); return { version: 1, id: revisionId, reviewId, suggestionIds: [...selectedIds], created, updated: created, state: "prepared", writes, error: "" };
 	}
 	apply(preview: CurationRevision, signal?: AbortSignal): Promise<CurationRevision> {
 		preview = structuredClone(preview);
 		return this.service.serial(async () => {
 			signal?.throwIfAborted(); const prior = this.service.revisions.get(preview.id); if (prior) return prior.state === "applied" ? this.finish(prior) : this.execute(prior, signal);
-			const rebuilt = await this.preview(preview.reviewId, preview.suggestionIds, preview.id, preview.created);
+			const rebuilt = await this.preview(preview.reviewId, preview.suggestionIds, preview.id, preview.created, signal);
 			if (JSON.stringify(rebuilt.writes) !== JSON.stringify(preview.writes)) throw new Error("预览后笔记、索引或日志已变化，请刷新修改预览");
 			signal?.throwIfAborted(); await this.service.saveRevision(rebuilt); return this.execute(rebuilt, signal);
 		});
@@ -118,7 +118,7 @@ export class CurationWriter {
 			signal?.throwIfAborted();
 			const current = await this.read(target.path);
 			if (current === null || ![target.beforeHash, target.afterHash].includes(contentHash(current))) throw new Error("目标笔记已有后续编辑，无法直接应用或恢复");
-			if (!revision.undoOf) await this.service.verify(review.context, contentHash(current));
+			if (!revision.undoOf) await this.service.verify(review.context, contentHash(current), signal);
 			// Preflight every file before the first write. Recovery accepts already-applied files only by exact hash.
 			for (const write of revision.writes) { const text = await this.read(write.path); const hash = text === null ? null : contentHash(text); if (hash !== write.beforeHash && hash !== write.afterHash) throw new Error("文件已变化，需要重新核对：" + write.path); }
 			revision.state = "applying"; revision.updated = new Date().toISOString(); await this.service.saveRevision(revision);

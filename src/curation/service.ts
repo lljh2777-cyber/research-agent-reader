@@ -44,11 +44,19 @@ export class CurationService {
 	constructor(readonly app: App, readonly workspace: ReadingWorkspaceService, readonly store: CurationRecordStore, private backendFor: (session: ReadingSession) => ReadingBackend, private search?: CurationSearch, private answerExcerpts?: AnswerExcerptService) {}
 	async verify(context: CurationContext, targetHash = context.target.hash, signal?: AbortSignal): Promise<void> {
 		if (context.answerExcerpt) return verifyAnswerExcerptCuration(this.app, this.answerExcerpts, context, targetHash, signal);
+		if (context.excerpt) return verifyExcerptCuration(this.app, context, targetHash, signal);
 		signal?.throwIfAborted(); await verifyCurationContext(this.app, this.workspace, context, targetHash); signal?.throwIfAborted();
 	}
 	subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	get activeCount(): number { return this.operations.size; }
-	noteChange(path: string): void { if ([...this.reviews.values()].some(r => r.context.target.path === path || r.context.answerExcerpt?.snapshot.path === path || r.context.excerpt?.snapshot.record.annotationPath === path || r.context.evidence.some(e => e.path === path) || ["article", "structured"].includes(r.context.source.kind) && path.startsWith(r.context.source.path.replace(/article\.md$/, "")))) { this.changesPending = true; this.emit(); } }
+	noteChange(path: string): void {
+		if ([...this.reviews.values()].some(({ context: c }) => {
+			const pdf = c.excerpt?.pdfSource;
+			return c.target.path === path || c.source.path === path || c.answerExcerpt?.snapshot.path === path || c.excerpt?.snapshot.record.annotationPath === path
+				|| c.evidence.some(e => e.path === path) || ["article", "structured"].includes(c.source.kind) && path.startsWith(c.source.path.replace(/article\.md$/, ""))
+				|| pdf?.kind === "managed" && (path === `papers/${pdf.manifest.packageKey}` || path.startsWith(`papers/${pdf.manifest.packageKey}/`));
+		})) { this.changesPending = true; this.emit(); }
+	}
 	emit(): void { this.listeners.forEach(listener => { try { listener(); } catch { /* A closed view must not interrupt persistence. */ } }); }
 	ready(): Promise<void> {
 		if (!this.initialization) this.initialization = (async () => {

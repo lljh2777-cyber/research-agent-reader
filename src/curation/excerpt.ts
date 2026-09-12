@@ -9,14 +9,24 @@ import { structuredTargetCompatible } from "../reading/structured-reference";
 import { readingPathCode } from "../reading/export";
 import { curationParagraphs, curationTarget, protectedPrefix } from "./policy";
 import type { CurationContext, CurationSuggestion } from "./types";
+import { PDF_EXCERPT_RULE, readPdfExcerptSource, validatePdfExcerptContext, pdfExcerptTargetCompatible } from "./pdf-excerpt";
 
 const RULE = "excerpt-curation-v1";
 const meta = (text: string): Record<string, unknown> => parseYaml(protectedPrefix(text).replace(/^\uFEFF?---\r?\n|\r?\n---(?:\r?\n|$)/g, "")) || {};
-const key = (c: CurationContext): string => objectDigest({ rule: RULE, input: c.excerpt, source: c.source, target: c.target });
+const rule = (c: CurationContext): string => c.excerpt?.sourceMode === "pdf" ? PDF_EXCERPT_RULE : RULE;
+const key = (c: CurationContext): string => objectDigest({ rule: rule(c), input: c.excerpt, source: c.source, target: c.target });
 const literal = (text: string): string => text.replace(/\\/g, "\\\\").replace(/([`*_{}\[\]()#+.!|~<>-])/g, "\\$1");
 export function excerptAddition(context: CurationContext): string {
 	const input = context.excerpt!, r = input.snapshot.record;
 	const quote = (value: string) => value.split(/\r?\n/).map(line => "> " + literal(line)).join("\n");
+	if (r.pdfExcerpt) {
+		const receipt = r.pdfExcerpt, proof = input.pdfSource!;
+		return "PDF 原文摘录（文字记录，未作图表核验）：\n\n" + quote(r.selectedText)
+			+ "\n\n来源：" + readingPathCode(r.sourcePath) + `；PDF 第 ${receipt.page} / ${receipt.pageCount} 页（文件页码）；页内字符 ${r.sourceAnchor!.start}–${r.sourceAnchor!.end}`
+			+ "；文件版本 " + readingPathCode(receipt.digest) + "；摘录 " + readingPathCode(r.annotationPath)
+			+ (proof.kind === "managed" ? "\n\n原文包：" + readingPathCode(proof.manifest.packageKey) + "；来源版本 " + readingPathCode(proof.manifest.sourceVersionId) + "；清单 " + readingPathCode(proof.manifest.digest) : "\n\n来源身份：独立 PDF 文件，尚未关联已核验的论文原文包。")
+			+ (input.includeManual ? "\n\n个人备注（用户记录，未作论文证据核验）：\n\n" + quote(r.manualText) : "");
+	}
 	return (r.sourcePath.startsWith("Clippings/") ? "剪藏原句（外部资料）：" : "原文摘录（文字记录）：") + "\n\n" + quote(r.selectedText)
 		+ "\n\n来源：" + readingPathCode(r.sourcePath) + "；字符 " + r.sourceAnchor!.start + "–" + r.sourceAnchor!.end
 		+ "；文本版本 " + readingPathCode(r.excerpt!.digest) + "；摘录 " + readingPathCode(r.annotationPath)
@@ -28,11 +38,13 @@ export function excerptSuggestion(context: CurationContext): CurationSuggestion 
 /** Manual excerpts have a fixed renderer, never the model suggestion validator or an editable claim. */
 export function validateExcerptContext(context: CurationContext): void {
 	const input = context.excerpt, r = input?.snapshot?.record;
-	if (!input || context.answerExcerpt || input.version !== 1 || !r || !r.excerpt || r.pdfExcerpt || !r.sourceAnchor || !supportsExcerpt(r.sourcePath)
-		|| !["markdown", "article", "structured"].includes(input.sourceMode) || typeof input.includeManual !== "boolean"
+	const pdf = input?.sourceMode === "pdf";
+	if (pdf) validatePdfExcerptContext(context);
+	if (!input || context.answerExcerpt || input.version !== 1 || !r || !r.sourceAnchor || (!pdf && (!r.excerpt || r.pdfExcerpt || input.pdfSource || !supportsExcerpt(r.sourcePath)))
+		|| !["markdown", "article", "structured", "pdf"].includes(input.sourceMode) || typeof input.includeManual !== "boolean"
 		|| typeof r.manualText !== "string" || r.manualText.length > 10000 || input.includeManual && !r.manualText.trim()
 		|| !/^ann-excerpt-[a-f0-9]{48}$/.test(r.id) || r.annotationPath !== `wiki/annotations/${r.id}.md` || !/^[a-f0-9]{64}$/.test(input.snapshot.digest)
-		|| context.ruleVersion !== RULE || context.sessionId !== "" || context.nodeIds.length !== 0 || context.learningHash !== input.snapshot.digest
+		|| context.ruleVersion !== rule(context) || context.sessionId !== "" || context.nodeIds.length !== 0 || context.learningHash !== input.snapshot.digest
 		|| context.backendId !== "none" || context.model !== "" || context.prompt !== "" || context.evidence.length !== 0 || !context.sourceCompatible
 		|| context.source.path !== r.sourcePath || context.source.kind !== (input.sourceMode === "markdown" ? "article" : input.sourceMode)
 		|| !curationTarget(context.target.path) || contentHash(context.target.text) !== context.target.hash
@@ -72,6 +84,7 @@ function compatible(context: CurationContext, sourceText: string, targetText: st
 	if (!context.target.path.startsWith("wiki/sources/")) return;
 	const metadata = meta(targetText);
 	if ([metadata.depth, metadata.reading_depth, metadata.status].includes("metadata-only")) throw new Error("目标仅有元数据，请先准备有依据的来源笔记");
+	if (context.source.kind === "pdf") { pdfExcerptTargetCompatible(context, metadata); return; }
 	if (context.source.path.startsWith("Clippings/")) throw new Error("剪藏摘录可整理到概念、方法或综合笔记；不能据此补写论文来源笔记");
 	if (context.source.kind === "structured") { if (!structuredTargetCompatible(context.source, context.target.path, metadata)) throw new Error("JATS 原文与目标论文或版本不一致"); return; }
 	const sourceIds = noteIdentifiers(meta(sourceText)), targetIds = noteIdentifiers(metadata);
@@ -82,10 +95,12 @@ function compatible(context: CurationContext, sourceText: string, targetText: st
 }
 export async function prepareExcerptCuration(app: App, ref: ExcerptRef, targetPath: string, paragraphId: string, includeManual: boolean, signal?: AbortSignal): Promise<CurationContext> {
 	const stable = { ...ref }; signal?.throwIfAborted(); if (!curationTarget(targetPath)) throw new Error("请选择已有的来源、概念、方法或综合笔记");
-	const snapshot = await new ExcerptLibraryService(app).load(stable, signal), original = await source(app, snapshot.record.sourcePath, signal);
+	const snapshot = await new ExcerptLibraryService(app).load(stable, signal);
+	const pdf = snapshot.record.pdfExcerpt ? await readPdfExcerptSource(app, snapshot.record, signal) : undefined;
+	const original = pdf ? { mode: "pdf" as const, source: pdf.source, text: "" } : await source(app, snapshot.record.sourcePath, signal);
 	const text = await read(app, targetPath, 160000); signal?.throwIfAborted();
 	if (text.includes(readingPathCode(snapshot.record.annotationPath))) throw new Error("目标笔记已有这条摘录的来源记录，请先查看已有内容或修订历史，避免重复补充");
-	const context: CurationContext = { excerpt: { version: 1, snapshot, paragraphId, includeManual, sourceMode: original.mode }, ruleVersion: RULE, key: "", sessionId: "", nodeIds: [], learningHash: snapshot.digest,
+	const context: CurationContext = { excerpt: { version: 1, snapshot, paragraphId, includeManual, sourceMode: original.mode, ...(pdf ? { pdfSource: pdf.proof } : {}) }, ruleVersion: pdf ? PDF_EXCERPT_RULE : RULE, key: "", sessionId: "", nodeIds: [], learningHash: snapshot.digest,
 		title: "摘录 · " + snapshot.record.selectedText.slice(0, 100), source: original.source, target: { path: targetPath, title: String(meta(text).title || targetPath), text, hash: contentHash(text), paragraphs: curationParagraphs(text) },
 		evidence: [], backendId: "none", backendName: "本地摘录", model: "", prompt: "", estimate: 0, sourceCompatible: true, warnings: ["仅保存原句与用户备注；未核验图像或升级科学阅读深度。"] };
 	context.key = key(context); validateExcerptContext(context); compatible(context, original.text, text);
@@ -95,12 +110,18 @@ export async function verifyExcerptCuration(app: App, context: CurationContext, 
 	validateExcerptContext(context); signal?.throwIfAborted(); const input = context.excerpt!, r = input.snapshot.record;
 	const current = await new ExcerptLibraryService(app).load(r, signal);
 	if (current.digest !== input.snapshot.digest || objectDigest(current.record) !== objectDigest(r)) throw new Error("摘录或个人备注已变化，请重新准备预览");
-	const original = await source(app, r.sourcePath, signal);
-	if (original.mode !== input.sourceMode || objectDigest(original.source) !== objectDigest(context.source) || !excerptMatches(r, original.text)) throw new Error("原文版本已变化，请重新核对摘录");
-	const anchor = r.sourceAnchor!, receipt = r.excerpt!;
-	const prepared = prepareExcerpt({ sourcePath: r.sourcePath, selectedText: r.selectedText, sourceStart: anchor.start, sourceEnd: anchor.end, prefix: anchor.prefix, suffix: anchor.suffix, sourceRevision: { algorithm: receipt.algorithm, digest: receipt.digest, length: receipt.length }, section: "", context: "", isTableCell: false, anchorRect: {} as DOMRect }, original.text);
-	if (prepared.id !== r.id) throw new Error("摘录 ID 与准确位置不一致");
+	let sourceText = "";
+	if (input.sourceMode === "pdf") {
+		const original = await readPdfExcerptSource(app, r, signal);
+		if (objectDigest(original.source) !== objectDigest(context.source) || objectDigest(original.proof) !== objectDigest(input.pdfSource)) throw new Error("PDF 来源或原文包版本已变化，请重新核对摘录");
+	} else {
+		const original = await source(app, r.sourcePath, signal); sourceText = original.text;
+		if (original.mode !== input.sourceMode || objectDigest(original.source) !== objectDigest(context.source) || !excerptMatches(r, original.text)) throw new Error("原文版本已变化，请重新核对摘录");
+		const anchor = r.sourceAnchor!, receipt = r.excerpt!;
+		const prepared = prepareExcerpt({ sourcePath: r.sourcePath, selectedText: r.selectedText, sourceStart: anchor.start, sourceEnd: anchor.end, prefix: anchor.prefix, suffix: anchor.suffix, sourceRevision: { algorithm: receipt.algorithm, digest: receipt.digest, length: receipt.length }, section: "", context: "", isTableCell: false, anchorRect: {} as DOMRect }, original.text);
+		if (prepared.id !== r.id) throw new Error("摘录 ID 与准确位置不一致");
+	}
 	const target = await read(app, context.target.path, 1000000);
 	if (contentHash(target) !== targetHash) throw new Error("目标笔记已变化，请重新预览");
-	compatible(context, original.text, target); signal?.throwIfAborted();
+	compatible(context, sourceText, target); signal?.throwIfAborted();
 }
