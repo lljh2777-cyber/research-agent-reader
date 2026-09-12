@@ -18,7 +18,7 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 > [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
 > The plugin is not yet listed in the Obsidian Community directory.
 
-The `codex/research-learning-map` development branch is at `0.68.0`; the beta
+The `codex/research-learning-map` development branch is at `0.69.0`; the beta
 release link above remains the published release.
 
 `0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；不为保存书目信息生成论文笔记。跨阶段待处理中心按路线归 R3。
@@ -36,6 +36,8 @@ release link above remains the published release.
 `0.67.1` 完成[R2 真实转换与初始笔记验收增量](docs/r2-acceptance.md)：修复 Obsidian 桌面辅助进程未创建笔记的问题，补充固定的摘要级证据提示，验证真实 MinerU、deepseek-flash、失败后续办和登记恢复。初始笔记的文件创建需要系统 PATH 中可用的独立 Node.js。新增 `pnpm test:r2` 统一回归。
 
 `0.68.0` 完成[R2 工程收尾](docs/r2-closeout.md)：转换清单中的 PDF 哈希与文件大小匹配已核验原文时，MinerU 正文可以和书目、PDF、Wiki 出现在同一文献详情中；同内容的本地与在线 PDF 继续保留独立版本。转换包仍需单独核验正文和资源，正文或身份冲突会阻止沿用 PDF 关联。此关联只在读取时计算，无需改写转换正文。下一步进入 R3 的快速摘录与待处理流程，科学与教学审阅继续单独验收。
+
+`0.69.0` 接通 [R3.1 无模型保存摘录](docs/excerpts-r31.md)：在原文 Markdown 中划选文字，点击“批注 → 保存摘录”，保留原句、上下文、文本版本和可选个人备注。相同版本与位置复用已有文件，原文变化时提示复查；重新划选可找回摘录，也可打开独立摘录文档编辑备注。当前支持 `papers/`、`Clippings/` 下的 Markdown，PDF 原生选区、摘录列表及后续整理继续开发。新增 `pnpm test:r3` 专项入口。
 
 `0.52.2` 修复真实 JATS 中的公式文档壳和备用图片误计数：DESeq2 可继续转换，Sopa 的公式与备用资源缺口已消除。旧转换器与来源包保持可回放，未展开的补充材料仍显示缺口。范围与测试见 [R0 公式修复](docs/jats-formulas-r0.md)。
 

@@ -148,6 +148,13 @@ export function projectLibrary(input: readonly LibraryObject[]): LibraryProjecti
 			|| ({ pdf: "pdf", mineru: "article", jats: "structured", markdown: "markdown", unknown: "unknown" }[target.item.source.format]) !== item.session.source.kind) throw new Error("阅读会话与已核验来源绑定不一致");
 		parents[root(i)] = root(target.i);
 	}
+	for (let i = 0; i < items.length; i++) {
+		const item = items[i]; if (item.kind !== "annotation" || item.provenance?.format !== "dashboard-excerpt-1" || item.binding?.state !== "matched") continue;
+		const target = sources.get(refKey({ kind: "source", id: item.binding.sourceId || "" }));
+		if (!target || target.item.kind !== "source" || target.item.source.verification.state !== "verified" || target.item.source.path !== item.provenance.sourcePath
+			|| target.item.source.format === "pdf" || target.item.source.verification.fingerprint !== item.binding.fingerprint) throw new Error("摘录与当前已核验来源绑定不一致");
+		parents[root(i)] = root(target.i);
+	}
 	const groups = new Map<number, LibraryObject[]>();
 	items.forEach((item, i) => { const key = root(i); if (!groups.has(key)) groups.set(key, []); groups.get(key)!.push(item); });
 	const citekeys = new Map<string, { groups: Set<number>; items: LibraryObject[] }>();

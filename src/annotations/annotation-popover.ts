@@ -7,6 +7,7 @@ import {
 } from "obsidian";
 
 import type { AnnotationService } from "./annotation-service";
+import { supportsExcerpt } from "./excerpt";
 import type {
 	AnnotationDraft,
 	AnnotationExplanation,
@@ -44,6 +45,7 @@ export class AnnotationPopover extends Component {
 	private cancelGeneration: (() => void) | null = null;
 	private generationVersion = 0;
 	private closed = true;
+	private excerptSave?: AbortController;
 	private outsideListener: ((event: PointerEvent) => void) | null = null;
 	private keyListener: ((event: KeyboardEvent) => void) | null = null;
 	private resizeListener: (() => void) | null = null;
@@ -95,6 +97,7 @@ export class AnnotationPopover extends Component {
 	}
 
 	close(): void {
+		this.excerptSave?.abort();
 		this.generationVersion += 1;
 		if (this.cancelGeneration) {
 			this.cancelGeneration();
@@ -137,6 +140,12 @@ export class AnnotationPopover extends Component {
 		const element = this.reset();
 		this.renderHeader(element, this.selection?.selectedText || "", "选择批注方式");
 		const actions = element.createDiv({ cls: "agent-annotation-choice-list" });
+		if (this.selection?.sourceRevision && supportsExcerpt(this.selection.sourcePath)) {
+			const excerpt = actions.createEl("button", { cls: "agent-annotation-choice", attr: { type: "button" } });
+			const icon = excerpt.createSpan({ cls: "agent-annotation-choice-icon" }); setIcon(icon, "bookmark-plus");
+			const label = excerpt.createDiv(); label.createEl("strong", { text: "保存摘录" }); label.createSpan({ text: "保留原句、上下文和个人备注，无需模型" });
+			excerpt.addEventListener("click", () => this.renderExcerpt());
+		}
 		const manual = actions.createEl("button", {
 			cls: "agent-annotation-choice",
 			attr: { type: "button" },
@@ -159,6 +168,29 @@ export class AnnotationPopover extends Component {
 		ai.addEventListener("click", () => void this.renderExplanation());
 		this.position();
 		window.setTimeout(() => this.element?.focus({ preventScroll: true }), 0);
+	}
+
+	private renderExcerpt(): void {
+		const element = this.reset(); this.renderHeader(element, this.selection?.selectedText || "", "保存摘录");
+		element.createEl("blockquote", { text: this.selection?.selectedText || "", attr: { style: "overflow-wrap:anywhere;max-height:150px;overflow:auto;flex-shrink:0" } });
+		element.createEl("p", { text: "保存到批注文档，保留当前 Markdown 文本版本。相同版本、相同位置的摘录会复用，已有备注保持不变。" });
+		const label = element.createEl("label", { cls: "agent-annotation-field" }); label.createSpan({ text: "个人备注（可留空）" });
+		const input = label.createEl("textarea", { attr: { rows: "4", maxlength: "10000" } });
+		input.addEventListener("input", () => { input.dataset.dirty = input.value ? "true" : "false"; });
+		const status = element.createEl("p", { attr: { role: "status" } }), footer = this.renderFooter(element);
+		const back = footer.createEl("button", { text: "返回", attr: { type: "button" } }); back.onclick = () => this.renderChooser();
+		const save = footer.createEl("button", { text: "确认保存摘录", cls: "mod-cta", attr: { type: "button" } });
+		save.onclick = async () => {
+			if (this.excerptSave || !this.selection || this.closed) return;
+			const controller = new AbortController(); this.excerptSave = controller; save.disabled = true; back.disabled = true; input.disabled = true; status.setText("正在核对原文并保存…");
+			try {
+				const record = await this.service.createExcerpt(this.selection, input.value, controller.signal);
+				if (this.closed || controller.signal.aborted) return;
+				this.record = record; this.renderExisting(); new Notice("摘录已保存或复用，已有备注保持不变");
+			} catch (error) { if (!this.closed && !controller.signal.aborted) status.setText("未确认保存成功：" + displayError(error)); }
+			finally { if (this.excerptSave === controller) this.excerptSave = undefined; save.disabled = false; back.disabled = false; input.disabled = false; }
+		};
+		this.position();
 	}
 
 	private renderManual(): void {
@@ -280,6 +312,17 @@ export class AnnotationPopover extends Component {
 		if (!this.record) return;
 		const element = this.reset();
 		this.renderHeader(element, this.record.selectedText, sectionLabel(this.record.section));
+		if (this.record.excerpt) {
+			element.createEl("blockquote", { text: this.record.selectedText, attr: { style: "overflow-wrap:anywhere;max-height:150px;overflow:auto;flex-shrink:0" } });
+			const record = this.record, status = element.createEl("p", { text: "正在核对摘录来源…", attr: { role: "status" } });
+			void this.service.getExcerptStatus(record).then(text => { if (!this.closed && this.record === record && status.isConnected) status.setText(text); }, () => { if (status.isConnected) status.setText("暂时无法核对原文，保留历史摘录"); });
+			this.renderTextSection(element, "个人备注", record.manualText, "没有填写个人备注");
+			const context = element.createEl("details"); context.createEl("summary", { text: "保存时的原文上下文" }); context.createEl("pre", { text: record.excerpt!.context, attr: { style: "white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto" } });
+			element.createEl("p", { text: "可打开摘录文档编辑个人备注；请保留原文片段、位置和版本凭据。" });
+			const open = this.renderFooter(element).createEl("button", { text: "打开摘录文档", attr: { type: "button" } });
+			open.onclick = () => { this.close(); void this.service.openAnnotationDocument(record).catch(error => new Notice(displayError(error))); };
+			this.position(); return;
+		}
 		this.renderTextSection(element, "手动批注", this.record.manualText, "暂无手动批注");
 		this.renderTextSection(element, "AI 解释", this.record.aiText, "暂无 AI 解释");
 		if (this.record.archiveStatus !== "none" || this.record.archiveTargets.length) {

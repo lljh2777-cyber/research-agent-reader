@@ -176,7 +176,14 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 			const binding: LibrarySourceBinding = { state: "unresolved", ...(source ? { sourceId: source.id } : {}), reason: "旧批注没有固定来源指纹，需核对后确认关联" };
 			const text = source && markdown.get(source.source.path), anchor = record.anchor;
 			if (text && anchor && text.slice(anchor.start, anchor.end) !== record.selectedText) { binding.state = "changed"; binding.reason = "旧批注位置与当前原文不同，未重新绑定"; }
-			if (record.provenance.sourceRevision) {
+			if (record.provenance.format === "dashboard-excerpt-1") {
+				if (text === undefined || !anchor) binding.reason = "本次未取得可核对的原文文本或位置，保留历史摘录，需复查";
+				else if (bytesDigest(new TextEncoder().encode(text)) !== record.provenance.sourceRevision || text.slice(anchor.start, anchor.end) !== record.selectedText) {
+					binding.state = "changed"; binding.reason = "摘录对应的 Markdown 文本版本已变化，保留历史内容，需复查";
+				} else if (source && source.source.verification.state === "verified") {
+					binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "摘录的文本版本与选区一致；科学证据仍需审阅";
+				} else binding.reason = "摘录文本版本一致，原文包尚未通过本次完整核验";
+			} else if (record.provenance.sourceRevision) {
 				if (binding.state !== "changed") binding.reason = "旧批注保留来源版本；仓库标识及版本算法尚未确认，保持独立";
 			}
 			objects.push({ kind: "annotation", id: name + "#" + record.id, annotationPath: name, title: record.section || record.selectedText.slice(0, 80), identifiers: {},

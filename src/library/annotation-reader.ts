@@ -50,6 +50,6 @@ export function readLibraryAnnotations(content: string, annotationPath: string, 
 	return { errors: result.errors, records: result.records.map(record => ({
 		id: record.id, sourcePath: record.sourcePath, selectedText: record.selectedText, section: record.section, anchor: record.sourceAnchor,
 		roles: ["original_quote", ...(record.manualText ? ["personal_note" as const] : []), ...(record.aiText ? ["ai_explanation" as const] : [])],
-		provenance: { format: "dashboard-blocks", sourcePath: record.sourcePath },
+		provenance: { format: record.excerpt ? "dashboard-excerpt-1" : "dashboard-blocks", sourcePath: record.sourcePath, ...(record.excerpt ? { sourceRevision: record.excerpt.digest } : {}) },
 	})) };
 }

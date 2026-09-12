@@ -1,3 +1,4 @@
+import type { ExcerptReceipt, ExcerptRevision } from "./excerpt";
 export type AnnotationArchiveStatus = "none" | "pending" | "completed" | "failed";
 
 export interface AnnotationSelection {
@@ -11,6 +12,7 @@ export interface AnnotationSelection {
 	suffix: string;
 	isTableCell: boolean;
 	anchorRect: DOMRect;
+	sourceRevision?: ExcerptRevision;
 }
 
 export interface AnnotationRecord {
@@ -21,6 +23,7 @@ export interface AnnotationRecord {
 	section: string;
 	/** Detached annotations retain their source position without editing the source. */
 	sourceAnchor?: { start: number; end: number; prefix: string; suffix: string };
+	excerpt?: ExcerptReceipt;
 	manualText: string;
 	aiText: string;
 	aiProvider: string;
