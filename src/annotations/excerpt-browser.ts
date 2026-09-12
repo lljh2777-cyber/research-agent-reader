@@ -19,7 +19,7 @@ export class ExcerptBrowser extends Modal {
 	private searchEl!: HTMLInputElement;
 	private refreshEl!: HTMLButtonElement;
 	private get dirty(): boolean { return Boolean(this.selected && this.draft !== this.selected.record.manualText); }
-	constructor(app: App, private readonly initial?: ExcerptRef, private readonly didClose?: () => void, openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>) { super(app); this.service = new ExcerptLibraryService(app, openMarkdown); }
+	constructor(app: App, private readonly initial?: ExcerptRef, private readonly didClose?: () => void, openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>, private readonly curate?: (ref: ExcerptRef) => void) { super(app); this.service = new ExcerptLibraryService(app, openMarkdown); }
 	onOpen(): void {
 		this.closed = false; this.setTitle("摘录"); this.modalEl.addClass("rar-excerpt-modal");
 		this.contentEl.createEl("p", { text: "查找保存的原句与个人备注。选择一条摘录后核对来源；备注可以独立修改。", cls: "rar-library-muted" });
@@ -129,6 +129,10 @@ export class ExcerptBrowser extends Modal {
 		}));
 		this.button(actions, "放弃修改", () => { if (this.busy) return; this.draft = snapshot.record.manualText; this.message("已放弃未保存的草稿。"); this.renderDetail(); this.syncControls(); });
 		const navigation = this.detailEl.createDiv("rar-excerpt-actions");
+		if (this.curate) this.button(navigation, "补充到已有笔记", () => {
+			if (this.dirty || this.busy) { this.message("请先保存或放弃备注草稿后再整理摘录。"); return; }
+			this.curate!({ annotationPath: record.annotationPath, id: record.id }); this.close();
+		});
 		this.button(navigation, "回到原文", () => {
 			if (this.dirty) { this.message("请先保存或放弃备注草稿后再回到原文。"); return; }
 			void this.run(async signal => { await this.service.openSource(record, signal); signal.throwIfAborted(); this.dispose(); });

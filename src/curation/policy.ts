@@ -1,6 +1,7 @@
 import { contentHash } from "../retrieval/chunks";
 import { validateModelNoteBodyMarkdown } from "../security/safe-markdown";
 import type { CurationContext, CurationParagraph, CurationSuggestion, SuggestionKind } from "./types";
+import { validateExcerptSuggestion } from "./excerpt";
 
 export const CURATION_TARGETS = ["sources", "concepts", "methods", "synthesis"].map(folder => "wiki/" + folder + "/");
 export const curationTarget = (file: string): boolean => CURATION_TARGETS.some(prefix => file.startsWith(prefix)) && file.endsWith(".md") && !/[\\[\]|#%<>:\r\n]/.test(file) && !file.split("/").some(part => !part || part.startsWith("."));
@@ -23,6 +24,7 @@ const numbers = (text: string): string[] => text.match(/\d+(?:[.,]\d+)*(?:%|％)
 const units = (text: string): string[] => text.match(/(?<![A-Za-z])(?:μg|µg|ug|mg|ng|pg|kg|mM|μM|µM|nM|mm|nm|μm|µm)(?:\/(?:mL|ml|L|kg))?(?![A-Za-z])/g) || [];
 const compact = (text: string): string => text.replace(/[\s，。,.!！?？*`]/g, "");
 export function validateSuggestion(raw: unknown, context: CurationContext, index: number): CurationSuggestion {
+	if (context.excerpt) return validateExcerptSuggestion(raw, context, index);
 	if (!raw || typeof raw !== "object") throw new Error("整理建议结构无效");
 	const value = raw as Record<string, unknown>; const kinds: SuggestionKind[] = ["add", "replace", "covered", "condition", "conflict", "insufficient"];
 	if (!kinds.includes(value.kind as SuggestionKind) || typeof value.claim !== "string" || typeof value.text !== "string" || typeof value.reason !== "string" || typeof value.paragraphId !== "string" || !Array.isArray(value.citations)) throw new Error("整理建议缺少必要字段");

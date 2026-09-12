@@ -150,6 +150,7 @@ import { CurationWriter } from "./curation/writer";
 import { FileCurationStore } from "./curation/store";
 import type { CurationContext, CurationReview } from "./curation/types";
 import { KnowledgeCurationModal, KnowledgeMaintenanceModal } from "./views/knowledge-curation";
+import { ExcerptCurationModal } from "./views/excerpt-curation";
 import { serializeActionRequest } from "./runtime/action-request";
 import type { DashboardActionOptions } from "./actions";
 import { AnnotationPopover } from "./annotations/annotation-popover";
@@ -768,7 +769,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	openExcerptBrowser(ref?: ExcerptRef): void {
 		if (this.excerptBrowser) { new Notice("摘录窗口已打开，请先完成当前操作"); return; }
-		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true));
+		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true), ref => this.showCurationModal(new ExcerptCurationModal(this.app, this, ref)));
 		this.excerptBrowser = modal; modal.open();
 	}
 
@@ -3046,6 +3047,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	readDashboardCuration() { return readDashboardCuration(new FileSourceStorage(this.readingPluginDirectory())); }
 	openKnowledgeMaintenance(entry?: CurationNavigation): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this, entry)); }
 	openKnowledgeCuration(sessionId: string, nodeId: string, review?: CurationReview): void {
+		if (review?.context.excerpt) { this.showCurationModal(new ExcerptCurationModal(this.app, this, review.context.excerpt.snapshot.record, review)); return; }
 		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") { new Notice("代码学习可导出独立笔记并关联已有笔记，暂不自动整理正式代码页"); return; }
 		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review)); }
 		catch (error) { new Notice(String(error)); }

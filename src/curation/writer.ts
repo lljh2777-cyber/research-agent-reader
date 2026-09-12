@@ -5,16 +5,22 @@ import { verifyCurationContext } from "./context";
 import { curationParagraphs, curationTarget, protectedPrefix, validateSuggestion } from "./policy";
 import type { CurationService } from "./service";
 import type { CurationReview, CurationRevision, CurationSuggestion, RevisionWrite } from "./types";
+import { excerptNoteText, validateExcerptContext, verifyExcerptCuration } from "./excerpt";
 
 const indices = { sources: "文献索引.md", concepts: "研究主题索引.md", methods: "研究方法索引.md", synthesis: "研究主题索引.md" };
 const link = (file: string): string => "[[" + file.replace(/\.md$/, "") + "]]";
 function revisionLog(revision: Pick<CurationRevision, "id" | "created" | "undoOf" | "suggestionIds">, review: CurationReview, indexed: boolean): string {
 	if (revision.undoOf) return "\n- " + revision.created + " 撤销整理修订 " + readingPathCode(revision.undoOf) + "；恢复 " + link(review.context.target.path) + " 的前一内容；新修订 " + readingPathCode(revision.id) + "。索引入口保留。\n";
+	if (review.context.excerpt) return "\n- " + revision.created + " 整理摘录至 " + link(review.context.target.path) + "；修订 " + readingPathCode(revision.id) + "；摘录 " + readingPathCode(review.context.excerpt.snapshot.record.annotationPath) + "；原句与个人备注分别保留，未调用模型。" + (indexed ? "已补充索引入口。" : "索引入口已存在或对应索引文件缺失，未改动索引。") + "\n";
 	return "\n- " + revision.created + " 整理学习内容至 " + link(review.context.target.path) + "；修订 " + readingPathCode(revision.id) + "；会话 " + readingPathCode(review.context.sessionId) + "；采用 " + revision.suggestionIds.length + " 条建议。" + (indexed ? "已补充索引入口。" : "索引入口已存在或对应索引文件缺失，未改动索引。") + "\n";
 }
 export function curationNoteText(review: CurationReview, selectedIds: string[]): string {
 	const ids = new Set(selectedIds); const choices = review.suggestions.filter(s => ids.has(s.id));
 	if (!ids.size || ids.size !== selectedIds.length || choices.length !== ids.size || choices.some(s => !s.applicable || s.decision !== "pending")) throw new Error("请选择尚未处理且证据完整的建议");
+	if (review.context.excerpt) {
+		validateExcerptContext(review.context); if (choices.length !== 1 || review.suggestions.length !== 1) throw new Error("每次只整理一条摘录");
+		validateSuggestion(choices[0], review.context, 0); return excerptNoteText(review.context);
+	}
 	const context = review.context; const paragraphs = curationParagraphs(context.target.text); const edits = new Map<string, CurationSuggestion[]>();
 	for (const suggestion of choices) {
 		if (!validateSuggestion(suggestion, context, review.suggestions.indexOf(suggestion)).applicable) throw new Error("建议内容或证据校验失败");
@@ -57,12 +63,13 @@ export class CurationWriter {
 		writes.push(this.write("wiki/log.md", log, (log || "# 知识库维护日志\n") + line, "log"));
 		return { version: 1, id: revisionId, reviewId, suggestionIds: [...selectedIds], created, updated: created, state: "prepared", writes, error: "" };
 	}
-	apply(preview: CurationRevision): Promise<CurationRevision> {
+	apply(preview: CurationRevision, signal?: AbortSignal): Promise<CurationRevision> {
+		preview = structuredClone(preview);
 		return this.service.serial(async () => {
-			const prior = this.service.revisions.get(preview.id); if (prior) return prior.state === "applied" ? this.finish(prior) : this.execute(prior);
+			signal?.throwIfAborted(); const prior = this.service.revisions.get(preview.id); if (prior) return prior.state === "applied" ? this.finish(prior) : this.execute(prior, signal);
 			const rebuilt = await this.preview(preview.reviewId, preview.suggestionIds, preview.id, preview.created);
 			if (JSON.stringify(rebuilt.writes) !== JSON.stringify(preview.writes)) throw new Error("预览后笔记、索引或日志已变化，请刷新修改预览");
-			await this.service.saveRevision(rebuilt); return this.execute(rebuilt);
+			signal?.throwIfAborted(); await this.service.saveRevision(rebuilt); return this.execute(rebuilt, signal);
 		});
 	}
 	resume(id: string): Promise<CurationRevision> { return this.service.serial(async () => { await this.service.ready(); const revision = this.service.revisions.get(id); if (!revision) throw new Error("修订记录不存在"); return revision.state === "applied" ? this.finish(revision) : this.execute(revision); }); }
@@ -98,9 +105,10 @@ export class CurationWriter {
 		}
 		return revision;
 	}
-	private async execute(stored: CurationRevision): Promise<CurationRevision> {
+	private async execute(stored: CurationRevision, signal?: AbortSignal): Promise<CurationRevision> {
 		const revision = structuredClone(stored); const review = this.validate(revision); const target = revision.writes.find(w => w.role === "target")!;
 		try {
+			signal?.throwIfAborted();
 			const current = await this.read(target.path);
 			if (current === null || ![target.beforeHash, target.afterHash].includes(contentHash(current))) throw new Error("目标笔记已有后续编辑，无法直接应用或恢复");
 			if (!revision.undoOf) await verifyCurationContext(this.service.app, this.service.workspace, review.context, contentHash(current));
@@ -108,6 +116,11 @@ export class CurationWriter {
 			for (const write of revision.writes) { const text = await this.read(write.path); const hash = text === null ? null : contentHash(text); if (hash !== write.beforeHash && hash !== write.afterHash) throw new Error("文件已变化，需要重新核对：" + write.path); }
 			revision.state = "applying"; revision.updated = new Date().toISOString(); await this.service.saveRevision(revision);
 			for (const write of revision.writes) {
+				signal?.throwIfAborted();
+				if (!revision.undoOf && review.context.excerpt) {
+					const currentTarget = await this.read(target.path); if (currentTarget === null || ![target.beforeHash, target.afterHash].includes(contentHash(currentTarget))) throw new Error("目标笔记已有后续编辑，停止剩余写入");
+					await verifyExcerptCuration(this.service.app, review.context, contentHash(currentTarget), signal);
+				}
 				if (!revision.undoOf && review.context.source.kind === "structured") {
 					const currentTarget = await this.read(target.path), currentHash = currentTarget === null ? null : contentHash(currentTarget);
 					if (!currentHash || ![target.beforeHash, target.afterHash].includes(currentHash)) throw new Error("目标笔记已有后续编辑，停止剩余写入");
@@ -115,9 +128,10 @@ export class CurationWriter {
 				}
 				const file = this.service.app.vault.getFileByPath(write.path);
 				if (!file) { if (write.before !== null) throw new Error("待更新文件缺失"); await this.service.app.vault.create(write.path, write.after); }
-				else await this.service.app.vault.process(file, text => { const hash = contentHash(text); if (hash === write.afterHash) return text; if (hash !== write.beforeHash) throw new Error("写入前文件已变化：" + write.path); return write.after; });
+				else await this.service.app.vault.process(file, text => { signal?.throwIfAborted(); if (review.context.excerpt && (file.path !== write.path || this.service.app.vault.getFileByPath(write.path) !== file)) throw new Error("写入前文件移动或替换：" + write.path); const hash = contentHash(text); if (hash === write.afterHash) return text; if (hash !== write.beforeHash) throw new Error("写入前文件已变化：" + write.path); return write.after; });
 			}
 			if (!revision.undoOf && review.context.source.kind === "structured") await verifyCurationContext(this.service.app, this.service.workspace, review.context, target.afterHash);
+			if (!revision.undoOf && review.context.excerpt) await verifyExcerptCuration(this.service.app, review.context, target.afterHash, signal);
 			revision.state = "applied"; revision.error = ""; revision.updated = new Date().toISOString(); await this.service.saveRevision(revision);
 			return await this.finish(revision);
 		} catch (error) {

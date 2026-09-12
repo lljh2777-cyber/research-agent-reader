@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Manual excerpt curation with guarded revisions — 0.72.0
+
+- 摘录详情可选择已有笔记和插入段落，明确勾选原句与可选个人备注，逐文件预览后确认补充；无需阅读会话或模型。
+- 固定文字和独立角色标注保留来源、文本版本与位置；普通 Markdown 核对全文，MinerU/JATS 沿用原文包验证，论文来源笔记保持身份限制。
+- 复用现有整理、修订、恢复与撤销，每步检查摘录和目标版本；重复预览与已有来源记录阻止重复补充，已应用批次返回修订历史。
+- 15 组新专项、相关回归、原生写入／重载／撤销和窄视口验证通过；983 个受保护文件及原十四个标签页恢复。具体隔离边界和未验收范围见 [R3.4 记录](docs/excerpt-curation-r34.md)。
+
 ### Read-only cross-stage pending center — 0.71.0
 
 - 首页、文献库和命令面板接通待处理中心，按五个阶段搜索与筛选已保存记录；独立读取失败、达到上限和未核验来源明确提示。

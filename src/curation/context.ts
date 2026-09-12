@@ -10,6 +10,7 @@ import { CURATION_RULE_VERSION, type CurationContext, type CurationEvidence } fr
 import { curationQuotes, selectCurationParagraphs, type CurationSearch } from "./selection";
 import { curationAnswerSchema } from "../reading/schemas";
 import { structuredReference, matchStructuredReference, structuredTargetCompatible } from "../reading/structured-reference";
+import { verifyExcerptCuration } from "./excerpt";
 
 export { curationSkill };
 export function curationLearningHash(session: ReadingSession, nodeIds: string[]): string {
@@ -73,6 +74,7 @@ export async function prepareCuration(app: App, workspace: ReadingWorkspaceServi
 	signal?.throwIfAborted(); return context;
 }
 export async function verifyCurationContext(app: App, workspace: ReadingWorkspaceService, context: CurationContext, targetHash = context.target.hash): Promise<void> {
+	if (context.excerpt) return verifyExcerptCuration(app, context, targetHash);
 	const session = workspace.repository.get(context.sessionId);
 	if (curationLearningHash(session, context.nodeIds) !== context.learningHash) throw new Error("学习内容已变化，请刷新整理范围");
 	const target = app.vault.getFileByPath(context.target.path);

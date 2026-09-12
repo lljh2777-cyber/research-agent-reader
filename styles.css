@@ -6895,3 +6895,8 @@ body.agent-dashboard-mineru-resizing {
 .rar-pending-row h3 { margin: 8px 0; }
 .rar-pending-row small { color: var(--text-muted); }
 .rar-pending-row button { white-space: normal; height: auto; min-height: 32px; }
+.rar-excerpt-curation .rar-excerpt-curation-choices { display: flex; flex-direction: column; gap: 12px; }
+.rar-excerpt-curation select, .rar-excerpt-curation input[type="search"] { width: 100%; min-width: 0; }
+.rar-excerpt-curation p, .rar-excerpt-curation blockquote, .rar-excerpt-curation summary { overflow-wrap: anywhere; }
+.rar-excerpt-curation label { display: flex; align-items: flex-start; gap: 8px; }
+.rar-excerpt-curation button { white-space: normal; height: auto; min-height: 30px; }
