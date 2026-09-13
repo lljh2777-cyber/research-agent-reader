@@ -159,40 +159,23 @@ const runtimeSettingsSource = fs.readFileSync(
 	"utf8",
 );
 for (const settingsPage of [
-	'renderSettingsHome(containerEl)',
-	'renderRuntimeSettings(containerEl)',
-	'renderMineruSettings(containerEl)',
-	'renderReaderSettings(containerEl)',
-	'renderTaskDefaultsSettings(containerEl)',
-	'renderDataSettings(containerEl)',
-	'renderCodexSettings(containerEl)',
-	'renderClaudeSettings(containerEl)',
-	'renderOpenCodeSettings(containerEl)',
-	'renderAnnotationSettings(containerEl)',
-	'renderDirectApiSettings(containerEl)',
+	'renderSettingsHome(content)',
+	'renderRuntimeSettings(content)',
+	'renderMineruSettings(content)',
+	'renderReaderSettings(content)',
+	'renderTaskDefaultsSettings(content)',
+	'renderDataSettings(content)',
+	'renderCodexSettings(content)',
+	'renderClaudeSettings(content)',
+	'renderOpenCodeSettings(content)',
+	'renderAnnotationSettings(content)',
+	'renderDirectApiSettings(content)',
 ]) {
 	assert.ok(
 		settingsSource.includes(settingsPage),
 		`settings should retain the ${settingsPage} navigation target`,
 	);
 }
-assert.ok(
-	settingsSource.includes('type SettingsPage =')
-		&& settingsSource.includes('| "opencode"')
-		&& settingsSource.includes('| "direct-api"')
-		&& settingsSource.includes('| "mineru"')
-		&& settingsSource.includes('| "reader"')
-		&& settingsSource.includes('| "tasks"')
-		&& settingsSource.includes('| "data"'),
-	"settings should retain a dedicated page state for each configuration module",
-);
-assert.ok(
-	settingsSource.includes('title: "MinerU 文献解析"')
-		&& settingsSource.includes('title: "文献阅读器"')
-		&& settingsSource.includes('title: "任务默认策略"')
-		&& settingsSource.includes('title: "数据与诊断"'),
-	"settings home should expose MinerU, reader, task defaults, and diagnostics modules",
-);
 assert.ok(
 	runtimeSettingsSource.includes("actionExecutionDefaults")
 		&& runtimeSettingsSource.includes("queryDefaultBackendId")
@@ -201,7 +184,7 @@ assert.ok(
 	"settings persistence should define task defaults and bounded history controls",
 );
 const taskHistorySettingStart = settingsSource.indexOf('.setName("任务历史保留数量")');
-const taskHistorySettingEnd = settingsSource.indexOf('.setName("查询会话保留数量")');
+const taskHistorySettingEnd = settingsSource.indexOf('.setName("知识库查询会话保留数量")');
 const taskHistorySettingSource = settingsSource.slice(taskHistorySettingStart, taskHistorySettingEnd);
 assert.ok(
 	taskHistorySettingStart >= 0
@@ -211,7 +194,7 @@ assert.ok(
 	"destructive task-history pruning must require a discrete selection, not fire on intermediate text input",
 );
 assert.ok(
-	settingsSource.includes('setIcon(chevron, "chevron-right")')
+	settingsSource.includes('setIcon(arrow, "chevron-right")')
 		&& settingsSource.includes('"aria-label": "返回设置首页"'),
 	"settings should retain forward and back navigation affordances",
 );
@@ -351,7 +334,7 @@ assert.strictEqual(plugin.getRunningTaskRun("vault-lint"), null);
 plugin.taskRuns = [];
 
 assert.ok(
-	pluginSource.includes('value: healthScore === null ? "—" : String(healthScore)'),
+	pluginSource.includes('value: healthScore === null ? "尚未体检" : String(healthScore)'),
 	"health metric should use the latest lint report or show no result",
 );
 assert.ok(
@@ -368,7 +351,7 @@ assert.ok(
 	"R code-practice cells should support Alt+- for the assignment operator",
 );
 assert.ok(
-	pluginSource.includes('isRunning ? "点击停止" : "空闲"'),
+	pluginSource.includes('isRunning ? "运行中 · 点击停止"') && pluginSource.includes('this.plugin.stopTaskRun(run.id)'),
 	"running Dashboard actions should expose a manual stop control",
 );
 

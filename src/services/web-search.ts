@@ -1,4 +1,4 @@
-import type { WebSearchResult } from "../types/contracts";
+import type { NativeWebSearchProtocol, WebSearchResult } from "../types/contracts";
 
 const TAVILY_ENDPOINT = "https://api.tavily.com/search";
 const MAX_WEB_RESULTS = 8;
@@ -17,13 +17,22 @@ export interface WebSearchHttpDeps {
 		headers: Record<string, string>;
 		body: unknown;
 		timeoutMs: number;
+		registerCancel?: (cancel: () => void) => void;
 	}): Promise<WebSearchHttpResult>;
 }
 
 export interface WebSearchOptions {
 	maxResults: number;
 	timeoutMs: number;
+	maxQueries?: number;
+	totalResults?: number;
+	signal?: AbortSignal;
 }
+
+export type WebSearchBackendResolution =
+	| { kind: "native"; protocol: NativeWebSearchProtocol }
+	| { kind: "tavily"; search: (queries: string[], options?: Partial<WebSearchOptions>) => Promise<WebSearchResult[]> }
+	| { kind: "unavailable"; reason: string };
 
 /**
  * Runs bounded Tavily searches for the given queries: one request per query
@@ -39,12 +48,18 @@ export async function searchTavily(
 	const key = String(apiKey || "").trim();
 	if (!key) throw new Error("未配置 Tavily API Key");
 	const maxResults = Math.max(1, Math.min(MAX_WEB_RESULTS, Math.round(options.maxResults) || 5));
+	const totalResults = Math.max(1, Math.min(MAX_WEB_RESULTS, Math.round(options.totalResults || MAX_WEB_RESULTS)));
+	const maxQueries = Math.max(1, Math.min(3, Math.round(options.maxQueries || 3)));
 	const seenUrls = new Set<string>();
 	const results: WebSearchResult[] = [];
-	for (const query of queries) {
+	for (const query of queries.slice(0, maxQueries)) {
+		options.signal?.throwIfAborted();
 		const trimmed = String(query || "").trim();
 		if (!trimmed) continue;
 		let payload: Record<string, unknown> | null = null;
+		let cancelRequest: (() => void) | undefined;
+		const abort = () => cancelRequest?.();
+		options.signal?.addEventListener("abort", abort, { once: true });
 		try {
 			const response = await deps.httpRequest({
 				url: TAVILY_ENDPOINT,
@@ -60,7 +75,9 @@ export async function searchTavily(
 					include_answer: false,
 				},
 				timeoutMs: options.timeoutMs,
+				registerCancel: (cancel) => { cancelRequest = cancel; if (options.signal?.aborted) cancel(); },
 			});
+			options.signal?.throwIfAborted();
 			if (response.status === 401 || response.status === 403) {
 				throw new Error("Tavily API Key 无效或未授权");
 			}
@@ -72,8 +89,11 @@ export async function searchTavily(
 			}
 			payload = response.json;
 		} catch (error) {
+			options.signal?.throwIfAborted();
 			if (error instanceof Error && /Tavily/.test(error.message)) throw error;
 			throw new Error(`Tavily 请求失败：${error instanceof Error ? error.message : String(error)}`);
+		} finally {
+			options.signal?.removeEventListener("abort", abort);
 		}
 		const rawResults = Array.isArray(payload?.results) ? payload?.results : [];
 		for (const raw of rawResults) {
@@ -87,7 +107,7 @@ export async function searchTavily(
 				content: String(record.content || "").trim().slice(0, MAX_RESULT_CHARS),
 				publishedAt: String(record.published_date || "").trim().slice(0, 40),
 			});
-			if (results.length >= MAX_WEB_RESULTS) return results;
+			if (results.length >= totalResults) return results;
 		}
 	}
 	return results;

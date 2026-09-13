@@ -14,6 +14,7 @@ const buildOptions = {
 	minify: !watch,
 	sourcemap: watch ? "inline" : false,
 	treeShaking: true,
+	loader: { ".md": "text" },
 	outfile: "main.js",
 	banner: {
 		js: "/* This file is generated from src/. Run `pnpm build`; do not edit main.js directly. */",

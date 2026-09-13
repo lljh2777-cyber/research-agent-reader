@@ -1,0 +1,38 @@
+const assert = require("node:assert/strict");
+const { loadReading, memoryStorage } = require("./reading-test-helpers");
+const { createReadingSession, validateReadingSession } = loadReading("reading/session.ts");
+const { readingCategory, readingTitle, recentReading, matchingReading } = loadReading("reading/catalog.ts");
+const { RoutedReadingStorage, ReadingRepository } = loadReading("reading/store.ts");
+const { ReadingWorkspaceService } = loadReading("reading/workspace.ts");
+(async () => {
+	const source = { kind: "pdf", path: "paper.pdf", fingerprint: "a".repeat(64), title: "Paper" };
+	const a = createReadingSession(source); const b = createReadingSession(source);
+	a.lastOpenedAt = "2026-01-01T00:00:00Z"; b.lastOpenedAt = "2026-02-01T00:00:00Z";
+	assert.equal(matchingReading([a,b], source).id, b.id);
+	assert.equal(matchingReading([a,b], { ...source, fingerprint: "b".repeat(64) }), undefined);
+	a.pinned = true; assert.equal(recentReading([a,b])[0].id, a.id);
+	b.archived = true; assert.equal(matchingReading([a,b], source).id, a.id);
+	assert.equal(recentReading([a,b], "reading", true)[0].id, b.id);
+	const legacy = createReadingSession({ ...source, path: "demo://reading", fingerprint: "0".repeat(64) });
+	legacy.purpose = undefined; legacy.demo = true; legacy.title = "集成验收 · 双模式与分支（示例）";
+	assert.equal(readingCategory(legacy), "test"); validateReadingSession(legacy); legacy.title = "已改名"; assert.equal(readingCategory(legacy), "test");
+	a.title = "集成验收 · 真实论文"; assert.equal(readingCategory(a), "reading");
+	assert.equal(readingTitle({ ...a, title: "source", source: { ...source, path: "papers/key/_extraction/source.pdf" } }), "key · PDF");
+	const regular = memoryStorage(), tests = memoryStorage();
+	regular.files.set(legacy.id, JSON.stringify(legacy)); const routed = new RoutedReadingStorage(regular, tests); const repo = new ReadingRepository(routed); await repo.load();
+	await repo.transact(legacy.id, s => { s.pinned = true; }); assert.ok(regular.files.has(legacy.id)); assert.equal(tests.files.size, 0);
+	const fixture = createReadingSession(source); fixture.demo = true; fixture.purpose = "test"; await repo.add(fixture);
+	assert.ok(tests.files.has(fixture.id)); assert.equal(regular.files.has(fixture.id), false);
+	tests.fail = true; await assert.rejects(repo.transact(fixture.id, s => { s.title = "failed"; }), /disk full/); assert.equal(repo.get(fixture.id).title, "Paper"); tests.fail = false;
+	const reloaded = new ReadingRepository(new RoutedReadingStorage(regular, tests)); await reloaded.load(); assert.equal(reloaded.sessions.size, 2);
+	// Reopening identical sources reuses the session, including concurrent open requests.
+	const service = Object.create(ReadingWorkspaceService.prototype); service.repository = new ReadingRepository(memoryStorage()); service.documents = new Map(); service.openings = Promise.resolve(); service.ready = async () => {};
+	let destroyed = 0; let fingerprint = source.fingerprint;
+	service.loader = { open: async () => ({ source: { ...source, fingerprint }, destroy: async () => { destroyed++; } }) };
+	const first = await service.open("pdf", "paper.pdf", "codex-cli", ""); const second = await service.open("pdf", "paper.pdf", "other", "ignored");
+	assert.equal(second.id, first.id); assert.equal(second.created, false); assert.equal(service.repository.get(first.id).backend, "codex-cli");
+	const explicit = await service.open("pdf", "paper.pdf", "codex-cli", "", true); assert.notEqual(explicit.id, first.id);
+	fingerprint = "c".repeat(64); const concurrent = await Promise.all([service.open("pdf", "paper.pdf", "codex-cli", ""), service.open("pdf", "paper.pdf", "codex-cli", "")]);
+	assert.equal(concurrent[0].id, concurrent[1].id); assert.notEqual(concurrent[0].id, first.id); assert.equal(concurrent[1].created, false); assert.equal(destroyed, 2);
+	console.log("READING_CATALOG_OK");
+})().catch(e => { console.error(e); process.exitCode = 1; });

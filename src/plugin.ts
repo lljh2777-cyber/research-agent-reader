@@ -2,15 +2,76 @@ import {
 	FileSystemAdapter,
 	MarkdownView,
 	Menu,
+	Modal,
 	Notice,
 	Plugin,
 	TFile,
 	normalizePath,
+	parseYaml,
 	type WorkspaceLeaf,
 } from "obsidian";
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
+import { hostname } from "node:os";
+import { AcquisitionService } from "./fulltext/service";
+import { readPaperLibrary } from "./library/reader";
+import { libraryNavigation } from "./library/browser";
+import type { LibraryObjectSummary } from "./library/types";
+import { PaperLibraryView, PAPER_LIBRARY_VIEW_TYPE } from "./views/paper-library";
+import { documentLearningEntry, type LearningEntry } from "./learning/entry";
+import { TopicLearningService } from "./topic-learning/service";
+import { TopicSessionStore } from "./topic-learning/store";
+import { TopicLearningView, TOPIC_LEARNING_VIEW_TYPE } from "./views/topic-learning";
+import { TopicStudyService } from "./topic-learning/study-service";
+import { TopicStudyStore } from "./topic-learning/study-store";
+import { TopicStudyExports, TOPIC_EXPORT_ROOT } from "./topic-learning/export";
+import { TopicStudyView, TOPIC_STUDY_VIEW_TYPE } from "./views/topic-study";
+import { libraryMineruVerifier } from "./library/mineru-verifier";
+import { JournalPaperRecordStore, readPaperRecordIdentities } from "./library/record-store";
+import { PaperRecordService, type PaperRecordEdit } from "./library/record-service";
+import { MetadataIntakeService, type PaperIntakeContext, type MetadataSource } from "./library/metadata-intake";
+import { savedPaperContext } from "./library/paper-continuation";
+import type { LibraryPaper } from "./library/types";
+import { loadSourcePackage } from "./sources/package";
+import { MetadataIntakeModal } from "./views/metadata-intake";
+import { LocalPdfIntakeService } from "./papers/local-pdf-intake";
+import { LocalPdfIntakeModal } from "./views/local-pdf-intake";
+import { IdentityResolver } from "./fulltext/identity-resolver";
+import { AcquisitionRepository } from "./fulltext/repository";
+import { FileAcquisitionStorage } from "./fulltext/file-storage";
+import { DemoAcquisitionBackend } from "./fulltext/demo-backend";
+import { FulltextAcquisitionModal } from "./fulltext/modal";
+import { acquisitionTaskRun } from "./fulltext/task-run";
+import { HttpsSourceTransport } from "./fulltext/transport";
+import { PmcAcquisitionBackend } from "./fulltext/pmc-backend";
+import { AcquiredPdfPreview } from "./fulltext/pdf-preview";
+import { openAcquiredIntake, openSavedPdfIntake } from "./fulltext/intake-modal";
+import { readSavedPdf as loadSavedPdf, decodeSavedPdfRef, type SavedPdfRef } from "./papers/saved-pdf";
+import { TaskResultModal } from "./modals/task-result";
+import { validateAcquiredIntake } from "./fulltext/intake-adapter";
+import { decodeIntakeRef, type AcquisitionIntakeRef } from "./fulltext/contracts";
+import { SourceIntakeService } from "./papers/source-intake";
+import { createVaultCatalog, sourceIndexIO } from "./papers/vault-catalog";
+import { FileSourceStorage } from "./sources/storage";
+import { readDashboardCuration, type CurationNavigation } from "./services/dashboard-curation";
+import { libraryCodeLinks, codeLinkStillPresent, type LibraryCodeLink } from "./library/code-links";
+import { openSourceSave } from "./papers/source-save-modal";
+import { JatsIntakeService } from "./jats/intake";
+import { openJatsSave } from "./jats/modal";
+import { JatsWikiService } from "./jats/wiki-service";
+import { openJatsWiki } from "./jats/wiki-modal";
+import { commitSourceNote } from "./agent/tools";
+import { runBoundedAgentLoop } from "./agent/loop";
+import { matchStructuredReference, validateStructuredReference, structuredLocationLabel } from "./reading/structured-reference";
+import { renderAuthorizedPdfIdentityPage } from "./agent/pdf-identity";
+import { catalogIntake, legacyCatalogAssociation } from "./papers/agent-intake";
+import type { AcquisitionMode } from "./fulltext/contracts";
+import { IngestRecords, validateIngestRequestForTask } from "./agent/ingest-records";
+import { openIngestContinuation } from "./views/ingest-continuation";
+import { IngestRegistrationController } from "./views/ingest-registration";
+import { ingestSteps, normalizeIngestProgress, type IngestProgress } from "./agent/ingest-progress";
 
 import { ACTION_BY_ID, type DashboardAction } from "./actions";
 import {
@@ -55,6 +116,16 @@ import {
 import { ProcessExecutionService } from "./runtime/process-execution";
 import { runMineruProcessCommand } from "./runtime/mineru-process";
 import { AgentLoopService, type AgentLoopRunOutcome } from "./agent/agent-loop-service";
+import { ReadingAssistantService } from "./assistant/service";
+import { probeReadingSchema } from "./assistant/probe";
+import { structuredProfileKey, supportsReadingSchema } from "./providers/structured";
+import { FileAssistantStorage } from "./assistant/store";
+import { ReadingAssistantModal } from "./views/reading-assistant";
+import { ReadingExportModal } from "./views/reading-export";
+import { readReadingOutcomes } from "./reading/outcomes";
+import { resolveAssistantAction, safeAssistantExportPath } from "./assistant/action-results";
+import type { AssistantExecution } from "./assistant/types";
+import { inKnowledgeScope, contentHash as assistantHash } from "./retrieval/chunks";
 import type { PaperIngestFlowOptions } from "./agent/paper-ingest-flow";
 import { VaultLintService } from "./services/vault-lint";
 import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./services/vault-evidence";
@@ -66,7 +137,41 @@ import { CodePracticeView } from "./views/code-practice";
 import { DashboardView } from "./views/dashboard";
 import { MineruReaderView } from "./views/mineru-reader";
 import { QueryWikiView } from "./views/query-wiki";
+import { ReadingWorkspaceView } from "./views/reading-workspace";
+import { ReadingWorkspaceService } from "./reading/workspace";
+import { ReadingEngine } from "./reading/engine";
+import { readingHash } from "./reading/document";
+import { DirectReadingBackend, CodexReadingBackend } from "./reading/backend";
+import { READING_VIEW_TYPE, type ReadingBackend, type ReadingSession } from "./reading/types";
+import { readingEntryDomain } from "./reading/entry";
+import { LearningLibrary } from "./curation/learning";
+import { CurationService } from "./curation/service";
+import { CurationWriter } from "./curation/writer";
+import { FileCurationStore } from "./curation/store";
+import { KnowledgeDraftStore } from "./curation/draft-store";
+import { readDraftMaterial } from "./curation/draft";
+import { KnowledgeDraftsModal } from "./views/knowledge-drafts";
+import type { CurationContext, CurationReview } from "./curation/types";
+import { KnowledgeCurationModal, KnowledgeMaintenanceModal } from "./views/knowledge-curation";
+import { ExcerptCurationModal } from "./views/excerpt-curation";
+import { serializeActionRequest } from "./runtime/action-request";
+import type { DashboardActionOptions } from "./actions";
 import { AnnotationPopover } from "./annotations/annotation-popover";
+import { ExcerptBrowser } from "./annotations/excerpt-browser";
+import { AnswerExcerptService } from "./learning/answer-excerpts";
+import { readAnswerExcerptPending } from "./learning/answer-excerpt-pending";
+import { readAnswerSnapshot, readingAnswerSnapshot, topicAnswerSnapshot, type AnswerSnapshot } from "./learning/answer-snapshot";
+import { validAnswerExcerptPath } from "./learning/answer-excerpt-path";
+import { AnswerExcerptModal } from "./views/answer-excerpt";
+import { AnswerExcerptBrowser } from "./views/answer-excerpt-browser";
+import { AnswerExcerptCurationModal } from "./views/answer-excerpt-curation";
+import { excerptHistoryDestination, readExcerptHistory, type ExcerptHistoryEntry } from "./annotations/excerpt-history";
+import { ExcerptLibraryService } from "./annotations/excerpt-library";
+import type { ExcerptRef } from "./annotations/excerpt-library";
+import { PendingCenterModal } from "./views/pending-center";
+import { readPendingCenter, pendingDestination, type PendingItem } from "./services/pending-center";
+import { readLocalPdfHistory } from "./papers/local-pdf-intake";
+import type { SavedCurationPending } from "./services/dashboard-curation";
 import { AnnotationService } from "./annotations/annotation-service";
 import type { AnnotationRecord, AnnotationSelection } from "./annotations/types";
 import {
@@ -124,6 +229,12 @@ import {
 	type WebSearchBackendResolution,
 } from "./query/direct-query-service";
 import { LexicalVaultRetriever } from "./query/lexical-retrieval";
+import { KnowledgeRetrievalService } from "./retrieval/service";
+import { BgeModels } from "./retrieval/models";
+import { FileVectorStorage } from "./retrieval/store";
+import { readKnowledgeDocuments } from "./retrieval/vault";
+import { knowledgeTrace } from "./retrieval/trace";
+import type { SearchOptions } from "./retrieval/types";
 import type {
 	CliModelDiscoveryResult,
 	CodePracticeRequest,
@@ -212,8 +323,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		getProviderProfile: (profileId) => this.getProviderProfile(profileId),
 		createProvider: (profile) => this.createLLMProvider(profile),
 		normalizeProviderError: (error) => this.normalizeProviderError(error),
-		runRetrievalPreflight: (runId, question, expandedTerms) => {
-			return this.runVaultRetrievalPreflight(runId, question, expandedTerms);
+		runRetrievalPreflight: (runId, question, expandedTerms, signal) => {
+			return this.runVaultRetrievalPreflight(runId, question, expandedTerms, signal);
 		},
 		readEvidencePacket: (trace) => this.readVaultEvidencePacket(trace),
 		readVaultImageData: (attachment) => this.readVaultImageData(attachment),
@@ -237,11 +348,35 @@ export default class AgentDashboardPlugin extends Plugin {
 		getVaultRoot: () => this.getActiveVaultRoot(),
 		runMineruCommand: (request) => this.runMineruProcess(request),
 		confirmPaperIdentity: (request) => requestHumanIdentityConfirmation(this.app, request),
+		prepareSourceIntake:(options,authorized,signal)=>catalogIntake(this.app,this.getSourceCatalog(),options.acquisitionSource?this.getAcquisitionService():undefined,options,authorized,signal,this.getActiveVaultRoot()),
+		verifySavedSource:(options,signal)=>this.validateSavedPdfIntake(options,signal),
+		legacySourceAssociation:identity=>legacyCatalogAssociation(this.getSourceCatalog(),identity),
 	});
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;
+	private readingWorkspace?: ReadingWorkspaceService;
+	private readingAssistant?: ReadingAssistantService;
+	private assistantModal?: ReadingAssistantModal;
+	private readingEngine?: ReadingEngine;
+	private readingOpenings: Promise<void> = Promise.resolve();
+	private libraryOpenings: Promise<void> = Promise.resolve();
+	private topicOpenings: Promise<void> = Promise.resolve();
+	private topicLearning?: TopicLearningService;
+	private topicStudy?: TopicStudyService;
+	private topicStudyOpenings: Promise<void> = Promise.resolve();
 	private lexicalRetriever: LexicalVaultRetriever | null = null;
+	private knowledgeService: KnowledgeRetrievalService | null = null;
+	private knowledgeModels: BgeModels | null = null;
+	private learningLibrary?: LearningLibrary;
+	private curationService?: CurationService;
+	private curationWriter?: CurationWriter;
+	private curationModals = new Set<Modal>();
+	private knowledgeDrafts?: KnowledgeDraftStore;
 	private annotationPopover: AnnotationPopover | null = null;
+	private excerptBrowser?: ExcerptBrowser;
+	private answerExcerptService?: AnswerExcerptService;
+	private answerExcerptBrowser?: AnswerExcerptBrowser;
+	private pendingCenter?: PendingCenterModal;
 	private annotationChip: HTMLElement | null = null;
 	private persistence?: DashboardPersistence;
 	private readonly cliModelDiscoveryCache = new Map<
@@ -255,6 +390,13 @@ export default class AgentDashboardPlugin extends Plugin {
 	private mineruReaderActivationQueue: Promise<void> = Promise.resolve();
 	private readonly readerAutoOpenBypass = new Set<string>();
 	private readonly finishingTaskRunIds = new Set<string>();
+	private readonly taskRunListeners = new Set<(progressOnly?: boolean) => void>();
+	private readonly acquisitionServices = new Map<AcquisitionMode, AcquisitionService>();
+	private readonly acquisitionModals = new Set<FulltextAcquisitionModal>();
+	private readonly fulltextPreviews = new Set<Modal>();
+	private acquisitionClosing = false;
+	private readonly acquisitionDialogs=new Set<Modal>();
+	trackAcquisitionDialog(modal:Modal):boolean { if(this.acquisitionClosing)return false;this.acquisitionDialogs.add(modal);const close=modal.onClose.bind(modal);modal.onClose=()=>{this.acquisitionDialogs.delete(modal);close();};return true; }
 	private taskRunMutationQueue: Promise<void> = Promise.resolve();
 	obsidianCliProbeState: ObsidianCliProbeState = { status: "idle" };
 
@@ -302,6 +444,8 @@ export default class AgentDashboardPlugin extends Plugin {
 			oldRun.status !== "running"
 			&& oldRun.status !== "queued"
 			&& !oldRun.cleanupPending
+			&& !oldRun.acquisitionSource
+			&& !oldRun.savedPdfSource
 		));
 		const protectedOverflow = overflow.filter((oldRun) => !evictable.includes(oldRun));
 		if (!evictable.length) {
@@ -350,6 +494,29 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerView(VIEW_TYPE, (leaf) => new DashboardView(leaf, this));
 		this.registerView(CODE_PRACTICE_VIEW_TYPE, (leaf) => new CodePracticeView(leaf, this));
 		this.registerView(QUERY_WIKI_VIEW_TYPE, (leaf) => new QueryWikiView(leaf, this));
+		this.registerView(READING_VIEW_TYPE, (leaf) => new ReadingWorkspaceView(leaf, this));
+		this.registerView(PAPER_LIBRARY_VIEW_TYPE, (leaf) => new PaperLibraryView(leaf, this));
+		this.registerView(TOPIC_LEARNING_VIEW_TYPE, (leaf) => new TopicLearningView(leaf, this));
+		this.registerView(TOPIC_STUDY_VIEW_TYPE, (leaf) => new TopicStudyView(leaf, this));
+		this.addCommand({ id: "open-topic-planning", name: "打开主题路线（预览）", callback: () => { void this.activateLearningSpace({ kind: "topic" }).catch(error => new Notice(String(error))); } });
+		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
+		this.addCommand({ id: "open-excerpts", name: "打开摘录（原句与个人备注）", callback: () => this.openExcerptBrowser() });
+		this.addCommand({ id: "open-answer-excerpts", name: "打开学习回答摘录（AI 内容）", callback: () => this.openAnswerExcerptBrowser() });
+		this.addCommand({ id: "open-pending-center", name: "打开待处理中心", callback: () => this.openPendingCenter() });
+		this.addCommand({ id: "add-paper-metadata", name: "添加文献信息（无需模型）", callback: () => this.openMetadataIntake() });
+		this.addCommand({ id: "add-paper", name: "添加文献（书目信息、全文与本地 PDF）", callback: () => this.openPaperIntake() });
+		this.addCommand({ id: "add-local-pdf", name: "添加本地 PDF（核对、保存与恢复）", callback: () => this.openLocalPdfIntake() });
+		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
+		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ domain: "code" }); } });
+		this.addCommand({ id: "open-knowledge-maintenance", name: "打开知识库维护", callback: () => this.openKnowledgeMaintenance() });
+		this.addCommand({ id: "open-knowledge-drafts", name: "打开新知识页草稿", callback: () => this.openKnowledgeDrafts() });
+		this.addCommand({ id: "open-fulltext-acquisition", name: "按标识获取论文全文", callback: () => this.openFulltextAcquisition() });
+		this.addCommand({ id: "demo-fulltext-acquisition", name: "全文获取流程演示（开发）", callback: () => this.openFulltextAcquisition("demo") });
+		void Promise.resolve().then(() => this.getAcquisitionService().ready()).catch(() => new Notice("全文获取记录读取失败，其他功能仍可使用"));
+		void Promise.resolve().then(() => this.getJatsWikiService().ready()).catch(() => new Notice("JATS Wiki 草稿记录读取失败，原记录保留"));
+		this.registerEvent(this.app.vault.on("modify", file => this.curationService?.noteChange(file.path)));
+		this.registerEvent(this.app.vault.on("delete", file => this.curationService?.noteChange(file.path)));
+		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { this.curationService?.noteChange(oldPath); this.curationService?.noteChange(file.path); }));
 		this.registerView(MINERU_READER_VIEW_TYPE, (leaf) => new MineruReaderView(leaf, this));
 		this.app.workspace.onLayoutReady(() => {
 			this.consolidateMineruReaderLeaves();
@@ -461,7 +628,27 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		this.answerExcerptBrowser?.dispose();
+		this.topicLearning?.dispose();
+		await this.topicStudy?.dispose();
+		this.acquisitionClosing = true; for (const modal of this.fulltextPreviews) modal.close();
+		for(const modal of [...this.acquisitionDialogs])modal.close();
+		await this.metadataIntake?.dispose();
+		await this.localPdfIntake?.dispose();
+		await this.sourceIntakeService?.dispose();
+		await this.jatsIntakeService?.dispose();
+		await this.jatsWikiService?.dispose();
+		for (const modal of [...this.acquisitionModals]) modal.close();
+		await Promise.all([...this.acquisitionServices.values()].map(service => service.dispose()));
+		for (const modal of [...this.curationModals]) { if (modal instanceof KnowledgeDraftsModal) modal.dispose(); else modal.close(); }
+		await this.readingAssistant?.dispose();
+		await this.curationService?.dispose();
+		this.learningLibrary?.dispose();
+		this.knowledgeService?.dispose();
+		await this.readingWorkspace?.dispose();
 		this.annotationPopover?.close();
+		this.excerptBrowser?.dispose();
+		this.pendingCenter?.close();
 		this.hideAnnotationChip();
 		await this.flushScheduledSettingsSave();
 		await this.agentLoopService.shutdown().catch((error) => {
@@ -478,9 +665,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!this.annotationService) return;
 		try {
 			const selection = await this.annotationService.captureSelection();
+			const record = await this.annotationService.findAnnotationForSelection(selection);
 			this.openAnnotationPopover({
 				anchorRect: selection.anchorRect,
-				selection,
+				...(record ? { record } : { selection }),
 			});
 		} catch (error) {
 			new Notice(error instanceof Error ? error.message : String(error));
@@ -488,8 +676,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	/**
-	 * Floating 批注 chip for any text selection inside a Markdown view — the
-	 * reader, reading mode, and Live Preview/source mode alike. Editor-mode
+	 * Floating 批注 chip inside Markdown views and native PDF text layers.
+	 * Markdown supports the reader, reading and editor modes. Editor-mode
 	 * selections have no native DOM selection, so their anchor rectangle comes
 	 * from the editor coordinates.
 	 */
@@ -503,7 +691,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const anchorElement = range.startContainer instanceof Element
 				? range.startContainer
 				: range.startContainer.parentElement;
-			if (!anchorElement?.closest(".markdown-source-view, .markdown-reading-view")) return;
+			if (!anchorElement?.closest(".markdown-source-view, .markdown-reading-view, .pdf-viewer-container .textLayer")) return;
 			if (anchorElement.closest(".agent-annotation-popover, input, textarea, button, pre, code")) {
 				return;
 			}
@@ -522,6 +710,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		const top = Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - 44));
 		chip.style.left = `${left}px`;
 		chip.style.top = `${top}px`;
+		button.addEventListener("mousedown", event => event.preventDefault());
 		button.addEventListener("click", (event) => {
 			event.stopPropagation();
 			this.hideAnnotationChip();
@@ -568,6 +757,82 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationChip = null;
 	}
 
+	openPendingCenter(): void {
+		if (this.pendingCenter) { new Notice("待处理中心已打开"); return; }
+		const modal = new PendingCenterModal(this.app, this, () => { if (this.pendingCenter === modal) this.pendingCenter = undefined; });
+		this.pendingCenter = modal; modal.open();
+	}
+	inspectPendingCenter(signal: AbortSignal) {
+		const directory = this.readingPluginDirectory(), io = new FileSourceStorage(directory);
+		const deviceId = createHash("sha256").update(hostname() + "\n" + path.resolve(directory).toLowerCase()).digest("hex");
+		return readPendingCenter({
+			library: s => this.inspectPaperLibrary(s), acquisitions: new FileAcquisitionStorage(directory, "production"),
+			local: s => readLocalPdfHistory(io, deviceId, undefined, s), excerpts: s => new ExcerptLibraryService(this.app).list(s),
+			answerExcerpts: s => readAnswerExcerptPending(this.getAnswerExcerpts(), s),
+			drafts: s => new KnowledgeDraftStore(io).summaries(s),
+			curation: async s => { const entries: SavedCurationPending[] = []; const summary = await readDashboardCuration(io, row => entries.push(row), s); return { entries, issues: summary.issues }; },
+			tasks: () => this.getTaskRuns(),
+		}, signal);
+	}
+	async openPendingItem(item: PendingItem, signal: AbortSignal): Promise<void> {
+		const expected = structuredClone(item); signal.throwIfAborted();
+		const target = pendingDestination(expected, await this.inspectPendingCenter(signal)); signal.throwIfAborted();
+		if (target.kind === "library") { await this.activatePaperLibrary(undefined, target.object, signal); return; }
+		if (target.kind === "excerpt") { if (this.excerptBrowser) throw new Error("请先完成已打开摘录窗口中的操作"); this.openExcerptBrowser(target.ref); return; }
+		if (target.kind === "answer-excerpt") { if (this.answerExcerptBrowser) throw new Error("请先完成已打开学习摘录窗口中的操作"); this.openAnswerExcerptBrowser(target.path); return; }
+		if (target.kind === "draft") { this.openKnowledgeDrafts(target.id); return; }
+		if (target.kind === "acquisition") { this.showFulltextAcquisition("production", target.id); return; }
+		if (target.kind === "local") { this.showLocalPdfIntake(undefined, target.id); return; }
+		if (target.kind === "review") { this.openKnowledgeMaintenance({ tab: "activity", reviewId: target.id }); return; }
+		if (target.kind === "revision") { this.openKnowledgeMaintenance({ tab: "history", revisionId: target.id }); return; }
+		const run = this.getTaskRun(target.id); if (!run) throw new Error("入库任务已缺失，请刷新");
+		new TaskResultModal(this.app, this, run, null).open();
+	}
+
+	openExcerptBrowser(ref?: ExcerptRef): void {
+		if (this.excerptBrowser) { new Notice("摘录窗口已打开，请先完成当前操作"); return; }
+		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true), ref => this.showCurationModal(new ExcerptCurationModal(this.app, this, ref)), {
+			read: (ref, signal) => this.readExcerptHistory(ref, signal), open: (ref, entry, signal) => this.openExcerptHistoryTarget(ref, entry, signal),
+		}, () => this.openAnswerExcerptBrowser(), ref => { void this.openDraftFromExcerpt({ kind: "excerpt", ref, includeNote: false }); });
+		this.excerptBrowser = modal; modal.open();
+	}
+	readExcerptHistory(ref: ExcerptRef, signal: AbortSignal) { return readExcerptHistory(new FileSourceStorage(this.readingPluginDirectory()), ref, signal); }
+	getAnswerExcerpts(): AnswerExcerptService { return this.answerExcerptService ||= new AnswerExcerptService(this.app, (ref, signal) => readAnswerSnapshot(new FileSourceStorage(this.readingPluginDirectory()), ref, signal)); }
+	openAnswerExcerpt(answer: AnswerSnapshot, range?: { start: number; end: number }): void { this.showCurationModal(new AnswerExcerptModal(this.app, this.getAnswerExcerpts(), answer, path => this.openAnswerExcerptBrowser(path), range)); }
+	openAnswerExcerptBrowser(path?: string): void {
+		if (this.answerExcerptBrowser) { new Notice("学习回答摘录已打开，请先完成当前操作"); return; }
+		const modal = new AnswerExcerptBrowser(this.app, this.getAnswerExcerpts(), async path => {
+			if (!validAnswerExcerptPath(path)) throw new Error("学习摘录路径无效"); const file = this.app.vault.getAbstractFileByPath(path); if (!(file instanceof TFile)) throw new Error("学习摘录文档缺失"); await this.openSourceMarkdownFile(file, true);
+		}, (answer, signal) => this.openAnswerExcerptSource(answer, signal), path, () => { if (this.answerExcerptBrowser === modal) this.answerExcerptBrowser = undefined; }, path => this.openAnswerExcerptCuration(path), path => { void this.openDraftFromExcerpt({ kind: "answer", path, roles: ["ai"] }); });
+		this.answerExcerptBrowser = modal; modal.open();
+	}
+	async openAnswerExcerptSource(answer: AnswerSnapshot, signal: AbortSignal): Promise<void> {
+		const expected = structuredClone(answer); await this.getAnswerExcerpts().verify(expected, signal); const ref = expected.ref;
+		if (ref.kind === "topic") {
+			const existing = this.app.workspace.getLeavesOfType(TOPIC_STUDY_VIEW_TYPE)[0]; if (existing) await existing.loadIfDeferred(); signal.throwIfAborted();
+			const leaf = existing || this.app.workspace.getLeaf("tab"); if (!existing) await leaf.setViewState({ type: TOPIC_STUDY_VIEW_TYPE, active: true }); signal.throwIfAborted();
+			if (!(leaf.view instanceof TopicStudyView)) throw new Error("主题学习页面无法打开");
+			await leaf.view.openStudy(ref.topicId, ref.route); signal.throwIfAborted();
+			const study = leaf.view.controller.study; if (!study || topicAnswerSnapshot(study, ref.nodeId).digest !== expected.digest) throw new Error("页面中的回答版本已变化，未选择其他节点");
+			await this.getAnswerExcerpts().verify(expected, signal); leaf.view.controller.select(ref.nodeId); await this.app.workspace.revealLeaf(leaf);
+		} else {
+			await this.activateReadingWorkspace({ sessionId: ref.sessionId }); signal.throwIfAborted();
+			const current = readingAnswerSnapshot(this.getReadingWorkspace().repository.get(ref.sessionId), ref.nodeId);
+			if (current.digest !== expected.digest) throw new Error("页面中的回答版本已变化，未选择其他节点");
+			await this.getAnswerExcerpts().verify(expected, signal);
+			const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE).map(leaf => leaf.view).find(v => v instanceof ReadingWorkspaceView && v.getState().sessionId === ref.sessionId);
+			if (!(view instanceof ReadingWorkspaceView)) throw new Error("阅读回答页面无法打开"); view.revealLearningNode(ref.nodeId);
+		}
+	}
+	async openExcerptHistoryTarget(ref: ExcerptRef, entry: ExcerptHistoryEntry, signal: AbortSignal): Promise<void> {
+		const expected = structuredClone(entry), stable = { ...ref };
+		await new ExcerptLibraryService(this.app).load(stable, signal);
+		const target = excerptHistoryDestination(expected, await this.readExcerptHistory(stable, signal)); signal.throwIfAborted();
+		const file = this.app.vault.getAbstractFileByPath(target);
+		if (!(file instanceof TFile)) throw new Error("整理目标已移动或缺失，保留历史记录；未选择同名笔记");
+		await this.openSourceMarkdownFile(file, true); signal.throwIfAborted();
+	}
+
 	private openAnnotationPopover(options: {
 		anchorRect: DOMRect;
 		selection?: AnnotationSelection;
@@ -580,6 +845,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			service: this.annotationService,
 			...options,
 			onArchive: (record) => this.archiveAnnotation(record),
+			onOpenExcerpt: (record) => this.openExcerptBrowser(record),
 			onClose: () => {
 				if (this.annotationPopover === popover) this.annotationPopover = null;
 			},
@@ -911,6 +1177,10 @@ export default class AgentDashboardPlugin extends Plugin {
 			asRecord(rawStoredSettings),
 		);
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings) as DashboardSettings;
+		this.settings.fulltextUnpaywallEnabled=storedSettings.fulltextUnpaywallEnabled===true;
+		this.settings.fulltextUnpaywallEmail=typeof storedSettings.fulltextUnpaywallEmail==="string"?storedSettings.fulltextUnpaywallEmail.slice(0,254):"";
+		this.settings.knowledgeRetrievalMode = storedSettings.knowledgeRetrievalMode === "hybrid" || storedSettings.knowledgeRetrievalMode === "rerank" ? storedSettings.knowledgeRetrievalMode : "lexical";
+		this.settings.knowledgeSecretId = String(storedSettings.knowledgeSecretId || "siliconflow").trim().slice(0, 200);
 		const normalizedProfiles = Array.isArray(storedSettings.providerProfiles)
 			? storedSettings.providerProfiles.slice(0, 20).map((profile) => normalizeProviderProfile(profile))
 			: [];
@@ -1005,6 +1275,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const recoveredOutput = completion.output.slice(0, 12000);
 			const recoveredError = completion.error.slice(0, 4000);
 			const recoveredSummary = completion.summary.slice(0, 4000);
+			const recoveredProgress = completion.ingestProgress || run.ingestProgress;
 			const differs = run.status !== completion.status
 				|| run.exitCode !== completion.exitCode
 				|| run.finishedAt !== completion.finishedAt
@@ -1012,7 +1283,8 @@ export default class AgentDashboardPlugin extends Plugin {
 				|| run.outputPath !== completion.relativePath
 				|| run.error !== recoveredError
 				|| run.summary !== recoveredSummary
-				|| JSON.stringify(run.artifacts) !== JSON.stringify(recoveredArtifacts);
+				|| JSON.stringify(run.artifacts) !== JSON.stringify(recoveredArtifacts)
+				|| JSON.stringify(run.ingestProgress) !== JSON.stringify(recoveredProgress);
 			if (differs) {
 				run.status = completion.status;
 				run.exitCode = completion.exitCode;
@@ -1022,6 +1294,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				run.error = recoveredError;
 				run.summary = recoveredSummary;
 				run.artifacts = recoveredArtifacts;
+				run.ingestProgress = recoveredProgress;
 				changed = true;
 			}
 		}
@@ -1230,15 +1503,6 @@ export default class AgentDashboardPlugin extends Plugin {
 			)
 		) {
 			this.settings.annotationBackendId = "auto";
-			changed = true;
-		}
-		if (
-			this.settings.annotationWebSearchEnabled === true
-			&& !["auto", "codex-cli", "claude-code", "opencode"].includes(
-				this.settings.annotationBackendId,
-			)
-		) {
-			this.settings.annotationBackendId = "codex-cli";
 			changed = true;
 		}
 		if (!REASONING_OPTIONS.some((option) => option.id === this.settings.annotationCodexReasoningEffort)) {
@@ -1913,13 +2177,116 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	getTaskRuns(): TaskRun[] {
-		return [...this.taskRuns].sort((a, b) => {
+		const acquisitionRuns = this.acquisitionServices.get("production")?.list().map(acquisitionTaskRun) || [];
+		return [...this.taskRuns, ...acquisitionRuns, ...(this.jatsWikiService?.taskRuns() || [])].sort((a, b) => {
 			return new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime();
 		});
 	}
 
+	subscribeTaskRuns(listener: (progressOnly?: boolean) => void): () => void {
+		this.taskRunListeners.add(listener);
+		return () => { this.taskRunListeners.delete(listener); };
+	}
+
+	private notifyTaskRuns(progressOnly = false): void {
+		for (const listener of [...this.taskRunListeners]) {
+			try { listener(progressOnly); } catch (error) { console.warn("Could not refresh Dashboard tasks", error); }
+		}
+	}
+
+	updateIngestProgress(runId: string, value: unknown): void {
+		const run = this.getTaskRun(runId), progress = normalizeIngestProgress(value);
+		if (!run || run.actionId !== "paper-ingest" || !["running", "queued"].includes(run.status) || !progress) return;
+		const before = run.ingestProgress;
+		if (before && JSON.stringify(before.steps) === JSON.stringify(progress.steps) && before.steps.indexOf(before.stage) > progress.steps.indexOf(progress.stage)) return;
+		if (JSON.stringify(before) === JSON.stringify(progress)) return;
+		run.ingestProgress = progress;
+		this.notifyTaskRuns(true);
+		// Persist stage transitions only; tool updates stay in memory until the
+		// next stage/completion. No extra model requests or per-token disk writes.
+		if (!before || before.stage !== progress.stage || before.waiting !== progress.waiting) {
+			void this.withTaskRunMutation(() => this.saveSettings()).catch(error => console.warn("Could not save intake progress", error));
+		}
+	}
+
 	getTaskRun(runId: string): TaskRun | null {
-		return this.taskRuns.find((run) => run.id === runId) || null;
+		const wiki = this.jatsWikiService?.taskRuns().find(r => r.id === runId); if (wiki) return wiki;
+		const acquisition = this.acquisitionServices.get("production")?.get(runId);
+		return acquisition ? acquisitionTaskRun(acquisition) : this.taskRuns.find((run) => run.id === runId) || null;
+	}
+
+	getAcquisitionService(mode: AcquisitionMode = "production"): AcquisitionService {
+		let service = this.acquisitionServices.get(mode);
+		if (!service) {
+			const directory = this.readingPluginDirectory();
+			const deviceId = createHash("sha256").update(hostname() + "\n" + path.resolve(directory).toLowerCase()).digest("hex");
+			const storage = new FileAcquisitionStorage(directory, mode);
+			service = new AcquisitionService(new AcquisitionRepository(storage, mode), deviceId, mode === "demo" ? new DemoAcquisitionBackend() : new PmcAcquisitionBackend(new HttpsSourceTransport(), storage,undefined,()=>({enabled:this.settings.fulltextUnpaywallEnabled,email:this.settings.fulltextUnpaywallEmail}),new FileSourceStorage(directory)));
+			if (mode === "production") service.subscribe(progressOnly => { if (!progressOnly) this.notifyTaskRuns(); });
+			this.acquisitionServices.set(mode, service);
+		}
+		return service;
+	}
+
+	openFulltextAcquisition(mode: AcquisitionMode = "production", jobId?: string): void {
+		try {
+			this.showFulltextAcquisition(mode, jobId);
+		} catch { new Notice("全文获取需要可读写的桌面插件目录"); }
+	}
+	private showFulltextAcquisition(mode: AcquisitionMode, jobId?: string, identity?: PaperIntakeContext["identity"]): void {
+		if (this.acquisitionClosing) throw new Error("插件已关闭");
+		const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id), {open:id=>openAcquiredIntake(this,id),save:id=>openSourceSave(this,id),jats:id=>openJatsSave(this,id),runs:()=>this.getTaskRuns(),subscribe:listener=>this.subscribeTaskRuns(listener),openRun:run=>new TaskResultModal(this.app,this,run,null).open()}, identity);
+		this.acquisitionModals.add(modal); modal.open();
+	}
+	private sourceIntakeService?:SourceIntakeService;
+	private jatsIntakeService?:JatsIntakeService;
+	private jatsWikiService?: JatsWikiService;
+	getJatsWikiService(): JatsWikiService {
+		if (this.acquisitionClosing) throw new Error("插件已关闭");
+		if (!this.jatsWikiService) {
+			const storage = new FileSourceStorage(this.getActiveVaultRoot());
+			this.jatsWikiService = new JatsWikiService({ catalog: this.getSourceCatalog(), journal: new FileSourceStorage(this.readingPluginDirectory()),
+				readNote: async p => { const bytes = await storage.read(p, 4 * 1024 * 1024); return bytes ? Buffer.from(bytes).toString("utf8") : null; },
+				commit: async (citekey, fields, content, created, verify) => {
+					await commitSourceNote({ app: this.app }, citekey, fields, "", { created, expectedContent: content, beforeCreate: verify });
+					const adapter = this.app.vault.adapter as typeof this.app.vault.adapter & { reconcileInternalFile?(path: string): void | Promise<void> };
+					await adapter.reconcileInternalFile?.(`wiki/sources/${citekey}.md`);
+				},
+				run: async request => {
+					const profile = this.getVerifiedProviderProfiles().find(p => p.id === request.profileId); if (!profile) throw new Error("请选择已通过连接测试的 Direct API 模型");
+					const provider = this.createLLMProvider({ ...profile, timeoutSeconds: Math.max(60, Math.min(120, profile.timeoutSeconds)) });
+					return runBoundedAgentLoop({ system: request.system, user: request.user, tools: request.tools, signal: request.signal, provider, model: profile.model,
+						maxSteps: Math.max(3, Math.min(8, this.settings.lightAgentMaxSteps || 8)), maxTokens: Math.max(512, Math.min(8192, this.settings.lightAgentMaxOutputTokens || 4096)),
+						timeoutMs: Math.max(60_000, Math.min(600_000, this.settings.taskTimeoutMinutes * 60_000 || 300_000)), providerTimeoutMs: 120_000, maxToolOutputChars: 60000, maxToolResultChars: 24000,
+						onStep: step => request.progress(step.title + (step.detail ? " · " + step.detail : "")) });
+				} });
+			this.jatsWikiService.subscribe(() => this.notifyTaskRuns());
+		}
+		return this.jatsWikiService;
+	}
+	async openJatsWiki(key: string, requestId?: string): Promise<void> { await openJatsWiki(this, key, requestId); }
+	async openJatsWikiTask(runId: string): Promise<void> {
+		const service = this.getJatsWikiService(); await service.ready(); const record = service.get(runId);
+		if (!record) throw new Error("JATS Wiki 草稿记录不存在"); await this.openJatsWiki(record.request.packageKey, runId);
+	}
+	getJatsIntakeService():JatsIntakeService {
+		if(this.acquisitionClosing)throw new Error("插件已关闭");return this.jatsIntakeService ||= new JatsIntakeService({deviceId:this.getAcquisitionService().deviceId,catalog:this.getSourceCatalog(),journal:new FileSourceStorage(this.readingPluginDirectory()),index:sourceIndexIO(this.app,this.getActiveVaultRoot()),read:id=>this.getAcquisitionService().previewJats(id),link:async(id,key)=>{await this.getAcquisitionService().linkSourcePackage(id,key);const adapter=this.app.vault.adapter as typeof this.app.vault.adapter&{reconcileInternalFile?(path:string):void|Promise<void>};await adapter.reconcileInternalFile?.(`papers/${key}/article.md`);}});
+	}
+	getSourceCatalog() { return createVaultCatalog(this.app,this.getActiveVaultRoot(),()=>readPaperRecordIdentities(new FileSourceStorage(this.readingPluginDirectory()))); }
+	getSourceIntakeService():SourceIntakeService {
+		if(this.acquisitionClosing)throw new Error("插件已关闭");
+		return this.sourceIntakeService ||= new SourceIntakeService({deviceId:this.getAcquisitionService().deviceId,catalog:this.getSourceCatalog(),journal:new FileSourceStorage(this.readingPluginDirectory()),index:sourceIndexIO(this.app,this.getActiveVaultRoot()),
+			readSource:async id=>{const service=this.getAcquisitionService(),source=await service.intakeSource(id),preview=await service.preview(id);return {...source,bytes:preview.bytes};},
+			render:(source,page,signal)=>renderAuthorizedPdfIdentityPage({path:source.path,directory:path.dirname(source.path),originalFileName:path.basename(source.path),size:source.snapshot.artifact.byteLength,sha256:source.snapshot.artifact.sha256,retainFiles:true},page,{signal,bytes:source.bytes}),
+			link:async(id,key)=>{await this.getAcquisitionService().linkSourcePackage(id,key);const adapter=this.app.vault.adapter as typeof this.app.vault.adapter&{reconcileInternalFile?(path:string):void|Promise<void>};await adapter.reconcileInternalFile?.("papers/"+key+"/source.pdf");},
+		});
+	}
+
+	async openAcquiredPdf(jobId: string): Promise<void> {
+		const { snapshot, bytes } = await this.getAcquisitionService().preview(jobId);
+		if (this.acquisitionClosing) return;
+		const modal = new AcquiredPdfPreview(this.app, bytes, snapshot, () => this.fulltextPreviews.delete(modal));
+		this.fulltextPreviews.add(modal); modal.open();
 	}
 
 	getRunningTaskRun(actionId: string): TaskRun | null {
@@ -1929,6 +2296,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.getTaskRuns().find((run) => (
 			actionIds.has(run.actionId)
 			&& (run.status === "running" || run.status === "queued")
+			&& (run.actionId !== "fulltext-acquisition" || this.acquisitionServices.get("production")?.owned(this.acquisitionServices.get("production")!.get(run.id)!))
 		)) || null;
 	}
 
@@ -1953,10 +2321,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	isActionRunning(actionId: string): boolean {
-		const actionIds = ["vault-lint", "vault-lint-fix"].includes(actionId)
-			? new Set(["vault-lint", "vault-lint-fix"])
-			: new Set([actionId]);
-		return this.taskRuns.some((run) => actionIds.has(run.actionId) && (run.status === "running" || run.status === "queued"));
+		return this.getRunningTaskRun(actionId) !== null;
 	}
 
 	getModelLabel(model: string): string {
@@ -2098,10 +2463,20 @@ export default class AgentDashboardPlugin extends Plugin {
 		action: DashboardAction,
 		summary: string,
 		executionConfig: ExecutionConfig | null = null,
+		acquisitionSource?: AcquisitionIntakeRef,
+		savedPdfSource?: SavedPdfRef,
 	): Promise<TaskRun> {
 		return this.withTaskRunMutation(async () => {
+			if (acquisitionSource && action.id !== "paper-ingest") throw new Error("获取快照只能绑定文献入库任务");
+			if (savedPdfSource && (action.id !== "paper-ingest" || acquisitionSource)) throw new Error("已保存原文只能单独绑定文献入库任务");
+			// Check inside the save queue: two open intake dialogs must not both start.
+			if (action.id === "paper-ingest" && this.isActionRunning(action.id)) {
+				throw new Error("文献入库正在运行，请在控制台查看或停止当前任务");
+			}
 			const now = new Date().toISOString();
 			const run: TaskRun = {
+				...(acquisitionSource?{acquisitionSource:decodeIntakeRef(acquisitionSource)}:{}),
+				...(savedPdfSource?{savedPdfSource:decodeSavedPdfRef(savedPdfSource)}:{}),
 				id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
 				actionId: action.id,
 				label: action.label,
@@ -2114,6 +2489,9 @@ export default class AgentDashboardPlugin extends Plugin {
 				exitCode: null,
 				output: "",
 				error: "",
+				...(action.id === "paper-ingest" ? { ingestProgress: executionConfig?.backend === "direct-api" || savedPdfSource || acquisitionSource
+					? { steps: ["prepare"], stage: "prepare", detail: "正在准备入库请求", waiting: false } as IngestProgress
+					: { steps: ["cli"], stage: "cli", detail: "正在执行，等待 CLI 阶段回报", waiting: false } as IngestProgress } : {}),
 			};
 			const originalRuns = [...this.taskRuns];
 			const limit = this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit;
@@ -2121,11 +2499,12 @@ export default class AgentDashboardPlugin extends Plugin {
 			// Commit the new history before reclaiming any old sidecar. A failed
 			// start save restores the previous history and leaves every old output.
 			try {
-				await this.persistTaskRunRetention(candidates, limit);
+				await this.persistTaskRunRetention(candidates, acquisitionSource||savedPdfSource?Math.max(limit,candidates.length):limit);
 			} catch (error) {
 				this.taskRuns = originalRuns;
 				throw error;
 			}
+			this.notifyTaskRuns();
 			return run;
 		});
 	}
@@ -2194,7 +2573,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				try {
 					await this.persistTaskRunRetention(
 						beforeRetention,
-						this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit,
+						completedRun.acquisitionSource||completedRun.savedPdfSource?Math.max(this.settings.taskHistoryLimit,beforeRetention.length):this.settings.taskHistoryLimit || DEFAULT_SETTINGS.taskHistoryLimit,
 					);
 				} catch (error) {
 					// The sidecar is already durable. Restore the in-memory completion;
@@ -2205,6 +2584,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				return this.taskRuns.find((run) => run.id === completedRun.id) || completedRun;
 			} finally {
 				this.finishingTaskRunIds.delete(runId);
+				this.notifyTaskRuns();
 			}
 		});
 	}
@@ -2382,7 +2762,9 @@ export default class AgentDashboardPlugin extends Plugin {
 		runId: string,
 		question: string,
 		expandedTerms: string[] = [],
+		signal?: AbortSignal,
 	): Promise<Record<string, unknown>> {
+		if (this.settings.knowledgeRetrievalMode !== "lexical") return knowledgeTrace(await this.searchKnowledge([question, ...expandedTerms].join(" "), { identityQuery: question, signal }));
 		const toolkit = this.resolveToolkitRetrieval();
 		if (toolkit.available) {
 			try {
@@ -2426,6 +2808,338 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!this.lexicalRetriever) this.lexicalRetriever = new LexicalVaultRetriever(this.app);
 		return this.lexicalRetriever;
 	}
+	getKnowledgeService(): KnowledgeRetrievalService {
+		if (!this.knowledgeService) {
+			const adapter = this.app.vault.adapter; if (!(adapter instanceof FileSystemAdapter)) throw new Error("向量检索需要桌面文件系统");
+			this.knowledgeModels = new BgeModels(() => String(this.app.secretStorage?.getSecret(this.settings.knowledgeSecretId) || "").trim());
+			this.knowledgeService = new KnowledgeRetrievalService((signal) => readKnowledgeDocuments(this.app, signal), new FileVectorStorage(path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader")), this.knowledgeModels, () => this.settings.knowledgeRetrievalMode);
+		}
+		return this.knowledgeService;
+	}
+	searchKnowledge(query: string, options: SearchOptions = {}) { return this.getKnowledgeService().search(query, options); }
+	private readingPluginDirectory(): string {
+		const adapter = this.app.vault.adapter; if (!(adapter instanceof FileSystemAdapter)) throw new Error("知识整理需要桌面文件系统");
+		return path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader");
+	}
+	/** Explicit read-only inspection; never initializes reading recovery or models. */
+	async inspectPaperLibrary(signal?: AbortSignal, verifyMineruPath?: string) {
+		const result = await readPaperLibrary(new FileSourceStorage(this.getActiveVaultRoot()), new FileSourceStorage(this.readingPluginDirectory()), {
+			vaultRoot: this.getActiveVaultRoot(), parseYaml, signal,
+			...(verifyMineruPath !== undefined ? { verifyMineruPath, verifyMineru: libraryMineruVerifier(this.app, signal) } : {}),
+		});
+		signal?.throwIfAborted();
+		try {
+			result.codeLinks = libraryCodeLinks(result.papers, this.app.vault.getMarkdownFiles().map(file => ({ path: file.path, codeExport: this.app.metadataCache.getFileCache(file)?.frontmatter?.reading_source_kind === "code" })), this.app.metadataCache.resolvedLinks);
+		} catch (error) { result.codeLinks = { byPaper: {}, issues: ["代码关联读取失败：" + String(error)] }; }
+		return result;
+	}
+	async openLibraryCodeLink(paperKey: string, link: LibraryCodeLink, signal: AbortSignal): Promise<void> {
+		signal.throwIfAborted(); const fresh = await this.inspectPaperLibrary(signal); signal.throwIfAborted();
+		if (!codeLinkStillPresent(link, fresh.codeLinks?.byPaper[paperKey] || [])) throw new Error("代码关联已变化或无法读取，请刷新后重新选择");
+		const file = this.app.vault.getAbstractFileByPath(link.path);
+		if (!(file instanceof TFile)) throw new Error("代码笔记已缺失，请刷新文献库");
+		signal.throwIfAborted(); await this.app.workspace.getLeaf("tab").openFile(file);
+	}
+	private metadataIntake?: MetadataIntakeService;
+	private localPdfIntake?: LocalPdfIntakeService;
+	getLocalPdfIntake(): LocalPdfIntakeService {
+		if (this.acquisitionClosing) throw new Error("插件已关闭");
+		const directory = this.readingPluginDirectory();
+		return this.localPdfIntake ||= new LocalPdfIntakeService({
+			deviceId: createHash("sha256").update(hostname() + "\n" + path.resolve(directory).toLowerCase()).digest("hex"),
+			resolver: new IdentityResolver(new HttpsSourceTransport()), catalog: this.getSourceCatalog(),
+			journal: new FileSourceStorage(directory), index: sourceIndexIO(this.app, this.getActiveVaultRoot()),
+			render: (source, page, signal) => renderAuthorizedPdfIdentityPage({ path: source.path, directory: path.dirname(source.path), originalFileName: path.basename(source.path), size: source.snapshot.artifact.byteLength, sha256: source.snapshot.artifact.sha256, retainFiles: true }, page, { signal, bytes: source.bytes }),
+			link: async (_id, key) => { const adapter = this.app.vault.adapter as typeof this.app.vault.adapter & { reconcileInternalFile?(path: string): void | Promise<void> }; await adapter.reconcileInternalFile?.(`papers/${key}/source.pdf`); },
+		});
+	}
+	openLocalPdfIntake(): void {
+		try {
+			this.showLocalPdfIntake();
+		} catch (error) { new Notice(String(error)); }
+	}
+	private showLocalPdfIntake(paper?: PaperIntakeContext, historyId?: string): void {
+		const modal = new LocalPdfIntakeModal(this.app, this.getLocalPdfIntake(), this.getActiveVaultRoot(), id => this.activatePaperLibrary(id), undefined, paper, historyId);
+		if (!this.trackAcquisitionDialog(modal)) throw new Error("插件已关闭"); modal.open();
+	}
+	openPaperIntake(initial?: { title: string; reference: string }): void {
+		try {
+			const modal = new MetadataIntakeModal(this.app, this.getMetadataIntake(), id => this.activatePaperLibrary(id), {
+				local: context => this.showLocalPdfIntake(context), fulltext: context => this.showFulltextAcquisition("production", undefined, context.identity),
+				source: (source, signal) => this.openIntakeSource(source, signal),
+			}, initial);
+			if (this.trackAcquisitionDialog(modal)) modal.open();
+		} catch (error) { new Notice(String(error)); }
+	}
+	async queryManualPaper(item: LibraryObjectSummary, signal: AbortSignal): Promise<void> {
+		const initial = await this.getMetadataIntake().manualReference(item, signal); signal.throwIfAborted();
+		this.openPaperIntake(initial);
+	}
+	async continuePaperIntake(paper: LibraryPaper, kind: "local" | "fulltext", signal: AbortSignal): Promise<void> {
+		const expected = structuredClone(paper); signal.throwIfAborted();
+		const fresh = await this.inspectPaperLibrary(signal); signal.throwIfAborted();
+		const context = await this.getMetadataIntake().savedContext(savedPaperContext(expected, fresh), signal);
+		signal.throwIfAborted();
+		if (kind === "local") this.showLocalPdfIntake(context);
+		else if (kind === "fulltext") this.showFulltextAcquisition("production", undefined, context.identity);
+		else throw new Error("不支持的文献处理入口");
+	}
+	async readSavedPdf(ref: SavedPdfRef, signal: AbortSignal) {
+		if (this.acquisitionClosing) throw new Error("插件已关闭");
+		const source = await loadSavedPdf(this.getSourceCatalog(), this.getActiveVaultRoot(), ref, signal);
+		if (this.acquisitionClosing) throw new Error("插件已关闭"); return source;
+	}
+	async validateSavedPdfIntake(options: PaperIngestFlowOptions, signal = new AbortController().signal): Promise<void> {
+		if (!options.savedPdfSource) return;
+		if (options.identityMode !== "source-v2" || options.acquisitionSource) throw new Error("所选 PDF 的处理凭据不一致");
+		const source = await this.readSavedPdf(options.savedPdfSource, signal);
+		if (path.resolve(options.sourcePdfPath) !== path.resolve(source.path)) throw new Error("处理路径与所选 PDF 原文包不一致");
+	}
+	async processLibrarySource(item: LibraryObjectSummary, signal: AbortSignal): Promise<void> {
+		const expected = structuredClone(item); signal.throwIfAborted();
+		const fresh = await this.inspectPaperLibrary(signal); libraryNavigation(expected, fresh); signal.throwIfAborted();
+		const source = expected.source;
+		if (!source?.packageKey || !source.manifestDigest) throw new Error("此原文没有可处理的来源凭据");
+		const loaded = await loadSourcePackage(this.getSourceCatalog().storage, source.packageKey); signal.throwIfAborted();
+		if (loaded.manifest.digest !== source.manifestDigest || loaded.manifest.paperId !== expected.paperId) throw new Error("所选原文清单或文献归属已变化，请刷新后重选");
+		if (loaded.manifest.packageKind === "jats-source") { await openJatsWiki(this, source.packageKey, undefined, signal, source.manifestDigest); return; }
+		const m = loaded.manifest;
+		await openSavedPdfIntake(this, { packageKey: m.packageKey, manifestDigest: m.digest, paperId: m.paperId, sha256: m.files[0].sha256, byteLength: m.files[0].byteLength }, undefined, signal);
+	}
+	private async openIntakeSource(source: MetadataSource, signal: AbortSignal): Promise<void> {
+		signal.throwIfAborted(); const scan = await this.inspectPaperLibrary(signal);
+		const item = scan.papers.find(p => p.paperId === source.paperId)?.objects.find(o => o.kind === "source" && o.source?.path === source.path);
+		if (!item) throw new Error("原文关联已变化，请重新查询");
+		const loaded = await loadSourcePackage(this.getSourceCatalog().storage, source.packageKey); signal.throwIfAborted();
+		if (loaded.manifest.digest !== source.manifestDigest || loaded.manifest.paperId !== source.paperId) throw new Error("原文版本已变化，请重新查询");
+		await this.openLibraryObject(item, false, signal);
+	}
+	getMetadataIntake(): MetadataIntakeService {
+		if (this.acquisitionClosing) throw new Error("插件已关闭");
+		return this.metadataIntake ||= new MetadataIntakeService(new IdentityResolver(new HttpsSourceTransport()), this.getSourceCatalog(), new JournalPaperRecordStore(new FileSourceStorage(this.readingPluginDirectory())));
+	}
+	openMetadataIntake(): void {
+		try {
+			const modal = new MetadataIntakeModal(this.app, this.getMetadataIntake(), id => this.activatePaperLibrary(id));
+			if (this.trackAcquisitionDialog(modal)) modal.open();
+		} catch (error) { new Notice(String(error)); }
+	}
+	activatePaperLibrary(paperId?: string, object?: import("./library/types").LibraryObjectRef, signal?: AbortSignal): Promise<void> {
+		const operation = this.libraryOpenings.then(async () => {
+			signal?.throwIfAborted();
+			const existing = this.app.workspace.getLeavesOfType(PAPER_LIBRARY_VIEW_TYPE)[0];
+			if (existing) await existing.loadIfDeferred();
+			const leaf = existing || this.app.workspace.getLeaf("tab");
+			if (!existing) await leaf.setViewState({ type: PAPER_LIBRARY_VIEW_TYPE, active: true });
+			await this.app.workspace.revealLeaf(leaf);
+			signal?.throwIfAborted();
+			if (object && leaf.view instanceof PaperLibraryView) await leaf.view.revealObject(object, signal);
+			if (paperId && leaf.view instanceof PaperLibraryView) await leaf.view.revealPaper(paperId);
+		}); this.libraryOpenings = operation.catch(() => undefined); return operation;
+	}
+	activateLearningSpace(entry: LearningEntry = { kind: "document" }): Promise<void> {
+		if (entry.kind === "topic") {
+			const operation = this.topicOpenings.then(async () => {
+				const existing = this.app.workspace.getLeavesOfType(TOPIC_LEARNING_VIEW_TYPE)[0];
+				if (existing) await existing.loadIfDeferred();
+				const leaf = existing || this.app.workspace.getLeaf("tab");
+				if (!existing) await leaf.setViewState({ type: TOPIC_LEARNING_VIEW_TYPE, active: true });
+				await this.app.workspace.revealLeaf(leaf);
+				if (entry.sessionId && leaf.view instanceof TopicLearningView) await leaf.view.selectSession(entry.sessionId);
+			}); this.topicOpenings = operation.catch(() => undefined); return operation;
+		}
+		return this.activateReadingWorkspace(documentLearningEntry(entry));
+	}
+	getTopicLearning(): TopicLearningService { return this.topicLearning ||= new TopicLearningService(new TopicSessionStore(new FileSourceStorage(this.readingPluginDirectory()))); }
+	getTopicStudy(): TopicStudyService { return this.topicStudy ||= new TopicStudyService(new TopicStudyStore(new FileSourceStorage(this.readingPluginDirectory())), this.getTopicLearning()); }
+	getTopicExports(): TopicStudyExports { return new TopicStudyExports(this.getTopicStudy(), new FileSourceStorage(this.getActiveVaultRoot())); }
+	async openTopicExport(exportPath: string): Promise<void> {
+		if (!exportPath.startsWith(TOPIC_EXPORT_ROOT + "/") || !/^wiki\/qa\/topic-learning\/t-[a-f0-9-]+\/[a-f0-9-]+\.md$/.test(exportPath)) throw new Error("主题学习导出路径无效");
+		const adapter = this.app.vault.adapter as typeof this.app.vault.adapter & { reconcileInternalFile?(path: string): void | Promise<void> };
+		await adapter.reconcileInternalFile?.(exportPath); await this.app.workspace.openLinkText(exportPath, "", true);
+	}
+	activateTopicStudy(topicId: string, confirmedRevision?: string): Promise<void> {
+		const operation = this.topicStudyOpenings.then(async () => {
+			const route = confirmedRevision ? await this.getTopicStudy().start(topicId, confirmedRevision) : "";
+			const existing = this.app.workspace.getLeavesOfType(TOPIC_STUDY_VIEW_TYPE)[0]; if (existing) await existing.loadIfDeferred();
+			const leaf = existing || this.app.workspace.getLeaf("tab"); if (!existing) await leaf.setViewState({ type: TOPIC_STUDY_VIEW_TYPE, active: true });
+			await this.app.workspace.revealLeaf(leaf); if (leaf.view instanceof TopicStudyView) await leaf.view.openStudy(topicId, route);
+		}); this.topicStudyOpenings = operation.catch(() => undefined); return operation;
+	}
+	getTopicModels(): Array<{ id: string; name: string; model: string }> { return this.getVerifiedProviderProfiles().map(({ id, name, model }) => ({ id, name, model })); }
+	createTopicBackend(profileId: string): ReadingBackend {
+		const profile = this.getVerifiedProviderProfiles().find(p => p.id === profileId);
+		if (!profile) throw new Error("请选择已通过连接测试的 Direct API 模型");
+		return this.createReadingBackend({ backend: profile.id, model: profile.model }, false);
+	}
+	async openLibraryObject(item: LibraryObjectSummary, read: boolean, signal: AbortSignal): Promise<void> {
+		signal.throwIfAborted();
+		const fresh = await this.inspectPaperLibrary(signal, item.source?.format === "mineru" ? item.source.path : undefined);
+		const target = libraryNavigation(item, fresh, read); signal.throwIfAborted();
+		if (target.kind === "session") {
+			const service = this.getReadingWorkspace(); await service.ready(); signal.throwIfAborted();
+			const source = service.repository.get(target.sessionId).source, expected = item.reading!.source;
+			if (source.kind !== expected.kind || source.path !== expected.path || source.fingerprint !== expected.fingerprint) throw new Error("会话来源已变化，请刷新后重试");
+			await this.activateLearningSpace({ kind: "document", reading: { sessionId: target.sessionId } }); return;
+		}
+		if (target.kind === "source" && target.read) {
+			const kind = { pdf: "pdf", mineru: "article", jats: "structured", markdown: "article" }[target.format] as "pdf" | "article" | "structured";
+			await this.activateLearningSpace({ kind: "document", reading: { source: { kind, path: target.path } } }); return;
+		}
+		if (target.kind === "source" && (target.format === "mineru" || target.format === "jats")) { await this.activateMineruReaderView(target.path); return; }
+		const file = this.app.vault.getAbstractFileByPath(normalizePath(target.path));
+		if (!(file instanceof TFile)) throw new Error("所选文件已不存在，请刷新文献库");
+		signal.throwIfAborted(); await this.app.workspace.getLeaf("tab").openFile(file);
+	}
+	private paperRecords(): PaperRecordService {
+		return new PaperRecordService(new JournalPaperRecordStore(new FileSourceStorage(this.readingPluginDirectory())), () => this.inspectPaperLibrary());
+	}
+	preparePaperRecord(paperId: string) { return this.paperRecords().prepare(paperId); }
+	savePaperRecord(edit: PaperRecordEdit) { return this.paperRecords().save(edit); }
+	getLearningLibrary(): LearningLibrary {
+		if (!this.learningLibrary) { this.getKnowledgeService(); this.learningLibrary = new LearningLibrary(this.app, this.getReadingWorkspace(), new FileVectorStorage(this.readingPluginDirectory(), "learning-index"), this.knowledgeModels!, () => this.settings.knowledgeRetrievalMode); }
+		return this.learningLibrary;
+	}
+	getCurationService(): CurationService {
+		if (!this.curationService) this.curationService = new CurationService(this.app, this.getReadingWorkspace(), new FileCurationStore(this.readingPluginDirectory()), session => this.createReadingBackend(session, false), (query, options) => this.searchKnowledge(query, options), this.getAnswerExcerpts());
+		return this.curationService;
+	}
+	getCurationWriter(): CurationWriter { return this.curationWriter ||= new CurationWriter(this.getCurationService()); }
+	getReadingAssistant(): ReadingAssistantService {
+		return this.readingAssistant ||= new ReadingAssistantService({ workspace: this.getReadingWorkspace(),
+			backend: (session, profileId) => {
+				if (!this.getVerifiedProviderProfiles().some(p => p.id === profileId)) throw new Error("请选择已通过连接测试的 Direct API 模型");
+				return this.createReadingBackend({ ...session, backend: profileId }, false);
+			}, search: (query, options) => this.searchKnowledge(query, options),
+			readFile: async filename => { if (!inKnowledgeScope(filename)) throw new Error("来源不在正式知识范围"); const file = this.app.vault.getAbstractFileByPath(filename); if (!(file instanceof TFile)) throw new Error("知识来源已缺失"); return this.app.vault.read(file); },
+			learning: (session, nodeId, signal) => this.getLearningLibrary().find(session, [nodeId], signal),
+			outcomes: session => readReadingOutcomes(this.app, session, this.getCurationService()),
+			resolveAction: async (sessionId, action) => {
+				const service = this.getCurationService(); await service.ready();
+				return resolveAssistantAction(this.getReadingWorkspace().repository.get(sessionId), action, { review: id => service.reviews.get(id), revisions: () => service.revisions.values(), readExport: async path => {
+					if (!safeAssistantExportPath(path)) throw new Error("导出路径无效"); const file = this.app.vault.getAbstractFileByPath(path); if (!(file instanceof TFile)) throw new Error("导出文件缺失"); return this.app.vault.read(file);
+				} });
+			},
+			subscribeActions: changed => { const reading = this.getReadingWorkspace().repository.subscribe(changed), curation = this.getCurationService().subscribe(changed); return () => { reading(); curation(); }; },
+		}, new FileAssistantStorage(this.readingPluginDirectory()));
+	}
+	async testReadingSchema(profileId: string): Promise<void> {
+		const profile = this.getVerifiedProviderProfiles().find(p => p.id === profileId); if (!profile) throw new Error("请选择已通过连接测试的 Direct API");
+		const snapshot = structuredClone(profile); const result = await probeReadingSchema(this.createLLMProvider(snapshot), snapshot);
+		const current = this.getProviderProfile(profileId); if (!current || structuredProfileKey(current) !== result.key) throw new Error("接口配置已变化，请重新测试");
+		current.structuredOutput = result; await this.saveSettings(); new Notice(result.message, 8000);
+	}
+	openReadingAssistant(sessionId: string, nodeId: string): void {
+		try {
+			if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") throw new Error("代码会话请使用主线和支线追问；阅读助手暂面向论文");
+			const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(n => n.id === nodeId && n.status === "done")) throw new Error("请先选择一个已完成的正式阅读节点");
+			this.assistantModal?.close(); this.assistantModal = this.showCurationModal(new ReadingAssistantModal(this.app, this, sessionId, nodeId));
+			const modal = this.assistantModal, close = modal.onClose.bind(modal); modal.onClose = () => { close(); if (this.assistantModal === modal) this.assistantModal = undefined; };
+		} catch (error) { new Notice(String(error)); }
+	}
+	async dispatchAssistantAction(runId: string, actionId: string): Promise<void> {
+		await this.getReadingAssistant().dispatch(runId, actionId, async (action, sessionId) => {
+			const service = this.getReadingAssistant(), executionId = action.execution!.id;
+			const report = (patch: Partial<Omit<AssistantExecution, "id" | "updated">>) => service.recordExecution(runId, actionId, executionId, patch);
+			const feedbackFailure = (error: unknown) => new Notice("业务结果请在原功能查看；助手状态保存失败：" + String(error), 8000);
+			const failed = async (error: unknown) => { await report({ state: "failed", detail: String(error) }).catch(feedbackFailure); };
+			if (action.kind === "curation") this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, action.nodeIds[0], undefined, { nodeIds: action.nodeIds, target: action.target }, {
+				prepared: async review => { await report({ state: review.state === "generating" ? "running" : "waiting", reviewId: review.id, path: review.context.target.path, detail: "已关联整理批次，结果随原功能更新" }); }, failed,
+			}));
+			else if (action.kind === "export") this.showCurationModal(new ReadingExportModal(this.app, () => this.getReadingWorkspace().repository.get(sessionId), action.nodeIds[0], (query, options) => this.searchKnowledge(query, options), filename => this.openVaultFile(filename), () => this.openKnowledgeCuration(sessionId, action.nodeIds[0]), action.scope, {
+				prepared: async receipt => { await report({ ...receipt, state: "running", detail: "正在保存学习笔记" }); },
+				finished: async result => { await report({ state: result.warning ? "needs-review" : "succeeded", path: result.path, reused: !!result.reused, warning: result.warning?.slice(0, 1000), detail: result.warning || (result.reused ? "已复用已有学习笔记" : "学习笔记已保存") }).catch(feedbackFailure); }, failed,
+			}));
+			else {
+				await this.openLearningRecord(sessionId, action.nodeIds[0]);
+				void this.getReadingWorkspace().advance(sessionId, { expectedParentId: action.nodeIds[0], prepared: async nodeId => { await report({ state: "running", nodeId, detail: "正在生成主线讲解" }); } })
+					.catch(async error => { await failed(error); new Notice("主线讲解未完成，请在节点中重试：" + String(error), 8000); })
+					.finally(() => { void service.refreshActions().catch(feedbackFailure); });
+			}
+		});
+	}
+	async openAssistantActionResult(runId: string, actionId: string): Promise<void> {
+		const service = this.getReadingAssistant(); await service.refreshActions(); const run = service.runs.get(runId), action = run?.actions.find(a => a.id === actionId), execution = action?.execution;
+		if (!run || !action || !execution) throw new Error("尚无执行记录");
+		if (action.kind === "advance") { await this.openLearningRecord(run.sessionId, execution.nodeId || action.nodeIds[0]); return; }
+		if (action.kind === "curation" && execution.reviewId) {
+			const review = this.getCurationService().reviews.get(execution.reviewId); if (!review || review.context.sessionId !== run.sessionId) throw new Error("整理记录缺失");
+			this.showCurationModal(new KnowledgeCurationModal(this.app, this, run.sessionId, review.context.nodeIds[0], review, undefined, {
+				prepared: record => service.recordExecution(runId, actionId, execution.id, { state: record.state === "generating" ? "running" : "waiting", reviewId: record.id, path: record.context.target.path, detail: "已关联整理批次，结果随原功能更新" }),
+				failed: async error => { await service.recordExecution(runId, actionId, execution.id, { state: "failed", detail: String(error) }).catch(e => new Notice("助手执行状态保存失败：" + String(e))); },
+			})); return;
+		}
+		if (action.kind === "export" && execution.path && safeAssistantExportPath(execution.path)) { await this.openVaultFile(execution.path); return; }
+		throw new Error("尚未关联执行结果，请在原功能查看");
+	}
+	async openAssistantEvidence(runId: string, sourceId: string): Promise<void> {
+		const run = this.getReadingAssistant().runs.get(runId), source = run?.sources.find(s => s.id === sourceId); if (!run || !source) throw new Error("助手引用不存在");
+		if (source.structured) {
+			if (!run.source) throw new Error("JATS 助手记录缺少固定来源"); validateStructuredReference(source, run.source);
+			const modal = new Modal(this.app); modal.titleEl.setText(source.id + " · " + source.label); modal.modalEl.addClass("reading-modal");
+			modal.contentEl.createEl("p", { cls: "reading-evidence-location", text: structuredLocationLabel(source) + " · " + run.source.structured!.manifest.sourceVersionId });
+			modal.contentEl.createEl("p", { text: "以下是助手实际读取时的文字快照；图像未在本轮助手中核验。" });
+			modal.contentEl.createEl("pre", { cls: "reading-evidence-text", text: source.text });
+			const status = modal.contentEl.createEl("p", { text: "正在核对当前原文…" }), open = modal.contentEl.createEl("button", { text: "前往原文块" }); open.disabled = true;
+			const verify = async () => { const doc = await this.getReadingWorkspace().document(run.sessionId); await doc.verify(); matchStructuredReference(source, doc.source, doc.evidence); };
+			open.onclick = () => void verify().then(() => this.openReadingEvidence(source.path, undefined, source.structured!.blockId)).catch(e => { status.setText("当前原文无法核对，保留历史快照：" + String(e)); open.disabled = true; });
+			this.showCurationModal(modal);
+			try { await verify(); if (modal.modalEl.isConnected) { status.setText("当前原文与历史依据一致。"); open.disabled = false; } }
+			catch (e) { if (modal.modalEl.isConnected) status.setText("当前原文无法核对，保留历史快照：" + String(e)); } return;
+		}
+		const doc = await this.getReadingWorkspace().document(run.sessionId); await doc.verify();
+		if (source.kind === "knowledge" && assistantHash(await this.getReadingAssistant().deps.readFile(source.path)) !== source.hash) throw new Error("知识来源已变化，请重新读取");
+		if (source.kind === "paper" && doc.source.fingerprint !== source.hash) throw new Error("原文已变化，请重新读取");
+		const modal = new Modal(this.app); modal.titleEl.setText(source.id + " · " + source.label); modal.modalEl.addClass("reading-modal");
+		modal.contentEl.createEl("p", { text: source.role + " · " + source.path + (source.page ? " · 第 " + source.page + " 页" : "") }); modal.contentEl.createEl("pre", { cls: "reading-evidence-text", text: source.text });
+		const open = modal.contentEl.createEl("button", { text: source.kind === "knowledge" ? "打开来源笔记" : doc.source.kind === "pdf" ? "查看原文页图" : "前往原文" });
+		open.disabled = source.kind === "paper" && doc.source.kind === "pdf";
+		open.onclick = () => { if (source.kind === "knowledge") this.openVaultFile(source.path); else if (doc.source.kind === "article") void this.openReadingEvidence(source.path, source.page).catch(error => new Notice(String(error))); };
+		this.showCurationModal(modal);
+		if (source.kind === "paper") {
+			const original = doc.evidence.find(e => e.page === source.page && e.start === source.start && e.text.startsWith(source.text));
+			if (original) { const image = await doc.image(doc.source.kind === "pdf" && original.page ? { ...original, asset: "pdf-page" } : original); if (image && modal.modalEl.isConnected) { const img = modal.contentEl.createEl("img", { attr: { alt: source.label } }); img.src = image.dataUrl; img.style.maxWidth = "100%"; if (doc.source.kind === "pdf") { open.disabled = false; open.onclick = () => img.scrollIntoView({ block: "start" }); } } }
+		}
+	}
+	showCurationModal<T extends Modal>(modal: T): T {
+		this.curationModals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.curationModals.delete(modal); }; modal.open(); return modal;
+	}
+	readDashboardCuration() { return readDashboardCuration(new FileSourceStorage(this.readingPluginDirectory())); }
+	openKnowledgeMaintenance(entry?: CurationNavigation): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this, entry)); }
+	getKnowledgeDrafts(): KnowledgeDraftStore { return this.knowledgeDrafts ||= new KnowledgeDraftStore(new FileSourceStorage(this.readingPluginDirectory())); }
+	openKnowledgeDrafts(id?: string): void { this.showCurationModal(new KnowledgeDraftsModal(this.app, this, id ? { id } : undefined)); }
+	private async openDraftFromExcerpt(input: Parameters<typeof readDraftMaterial>[1]): Promise<void> {
+		try { const material = await readDraftMaterial(this.app, input); if (!this.acquisitionClosing) this.showCurationModal(new KnowledgeDraftsModal(this.app, this, { material })); }
+		catch (error) { if (!this.acquisitionClosing) new Notice(String(error), 8000); }
+	}
+	openAnswerExcerptCuration(path: string, review?: CurationReview): void { this.showCurationModal(new AnswerExcerptCurationModal(this.app, this, path, review)); }
+	openKnowledgeCuration(sessionId: string, nodeId: string, review?: CurationReview): void {
+		if (review?.context.answerExcerpt) { this.openAnswerExcerptCuration(review.context.answerExcerpt.snapshot.path, review); return; }
+		if (review?.context.excerpt) { this.showCurationModal(new ExcerptCurationModal(this.app, this, review.context.excerpt.snapshot.record, review)); return; }
+		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") { new Notice("代码学习可导出独立笔记并关联已有笔记，暂不自动整理正式代码页"); return; }
+		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review)); }
+		catch (error) { new Notice(String(error)); }
+	}
+	async openLearningRecord(sessionId: string, nodeId: string): Promise<void> {
+		await this.activateReadingWorkspace({ sessionId }); const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE).map(leaf => leaf.view).find(v => v instanceof ReadingWorkspaceView && v.getState().sessionId === sessionId);
+		if (view instanceof ReadingWorkspaceView) view.revealLearningNode(nodeId);
+	}
+	async openCurationEvidence(context: CurationContext, evidenceId: string): Promise<void> {
+		const evidence = context.evidence.find(item => item.id === evidenceId); if (!evidence || evidence.kind !== "paper") throw new Error("本文依据不存在");
+		const source = await this.getReadingWorkspace().document(context.sessionId); await source.verify(); if (source.source.fingerprint !== context.source.fingerprint) throw new Error("原文已变化，请重新读取依据");
+		const original = context.source.kind === "structured" ? matchStructuredReference(evidence, context.source, source.evidence) : source.evidence.find(item => evidence.visual ? "V:" + item.id === evidence.id : !item.asset && item.start === evidence.start && item.page === evidence.page && item.text.startsWith(evidence.text));
+		if (!original) throw new Error("原文中的引用位置已无法匹配");
+		const modal = new Modal(this.app); modal.titleEl.setText(evidence.label); modal.modalEl.addClass("reading-modal"); modal.contentEl.createEl("p", { text: evidence.path + (evidence.page ? " · 第 " + evidence.page + " 页" : "") });
+		modal.contentEl.createEl("pre", { text: evidence.text, cls: "reading-evidence-text" });
+		if (evidence.structured) modal.contentEl.createEl("p", { cls: "reading-evidence-location", text: structuredLocationLabel(evidence) + " · " + context.source.structured!.manifest.sourceVersionId });
+		if (["article", "structured"].includes(source.source.kind)) { const open = modal.contentEl.createEl("button", { text: "在阅读器打开原文" }); open.onclick = () => { void source.verify().then(() => this.openReadingEvidence(evidence.path, evidence.page, evidence.structured?.blockId)).catch(error => new Notice(String(error))); }; }
+		this.showCurationModal(modal);
+		const image = await source.image(source.source.kind === "pdf" && original.page ? { ...original, asset: "pdf-page" } : original);
+		if (image && modal.modalEl.isConnected) { const img = modal.contentEl.createEl("img", { attr: { alt: evidence.label } }); img.src = image.dataUrl; img.style.maxWidth = "100%"; }
+	}
+	async testKnowledgeModels(): Promise<void> {
+		this.getKnowledgeService(); await this.knowledgeModels!.embed(["知识库连接测试"]); await this.knowledgeModels!.rerank("测试", ["知识库连接测试"]);
+	}
 
 	async readVaultEvidencePacket(trace: RetrievalTrace): Promise<VaultEvidencePacket[]> {
 		return readVaultEvidencePackets(this.app, trace);
@@ -2463,7 +3177,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	 * server search, plugin-side Tavily searches, or nothing (with an
 	 * actionable reason the query view can surface).
 	 */
-	private resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution {
+	resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution {
 		const normalized = normalizeProviderProfile(profile);
 		const mode = normalized.webSearch || "auto";
 		if (mode === "off") {
@@ -2500,7 +3214,11 @@ export default class AgentDashboardPlugin extends Plugin {
 		) * 1000;
 		return {
 			kind: "tavily",
-			search: (queries) => searchTavily(httpDeps, secret, queries, { maxResults, timeoutMs }),
+			search: (queries, options = {}) => searchTavily(httpDeps, secret, queries, {
+				...options,
+				maxResults: Math.min(maxResults, options.maxResults ?? maxResults),
+				timeoutMs: Math.min(timeoutMs, options.timeoutMs ?? timeoutMs),
+			}),
 		};
 	}
 
@@ -2552,15 +3270,43 @@ export default class AgentDashboardPlugin extends Plugin {
 	 * Runs 文献入库 through the in-plugin bounded agent loop (Direct API
 	 * brain, allowlisted tools) instead of the Codex CLI toolkit pipeline.
 	 */
-	runLightPaperIngest(
+	private ingestRecords?: IngestRecords;
+	private ingestRegistration?: IngestRegistrationController;
+	async registerIngestNote(notePath: string, runId: string): Promise<void> { await (this.ingestRegistration ||= new IngestRegistrationController(this)).open(notePath, runId); }
+	async getIngestRegistrationAvailability(notePath: string): Promise<{ eligible: boolean; reason: string }> { return (this.ingestRegistration ||= new IngestRegistrationController(this)).availability(notePath); }
+	getIngestRecords(): IngestRecords { return this.ingestRecords ||= new IngestRecords(this.readingPluginDirectory()); }
+	async readIngestPdf(run: TaskRun): Promise<void> {
+		const request = validateIngestRequestForTask(await this.getIngestRecords().read("request", run.id), run);
+		if (request.options.acquisitionSource) await validateAcquiredIntake(this.getAcquisitionService(), request.options);
+		await this.validateSavedPdfIntake(request.options);
+		await this.activateReadingWorkspace({ source: { kind: "pdf", path: request.options.sourcePdfPath }, backend: request.profileId });
+	}
+	async continuePaperIngest(run: TaskRun): Promise<void> { await openIngestContinuation(this, run); }
+	async runLightPaperIngest(
 		runId: string,
 		options: PaperIngestFlowOptions,
 		profileId: string,
 		hooks: { onEvent?: (event: DashboardProcessEvent) => void } = {},
 	): Promise<AgentLoopRunOutcome> {
+		options = structuredClone(options);
+		await this.validateSavedPdfIntake(options);
+		const steps = ingestSteps(options);
+		const boundSource = this.taskRuns.find(run => run.id === runId)?.acquisitionSource;
+		const boundPdf = this.taskRuns.find(run => run.id === runId)?.savedPdfSource;
+		if (boundPdf && (!options.savedPdfSource || JSON.stringify(decodeSavedPdfRef(boundPdf)) !== JSON.stringify(decodeSavedPdfRef(options.savedPdfSource)))) throw new Error("处理请求与任务绑定的原文包不一致");
+		if (boundSource && (!options.acquisitionSource || JSON.stringify(decodeIntakeRef(boundSource)) !== JSON.stringify(decodeIntakeRef(options.acquisitionSource)))) throw new Error("入库请求与任务绑定的获取快照不一致");
+		if(options.acquisitionSource){if(this.acquisitionClosing)throw new Error("插件已关闭，入库未启动");await validateAcquiredIntake(this.getAcquisitionService(),options);if(this.acquisitionClosing)throw new Error("插件已关闭，入库未启动");}
+		this.updateIngestProgress(runId, { steps, stage: "prepare", detail: "正在准备授权 PDF 与入库参数", waiting: false });
 		this.lightAgentResults.delete(runId);
-		return this.agentLoopService.runPaperIngest(runId, options, profileId, hooks)
+		await this.getIngestRecords().write("request", runId, { version: 1, runId, profileId, options: structuredClone(options) });
+		return this.agentLoopService.runPaperIngest(runId, options, profileId, {
+			onEvent: event => {
+				if (event.status === "running" || event.status === "waiting") this.updateIngestProgress(runId, event.payload?.ingestProgress);
+				hooks.onEvent?.(event);
+			},
+		})
 			.then(async (outcome) => {
+				if (outcome.exitCode === 0) this.updateIngestProgress(runId, { steps, stage: "save", detail: "正在同步文件索引并保存任务结果", waiting: false });
 				const articlePath = outcome.artifacts.articlePath;
 				if (articlePath && outcome.filesWritten.includes(articlePath)) {
 					await this.reconcilePublishedPackage(articlePath);
@@ -3070,7 +3816,12 @@ export default class AgentDashboardPlugin extends Plugin {
 			input,
 			executionConfig: effectiveConfig,
 			settings: this.settings,
-			hooks,
+			hooks: action.id === "paper-ingest" ? { ...hooks, onEvent: event => {
+				if (event.type === "status" && event.status !== "done" && event.status !== "failed" && event.stage !== "stopped") {
+					this.updateIngestProgress(runId, { steps: ["cli"], stage: "cli", detail: event.label || "正在执行，等待 CLI 阶段回报", waiting: event.status === "waiting" });
+				}
+				hooks.onEvent?.(event);
+			} } : hooks,
 		});
 	}
 
@@ -3084,6 +3835,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	 * executor in turn instead of inferring from executionConfig.backend.
 	 */
 	stopTaskRun(runId: string): boolean {
+		if (this.jatsWikiService?.stop(runId)) return true;
+		if (this.acquisitionServices.get("production")?.get(runId)) return this.acquisitionServices.get("production")!.stop(runId);
 		if (this.agentLoopService.stop(runId)) return true;
 		if (this.directQueryService.stop(runId)) return true;
 		return this.processExecution.stopVaultAction(runId);
@@ -3117,6 +3870,58 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.app.workspace.revealLeaf(leaf);
 	}
 
+	getReadingWorkspace(): ReadingWorkspaceService {
+		if (!this.readingWorkspace) {
+			const adapter = this.app.vault.adapter;
+			if (!(adapter instanceof FileSystemAdapter)) throw new Error("交互深读需要桌面文件系统");
+			this.readingWorkspace = new ReadingWorkspaceService(this.app, adapter.getBasePath(), path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader"));
+			this.readingEngine = new ReadingEngine(this.readingWorkspace, session => this.createReadingBackend(session), async (query, context) => {
+				const prefixes = ["sources", "concepts", "methods", "datasets", "synthesis", "mocs", "projects", "entities", "code", "r", "linux"].map((folder) => "wiki/" + folder);
+				let paperPaths: string[] | undefined;
+				if (context && /本文|这篇|本研究|作者/.test(context.question) && !/比较|对比|跨论文|相比/.test(context.question)) {
+					const key = context.source.path.replace(/\\/g, "/").match(/papers\/([^/]+)\/article\.md$/)?.[1];
+					paperPaths = (await readKnowledgeDocuments(this.app, context.signal)).filter((doc) => doc.path.startsWith("wiki/sources/") &&
+						(key && doc.path === "wiki/sources/" + key + ".md" || doc.title.toLowerCase() === context.source.title.toLowerCase())).map((doc) => doc.path);
+				}
+				const trace = this.settings.knowledgeRetrievalMode === "lexical" ? await this.getLexicalRetriever().retrieve(query, [], { allowedPrefixes: prefixes })
+					: knowledgeTrace(await this.searchKnowledge(query, { identityQuery: context?.question || query, paperPaths, signal: context?.signal, limit: 4 }));
+				const evidence = await this.readVaultEvidencePacket(trace);
+				return { evidence: evidence.filter((item) => prefixes.some((prefix) => item.path.startsWith(prefix + "/"))).slice(0, 4).map((item) => ({ id: "vault-" + readingHash(item.path).slice(0, 12), kind: "vault" as const,
+					path: item.path, label: item.path.split("/").slice(-1)[0], text: item.content.slice(0, 6000), role: item.role, heading: item.heading, origins: item.origins, sourceHash: item.hash, start: item.start, end: item.end })),
+					label: String(trace.retrieval_label || "关键词检索"), warnings: (trace as RetrievalTrace).knowledge?.warnings || [] };
+			});
+		}
+		return this.readingWorkspace;
+	}
+	getReadingEngine(): ReadingEngine { this.getReadingWorkspace(); return this.readingEngine!; }
+	createReadingBackend(session: Pick<ReadingSession, "backend" | "model">, streaming = true): ReadingBackend {
+		if (session.backend === "codex-cli") return new CodexReadingBackend(this.settings.codexExecutable, session.model || this.settings.codexModel, this.readingPluginDirectory());
+		const profile = this.getProviderProfile(session.backend); if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");
+		return new DirectReadingBackend(this.createLLMProvider({ ...profile, timeoutSeconds: 120 }), profile.name, profile.model, streaming && profile.lastTest.streamingVerified === true, supportsReadingSchema(profile), () => this.resolveWebSearchBackend(profile));
+	}
+	activateReadingWorkspace(entry?: import("./reading/entry").ReadingEntry): Promise<void> {
+		const operation = this.readingOpenings.then(async () => {
+			const service = this.getReadingWorkspace(); await service.ready();
+			if (entry?.sessionId) service.repository.get(entry.sessionId);
+			const domain = readingEntryDomain(entry, service.repository.sessions.values());
+			const leaves = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE); for (const leaf of leaves) await leaf.loadIfDeferred();
+			const existing = leaves.find(leaf => leaf.view instanceof ReadingWorkspaceView && leaf.view.getReadingDomain() === domain);
+			const leaf = existing || this.app.workspace.getLeaf("tab");
+			if (!existing || entry?.sessionId) await leaf.setViewState({ type: READING_VIEW_TYPE, state: { domain, ...(entry?.sessionId ? { sessionId: entry.sessionId } : {}) }, active: true });
+			await this.app.workspace.revealLeaf(leaf);
+			if (leaf.view instanceof ReadingWorkspaceView && entry?.source) leaf.view.openSource(entry);
+		}); this.readingOpenings = operation.catch(() => undefined); return operation;
+	}
+	async runClassicReading(input: string, overrides: ExecutionOverrides, options: DashboardActionOptions, actionId: "pdf-xray" | "code-analysis" = "pdf-xray"): Promise<void> {
+		const action = ACTION_BY_ID.get(actionId)!;
+		const execution = this.resolveCliActionExecutionConfig(action, actionId === "code-analysis" && (overrides.backend === "claude-code" || overrides.backend === "opencode") ? overrides.backend : "codex-cli", overrides);
+		const run = await this.startTaskRun(action, input.slice(0, 160), execution);
+		try {
+			const result = await this.runVaultAction(run.id, action, serializeActionRequest(action, input, options), execution);
+			await this.finishTaskRun(run.id, { status: result.exitCode === 0 ? "done" : "failed", output: result.stdout, error: result.stderr, exitCode: result.exitCode });
+			new Notice(action.label + (result.exitCode === 0 ? "已完成，可在控制台查看" : "失败，请查看控制台任务"));
+		} catch (error) { await this.finishTaskRun(run.id, { status: "failed", error: String(error) }); throw error; }
+	}
 	async activateCodePracticeView(): Promise<void> {
 		const contextFile = this.app.workspace.getActiveFile() || this.lastContextFile;
 		const existing = this.app.workspace.getLeavesOfType(CODE_PRACTICE_VIEW_TYPE)[0];
@@ -3159,6 +3964,14 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.isMineruArticleFile(file) || this.isConfiguredReaderMarkdownFile(file);
 	}
 
+	async openReadingEvidence(articlePath: string, page?: number, blockId?: string): Promise<void> {
+		await this.activateMineruReaderView(articlePath);
+		const view = this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE)[0]?.view;
+		if (view instanceof MineruReaderView && page) {
+			view.revealReadingPage(page);
+		}
+		if (view instanceof MineruReaderView && blockId) view.revealReadingBlock(blockId);
+	}
 	async activateMineruReaderView(articlePath = "", preferredLeaf?: WorkspaceLeaf): Promise<void> {
 		const contextFile = this.app.workspace.getActiveFile() || this.lastContextFile;
 		const resolvedPath = normalizePath(
@@ -3184,6 +3997,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE).forEach((leaf) => {
 				if (leaf !== preferredLeaf) leaf.detach();
 			});
+			await this.app.workspace.revealLeaf(preferredLeaf);
 			await preferredLeaf.setViewState({
 				type: MINERU_READER_VIEW_TYPE,
 				active: true,
@@ -3193,7 +4007,10 @@ export default class AgentDashboardPlugin extends Plugin {
 			return;
 		}
 		const existing = this.consolidateMineruReaderLeaves();
+		if (existing) await existing.loadIfDeferred();
 		const leaf = existing || this.app.workspace.getLeaf("tab");
+		// Markdown rendering can wait for visibility, including in a newly created tab.
+		await this.app.workspace.revealLeaf(leaf);
 		if (!existing) {
 			await leaf.setViewState({
 				type: MINERU_READER_VIEW_TYPE,
@@ -3216,9 +4033,16 @@ export default class AgentDashboardPlugin extends Plugin {
 		const normalizedPath = normalizePath(articlePath);
 		const file = this.app.vault.getAbstractFileByPath(normalizedPath);
 		if (!(file instanceof TFile)) return;
+		await this.openSourceMarkdownFile(file);
+	}
+
+	private async openSourceMarkdownFile(file: TFile, sourceMode = false): Promise<WorkspaceLeaf> {
+		const normalizedPath = normalizePath(file.path);
 		this.readerAutoOpenBypass.add(normalizedPath);
 		try {
-			await this.app.workspace.getLeaf("tab").openFile(file);
+			const leaf = this.app.workspace.getLeaf("tab");
+			await leaf.openFile(file, sourceMode ? { active: true, state: { mode: "source" } } : undefined);
+			return leaf;
 		} finally {
 			window.setTimeout(() => this.readerAutoOpenBypass.delete(normalizedPath), 1000);
 		}

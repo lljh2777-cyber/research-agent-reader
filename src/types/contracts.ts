@@ -83,6 +83,9 @@ export interface TaskRunArtifacts {
 }
 
 export interface TaskRun {
+	acquisitionSource?: import("../fulltext/contracts").AcquisitionIntakeRef;
+	savedPdfSource?: import("../papers/saved-pdf").SavedPdfRef;
+	ingestProgress?: import("../agent/ingest-progress").IngestProgress;
 	id: string;
 	actionId: string;
 	label: string;
@@ -250,6 +253,9 @@ export interface WebSearchResult {
 }
 
 export interface ProviderChatRequest {
+	/** A cost preference, applied only to explicitly supported hybrid-thinking endpoints. */
+	disableReasoning?: boolean;
+	responseSchema?: { name: string; schema: Record<string, unknown> };
 	model?: string;
 	messages: readonly ChatMessage[];
 	maxTokens?: number;

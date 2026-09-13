@@ -42,10 +42,15 @@ export interface DashboardAction {
 
 export const ACTIONS: readonly DashboardAction[] = [
 	{
+		id: "fulltext-acquisition", label: "获取全文", agent: "fulltext-acquisition-service",
+		description: "按 DOI、PMID 或 PMCID 查找 PMC 可用 PDF，核对版本后获取并在本地预览，无需模型配置。",
+		placeholder: "", requiresInput: false, writes: false, enabled: true, ai: false, localView: true,
+	},
+	{
 		id: "paper-ingest",
 		label: "文献入库",
 		agent: "paper-intake-pipeline",
-		description: "输入本地 PDF，并选择生成可追溯的原文 Markdown、创建初步文章 Wiki，或同时执行。身份核验、去重和元数据准备始终先执行。",
+		description: "输入本地 PDF，并选择生成可追溯的原文 Markdown、创建初步论文笔记，或同时执行。身份核验、去重和元数据准备始终先执行。",
 		placeholder: "例如：<论文目录>/paper.pdf\n可补充 citekey、DOI、Zotero key 或处理要求",
 		requiresInput: true,
 		writes: true,
@@ -55,7 +60,7 @@ export const ACTIONS: readonly DashboardAction[] = [
 	},
 	{
 		id: "pdf-xray",
-		label: "PDF 深读",
+		label: "文献深读",
 		agent: "paper_xray",
 		description: "选择从原始 PDF 或已有 MinerU article.md 深读，再输入来源路径和核验目标。只有完整检查全文证据后才允许升级为 x-ray。",
 		placeholder: "例如：<论文目录>/example.pdf\n或 papers/example/article.md\n重点核验方法、图 2、数据来源与局限性",
@@ -70,7 +75,7 @@ export const ACTIONS: readonly DashboardAction[] = [
 		id: "code-analysis",
 		label: "代码分析",
 		agent: "code_reader",
-		description: "输入 R/Python 项目根目录和关注重点。该操作会调用 code_reader 子智能体，只做静态阅读并更新代码说明页。",
+		description: "选择 R/Python 文件或项目，沿主线逐步理解代码，通过支线追问并查看源码依据；一次性代码笔记保留在更多选项中。",
 		placeholder: "例如：<代码项目目录>\n分析入口、脚本关系、数据流，并按关键代码 + 解释输出",
 		requiresInput: true,
 		writes: true,

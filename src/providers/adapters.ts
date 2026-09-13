@@ -5,6 +5,7 @@ import {
 	type ChatMessage,
 	type ProviderCapabilities,
 } from "../config";
+import { supportsFastCoordination } from "./structured";
 import type {
 	PluginHost,
 	ProviderChatRequest,
@@ -241,6 +242,7 @@ export class OpenAIProvider extends LLMProvider {
 				model: request.model || this.config.model,
 				input: request.messages,
 				max_output_tokens: request.maxTokens || 256,
+				...(request.responseSchema ? { text: { format: { type: "json_schema", strict: true, ...request.responseSchema } } } : {}),
 				store: false,
 			},
 			timeoutMs: options.timeoutMs,
@@ -264,6 +266,7 @@ export class OpenAIProvider extends LLMProvider {
 				model: request.model || this.config.model,
 				input: request.messages,
 				max_output_tokens: request.maxTokens || 256,
+				...(request.responseSchema ? { text: { format: { type: "json_schema", strict: true, ...request.responseSchema } } } : {}),
 				store: false,
 				stream: true,
 			},
@@ -407,6 +410,8 @@ export class OpenAICompatibleProvider extends LLMProvider {
 			messages: request.messages,
 			max_tokens: request.maxTokens || 256,
 			stream,
+			...(request.responseSchema ? { response_format: { type: "json_schema", json_schema: { ...request.responseSchema, strict: true } } } : {}),
+			...(request.disableReasoning && supportsFastCoordination(this.config.baseUrl, request.model || this.config.model) ? { enable_thinking: false } : {}),
 		};
 		const webSearch = request.webSearch;
 		if (webSearch?.protocol === "qwen") {

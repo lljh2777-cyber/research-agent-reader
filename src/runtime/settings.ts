@@ -135,6 +135,8 @@ const CLI_COMMAND_NAMES: Record<CliExecutableKind, string> = {
 };
 
 export interface DashboardSettings {
+	knowledgeRetrievalMode: "lexical" | "rerank" | "hybrid";
+	knowledgeSecretId: string;
 	toolkitRoot: string;
 	readerMarkdownFolders: string[];
 	obsidianCliExecutable: string;
@@ -199,6 +201,8 @@ export interface DashboardSettings {
 	webSearchMaxResults: number;
 	webSearchTimeoutSeconds: number;
 	lightAgentMaxSteps: number;
+	fulltextUnpaywallEnabled: boolean;
+	fulltextUnpaywallEmail: string;
 	lightAgentMaxOutputTokens: number;
 }
 
@@ -615,6 +619,8 @@ export function migrateLegacySettingsKeys(
 }
 
 export const DEFAULT_SETTINGS: DashboardSettings = {
+	knowledgeRetrievalMode: "lexical",
+	knowledgeSecretId: "siliconflow",
 	toolkitRoot: "",
 	readerMarkdownFolders: ["papers", "Clippings"],
 	obsidianCliExecutable: findPreferredObsidianCliExecutable(),
@@ -679,5 +685,7 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	webSearchMaxResults: 5,
 	webSearchTimeoutSeconds: 20,
 	lightAgentMaxSteps: 10,
+	fulltextUnpaywallEnabled: false,
+	fulltextUnpaywallEmail: "",
 	lightAgentMaxOutputTokens: 4096,
 };

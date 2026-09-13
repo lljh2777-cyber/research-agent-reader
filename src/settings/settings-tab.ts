@@ -1,5 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ROLE_LABELS, type RetrievalMode } from "../retrieval/types";
+import type { KnowledgeRetrievalService } from "../retrieval/service";
+import type { WebSearchBackendResolution } from "../services/web-search";
+import { contactEmail } from "../fulltext/url-policy";
 
 import {
 	App,
@@ -14,6 +18,7 @@ import {
 import { ACTIONS, type DashboardAction } from "../actions";
 import {
 	getCliBackendLabel,
+	isCliBackendId,
 	MAX_QUERY_IMAGE_ATTACHMENTS,
 	MODEL_OPTIONS,
 	PROVIDER_TYPES,
@@ -23,7 +28,6 @@ import {
 	type ProviderTypeId,
 } from "../config";
 import {
-	detectNativeWebSearchProtocol,
 	makeProviderProfile,
 	modelHasKnownVisionSupport,
 	type ProfileWebSearchMode,
@@ -58,6 +62,10 @@ import type {
 } from "../types/contracts";
 
 interface SettingsPluginHost extends PluginHost {
+	resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution;
+	getKnowledgeService(): KnowledgeRetrievalService;
+	openKnowledgeMaintenance(): void;
+	testKnowledgeModels(): Promise<void>;
 	providerRuntimeState: Map<string, ProviderRuntimeEntry>;
 	obsidianCliProbeState: ObsidianCliProbeState;
 	providerEditorProfileId: string;
@@ -79,23 +87,19 @@ interface SettingsPluginHost extends PluginHost {
 	buildDiagnosticsSummary(): string;
 }
 
-type SettingsPage =
-	| "home"
-	| "runtime"
-	| "obsidian-cli"
-	| "mineru"
-	| "reader"
-	| "tasks"
-	| "data"
-	| "codex"
-	| "claude"
-	| "opencode"
-	| "annotations"
-	| "direct-api";
+import { SETTINGS_CATEGORIES, SETTINGS_ENTRIES, filterSettingsEntries,
+	type SettingsEntry, type SettingsFilter, type SettingsPage } from "./navigation";
 
 export class AgentDashboardSettingTab extends PluginSettingTab {
 	declare plugin: Plugin & SettingsPluginHost;
 	private activePage: SettingsPage = "home";
+	private renderedPage: SettingsPage = "home";
+	private homeFilter: SettingsFilter = "common";
+	private homeQuery = "";
+	private homeExpanded = false;
+	private pageScroll = new Map<SettingsPage, number>();
+	private disclosureState = new Map<string, boolean>();
+	private retrievalUnsubscribe?: () => void;
 
 	constructor(app: App, plugin: Plugin & SettingsPluginHost) {
 		super(app, plugin);
@@ -103,231 +107,210 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 	}
 
 	display(): void {
+		this.retrievalUnsubscribe?.(); this.retrievalUnsubscribe = undefined;
 		const { containerEl } = this;
-		const previousPage = this.activePage;
-		const previousScrollTop = containerEl.scrollTop;
+		containerEl.querySelectorAll<HTMLDetailsElement>("details[data-disclosure]").forEach(details => {
+			this.disclosureState.set(details.dataset.disclosure!, details.open);
+		});
+		this.pageScroll.set(this.renderedPage, containerEl.scrollTop);
+		const samePage = this.renderedPage === this.activePage;
 		containerEl.empty();
 		containerEl.addClass("agent-dashboard-settings");
+		containerEl.dataset.settingsPage = this.activePage;
+		const content = containerEl.createDiv({ cls: "rar-settings-content" });
 		switch (this.activePage) {
+			case "fulltext": this.renderFulltextSettings(content); break;
+			case "retrieval": this.renderKnowledgeRetrieval(content); break;
 			case "runtime":
-				this.renderRuntimeSettings(containerEl);
+				this.renderRuntimeSettings(content);
 				break;
 			case "obsidian-cli":
-				this.renderObsidianCliSettings(containerEl);
+				this.renderObsidianCliSettings(content);
 				break;
 			case "mineru":
-				this.renderMineruSettings(containerEl);
+				this.renderMineruSettings(content);
 				break;
 			case "reader":
-				this.renderReaderSettings(containerEl);
+				this.renderReaderSettings(content);
 				break;
 			case "tasks":
-				this.renderTaskDefaultsSettings(containerEl);
+				this.renderTaskDefaultsSettings(content);
 				break;
 			case "data":
-				this.renderDataSettings(containerEl);
+				this.renderDataSettings(content);
 				break;
 			case "codex":
-				this.renderCodexSettings(containerEl);
+				this.renderCodexSettings(content);
 				break;
 			case "claude":
-				this.renderClaudeSettings(containerEl);
+				this.renderClaudeSettings(content);
 				break;
 			case "opencode":
-				this.renderOpenCodeSettings(containerEl);
+				this.renderOpenCodeSettings(content);
 				break;
 			case "annotations":
-				this.renderAnnotationSettings(containerEl);
+				this.renderAnnotationSettings(content);
 				break;
 			case "direct-api":
-				this.renderDirectApiSettings(containerEl);
+				this.renderDirectApiSettings(content);
 				break;
 			default:
-				this.renderSettingsHome(containerEl);
+				this.renderSettingsHome(content);
 		}
-		// Re-rendering replaces the DOM and resets the scroll position; keep
-		// it stable when staying on the same settings page.
-		if (this.activePage === previousPage) {
-			containerEl.scrollTop = previousScrollTop;
-		} else {
-			containerEl.scrollTop = 0;
+		containerEl.scrollTop = this.pageScroll.get(this.activePage) || 0;
+		this.renderedPage = this.activePage;
+		if (!samePage && this.activePage !== "home") {
+			content.querySelector<HTMLElement>("h2")?.focus({ preventScroll: true });
 		}
 	}
 
+	private renderFulltextSettings(container:HTMLElement):void {
+		this.createSettingsPageHeader(container,"全文来源","按论文标识获取可用 PDF，来源配置与模型配置分开。");
+		container.createEl("p",{text:"PMC PDF 默认可用，无需模型。启用 Unpaywall 后，在 PMC 无可用 PDF 时查询其他开放来源。请求使用 HTTPS 直连，不继承系统或 Obsidian 代理。"});
+		new Setting(container).setName("启用 Unpaywall 回退").setDesc("查询将发送论文 DOI 和下方联系邮箱至 Unpaywall；邮箱保存在本地插件设置中，不写入获取任务日志。").addToggle(toggle=>toggle.setValue(this.plugin.settings.fulltextUnpaywallEnabled).onChange(async value=>{this.plugin.settings.fulltextUnpaywallEnabled=value;await this.plugin.saveSettings();}));
+		let email=this.plugin.settings.fulltextUnpaywallEmail;
+		const status=container.createEl("p",{attr:{"aria-live":"polite"}});
+		new Setting(container).setName("Unpaywall 联系邮箱").setDesc("由你明确填写，不从其他账户推断。清空邮箱后，回退查询会提示需要配置。").addText(text=>text.setPlaceholder("name@example.org").setValue(email).onChange(value=>{email=value;})).addButton(button=>button.setButtonText("保存邮箱").onClick(async()=>{
+			try {const value=email.trim()?contactEmail(email):"";this.plugin.settings.fulltextUnpaywallEmail=value;await this.plugin.saveSettings();status.setText("联系邮箱已保存，新查询将使用此配置");}catch{status.setText("邮箱格式无效或保存失败，请检查后重试");}
+		}));
+	}
+	private navigateSettings(page: SettingsPage): void {
+		const previous = this.activePage;
+		this.activePage = page;
+		this.display();
+		if (page === "home") {
+			this.containerEl.querySelector<HTMLElement>(`[data-settings-target="${previous}"]`)?.focus({ preventScroll: true });
+		}
+	}
+
+
+	hide(): void { this.retrievalUnsubscribe?.(); this.retrievalUnsubscribe = undefined; }
+	private renderKnowledgeRetrieval(container: HTMLElement): void {
+		this.createSettingsPageHeader(container, "知识库检索", "让问题更容易找到对应段落。本文事实优先限定论文，跨论文比较再扩大范围。");
+		new Setting(container).setName("学习整理与修订").setDesc("审阅整理建议，查看修订历史，分别维护正式知识与学习记录索引。")
+			.addButton(button => button.setButtonText("打开知识库维护").onClick(() => this.plugin.openKnowledgeMaintenance()));
+		new Setting(container).setName("检索模式").setDesc("关键词保留现有流程；重排和混合检索供 Direct API 知识库对话、两种后端的 PDF 交互深读与导出关联共用。")
+			.addDropdown((select) => select.addOption("lexical", "关键词（兼容现有流程）").addOption("rerank", "关键词＋BGE 重排").addOption("hybrid", "混合检索＋BGE 重排")
+				.setValue(this.plugin.settings.knowledgeRetrievalMode).onChange(async (value) => { this.plugin.settings.knowledgeRetrievalMode = value as RetrievalMode; await this.plugin.saveSettings(); }));
+		const secret = new Setting(container).setName("硅基流动凭据").setDesc("选择钥匙串中的凭据。启用后会发送问题和选定的知识笔记片段；更新向量索引会发送索引范围内的正文。");
+		if (this.app.secretStorage && typeof SecretComponent === "function") secret.addComponent((element) => new SecretComponent(this.app, element)
+			.setValue(this.plugin.settings.knowledgeSecretId).onChange(async (value) => { this.plugin.settings.knowledgeSecretId = value.trim().slice(0, 200); await this.plugin.saveSettings(); }));
+		else secret.setDesc("当前版本不支持钥匙串，请升级 Obsidian。");
+		new Setting(container).setName("检索模型").setDesc("BAAI/bge-m3 · BAAI/bge-reranker-v2-m3；仅使用这两个模型。")
+			.addButton((button) => button.setButtonText("测试连接").onClick(async () => { button.setDisabled(true); try { await this.plugin.testKnowledgeModels(); new Notice("嵌入与重排连接均成功"); } catch (error) { new Notice(String(error)); } finally { button.setDisabled(false); } }));
+		const service = this.plugin.getKnowledgeService();
+		const status = container.createDiv({ cls: "knowledge-index-status" });
+		const summary = status.createEl("strong"); const progress = status.createEl("progress"); progress.max = 1;
+		const detail = status.createEl("p");
+		const renderStatus = () => { const value = service.status; summary.setText(value.message); progress.value = value.total ? value.done / value.total : 0; detail.setText(value.documents + " 篇笔记 · " + value.done + "/" + value.total + " 个片段 · " + value.changed + " 篇变化" + (value.updated ? " · 最近保存 " + new Date(value.updated).toLocaleString() : "")); };
+		this.retrievalUnsubscribe = service.subscribe(renderStatus); renderStatus();
+		new Setting(container).setName("本地向量索引").setDesc("仅处理新增与变化的片段，停止后可继续。原笔记不写回；改动后的正文不会套用旧向量。")
+			.addButton((button) => button.setButtonText("更新索引").setCta().onClick(async () => { button.setDisabled(true); try { await service.update(); } catch (error) { new Notice(String(error)); } finally { button.setDisabled(false); } }))
+			.addButton((button) => button.setButtonText("停止").onClick(() => service.stop()))
+			.addButton((button) => button.setButtonText("检查变化").onClick(() => { void service.inspect().catch((error) => new Notice(String(error))); }));
+		container.createEl("p", { cls: "setting-item-description", text: "索引范围：正式来源、概念、方法、数据、综合与代码知识等。排除 PDF 原文包、批注、学习 QA、日志和范围外导航；导航和研究设想不进入普通事实回答的候选。独立 CLI 知识库对话继续使用自身工具链。" });
+		const query = container.createEl("textarea", { cls: "knowledge-search-input", attr: { placeholder: "试问一个概念，或用作者＋年份限定论文…", "aria-label": "检索预览问题" } });
+		const output = container.createDiv({ cls: "knowledge-search-results" });
+		let controller: AbortController | null = null;
+		new Setting(container).setName("片段检索预览").setDesc("检查实际候选和证据角色，不调用回答模型。相关分不能判断是否可以入库。")
+			.addButton((button) => button.setButtonText("检索").onClick(async () => {
+				if (!query.value.trim()) return; controller?.abort(); const current = new AbortController(); controller = current; button.setDisabled(true); output.empty();
+				try { const result = await service.search(query.value, { signal: current.signal, limit: 5 }); if (controller !== current) return;
+					output.createEl("p", { text: result.scope ? "限定来源：" + (result.scope.join("、") || "未找到") : "范围：正式知识笔记" });
+					for (const warning of result.warnings) output.createEl("p", { cls: "reading-error", text: warning });
+					if (!result.hits.length) output.createEl("p", { text: "Vault 中未找到足够依据" });
+					for (const hit of result.hits) { const item = output.createEl("details"); item.createEl("summary", { text: hit.title + " · " + ROLE_LABELS[hit.role] }); item.createEl("p", { text: hit.path + " · " + hit.heading }); item.createEl("pre", { cls: "reading-evidence-text", text: hit.text }); }
+				} catch (error) { output.createEl("p", { text: current.signal.aborted ? "检索已停止" : String(error) }); } finally { if (controller === current) button.setDisabled(false); }
+			})).addButton((button) => button.setButtonText("停止检索").onClick(() => controller?.abort()));
+		const unsubscribe = this.retrievalUnsubscribe; this.retrievalUnsubscribe = () => { unsubscribe?.(); controller?.abort(); };
+		void service.inspect().catch((error) => { if (container.isConnected) detail.setText(String(error)); });
+	}
 	private renderSettingsHome(containerEl: HTMLElement): void {
-		this.createSettingsPageHeader(
-			containerEl,
-			"Research Agent Reader",
-			"核心阅读开箱即用；AI 助手只需配置一个供应商；其余扩展全部可选。进入模块后再修改详细设置。",
-		);
+		const hero = containerEl.createDiv({ cls: "rar-settings-hero" });
+		const mark = hero.createSpan({ cls: "rar-settings-mark" }); setIcon(mark, "book-open-text");
+		const intro = hero.createDiv();
+		intro.createDiv({ cls: "rar-settings-eyebrow", text: "Research Agent Reader" });
+		intro.createEl("h2", { text: "设置", attr: { tabindex: "-1" } });
+		intro.createEl("p", { text: "从阅读习惯到 AI 连接，按需配置你的研究空间。" });
 
-		const coreNavigation = this.createSettingsHomeSection(containerEl, "阅读 · 开箱即用");
-		this.createSettingsNavigationItem(coreNavigation, {
-			page: "reader",
-			icon: "book-open-text",
-			title: "文献阅读器",
-			description: "默认接管目录、图文双栏、跟随阅读、版面框、缩放与栏宽。",
-			status: `${this.plugin.settings.readerMarkdownFolders.length} 个目录`,
-			badge: { text: "核心", tone: "ok" },
+		const searchBar = containerEl.createDiv({ cls: "rar-settings-search" });
+		setIcon(searchBar.createSpan(), "search");
+		const input = searchBar.createEl("input", { type: "search", attr: {
+			placeholder: "搜索设置，如模型、密钥、PDF、导出…", "aria-label": "搜索全部设置",
+		} });
+		input.value = this.homeQuery;
+		const clear = searchBar.createEl("button", { text: "清除", attr: { type: "button", "aria-label": "清除设置搜索" } });
+		const filters = containerEl.createDiv({ cls: "rar-settings-filters", attr: { "aria-label": "设置分类", role: "group" } });
+		const choices: Array<{ id: SettingsFilter; label: string }> = [
+			{ id: "common", label: "常用" }, ...SETTINGS_CATEGORIES, { id: "all", label: "全部" },
+		];
+		for (const choice of choices) {
+			const button = filters.createEl("button", { text: choice.label, attr: { type: "button", "data-filter": choice.id } });
+			button.addEventListener("click", () => {
+				this.homeFilter = choice.id; this.homeQuery = ""; input.value = ""; renderResults();
+			});
+		}
+		const results = containerEl.createDiv({ cls: "rar-settings-results" });
+		const renderResults = () => {
+			results.empty(); clear.hidden = !this.homeQuery;
+			filters.querySelectorAll<HTMLButtonElement>("button").forEach((button) => {
+				button.setAttribute("aria-pressed", String(!this.homeQuery.trim() && button.dataset.filter === this.homeFilter));
+			});
+			const entries = filterSettingsEntries(this.homeFilter, this.homeQuery);
+			const heading = results.createDiv({ cls: "rar-settings-results-heading" });
+			heading.createEl("h3", { text: this.homeQuery.trim() ? "搜索结果" : choices.find(c => c.id === this.homeFilter)!.label + "设置" });
+			heading.createSpan({ text: `${entries.length} 项`, attr: { role: "status", "aria-live": "polite" } });
+			if (entries.length) {
+				const grid = results.createDiv({ cls: "rar-settings-grid" });
+				entries.forEach((entry) => this.createSettingsNavigationItem(grid, entry));
+			} else {
+				const empty = results.createDiv({ cls: "rar-settings-empty" });
+				empty.createEl("strong", { text: "没有找到对应设置" });
+				empty.createEl("p", { text: "试试功能名称，或清除搜索查看全部分类。" });
+			}
+			if (this.homeFilter === "common" && !this.homeQuery.trim()) {
+				const more = results.createEl("details", { cls: "rar-settings-more" }); more.open = this.homeExpanded;
+				more.createEl("summary", { text: "更多设置 · CLI 连接、任务策略与运行环境" });
+				more.addEventListener("toggle", () => { if (more.isConnected) this.homeExpanded = more.open; });
+				const grid = more.createDiv({ cls: "rar-settings-grid" });
+				SETTINGS_ENTRIES.filter(e => !e.common).forEach(e => this.createSettingsNavigationItem(grid, e));
+			}
+		};
+		input.addEventListener("input", () => { this.homeQuery = input.value; renderResults(); });
+		input.addEventListener("keydown", (event) => {
+			if (event.key === "Escape" && input.value) { event.preventDefault(); event.stopPropagation(); this.homeQuery = ""; input.value = ""; renderResults(); }
 		});
-		this.createSettingsNavigationItem(coreNavigation, {
-			page: "data",
-			icon: "database-zap",
-			title: "数据与诊断",
-			description: "历史保留、知识库维护范围、脱敏诊断和清理操作。",
-			status: `任务 ${this.plugin.settings.taskHistoryLimit} · 对话 ${this.plugin.settings.querySessionLimit}`,
-			badge: { text: "内置", tone: "ok" },
-		});
+		clear.addEventListener("click", () => { this.homeQuery = ""; input.value = ""; renderResults(); input.focus(); });
+		renderResults();
+		const note = containerEl.createDiv({ cls: "rar-settings-note" });
+		setIcon(note.createSpan(), "info");
+		note.createSpan({ text: "PDF 交互深读的后端、模型与讲解偏好，在阅读会话中选择；阅读器本身开箱即用。" });
+	}
 
-		const aiNavigation = this.createSettingsHomeSection(containerEl, "AI 助手");
-		const profiles = this.plugin.settings.providerProfiles;
-		const activeProfile = profiles.find(
-			(profile) => profile.id === this.plugin.settings.activeProviderId,
-		);
-		this.createSettingsNavigationItem(aiNavigation, {
-			page: "direct-api",
-			icon: "plug-zap",
-			title: "Direct API 知识助手",
-			description: "知识问答、联网搜索与轻量 Agent 的供应商、凭据、模型能力和连接测试。",
-			status: activeProfile
-				? `${activeProfile.name} · 已启用`
-				: profiles.length
-					? `${profiles.length} 个配置`
-					: "未配置",
-			badge: activeProfile
-				? { text: "已配置", tone: "ok" }
-				: { text: "未配置", tone: "warn" },
-		});
-		const annotationBackendId = this.plugin.settings.annotationBackendId || "auto";
-		const annotationProfile = this.plugin.settings.providerProfiles.find(
-			(profile) => profile.id === annotationBackendId,
-		);
-		const annotationStatus = annotationBackendId === "auto"
-			? "自动选择"
-			: annotationBackendId === "codex-cli"
-				? `Codex · ${this.plugin.settings.annotationCodexModel || "默认模型"}`
-				: annotationBackendId === "claude-code"
-					? `Claude · ${this.plugin.settings.annotationClaudeModel || getClaudeDefaultModelLabel(this.plugin.settings.claudeConfigSource)}`
-					: annotationBackendId === "opencode"
-						? `OpenCode · ${this.plugin.settings.annotationOpenCodeModel || getOpenCodeDefaultModelLabel(this.plugin.settings.openCodeConfigSource)}`
-					: annotationProfile
-						? `${annotationProfile.name} · ${annotationProfile.model}`
-						: "自动选择";
-		this.createSettingsNavigationItem(aiNavigation, {
-			page: "annotations",
-			icon: "message-square-text",
-			title: "批注 AI",
-			description: "选择批注解释后端、模型、推理强度、速度和输出长度。",
-			status: annotationStatus,
-			badge: annotationBackendId === "auto"
-				? { text: "可选后端", tone: "muted" }
-				: { text: "已配置", tone: "ok" },
-		});
-		this.createSettingsNavigationItem(aiNavigation, {
-			page: "tasks",
-			icon: "sliders-horizontal",
-			title: "任务默认策略",
-			description: "按操作设置默认后端、模型、推理强度、速度和查询模式。",
-			status: `${CONFIGURABLE_ACTION_IDS.length} 项策略`,
-			badge: { text: "可选", tone: "muted" },
-		});
-
-		const optionalNavigation = this.createSettingsHomeSection(containerEl, "可选扩展 · 高级");
-		const toolkitRoot = String(this.plugin.settings.toolkitRoot || "").trim();
-		const toolkitAvailable = toolkitRoot !== "" && fs.existsSync(toolkitRoot);
-		this.createSettingsNavigationItem(optionalNavigation, {
-			page: "runtime",
-			icon: "terminal",
-			title: "工具链与运行环境",
-			description: "可选工具链目录、Agent/Python/R 可执行文件、任务超时和环境检查。",
-			status: toolkitAvailable
-				? "工具链可用"
-				: toolkitRoot
-					? "目录不可用"
-					: "本地执行",
-			badge: toolkitAvailable
-				? { text: "已配置", tone: "ok" }
-				: { text: "可选", tone: "muted" },
-		});
-		const reasoningLabel = REASONING_OPTIONS.find(
-			(option) => option.id === this.plugin.settings.codexReasoningEffort,
-		)?.label || this.plugin.settings.codexReasoningEffort;
-		const codexSourceLabel = getCodexConfigSourceLabel(
-			this.plugin.settings.codexConfigSource,
-		);
-		const codexAvailable = this.plugin.isCliBackendAvailable("codex-cli");
-		this.createSettingsNavigationItem(optionalNavigation, {
-			page: "codex",
-			icon: "bot",
-			title: "Codex CLI",
-			description: "选择官方 OpenAI 配置或 CC Switch 当前配置。",
-			status: this.plugin.settings.codexConfigSource === "official"
-				? `${codexSourceLabel} · ${this.plugin.settings.codexModel} · ${reasoningLabel}`
-				: `${codexSourceLabel} · 当前配置`,
-			badge: codexAvailable
-				? { text: "可用", tone: "ok" }
-				: { text: "未检测到", tone: "warn" },
-		});
-		const claudeReasoningLabel = REASONING_OPTIONS.find(
-			(option) => option.id === this.plugin.settings.claudeReasoningEffort,
-		)?.label || this.plugin.settings.claudeReasoningEffort;
-		const claudeSourceLabel = getClaudeConfigSourceLabel(
-			this.plugin.settings.claudeConfigSource,
-		);
-		const claudeAvailable = this.plugin.isCliBackendAvailable("claude-code");
-		this.createSettingsNavigationItem(optionalNavigation, {
-			page: "claude",
-			icon: "sparkles",
-			title: "Claude Code",
-			description: "选择官方配置或 CC Switch，并管理模型覆盖和连接测试。",
-			status: `${claudeSourceLabel} · ${this.plugin.settings.claudeModel || "默认模型"} · ${claudeReasoningLabel}`,
-			badge: claudeAvailable
-				? { text: "可用", tone: "ok" }
-				: { text: "未检测到", tone: "warn" },
-		});
-		const openCodeReasoningLabel = REASONING_OPTIONS.find(
-			(option) => option.id === this.plugin.settings.openCodeReasoningEffort,
-		)?.label || this.plugin.settings.openCodeReasoningEffort;
-		const openCodeSourceLabel = getOpenCodeConfigSourceLabel(
-			this.plugin.settings.openCodeConfigSource,
-		);
-		const openCodeAvailable = this.plugin.isCliBackendAvailable("opencode");
-		this.createSettingsNavigationItem(optionalNavigation, {
-			page: "opencode",
-			icon: "braces",
-			title: "OpenCode",
-			description: "选择官方 OpenCode Zen 或 CC Switch，并自动识别当前可用模型。",
-			status: `${openCodeSourceLabel} · ${this.plugin.settings.openCodeModel || "默认模型"} · ${openCodeReasoningLabel}`,
-			badge: openCodeAvailable
-				? { text: "可用", tone: "ok" }
-				: { text: "未检测到", tone: "warn" },
-		});
-		this.createSettingsNavigationItem(optionalNavigation, {
-			page: "mineru",
-			icon: "file-scan",
-			title: "MinerU 文献解析",
-			description: "CLI、服务地址、认证状态提示和文献入库默认参数。",
-			status: this.plugin.settings.mineruServiceMode === "private"
-				? "私有服务"
-				: `官方服务 · ${this.plugin.settings.mineruDefaultModel.toUpperCase()}`,
-			badge: { text: "可选", tone: "muted" },
-		});
-		const obsidianCliDetection = describeCliExecutable(
-			"obsidian",
-			this.plugin.settings.obsidianCliExecutable,
-		);
-		this.createSettingsNavigationItem(optionalNavigation, {
-			page: "obsidian-cli",
-			icon: "square-terminal",
-			title: "Obsidian CLI",
-			description: "可选的外部自动化桥梁、连接诊断与开发回归入口。",
-			status: obsidianCliDetection.found
-				? obsidianCliDetection.sourceLabel
-				: "可选外部工具",
-			badge: obsidianCliDetection.found
-				? { text: "可用", tone: "ok" }
-				: { text: "未检测到", tone: "muted" },
-		});
+	private settingsStatus(page: SettingsEntry["page"]): { text: string; tone?: "ok" | "muted" | "warn" } {
+		const s = this.plugin.settings;
+		switch (page) {
+			case "reader": return { text: s.readerMarkdownFolders.length ? `${s.readerMarkdownFolders.length} 个接管目录` : "未设置接管目录" };
+			case "direct-api": {
+				const active = s.providerProfiles.find(p => p.id === s.activeProviderId);
+				return active ? { text: `${active.lastTest?.ok ? "已验证" : "已选择"} · ${active.model || active.name}`, tone: active.lastTest?.ok ? "ok" : "muted" }
+					: { text: s.providerProfiles.length ? `${s.providerProfiles.length} 个配置 · 待选择并验证` : "添加模型服务", tone: "muted" };
+			}
+			case "annotations": {
+				const id = s.annotationBackendId || "auto";
+				return { text: id === "auto" ? "自动选择后端" : `当前后端 · ${isCliBackendId(id) ? getCliBackendLabel(id) : s.providerProfiles.find(p => p.id === id)?.name || "待重新选择"}` };
+			}
+			case "retrieval": return { text: s.knowledgeRetrievalMode === "lexical" ? "关键词检索" : `${s.knowledgeRetrievalMode === "hybrid" ? "混合检索" : "关键词＋重排"}${s.knowledgeSecretId ? " · 已指定凭据" : " · 待配置凭据"}` };
+			case "mineru": return { text: `${s.mineruServiceMode === "private" ? "私有服务" : "官方服务"} · ${s.mineruDefaultModel.toUpperCase()}` };
+			case "data": return { text: `任务保留 ${s.taskHistoryLimit} 条 · 查询保留 ${s.querySessionLimit} 个会话` };
+			case "tasks": return { text: `${CONFIGURABLE_ACTION_IDS.length} 类任务` };
+			case "runtime": return { text: s.toolkitRoot ? "已指定工具包目录" : "按需配置本地工具" };
+			case "obsidian-cli": return { text: describeCliExecutable("obsidian", s.obsidianCliExecutable).found ? "已检测到程序" : "可选 · 未检测到程序" };
+			default: {
+				const id: CliBackendId = page === "codex" ? "codex-cli" : page === "claude" ? "claude-code" : "opencode";
+				return { text: this.plugin.isCliBackendAvailable(id) ? "已检测到程序 · 可进入测试" : "可选 · 未检测到程序" };
+			}
+		}
 	}
 
 	/**
@@ -1000,7 +983,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				containerEl,
 				action.label,
 				isPaperIngest
-					? "两种运行方式：轻量 Agent · Direct API（无需编码 Agent，轮数与 Token 上限在 Direct API 页配置）和 Codex CLI · 完整入库（登记 papers.csv/references.bib/索引）。下面的模型/推理/速度默认值作用于 Codex CLI 方式。"
+					? "两种运行方式：轻量 Agent · Direct API（完成后可预览并确认入库登记，轮数与 Token 上限在 Direct API 页配置）和 Codex CLI · 完整入库。下面的模型/推理/速度默认值作用于 Codex CLI 方式。"
 					: STAGE_WRITE_BACKEND_ACTION_IDS.has(action.id)
 						? "可选择受阶段写入边界约束的 Agent；运行前仍可修改。"
 						: "该操作固定使用 Codex CLI 权限边界；可覆盖模型、推理和速度。",
@@ -1125,20 +1108,10 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.createSettingsPageHeader(
 			containerEl,
 			"数据与诊断",
-			"管理本地历史保留、请求超时和脱敏诊断；不会修改论文原文包。",
+			"管理任务与知识库查询的历史保留、导出目录和诊断信息。交互深读会话独立保存。",
 			true,
 		);
-		new Setting(containerEl)
-			.setName("Direct API 超时（秒）")
-			.setDesc("连接测试和普通请求的基础超时，范围 3–120 秒。")
-			.addText((text) => text
-				.setValue(String(this.plugin.settings.providerTimeoutSeconds))
-				.onChange(async (value) => {
-					const parsed = Number.parseInt(value, 10);
-					if (!Number.isFinite(parsed)) return;
-					this.plugin.settings.providerTimeoutSeconds = Math.max(3, Math.min(120, parsed));
-					await this.plugin.saveSettings();
-				}));
+
 		new Setting(containerEl)
 			.setName("任务历史保留数量")
 			.setDesc("选择 5–100 条；缩减数量会安全回收超出的已结束任务输出，正在运行的任务会保留。")
@@ -1157,8 +1130,8 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				});
 			});
 		new Setting(containerEl)
-			.setName("查询会话保留数量")
-			.setDesc("范围 1–30。")
+			.setName("知识库查询会话保留数量")
+			.setDesc("范围 1–30；不影响 PDF 交互深读会话。")
 			.addText((text) => text
 				.setValue(String(this.plugin.settings.querySessionLimit))
 				.onChange(async (value) => {
@@ -1168,7 +1141,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 		new Setting(containerEl)
-			.setName("每个会话保留消息数")
+			.setName("每个查询会话保留消息数")
 			.setDesc("范围 10–100；限制本地持久化体积，不改变当前回答上下文裁剪规则。")
 			.addText((text) => text
 				.setValue(String(this.plugin.settings.queryMessageLimit))
@@ -1181,8 +1154,8 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 		this.createProviderSectionHeader(
 			containerEl,
-			"问答笔记",
-			"回答可一键落为 Markdown 笔记（frontmatter + 来源回链）；目录在全 Vault 内解析。",
+			"知识库问答笔记",
+			"此目录用于知识库查询的回答笔记。PDF 交互深读的学习笔记仍导出至 wiki/qa/。",
 		);
 		new Setting(containerEl)
 			.setName("笔记目录")
@@ -1206,12 +1179,8 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			.setName("体检范围")
 			.setDesc("内置只读体检检查 wiki/ 与 Vault 顶层 Markdown。papers/、Clippings/ 不参与断链、孤立页、属性和内容检查，仅检查跨根链接边界；papers/、wiki/、Clippings/ 三个主目录之间禁止创建 Obsidian 或 Markdown 链接。核心规则不可关闭。");
 
-		this.createProviderSectionHeader(
-			containerEl,
-			"清理与诊断",
-			"诊断内容不包含 API Key、MinerU Token、对话正文或论文内容。",
-		);
-		new Setting(containerEl)
+		const cleanupOptions = this.createSettingsDisclosure(containerEl, "data-cleanup", "清理本地历史", "仅在需要重置或释放空间时展开");
+		new Setting(cleanupOptions)
 			.setName("清理本地历史")
 			.setDesc("任务清理只移除已结束记录及其已登记输出；早期版本遗留且未被历史引用的 Toolkit 输出不会自动删除。查询清理会新建一个空白对话。")
 			.addButton((button) => button.setButtonText("清理已完成任务").onClick(async () => {
@@ -1573,7 +1542,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.createSettingsPageHeader(
 			containerEl,
 			"批注 AI",
-			"普通解释可自由选择 Agent 或 Direct API；启用浅层联网后仅使用 Agent，始终不写入文件。",
+			"选择划选解释使用的模型。Direct API 与 CLI Agent 均可联网；生成后由你决定是否保存批注。",
 			true,
 		);
 		new Setting(containerEl)
@@ -1604,7 +1573,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			.setName("执行后端")
 			.setDesc(
 				this.plugin.settings.annotationWebSearchEnabled
-					? "联网解释仅使用 Agent；自动模式使用 Codex CLI。"
+					? "Direct API 可使用供应商原生联网或 Tavily；自动模式优先选择已就绪的默认 Direct API，否则使用 Codex CLI。"
 					: "普通解释可自由选择 Agent 或已验证的 Direct API；自动模式优先使用默认 Direct API。",
 			)
 			.addDropdown((dropdown) => {
@@ -1615,10 +1584,6 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					.addOption("opencode", "Agent · OpenCode");
 				verifiedProfiles.forEach((profile) => {
 					dropdown.addOption(profile.id, `Direct API · ${profile.name}`);
-					const option = dropdown.selectEl.options[
-						dropdown.selectEl.options.length - 1
-					];
-					if (option) option.disabled = this.plugin.settings.annotationWebSearchEnabled;
 				});
 				dropdown
 					.setValue(backendId)
@@ -1631,23 +1596,15 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.renderAnnotationWebSearchSettings(containerEl, backendId);
 
 		if (backendId === "auto") {
-			const activeProfile = verifiedProfiles.find(
-				(profile) => profile.id === this.plugin.settings.activeProviderId,
-			);
-			new Setting(containerEl)
-				.setName("自动选择顺序")
-				.setDesc(
-					this.plugin.settings.annotationWebSearchEnabled
-						? "联网解释固定使用 Codex CLI；关闭联网后恢复 Direct API 优先。"
-					: activeProfile
-						? `使用 Direct API“${activeProfile.name}”（${activeProfile.model}）；若以后停用该配置，则使用下方 Codex 回退参数。`
-						: "当前没有启用且已验证的 Direct API，将直接使用下方 Codex 回退参数。",
-				);
+			const activeProfile = verifiedProfiles.find(profile => profile.id === this.plugin.settings.activeProviderId);
+			const webBackend = activeProfile && this.plugin.settings.annotationWebSearchEnabled
+				? this.plugin.resolveWebSearchBackend(activeProfile) : undefined;
+			const useDirect = Boolean(activeProfile) && webBackend?.kind !== "unavailable";
+			new Setting(containerEl).setName("自动选择顺序").setDesc(useDirect
+				? `当前使用 Direct API“${activeProfile!.name}”（${activeProfile!.model}）${webBackend ? `，通过${webBackend.kind === "native" ? "供应商原生联网" : "Tavily 搜索"}` : ""}。请求失败时提示重试，不自动切换后端。`
+				: `当前使用 Codex CLI。${webBackend?.kind === "unavailable" ? `默认 Direct API 联网未就绪：${webBackend.reason}` : "没有启用且已验证的默认 Direct API。"}`);
 			this.renderAnnotationCliSettings(containerEl, "codex-cli", true);
-			this.renderAnnotationTokenSetting(
-				containerEl,
-				Boolean(activeProfile) && !this.plugin.settings.annotationWebSearchEnabled,
-			);
+			this.renderAnnotationTokenSetting(containerEl, useDirect);
 			return;
 		}
 
@@ -1690,33 +1647,26 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName("浅层联网解释")
 			.setDesc(
-				"关闭时可使用 Direct API 或 Agent。启用后仅使用 Agent，最多围绕 2 个检索问题、采用不超过 3 个权威来源，不追踪二级链接。",
+				"Direct API 与 CLI Agent 均可使用。仅发送选区及附近语境；浅层查证围绕最多 2 个问题、参考最多 3 个来源，优先权威资料。Tavily 使用选中文字与章节检索，不额外调用模型生成检索词。",
 			)
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.annotationWebSearchEnabled)
 					.onChange(async (value) => {
 						this.plugin.settings.annotationWebSearchEnabled = value;
-						const directBackendSelected = value
-							&& !["auto", "codex-cli", "claude-code", "opencode"].includes(backendId);
-						if (directBackendSelected) {
-							const profile = this.plugin.getProviderProfile(backendId);
-							const nativeCapable = Boolean(
-								profile
-								&& (profile.webSearch || "auto") !== "off"
-								&& detectNativeWebSearchProtocol(profile.baseUrl),
-							);
-							if (!nativeCapable) {
-								this.plugin.settings.annotationBackendId = "codex-cli";
-								new Notice("该 Direct API 供应商不支持原生联网，批注后端已切换为 Codex CLI");
-							}
-						}
 						await this.plugin.saveSettings();
 						this.display();
 					})
 			);
 		if (!this.plugin.settings.annotationWebSearchEnabled) return;
-
+		if (backendId !== "auto" && !isCliBackendId(backendId)) {
+			const profile = this.plugin.getProviderProfile(backendId);
+			const backend = profile ? this.plugin.resolveWebSearchBackend(profile) : undefined;
+			new Setting(containerEl).setName("联网方式").setDesc(backend?.kind === "native"
+				? "供应商原生联网。使用当前配置的模型；回答应附来源链接，插件不将其视为独立核验。"
+				: backend?.kind === "tavily" ? "Tavily 搜索 → 当前 Direct API 模型解释。与知识库联网问答共用同一份 Tavily 凭据。"
+				: `联网未就绪：${backend?.kind === "unavailable" ? backend.reason : "请先选择已验证的 Direct API 配置"}。保留你的后端选择，不会自动切到 CLI。`);
+		}
 		const timeoutSetting = new Setting(containerEl)
 			.setName("联网时间上限")
 			.setDesc(
@@ -1737,7 +1687,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName("搜索深度")
-			.setDesc("固定为浅层：Agent 仅临时开放联网工具，并受上述总时间限制。")
+			.setDesc("固定为浅层。Tavily 由插件限制检索与来源数量；原生联网及 CLI 由导读指令约束搜索范围。所有批注解释均受上述总时间限制。")
 			.addDropdown((dropdown) =>
 				dropdown
 					.addOption("shallow", "浅层（固定）")
@@ -1937,8 +1887,8 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 	private renderDirectApiSettings(containerEl: HTMLElement): void {
 		this.createSettingsPageHeader(
 			containerEl,
-			"Direct API 知识助手",
-			"管理知识库问答、联网搜索与轻量 Agent 使用的模型服务。知识库模式只发送插件筛选出的 Vault 上下文；联网和工具调用仅在用户显式选择对应功能时启用。模型不能直接写 Vault，文件变更始终由插件校验并提交。",
+			"Direct API · 模型与连接",
+			"配置一次，供 PDF 交互深读、知识库问答、批注与轻量 Agent 选用。先填写连接信息，再选择模型并测试。",
 			true,
 		);
 		this.createProviderSectionHeader(
@@ -2005,13 +1955,39 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			});
 		}
 
+		if (!selectedProfile) {
+			const empty = containerEl.createDiv({ cls: "agent-dashboard-provider-empty" });
+			const icon = empty.createSpan();
+			setIcon(icon, "plug-zap");
+			const copy = empty.createDiv();
+			copy.createEl("strong", { text: "从新增配置开始" });
+			copy.createEl("span", {
+				text: "创建后依次填写供应商、SecretStorage 凭据和 endpoint，再获取模型并测试连接。",
+			});
+		} else {
+			this.renderProviderProfile(containerEl, selectedProfile);
+		}
+		const requestOptions = this.createSettingsDisclosure(containerEl, "api-request", "请求参数", "高级 · 默认超时");
+		new Setting(requestOptions)
+			.setName("Direct API 超时（秒）")
+			.setDesc("连接测试和普通请求的基础超时，范围 3–120 秒。")
+			.addText((text) => text
+				.setValue(String(this.plugin.settings.providerTimeoutSeconds))
+				.onChange(async (value) => {
+					const parsed = Number.parseInt(value, 10);
+					if (!Number.isFinite(parsed)) return;
+					this.plugin.settings.providerTimeoutSeconds = Math.max(3, Math.min(120, parsed));
+					await this.plugin.saveSettings();
+				}));
+		const webOptions = this.createSettingsDisclosure(containerEl, "api-web", "联网搜索", "可选 · Tavily 凭据与搜索参数");
+
 		this.createProviderSectionHeader(
-			containerEl,
+			webOptions,
 			"联网搜索（Tavily 兜底）",
-			"仅 Direct API 的联网问答使用：供应商不支持原生联网时，插件侧调用 Tavily 检索并让模型引用 [n] 来源。API Key 保存在 Obsidian SecretStorage，不写入 data.json。",
+			"供 Direct API 联网问答与联网批注共用：原生联网不可用或选择 Tavily 时，由插件检索并附上实际来源。API Key 保存在 Obsidian SecretStorage，不写入 data.json。",
 		);
 		if (this.app.secretStorage && typeof SecretComponent === "function") {
-			const tavilySetting = new Setting(containerEl)
+			const tavilySetting = new Setting(webOptions)
 				.setName("Tavily API Key")
 				.setDesc("在 https://tavily.com 免费注册获取；未配置时，不支持原生联网的供应商无法使用联网模式。");
 			tavilySetting.addComponent((element) =>
@@ -2023,7 +1999,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					})
 			);
 		}
-		new Setting(containerEl)
+		new Setting(webOptions)
 			.setName("每个搜索词的结果数")
 			.setDesc("联网问答每个搜索词最多取用的结果数（1-8），多结果自动去重并截断。")
 			.addText((text) =>
@@ -2037,7 +2013,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
-		new Setting(containerEl)
+		new Setting(webOptions)
 			.setName("搜索超时（秒）")
 			.setDesc("单次 Tavily 请求的超时上限（5-60 秒）。")
 			.addText((text) =>
@@ -2052,12 +2028,14 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					})
 			);
 
+		const agentOptions = this.createSettingsDisclosure(containerEl, "api-agent", "Agent 运行参数", "高级 · 工具轮数与输出长度");
+
 		this.createProviderSectionHeader(
-			containerEl,
+			agentOptions,
 			"轻量 Agent（文献入库）",
 			"文献入库的「轻量 Agent」运行方式在插件内执行有界工具循环：只读检索、白名单元数据接口、MinerU 提取与限定目录写入，无需 Codex CLI。",
 		);
-		new Setting(containerEl)
+		new Setting(agentOptions)
 			.setName("最大工具循环轮数")
 			.setDesc("轻量 Agent 单阶段任务的模型轮数上限（3-20）。达到上限即停止并报告当前进度。")
 			.addText((text) =>
@@ -2071,7 +2049,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
-		new Setting(containerEl)
+		new Setting(agentOptions)
 			.setName("单轮输出 Token 上限")
 			.setDesc("轻量 Agent 每轮模型输出的最大 Token 数（512-8192）。过低会导致协议 JSON 被截断。")
 			.addText((text) =>
@@ -2086,92 +2064,53 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					})
 			);
 
-		if (!selectedProfile) {
-			const empty = containerEl.createDiv({ cls: "agent-dashboard-provider-empty" });
-			const icon = empty.createSpan();
-			setIcon(icon, "plug-zap");
-			const copy = empty.createDiv();
-			copy.createEl("strong", { text: "从新增配置开始" });
-			copy.createEl("span", {
-				text: "创建后依次填写供应商、SecretStorage 凭据和 endpoint，再获取模型并测试连接。",
-			});
-			return;
-		}
-		this.renderProviderProfile(containerEl, selectedProfile);
 	}
 
-	private createSettingsPageHeader(
-		containerEl: HTMLElement,
-		title: string,
-		description: string,
-		showBack = false,
-	): void {
+	private createSettingsPageHeader(containerEl: HTMLElement, title: string, description: string, _showBack = false): void {
 		const header = containerEl.createDiv({ cls: "agent-dashboard-settings-page-header" });
-		if (showBack) {
-			const backButton = header.createEl("button", {
-				cls: "agent-dashboard-settings-back",
-				attr: {
-					type: "button",
-					"aria-label": "返回设置首页",
-				},
-			});
-			const icon = backButton.createSpan();
-			setIcon(icon, "arrow-left");
-			backButton.createSpan({ text: "设置" });
-			backButton.addEventListener("click", () => {
-				this.activePage = "home";
-				this.display();
-			});
+		const nav = header.createDiv({ cls: "rar-settings-breadcrumb" });
+		const back = nav.createEl("button", { cls: "agent-dashboard-settings-back", attr: { type: "button", "aria-label": "返回设置首页" } });
+		setIcon(back.createSpan(), "arrow-left"); back.createSpan({ text: "全部设置" });
+		back.addEventListener("click", () => this.navigateSettings("home"));
+		const entry = SETTINGS_ENTRIES.find(e => e.page === this.activePage);
+		nav.createSpan({ cls: "rar-settings-breadcrumb-category", text: SETTINGS_CATEGORIES.find(c => c.id === entry?.category)?.label || "设置" });
+		const jump = nav.createEl("select", { attr: { "aria-label": "切换设置页面" } });
+		for (const category of SETTINGS_CATEGORIES) {
+			const group = jump.createEl("optgroup", { attr: { label: category.label } });
+			SETTINGS_ENTRIES.filter(e => e.category === category.id).forEach(e => group.createEl("option", { text: e.title, value: e.page }));
 		}
-		header.createEl("h2", { text: title });
+		jump.value = this.activePage;
+		jump.addEventListener("change", () => this.navigateSettings(jump.value as SettingsPage));
+		header.createEl("h2", { text: title, attr: { tabindex: "-1" } });
 		header.createEl("p", { text: description });
-	}
-
-	private createSettingsHomeSection(containerEl: HTMLElement, title: string): HTMLElement {
-		containerEl.createEl("h3", {
-			cls: "agent-dashboard-settings-section-title",
-			text: title,
-		});
-		return containerEl.createDiv({ cls: "agent-dashboard-settings-navigation" });
-	}
-
-	private createSettingsNavigationItem(
-		containerEl: HTMLElement,
-		options: {
-			page: Exclude<SettingsPage, "home">;
-			icon: string;
-			title: string;
-			description: string;
-			status: string;
-			badge?: { text: string; tone: "ok" | "muted" | "warn" };
-		},
-	): void {
-		const button = containerEl.createEl("button", {
-			cls: "agent-dashboard-settings-navigation-item",
-			attr: {
-				type: "button",
-				"aria-label": `打开${options.title}设置`,
-			},
-		});
-		const icon = button.createSpan({ cls: "agent-dashboard-settings-navigation-icon" });
-		setIcon(icon, options.icon);
-		const copy = button.createDiv({ cls: "agent-dashboard-settings-navigation-copy" });
-		copy.createEl("strong", { text: options.title });
-		copy.createSpan({ text: options.description });
-		const trailing = button.createDiv({ cls: "agent-dashboard-settings-navigation-trailing" });
-		trailing.createSpan({ text: options.status });
-		if (options.badge) {
-			trailing.createSpan({
-				cls: `agent-dashboard-settings-navigation-badge is-${options.badge.tone}`,
-				text: options.badge.text,
-			});
+		if (["codex", "claude", "opencode"].includes(this.activePage)) {
+			const link = header.createEl("button", { cls: "rar-settings-text-link", text: "配置可执行文件路径 →", attr: { type: "button" } });
+			link.addEventListener("click", () => this.navigateSettings("runtime"));
 		}
-		const chevron = trailing.createSpan({ cls: "agent-dashboard-settings-navigation-chevron" });
-		setIcon(chevron, "chevron-right");
-		button.addEventListener("click", () => {
-			this.activePage = options.page;
-			this.display();
-		});
+	}
+
+	private createSettingsDisclosure(container: HTMLElement, id: string, title: string, description: string): HTMLElement {
+		const details = container.createEl("details", { cls: "rar-settings-disclosure", attr: { "data-disclosure": id } });
+		details.open = this.disclosureState.get(id) || false;
+		const summary = details.createEl("summary"); summary.createSpan({ text: title });
+		summary.createSpan({ cls: "rar-settings-disclosure-description", text: description });
+		details.addEventListener("toggle", () => { if (details.isConnected) this.disclosureState.set(id, details.open); });
+		return details.createDiv({ cls: "rar-settings-disclosure-body" });
+	}
+
+	private createSettingsNavigationItem(containerEl: HTMLElement, entry: SettingsEntry): void {
+		const button = containerEl.createEl("button", { cls: "rar-settings-card", attr: {
+			type: "button", "aria-label": `打开${entry.title}设置`, "data-settings-target": entry.page,
+		} });
+		const icon = button.createSpan({ cls: "rar-settings-card-icon" }); setIcon(icon, entry.icon);
+		const copy = button.createDiv({ cls: "rar-settings-card-copy" });
+		copy.createEl("strong", { text: entry.title }); copy.createSpan({ text: entry.description });
+		const arrow = button.createSpan({ cls: "rar-settings-card-arrow" }); setIcon(arrow, "chevron-right");
+		const status = this.settingsStatus(entry.page);
+		const footer = button.createDiv({ cls: "rar-settings-card-footer" });
+		footer.createSpan({ cls: "rar-settings-card-category", text: SETTINGS_CATEGORIES.find(c => c.id === entry.category)!.label });
+		footer.createSpan({ cls: `rar-settings-card-status is-${status.tone || "muted"}`, text: status.text, attr: { title: status.text } });
+		button.addEventListener("click", () => this.navigateSettings(entry.page));
 	}
 
 	getEditorProviderProfile(): ProviderProfile | null {
@@ -2211,7 +2150,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			: "";
 		this.createProviderSectionHeader(
 			containerEl,
-			"LLM 配置",
+			"连接信息",
 			"凭据通过 Obsidian SecretStorage 管理；插件配置只保存凭据名称。",
 			verificationStatus,
 		);
@@ -2247,7 +2186,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				});
 			});
 		new Setting(section)
-			.setName("LLM Provider")
+			.setName("供应商类型")
 			.setDesc("选择预定义供应商或 OpenAI 兼容服务。")
 			.addDropdown((dropdown) => {
 				PROVIDER_TYPES.forEach((provider) => dropdown.addOption(provider.id, provider.label));
@@ -2286,26 +2225,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					})
 			);
 		}
-		new Setting(section)
-			.setName("联网搜索")
-			.setDesc("问答视图「联网搜索」模式的取网方式：自动优先供应商原生联网（OpenRouter、通义千问、智谱、DeepSeek Responses），否则回退 Tavily；关闭后该供应商仅可知识库问答。")
-			.addDropdown((dropdown) => {
-				const modes: Array<[ProfileWebSearchMode, string]> = [
-					["auto", "自动（原生优先，Tavily 兜底）"],
-					["native", "仅供应商原生"],
-					["tavily", "仅 Tavily"],
-					["off", "关闭"],
-				];
-				for (const [value, label] of modes) dropdown.addOption(value, label);
-				dropdown.setValue(profile.webSearch || "auto");
-				dropdown.onChange(async (value) => {
-					profile.webSearch = (["auto", "off", "native", "tavily"].includes(value)
-						? value
-						: "auto") as ProfileWebSearchMode;
-					profile.updatedAt = new Date().toISOString();
-					await this.plugin.saveSettings();
-				});
-			});
+
 		new Setting(section)
 			.setName("API Base URL")
 			.setDesc(`服务根地址。${metadata.defaultBaseUrl ? `默认：${metadata.defaultBaseUrl}` : ""}`)
@@ -2319,26 +2239,10 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
-		const timeoutSetting = new Setting(section)
-			.setName("请求超时")
-			.setDesc(`模型发现和连接测试的单次请求上限。当前：${profile.timeoutSeconds} 秒。`)
-			.addSlider((slider) =>
-				slider
-					.setLimits(3, 120, 1)
-					.setValue(profile.timeoutSeconds)
-					.setDynamicTooltip()
-					.onChange(async (value) => {
-						profile.timeoutSeconds = value;
-						this.invalidateProviderProfile(profile);
-						timeoutSetting.setDesc(`模型发现和连接测试的单次请求上限。当前：${value} 秒。`);
-						await this.plugin.saveSettings();
-					})
-			);
-		timeoutSetting.settingEl.addClass("agent-dashboard-provider-setting-emphasis");
 
 		this.createProviderSectionHeader(
 			containerEl,
-			"模型选择",
+			"模型与验证",
 			"先从 Provider API 获取模型列表，再选择模型并执行最小连接测试。",
 		);
 		const modelForm = containerEl.createDiv({ cls: "agent-dashboard-provider-form" });
@@ -2490,6 +2394,44 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				this.plugin.directApiBoundaryLabel(profile.id),
 			);
 		}
+		const profileOptions = this.createSettingsDisclosure(containerEl, "api-profile-options", "当前配置的高级选项", "联网方式与连接测试超时");
+		new Setting(profileOptions)
+			.setName("联网搜索")
+			.setDesc("联网问答与联网批注共用。自动模式优先供应商原生联网，否则使用 Tavily；也可指定一种方式。关闭后仍可进行不联网的问答与批注。")
+			.addDropdown((dropdown) => {
+				const modes: Array<[ProfileWebSearchMode, string]> = [
+					["auto", "自动（原生优先，Tavily 兜底）"],
+					["native", "仅供应商原生"],
+					["tavily", "仅 Tavily"],
+					["off", "关闭"],
+				];
+				for (const [value, label] of modes) dropdown.addOption(value, label);
+				dropdown.setValue(profile.webSearch || "auto");
+				dropdown.onChange(async (value) => {
+					profile.webSearch = (["auto", "off", "native", "tavily"].includes(value)
+						? value
+						: "auto") as ProfileWebSearchMode;
+					profile.updatedAt = new Date().toISOString();
+					await this.plugin.saveSettings();
+				});
+			});
+		const timeoutSetting = new Setting(profileOptions)
+			.setName("请求超时")
+			.setDesc(`模型发现和连接测试的单次请求上限。当前：${profile.timeoutSeconds} 秒。`)
+			.addSlider((slider) =>
+				slider
+					.setLimits(3, 120, 1)
+					.setValue(profile.timeoutSeconds)
+					.setDynamicTooltip()
+					.onChange(async (value) => {
+						profile.timeoutSeconds = value;
+						this.invalidateProviderProfile(profile);
+						timeoutSetting.setDesc(`模型发现和连接测试的单次请求上限。当前：${value} 秒。`);
+						await this.plugin.saveSettings();
+					})
+			);
+		timeoutSetting.settingEl.addClass("agent-dashboard-provider-setting-emphasis");
+
 	}
 
 	invalidateProviderProfile(profile: ProviderProfile): void {

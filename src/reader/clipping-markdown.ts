@@ -3,6 +3,7 @@ import type {
 	MineruReaderVisual,
 	MineruViewerIndex,
 } from "../mineru/types";
+import { markdownImagePattern } from "./markdown-images";
 
 interface MarkdownLine {
 	text: string;
@@ -19,9 +20,6 @@ export interface ClippingFigure {
 	captionLines: string[];
 }
 
-const MARKDOWN_IMAGE_LINE_RE = /^\s*!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)\s*$/i;
-const HTML_IMAGE_LINE_RE = /^\s*<img\b([^>]*)>\s*$/i;
-const HTML_SRC_RE = /\bsrc\s*=\s*["']([^"']+)["']/i;
 const HTML_ALT_RE = /\balt\s*=\s*["']([^"']*)["']/i;
 
 function markdownLines(markdown: string): MarkdownLine[] {
@@ -63,20 +61,11 @@ export function readableCaptionText(value: string): string {
 }
 
 function standaloneImage(line: string): { assetPath: string; alt: string } | null {
-	const markdownMatch = MARKDOWN_IMAGE_LINE_RE.exec(line);
-	if (markdownMatch) {
-		return {
-			assetPath: decodeHtmlEntities(markdownMatch[2] || markdownMatch[3] || "").trim(),
-			alt: decodeHtmlEntities(markdownMatch[1] || "").trim(),
-		};
-	}
-	const htmlMatch = HTML_IMAGE_LINE_RE.exec(line);
-	if (!htmlMatch) return null;
-	const src = HTML_SRC_RE.exec(htmlMatch[1])?.[1] || "";
-	if (!src.trim()) return null;
+	const token = markdownImagePattern().exec(line.trim());
+	if (!token || token[0] !== line.trim()) return null;
 	return {
-		assetPath: decodeHtmlEntities(src).trim(),
-		alt: decodeHtmlEntities(HTML_ALT_RE.exec(htmlMatch[1])?.[1] || "").trim(),
+		assetPath: decodeHtmlEntities(token[2] || token[3] || token[4] || "").trim(),
+		alt: decodeHtmlEntities(token[1] || HTML_ALT_RE.exec(token[0])?.[1] || "").trim(),
 	};
 }
 

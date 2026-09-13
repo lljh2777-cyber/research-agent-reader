@@ -42,6 +42,9 @@ import {
 export type PaperIngestPhase = "identity" | "draft";
 
 export interface PaperIngestFlowOptions {
+	identityMode?: "source-v2";
+	acquisitionSource?: import("../fulltext/contracts").AcquisitionIntakeRef;
+	savedPdfSource?: import("../papers/saved-pdf").SavedPdfRef;
 	sourcePdfPath: string;
 	requestNotes: string;
 	identityCandidateTitle: string;
@@ -329,20 +332,22 @@ export function buildDraftTools(deps: PaperIngestToolDeps, articleVaultPath = ""
 }
 
 /**
- * A draft sourced from MinerU is accepted only when the model actually read
- * the overview produced by the path-bound article tool. Model claims and a
- * generic vault_read receipt cannot satisfy this gate.
+ * A draft is accepted only when the model actually read the overview produced
+ * by the path-bound source tool and did not report insufficient evidence.
+ * Model claims and a generic vault_read receipt cannot satisfy this gate.
  */
 export function validateDraftReceipts(
 	articleVaultPath: string,
 	expectedTitle: string,
 	toolCalls: ReadonlyArray<AgentToolCallReceipt>,
+	draftStatus: PaperIngestNoteDraft["status"] = "completed",
 ): string[] {
-	if (!articleVaultPath) return [];
+	if (draftStatus === "insufficient-evidence") return ["模型明确报告证据不足，未创建文章 Wiki"];
+	if (!articleVaultPath) return ["没有已验证的原文 Markdown，未创建文章 Wiki"];
 	const expected = normalizeReceiptPath(articleVaultPath);
 	const normalizedTitle = normalizeBibliographicTitle(expectedTitle);
 	const observed = toolCalls.some((call) => (
-		call.tool === "article_read"
+		call.tool === (/^pdf-sha256:[a-f0-9]{64}$/.test(articleVaultPath) ? "pdf_read" : "article_read")
 		&& call.ok
 		&& (call.data?.paths || []).some((path) => normalizeReceiptPath(path) === expected)
 		&& (call.data?.queryTerms || []).includes("overview")
@@ -350,7 +355,7 @@ export function validateDraftReceipts(
 	));
 	return observed
 		? []
-		: ["未成功读取插件绑定且标题一致的原文 Markdown 摘要证据包"];
+		: ["未成功读取插件绑定且标题一致的原文摘要证据包"];
 }
 
 /** Validates the identity phase output; throws with a readable reason. */
@@ -1032,6 +1037,7 @@ export function evaluateDraftPhase(
 	options: PaperIngestFlowOptions,
 	articleVaultPath: string,
 	titleConflict: boolean,
+	pdfAvailable = false,
 ): { run: boolean; blocker: string; downgradeNote: string } {
 	if (!options.createArticleWiki || titleConflict) return { run: false, blocker: "", downgradeNote: "" };
 	if (options.createArticleMarkdown && !articleVaultPath) {
@@ -1048,14 +1054,15 @@ export function evaluateDraftPhase(
 			downgradeNote: "",
 		};
 	}
-	const downgradeNote = articleVaultPath
-		? ""
-		: options.articleWikiSource === "pdf"
-			? "轻量方式不读取 PDF 正文：内容来源已降级为文献元数据与用户说明"
-			: options.articleWikiSource === "auto"
-				? "未找到已验证 article 包：内容来源回退为文献元数据与用户说明"
-				: "";
-	return { run: true, blocker: "", downgradeNote };
+	if (pdfAvailable && options.articleWikiSource !== "article" && (options.articleWikiSource === "pdf" || !articleVaultPath)) return { run: true, blocker: "", downgradeNote: "" };
+	if (!articleVaultPath) {
+		return {
+			run: false,
+			blocker: "轻量方式尚无已验证的原文 Markdown，标题与书目元数据不足以创建 abstract-level 文章 Wiki；请先生成或提供原文，或使用支持 PDF 正文读取的工作流",
+			downgradeNote: "",
+		};
+	}
+	return { run: true, blocker: "", downgradeNote: "" };
 }
 
 /**

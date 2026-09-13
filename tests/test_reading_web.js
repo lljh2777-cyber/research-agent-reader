@@ -1,0 +1,43 @@
+const assert = require("node:assert/strict");
+const { loadReading, memoryStorage } = require("./reading-test-helpers");
+const { prepareReadingWeb, finishReadingWeb } = loadReading("reading/web.ts");
+const { ReadingEngine } = loadReading("reading/engine.ts");
+const { ReadingRepository } = loadReading("reading/store.ts");
+const { createReadingSession, addReadingNode, addReadingBranch } = loadReading("reading/session.ts");
+const { DirectReadingBackend } = loadReading("reading/backend.ts");
+(async () => {
+	const controller = new AbortController(); let searches = 0;
+	const tavily = { kind: "tavily", search: async (queries, options) => { searches++; assert.equal(queries.length, 1); assert.equal(options.totalResults, 3); return [{ url: "https://example.org/a", title: "Primary source", content: "Actual excerpt" }]; } };
+	const web = await prepareReadingWeb(tavily, "query", "paper", controller.signal);
+	assert.equal(web.sources.length, 1); assert.equal(finishReadingWeb(web, "Explained [网络 W1]").sources[0].content, "Actual excerpt");
+	assert.throws(() => finishReadingWeb(web, "[网络 W2]"), /编号/); assert.throws(() => finishReadingWeb(web, "https://fabricated.org/claim"), /未检索/);
+	assert.doesNotThrow(() => finishReadingWeb(web, "Paper https://paper.org/data [网络 W1]", ["Original dataset https://paper.org/data"]));
+	assert.equal(finishReadingWeb({ mode: "native", sources: [], query: "", warning: "供应商提供" }, "https://paper.org/data", ["Original dataset https://paper.org/data"]).sources.length, 0);
+	const empty = await prepareReadingWeb({ ...tavily, search: async () => [] }, "query", "paper", controller.signal); assert.match(empty.warning, /没有检索/);
+	assert.match(finishReadingWeb({ mode: "native", sources: [], query: "", warning: "供应商提供" }, "No sources").warning, /未返回/);
+	assert.equal(finishReadingWeb({ mode: "native", sources: [], query: "", warning: "供应商提供" }, "https://example.org/a").sources.length, 1);
+	await assert.rejects(prepareReadingWeb({ kind: "unavailable", reason: "off" }, "q", "t", controller.signal), /off/);
+	const source = { kind: "pdf", path: "paper.pdf", title: "Paper", fingerprint: "a".repeat(64) };
+	const session = createReadingSession(source); const main = addReadingNode(session, null); main.status = "done"; main.content = "Main unchanged";
+	const branch = addReadingBranch(session, main.id), node = addReadingNode(session, branch.id, "Question"); node.requestWeb = true;
+	node.status = "failed"; node.error = "正文引用与证据列表不一致";
+	const storage = memoryStorage(), repository = new ReadingRepository(storage); await repository.add(session);
+	const events = [], evidence = [{ id: "text-1", kind: "paper", path: source.path, label: "Methods", text: "Original evidence" }];
+	const workspace = { repository, document: async () => ({ source, catalog: "text-1", evidence, verify: async () => { events.push("read-paper"); }, image: async () => null }) };
+	const backend = { name: "mock", model: "mock", images: false, webSearch: () => ({ ...tavily, search: async (...args) => { events.push("search"); return tavily.search(...args); } }),
+		complete: async request => {
+			if (request.system.includes("证据选择器")) return JSON.stringify({ ids: ["text-1"], query: "query", needsVisual: false, vaultQuery: null });
+			const prompt = JSON.parse(request.prompt); assert.equal(prompt.webEvidence.sources[0].content, "Actual excerpt"); assert.match(prompt.validationFeedback, /上次正文引用/); events.push("answer");
+			return JSON.stringify({ title: "Answer", content: "Paper [text-1]. Web [网络 W1].", evidenceIds: ["text-1"] });
+		} };
+	await new ReadingEngine(workspace, () => backend).generate(session.id, node.id);
+	assert.ok(events.indexOf("read-paper") < events.indexOf("search")); assert.ok(events.indexOf("search") < events.indexOf("answer"));
+	const saved = repository.get(session.id); assert.equal(saved.nodes[0].content, "Main unchanged"); assert.equal(saved.mainSummary, ""); assert.equal(saved.nodes[1].web.mode, "tavily"); assert.equal(saved.nodes[1].evidence.length, 1);
+	const reloaded = new ReadingRepository(storage); await reloaded.load(); assert.equal(reloaded.get(session.id).nodes[1].web.sources.length, 1);
+	let sent;
+	const provider = { capabilities: { vision: false }, complete: async payload => { sent = payload; return { text: "Result" }; } };
+	await new DirectReadingBackend(provider, "native", "model", false).complete({ system: "s", prompt: "p", images: [], signal: controller.signal, webSearch: "qwen" });
+	assert.equal(sent.webSearch.protocol, "qwen");
+	controller.abort(); await assert.rejects(prepareReadingWeb({ ...tavily, search: async () => [] }, "q", "p", controller.signal));
+	console.log("READING_WEB_OK");
+})().catch(e => { console.error(e); process.exitCode = 1; });

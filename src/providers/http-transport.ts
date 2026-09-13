@@ -77,6 +77,22 @@ function networkError(error: unknown, endpoint: string): ProviderConnectionError
 	return new ProviderConnectionError(type, message, { endpoint });
 }
 
+function interruptedResponseError(endpoint: string): ProviderConnectionError {
+	return new ProviderConnectionError("network", "响应在完整接收前中断", { endpoint });
+}
+
+function watchResponseFailure(
+	response: http.IncomingMessage,
+	endpoint: string,
+	fail: (error: unknown) => void,
+): void {
+	response.once("aborted", () => fail(interruptedResponseError(endpoint)));
+	response.once("error", fail);
+	response.once("close", () => {
+		if (!response.complete) fail(interruptedResponseError(endpoint));
+	});
+}
+
 export function normalizeProviderError(error: unknown): NormalizedProviderError {
 	if (error instanceof ProviderConnectionError) {
 		return {
@@ -144,16 +160,26 @@ export class ProviderHttpTransport {
 				if (totalTimer !== null) clearTimeout(totalTimer);
 				callback();
 			};
+			const fail = (error: unknown): void => {
+				if (settled) return;
+				const normalized = networkError(error, options.url);
+				// A peer-closed request is already destroyed and cannot emit a new
+				// request error. Settle directly, including for timeout and cancel.
+				finish(() => reject(normalized));
+				request.destroy(normalized);
+			};
 			const request = transport.request(endpoint, {
 				method: options.method || "GET",
 				headers,
 			}, (response) => {
 				phase = "read";
+				watchResponseFailure(response, options.url, fail);
 				response.setEncoding("utf8");
 				response.on("data", (chunk: string) => {
+					if (settled) return;
 					responseBytes += Buffer.byteLength(chunk);
 					if (responseBytes > maxResponseBytes) {
-						request.destroy(new ProviderConnectionError(
+						fail(new ProviderConnectionError(
 							"response-too-large",
 							`响应体超过 ${Math.round(maxResponseBytes / 1024 / 1024)} MB 上限`,
 							{ endpoint: options.url },
@@ -163,6 +189,11 @@ export class ProviderHttpTransport {
 					chunks.push(chunk);
 				});
 				response.on("end", () => {
+					if (settled) return;
+					if (!response.complete) {
+						fail(interruptedResponseError(options.url));
+						return;
+					}
 					const text = chunks.join("");
 					const json = parseProviderJson(text);
 					const status = Number(response.statusCode || 0);
@@ -185,31 +216,31 @@ export class ProviderHttpTransport {
 				});
 			});
 			totalTimer = setTimeout(() => {
-				request.destroy(new ProviderConnectionError(
+				fail(new ProviderConnectionError(
 					phase === "connect" ? "connect-timeout" : "read-timeout",
 					`请求超过 ${Math.round(timeoutMs / 1000)} 秒`,
 					{ endpoint: options.url },
 				));
 			}, timeoutMs);
 			request.setTimeout(timeoutMs, () => {
-				request.destroy(new ProviderConnectionError(
+				fail(new ProviderConnectionError(
 					phase === "connect" ? "connect-timeout" : "read-timeout",
 					`请求超过 ${Math.round(timeoutMs / 1000)} 秒`,
 					{ endpoint: options.url },
 				));
 			});
-			request.on("error", (error) => {
-				finish(() => reject(networkError(error, options.url)));
-			});
+			request.on("error", fail);
 			options.registerCancel?.(() => {
-				request.destroy(new ProviderConnectionError(
+				fail(new ProviderConnectionError(
 					"cancelled",
 					"已停止本轮查询",
 					{ endpoint: options.url },
 				));
 			});
-			if (body) request.write(body);
-			request.end();
+			if (!settled) {
+				if (body) request.write(body);
+				request.end();
+			}
 		});
 	}
 
@@ -241,16 +272,24 @@ export class ProviderHttpTransport {
 				if (totalTimer !== null) clearTimeout(totalTimer);
 				callback();
 			};
+			const fail = (error: unknown): void => {
+				if (settled) return;
+				const normalized = networkError(error, options.url);
+				finish(() => reject(normalized));
+				request.destroy(normalized);
+			};
 			const request = transport.request(endpoint, {
 				method: options.method || "POST",
 				headers,
 			}, (response) => {
 				const status = Number(response.statusCode || 0);
+				watchResponseFailure(response, options.url, fail);
 				response.setEncoding("utf8");
 				response.on("data", (chunk: string) => {
+					if (settled) return;
 					responseBytes += Buffer.byteLength(chunk);
 					if (responseBytes > maxResponseBytes) {
-						request.destroy(new ProviderConnectionError(
+						fail(new ProviderConnectionError(
 							"response-too-large",
 							`响应体超过 ${Math.round(maxResponseBytes / 1024 / 1024)} MB 上限`,
 							{ endpoint: options.url },
@@ -278,6 +317,11 @@ export class ProviderHttpTransport {
 					}
 				});
 				response.on("end", () => {
+					if (settled) return;
+					if (!response.complete) {
+						fail(interruptedResponseError(options.url));
+						return;
+					}
 					if (status < 200 || status >= 300) {
 						const payload = parseProviderJson(responseText);
 						finish(() => reject(httpError(
@@ -309,32 +353,31 @@ export class ProviderHttpTransport {
 				});
 			});
 			request.setTimeout(timeoutMs, () => {
-				request.destroy(new ProviderConnectionError(
+				fail(new ProviderConnectionError(
 					"read-timeout",
 					`请求超过 ${Math.round(timeoutMs / 1000)} 秒`,
 					{ endpoint: options.url },
 				));
 			});
 			totalTimer = setTimeout(() => {
-				request.destroy(new ProviderConnectionError(
+				fail(new ProviderConnectionError(
 					"read-timeout",
 					`请求超过 ${Math.round(timeoutMs / 1000)} 秒`,
 					{ endpoint: options.url },
 				));
 			}, timeoutMs);
-			request.on("error", (error) => {
-				if (settled) return;
-				finish(() => reject(networkError(error, options.url)));
-			});
+			request.on("error", fail);
 			options.registerCancel?.(() => {
-				request.destroy(new ProviderConnectionError(
+				fail(new ProviderConnectionError(
 					"cancelled",
 					"已停止本轮查询",
 					{ endpoint: options.url },
 				));
 			});
-			if (body) request.write(body);
-			request.end();
+			if (!settled) {
+				if (body) request.write(body);
+				request.end();
+			}
 		});
 	}
 }

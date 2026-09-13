@@ -1433,7 +1433,7 @@ function testIdentityAndDraftContracts() {
 		"demo_2026",
 		"Demo Paper",
 	);
-	assert.match(noMarkdownPrompt, /元数据与用户说明/);
+	assert.match(noMarkdownPrompt, /status=insufficient-evidence/);
 
 	const verified = parseIdentityResult({
 		status: "verified",
@@ -2195,8 +2195,9 @@ function testDraftGateAndStatusSemantics() {
 		createArticleMarkdown: false,
 		articleWikiSource: "auto",
 	}, "", false);
-	assert.equal(metadataOnly.run, true);
-	assert.match(metadataOnly.downgradeNote, /元数据与用户说明/);
+	assert.equal(metadataOnly.run, false);
+	assert.match(metadataOnly.blocker, /标题与书目元数据不足/);
+	assert.equal(metadataOnly.downgradeNote, "");
 
 	// Technical errors are "failed", never dressed up as conflicts — even
 	// when a conflict blocker exists alongside them.

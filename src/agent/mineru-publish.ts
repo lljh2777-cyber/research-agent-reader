@@ -75,10 +75,14 @@ export interface MineruPackageReceipt {
 }
 
 export interface MineruPublishContext {
+	/** Acquisition intake retains all staging, including failed/empty containers. */
+	retainStaging?: boolean;
 	signal: AbortSignal;
 	timeoutMs: number;
 	/** Synchronous, read-only gate over the exact same-volume copy to commit. */
 	validateBeforeCommit?(articleMarkdown: string): void;
+	/** Revalidate the saved original after remote work, before synchronous atomic publication. */
+	verifySourceBeforePublish?(): Promise<void>;
 }
 
 /** Identity/evidence conflicts are distinct from CLI and filesystem failures. */
@@ -1200,7 +1204,7 @@ function cleanPublishStaging(
 }
 
 function retainedStagingDetail(cleaned: boolean, stagingContainer: string): string {
-	return cleaned ? "" : `；staging 清理失败并保留：${path.basename(stagingContainer)}`;
+	return cleaned ? "" : `；暂存目录已保留：${path.basename(stagingContainer)}`;
 }
 
 /**
@@ -1210,7 +1214,7 @@ function retainedStagingDetail(cleaned: boolean, stagingContainer: string): stri
  * fails, only the named hidden staging directory can remain. The final citekey
  * directory is never populated incrementally.
  */
-function publishValidatedPackageAtomically(
+export function publishValidatedPackageAtomically(
 	packageRoot: string,
 	papersRoot: string,
 	citekey: string,
@@ -1246,7 +1250,7 @@ function publishValidatedPackageAtomically(
 	try {
 		copyPackage(packageRoot, stagedPackage);
 	} catch (error) {
-		const cleaned = cleanPublishStaging(stagingContainer, papersRoot, citekey);
+		const cleaned = context.retainStaging ? false : cleanPublishStaging(stagingContainer, papersRoot, citekey);
 		throw new Error(
 			`MinerU 包复制到同卷 staging 失败；最终目录未创建${retainedStagingDetail(cleaned, stagingContainer)}；${errorDetail(error)}`,
 		);
@@ -1261,11 +1265,11 @@ function publishValidatedPackageAtomically(
 		}
 		if (context.signal.aborted) throw new Error("任务已取消");
 	} catch (error) {
-		const cleaned = cleanPublishStaging(stagingContainer, papersRoot, citekey);
+		const cleaned = context.retainStaging ? false : cleanPublishStaging(stagingContainer, papersRoot, citekey);
 		const detail = retainedStagingDetail(cleaned, stagingContainer);
 		if (error instanceof MineruPreCommitValidationError) {
 			throw new MineruPreCommitValidationError(error.message, {
-				cleanupFailed: !cleaned,
+				cleanupFailed: !cleaned && !context.retainStaging,
 				stagingBasename: cleaned ? "" : path.basename(stagingContainer),
 			});
 		}
@@ -1278,7 +1282,7 @@ function publishValidatedPackageAtomically(
 	// expose a complete, non-empty directory with rename, so a later rename
 	// also fails without replacing their package on supported desktop hosts.
 	if (fs.existsSync(packageTarget)) {
-		const cleaned = cleanPublishStaging(stagingContainer, papersRoot, citekey);
+		const cleaned = context.retainStaging ? false : cleanPublishStaging(stagingContainer, papersRoot, citekey);
 		throw createOnlyError(citekey, true, retainedStagingDetail(cleaned, stagingContainer));
 	}
 	try {
@@ -1287,7 +1291,7 @@ function publishValidatedPackageAtomically(
 		assertPapersIdentity();
 	} catch (error) {
 		const targetExists = fs.existsSync(packageTarget);
-		const cleaned = cleanPublishStaging(stagingContainer, papersRoot, citekey);
+		const cleaned = context.retainStaging ? false : cleanPublishStaging(stagingContainer, papersRoot, citekey);
 		if (targetExists) {
 			throw createOnlyError(citekey, true, retainedStagingDetail(cleaned, stagingContainer));
 		}
@@ -1299,7 +1303,7 @@ function publishValidatedPackageAtomically(
 	// rename moved the only child away; removing an empty container is safe and
 	// non-recursive. Failure here does not invalidate the committed package.
 	try {
-		fs.rmdirSync(stagingContainer);
+		if(!context.retainStaging)fs.rmdirSync(stagingContainer);
 	} catch (cleanupError) {
 		console.warn("Could not clean empty MinerU vault staging directory", cleanupError);
 	}
@@ -1459,6 +1463,8 @@ export async function publishMineruPackage(
 
 		// Re-resolve immediately before creating same-volume staging: a papers/
 		// junction introduced during the long remote extraction must fail closed.
+		await context.verifySourceBeforePublish?.();
+		if (context.signal.aborted) throw new Error("任务已取消");
 		const commitPapersRoot = ensureTrustedPapersRoot(deps.vaultRoot);
 		const commitPapersStats = fs.statSync(commitPapersRoot, { bigint: true });
 		if (realPathSync(commitPapersRoot) !== publishLock.papersIdentity.realPath
@@ -1482,7 +1488,7 @@ export async function publishMineruPackage(
 			}
 			throw error;
 		} finally {
-			if (!preserveStage) {
+			if (!preserveStage && !context.retainStaging) {
 				try {
 					removeTreeNoFollow(stage);
 				} catch (cleanupError) {

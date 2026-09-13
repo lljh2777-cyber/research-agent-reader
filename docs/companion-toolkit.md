@@ -63,9 +63,16 @@ The model never writes files and never chooses extraction paths:
   snapshot with the plugin-bound Crossref record; filenames, metadata, and
   PDF text-layer candidates remain discovery hints only.
 
-The light runner never updates `papers.csv`, `references.bib`, or index/log
-pages — those registry files remain the Codex CLI pipeline's job, which can
-later upgrade a lightweight product to a fully registered entry.
+The model loop does not write registries. Since 0.39.2, its result offers a local
+registration preview: index/log updates, plus CSV and BibTeX when the configured
+toolkit's knowledge-base resolves to this vault. Standalone vaults are marked
+indexed, not fully registered. Existing bibliographic conflicts stop the update;
+the plugin saves before/after snapshots and supports interrupted-write recovery.
+
+创建文章 Wiki 前必须读取本篇原文。复用 `papers/` 中的既有包时，插件会重新执行
+阅读器的完整包校验；`Clippings/` 仍可作为普通 Markdown 原文使用。没有可用原文、
+没有成功的原文读取回执，或模型明确报告证据不足时，不创建摘要级 Wiki。
+仅选择 Wiki 时，自动模式可直接读取已由用户确认的 PDF 快照文字；显式选择 PDF 时始终使用该快照。overview 按页读取前 3 页，模型可补读具体页码；扫描页无文字时要求 OCR。仍只生成 abstract-level 笔记，不将文字层读取当作图表核验。显式选择 article.md 或要求先生成原文包时，不静默切换来源。
 
 This is an integration contract, not an installation instruction. The public
 toolkit repository, version compatibility policy, installer, and upgrade path

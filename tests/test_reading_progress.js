@@ -1,0 +1,21 @@
+const assert = require("node:assert/strict");
+const { loadReading, memoryStorage } = require("./reading-test-helpers");
+const { createReadingSession, addReadingNode } = loadReading("reading/session.ts");
+const { markReading, visitReadingEvidence } = loadReading("reading/progress.ts");
+const { ReadingRepository } = loadReading("reading/store.ts");
+(async () => {
+	const storage = memoryStorage(); const repo = new ReadingRepository(storage);
+	const s = createReadingSession({ kind: "pdf", path: "paper.pdf", fingerprint: "a".repeat(64), title: "论文" });
+	const n = addReadingNode(s, null); assert.throws(() => markReading(s, n.id, "understood")); n.status = "done";
+	n.evidence = ["e1", "e2"].map(id => ({ id, kind: "paper", path: "paper.pdf", label: id, text: "原文" }));
+	await repo.add(s);
+	await repo.transact(s.id, d => { markReading(d, n.id, "question"); visitReadingEvidence(d, n.id, "e1"); visitReadingEvidence(d, n.id, "e2"); d.nodes[0].reviewedEvidence = ["e1"]; });
+	const restored = new ReadingRepository(storage); await restored.load(); const saved = restored.get(s.id);
+	assert.equal(saved.nodes[0].learningState, "question"); assert.equal(saved.nodes[0].status, "done"); assert.deepEqual(saved.nodes[0].reviewedEvidence, ["e1"]);
+	assert.equal(saved.ui.evidenceView.cursor, 1); assert.equal(saved.ui.evidenceView.history.length, 2);
+	visitReadingEvidence(saved, n.id, "e2"); assert.equal(saved.ui.evidenceView.history.length, 2);
+	saved.ui.evidenceView.cursor = 0; visitReadingEvidence(saved, n.id, "e2"); assert.equal(saved.ui.evidenceView.cursor, 1);
+	assert.throws(() => visitReadingEvidence(saved, n.id, "missing"));
+	storage.fail = true; await assert.rejects(repo.transact(s.id, d => markReading(d, n.id, "understood"))); assert.equal(repo.get(s.id).nodes[0].learningState, "question");
+	console.log("READING_PROGRESS_OK");
+})().catch(e => { console.error(e); process.exitCode = 1; });

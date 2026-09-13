@@ -75,10 +75,9 @@ assert.match(serviceSource, /settings\.annotationWebSearchEnabled/);
 assert.match(serviceSource, /settings\.annotationWebSearchTimeoutSeconds/);
 assert.match(serviceSource, /最多围绕 2 个检索问题/);
 assert.match(serviceSource, /executionConfig\.retrievalMode\s*=\s*webSearchEnabled/);
-assert.match(serviceSource, /const directProfile = webSearchEnabled\n?\s*\?\s*\(directNativeProtocol \? selectedDirectProfile : null\)\n?\s*: selectedDirectProfile/);
 assert.match(serviceSource, /resolveCliActionExecutionConfig/);
 assert.match(serviceSource, /getCliBackendLabel/);
-assert.match(settingsSource, /title:\s*"批注 AI"/);
+assert.match(source("src/settings/navigation.ts"), /title:\s*"批注 AI"/);
 assert.match(settingsSource, /renderAnnotationSettings/);
 assert.match(settingsSource, /划选批注入口/);
 assert.match(settingsSource, /打开快捷键设置/);
@@ -87,15 +86,10 @@ assert.match(settingsSource, /浅层联网解释/);
 assert.match(settingsSource, /联网时间上限/);
 assert.match(settingsSource, /浅层（固定）/);
 assert.match(settingsSource, /Direct API · \$\{profile\.name\}/);
-// Direct API stays usable for shallow web search when the provider runs
-// server-side search natively; only otherwise is the backend switched.
-assert.match(settingsSource, /不支持原生联网，批注后端已切换为 Codex CLI/);
-assert.match(settingsSource, /detectNativeWebSearchProtocol\(profile\.baseUrl\)/);
-assert.match(serviceSource, /directNativeProtocol/);
-assert.match(serviceSource, /webSearch: \{ protocol: directNativeProtocol \}/);
+// Native/Tavily routing and cancellation are exercised in test_annotation_web_search.js.
 assert.match(pluginSource, /directApiBoundaryLabel\(profileId: string\): string/);
 assert.match(settingsSource, /directApiBoundaryLabel\(profile\.id\)/);
-assert.match(settingsSource, /containerEl\.scrollTop = previousScrollTop/);
+assert.match(settingsSource, /containerEl\.scrollTop = this\.pageScroll\.get\(this\.activePage\)/);
 assert.match(settingsSource, /最大输出 Token/);
 assert.match(runtimeSettingsSource, /annotationMaxTokens:\s*900/);
 assert.match(runtimeSettingsSource, /annotationWebSearchEnabled:\s*false/);
