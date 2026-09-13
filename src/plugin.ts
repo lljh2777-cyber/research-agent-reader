@@ -148,6 +148,9 @@ import { LearningLibrary } from "./curation/learning";
 import { CurationService } from "./curation/service";
 import { CurationWriter } from "./curation/writer";
 import { FileCurationStore } from "./curation/store";
+import { KnowledgeDraftStore } from "./curation/draft-store";
+import { readDraftMaterial } from "./curation/draft";
+import { KnowledgeDraftsModal } from "./views/knowledge-drafts";
 import type { CurationContext, CurationReview } from "./curation/types";
 import { KnowledgeCurationModal, KnowledgeMaintenanceModal } from "./views/knowledge-curation";
 import { ExcerptCurationModal } from "./views/excerpt-curation";
@@ -368,6 +371,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private curationService?: CurationService;
 	private curationWriter?: CurationWriter;
 	private curationModals = new Set<Modal>();
+	private knowledgeDrafts?: KnowledgeDraftStore;
 	private annotationPopover: AnnotationPopover | null = null;
 	private excerptBrowser?: ExcerptBrowser;
 	private answerExcerptService?: AnswerExcerptService;
@@ -505,6 +509,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.addCommand({ id: "open-interactive-reading", name: "打开 PDF 交互深读", callback: () => { void this.activateReadingWorkspace(); } });
 		this.addCommand({ id: "open-code-reading", name: "打开代码交互阅读", callback: () => { void this.activateReadingWorkspace({ domain: "code" }); } });
 		this.addCommand({ id: "open-knowledge-maintenance", name: "打开知识库维护", callback: () => this.openKnowledgeMaintenance() });
+		this.addCommand({ id: "open-knowledge-drafts", name: "打开新知识页草稿", callback: () => this.openKnowledgeDrafts() });
 		this.addCommand({ id: "open-fulltext-acquisition", name: "按标识获取论文全文", callback: () => this.openFulltextAcquisition() });
 		this.addCommand({ id: "demo-fulltext-acquisition", name: "全文获取流程演示（开发）", callback: () => this.openFulltextAcquisition("demo") });
 		void Promise.resolve().then(() => this.getAcquisitionService().ready()).catch(() => new Notice("全文获取记录读取失败，其他功能仍可使用"));
@@ -635,7 +640,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.jatsWikiService?.dispose();
 		for (const modal of [...this.acquisitionModals]) modal.close();
 		await Promise.all([...this.acquisitionServices.values()].map(service => service.dispose()));
-		for (const modal of [...this.curationModals]) modal.close();
+		for (const modal of [...this.curationModals]) { if (modal instanceof KnowledgeDraftsModal) modal.dispose(); else modal.close(); }
 		await this.readingAssistant?.dispose();
 		await this.curationService?.dispose();
 		this.learningLibrary?.dispose();
@@ -764,6 +769,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			library: s => this.inspectPaperLibrary(s), acquisitions: new FileAcquisitionStorage(directory, "production"),
 			local: s => readLocalPdfHistory(io, deviceId, undefined, s), excerpts: s => new ExcerptLibraryService(this.app).list(s),
 			answerExcerpts: s => readAnswerExcerptPending(this.getAnswerExcerpts(), s),
+			drafts: s => new KnowledgeDraftStore(io).summaries(s),
 			curation: async s => { const entries: SavedCurationPending[] = []; const summary = await readDashboardCuration(io, row => entries.push(row), s); return { entries, issues: summary.issues }; },
 			tasks: () => this.getTaskRuns(),
 		}, signal);
@@ -774,6 +780,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (target.kind === "library") { await this.activatePaperLibrary(undefined, target.object, signal); return; }
 		if (target.kind === "excerpt") { if (this.excerptBrowser) throw new Error("请先完成已打开摘录窗口中的操作"); this.openExcerptBrowser(target.ref); return; }
 		if (target.kind === "answer-excerpt") { if (this.answerExcerptBrowser) throw new Error("请先完成已打开学习摘录窗口中的操作"); this.openAnswerExcerptBrowser(target.path); return; }
+		if (target.kind === "draft") { this.openKnowledgeDrafts(target.id); return; }
 		if (target.kind === "acquisition") { this.showFulltextAcquisition("production", target.id); return; }
 		if (target.kind === "local") { this.showLocalPdfIntake(undefined, target.id); return; }
 		if (target.kind === "review") { this.openKnowledgeMaintenance({ tab: "activity", reviewId: target.id }); return; }
@@ -786,7 +793,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (this.excerptBrowser) { new Notice("摘录窗口已打开，请先完成当前操作"); return; }
 		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true), ref => this.showCurationModal(new ExcerptCurationModal(this.app, this, ref)), {
 			read: (ref, signal) => this.readExcerptHistory(ref, signal), open: (ref, entry, signal) => this.openExcerptHistoryTarget(ref, entry, signal),
-		}, () => this.openAnswerExcerptBrowser());
+		}, () => this.openAnswerExcerptBrowser(), ref => { void this.openDraftFromExcerpt({ kind: "excerpt", ref, includeNote: false }); });
 		this.excerptBrowser = modal; modal.open();
 	}
 	readExcerptHistory(ref: ExcerptRef, signal: AbortSignal) { return readExcerptHistory(new FileSourceStorage(this.readingPluginDirectory()), ref, signal); }
@@ -796,7 +803,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (this.answerExcerptBrowser) { new Notice("学习回答摘录已打开，请先完成当前操作"); return; }
 		const modal = new AnswerExcerptBrowser(this.app, this.getAnswerExcerpts(), async path => {
 			if (!validAnswerExcerptPath(path)) throw new Error("学习摘录路径无效"); const file = this.app.vault.getAbstractFileByPath(path); if (!(file instanceof TFile)) throw new Error("学习摘录文档缺失"); await this.openSourceMarkdownFile(file, true);
-		}, (answer, signal) => this.openAnswerExcerptSource(answer, signal), path, () => { if (this.answerExcerptBrowser === modal) this.answerExcerptBrowser = undefined; }, path => this.openAnswerExcerptCuration(path));
+		}, (answer, signal) => this.openAnswerExcerptSource(answer, signal), path, () => { if (this.answerExcerptBrowser === modal) this.answerExcerptBrowser = undefined; }, path => this.openAnswerExcerptCuration(path), path => { void this.openDraftFromExcerpt({ kind: "answer", path, roles: ["ai"] }); });
 		this.answerExcerptBrowser = modal; modal.open();
 	}
 	async openAnswerExcerptSource(answer: AnswerSnapshot, signal: AbortSignal): Promise<void> {
@@ -3099,6 +3106,12 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	readDashboardCuration() { return readDashboardCuration(new FileSourceStorage(this.readingPluginDirectory())); }
 	openKnowledgeMaintenance(entry?: CurationNavigation): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this, entry)); }
+	getKnowledgeDrafts(): KnowledgeDraftStore { return this.knowledgeDrafts ||= new KnowledgeDraftStore(new FileSourceStorage(this.readingPluginDirectory())); }
+	openKnowledgeDrafts(id?: string): void { this.showCurationModal(new KnowledgeDraftsModal(this.app, this, id ? { id } : undefined)); }
+	private async openDraftFromExcerpt(input: Parameters<typeof readDraftMaterial>[1]): Promise<void> {
+		try { const material = await readDraftMaterial(this.app, input); if (!this.acquisitionClosing) this.showCurationModal(new KnowledgeDraftsModal(this.app, this, { material })); }
+		catch (error) { if (!this.acquisitionClosing) new Notice(String(error), 8000); }
+	}
 	openAnswerExcerptCuration(path: string, review?: CurationReview): void { this.showCurationModal(new AnswerExcerptCurationModal(this.app, this, path, review)); }
 	openKnowledgeCuration(sessionId: string, nodeId: string, review?: CurationReview): void {
 		if (review?.context.answerExcerpt) { this.openAnswerExcerptCuration(review.context.answerExcerpt.snapshot.path, review); return; }

@@ -21,7 +21,7 @@ export class ExcerptBrowser extends Modal {
 	private searchEl!: HTMLInputElement;
 	private refreshEl!: HTMLButtonElement;
 	private get dirty(): boolean { return Boolean(this.selected && this.draft !== this.selected.record.manualText); }
-	constructor(app: App, private readonly initial?: ExcerptRef, private readonly didClose?: () => void, openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>, private readonly curate?: (ref: ExcerptRef) => void, private readonly history?: ExcerptHistoryHost, private readonly answers?: () => void) { super(app); this.service = new ExcerptLibraryService(app, openMarkdown); }
+	constructor(app: App, private readonly initial?: ExcerptRef, private readonly didClose?: () => void, openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>, private readonly curate?: (ref: ExcerptRef) => void, private readonly history?: ExcerptHistoryHost, private readonly answers?: () => void, private readonly knowledgeDraft?: (ref: ExcerptRef) => void) { super(app); this.service = new ExcerptLibraryService(app, openMarkdown); }
 	onOpen(): void {
 		this.closed = false; this.setTitle("摘录"); this.modalEl.addClass("rar-excerpt-modal");
 		this.contentEl.createEl("p", { text: "查找保存的原句与个人备注。选择一条摘录后核对来源；备注可以独立修改。", cls: "rar-library-muted" });
@@ -153,6 +153,7 @@ export class ExcerptBrowser extends Modal {
 				});
 			}); button.dataset.requiresClean = "true";
 		} else this.detailEl.createEl("p", { text: "此摘录有关联归档任务，请在原归档功能处理其状态。" });
+		if (this.knowledgeDraft) this.button(navigation, "以此摘录起草新知识页", () => { if (this.dirty || this.busy) { this.message("请先保存或放弃个人备注。"); return; } this.knowledgeDraft!({ annotationPath: record.annotationPath, id: record.id }); this.close(); });
 		if (this.curate) this.button(navigation, "补充到已有笔记", () => {
 			if (this.dirty || this.busy) { this.message("请先保存或放弃备注草稿后再整理摘录。"); return; }
 			this.curate!({ annotationPath: record.annotationPath, id: record.id }); this.close();

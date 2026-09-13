@@ -8,7 +8,7 @@ export class AnswerExcerptBrowser extends Modal {
 	private busy = false; private closed = true; private abort = new AbortController(); private check?: AbortController; private limit = 25;
 	private list!: HTMLElement; private detail!: HTMLElement; private status!: HTMLElement;
 	private get dirty(): boolean { return Boolean(this.selected && (this.draft !== this.selected.record.note || this.humanDraft !== (this.selected.record.humanRevision?.text || ""))); }
-	constructor(app: App, private service: AnswerExcerptService, private openDocument: (path: string) => Promise<void>, private openAnswer: (answer: AnswerSnapshot, signal: AbortSignal) => Promise<void>, private initial?: string, private didClose?: () => void, private curate?: (path: string) => void) { super(app); }
+	constructor(app: App, private service: AnswerExcerptService, private openDocument: (path: string) => Promise<void>, private openAnswer: (answer: AnswerSnapshot, signal: AbortSignal) => Promise<void>, private initial?: string, private didClose?: () => void, private curate?: (path: string) => void, private knowledgeDraft?: (path: string) => void) { super(app); }
 	onOpen(): void {
 		this.closed = false; this.setTitle("学习回答摘录"); this.modalEl.addClass("rar-excerpt-modal", "rar-answer-excerpt");
 		this.contentEl.createEl("p", { text: "分别保留原始 AI 回答、人工修订稿与个人备注。人工修订和整理完成不代表原文、科学或教学核验通过。" });
@@ -79,6 +79,7 @@ export class AnswerExcerptBrowser extends Modal {
 		this.button(tools, "放弃修改", () => { this.draft = record.note; this.renderDetail(); });
 		const nav = this.detail.createDiv("rar-excerpt-actions");
 		if (this.curate) this.button(nav, "补充学习内容到已有笔记", () => { this.dispose(); this.curate!(entry.path); }, true);
+		if (this.knowledgeDraft) this.button(nav, "以此学习摘录起草新知识页", () => { this.dispose(); this.knowledgeDraft!(entry.path); }, true);
 		this.button(nav, "回到回答节点", () => void this.run(async () => { const latest = await this.service.load(entry.path, this.abort.signal); if (latest.digest !== entry.digest) throw new Error("摘录已变化，请重新读取"); await this.service.verify(a, this.abort.signal); await this.openAnswer(a, this.abort.signal); this.abort.signal.throwIfAborted(); this.dispose(); }), true);
 		this.button(nav, "打开学习摘录文档", () => void this.run(async () => { await this.service.load(entry.path, this.abort.signal); await this.openDocument(entry.path); this.abort.signal.throwIfAborted(); this.dispose(); }), true);
 		this.detail.createEl("code", { text: entry.path }); this.sync();

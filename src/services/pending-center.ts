@@ -7,13 +7,14 @@ import type { LocalPdfHistory } from "../papers/local-pdf-intake";
 import type { TaskRun } from "../types/contracts";
 import type { SavedCurationPending } from "./dashboard-curation";
 import type { AnswerExcerptPendingList } from "../learning/answer-excerpt-pending";
+import type { DraftSummary } from "../curation/draft-store";
 import { objectDigest, identityRelation } from "../papers/identity";
 
-export const PENDING_CATEGORIES = { metadata: "书目与全文", acquisition: "获取与保存", intake: "入库与转换", excerpt: "摘录待整理", learning: "学习摘录", review: "审阅与复查" } as const;
+export const PENDING_CATEGORIES = { metadata: "书目与全文", acquisition: "获取与保存", intake: "入库与转换", excerpt: "摘录待整理", learning: "学习摘录", draft: "知识页草稿", review: "审阅与复查" } as const;
 export type PendingCategory = keyof typeof PENDING_CATEGORIES;
 export type PendingTarget = { kind: "library"; object: LibraryObjectRef } | { kind: "excerpt"; ref: ExcerptRef }
 	| { kind: "answer-excerpt"; path: string }
-	| { kind: "acquisition" | "local" | "task" | "review" | "revision"; id: string };
+	| { kind: "acquisition" | "local" | "task" | "review" | "revision" | "draft"; id: string };
 export interface PendingItem { key: string; category: PendingCategory; title: string; detail: string; next: string; location: string; target: PendingTarget; revision: string; }
 export interface PendingResult { items: PendingItem[]; issues: string[]; scannedAt: string; }
 export interface PendingInputs {
@@ -24,6 +25,7 @@ export interface PendingInputs {
 	curation(signal: AbortSignal): Promise<{ entries: SavedCurationPending[]; issues: string[] }>;
 	tasks(): TaskRun[];
 	answerExcerpts?(signal: AbortSignal): Promise<AnswerExcerptPendingList>;
+	drafts?(signal: AbortSignal): Promise<{ entries: DraftSummary[]; issues: string[] }>;
 }
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -42,17 +44,18 @@ export async function readPendingAcquisitions(io: PendingInputs["acquisitions"],
 /** Parallel read adapters are isolated: one failed area never reports an empty, complete center. */
 export async function readPendingCenter(inputs: PendingInputs, signal: AbortSignal): Promise<PendingResult> {
 	signal.throwIfAborted();
-	const [library, acquisition, local, excerpts, curation, tasks, answers] = await Promise.allSettled([
+	const [library, acquisition, local, excerpts, curation, tasks, answers, drafts] = await Promise.allSettled([
 		Promise.resolve().then(() => inputs.library(signal)), readPendingAcquisitions(inputs.acquisitions, signal), Promise.resolve().then(() => inputs.local(signal)), Promise.resolve().then(() => inputs.excerpts(signal)), Promise.resolve().then(() => inputs.curation(signal)), Promise.resolve().then(() => inputs.tasks()),
 		Promise.resolve().then(() => inputs.answerExcerpts?.(signal) || { entries: [], issues: [] }),
+		Promise.resolve().then(() => inputs.drafts?.(signal) || { entries: [], issues: [] }),
 	]);
 	signal.throwIfAborted();
 	const result: PendingResult = { items: [], issues: [], scannedAt: new Date().toISOString() };
 	const add = (key: string, category: PendingCategory, title: string, detail: string, next: string, location: string, target: PendingTarget, proof: unknown) => {
 		result.items.push({ key, category, title, detail, next, location, target, revision: objectDigest({ target, proof }) });
 	};
-	const labels = ["文献库", "全文获取", "本地添加", "摘录", "知识整理", "入库任务", "学习摘录"];
-	[library, acquisition, local, excerpts, curation, tasks, answers].forEach((entry, i) => { if (entry.status === "rejected") result.issues.push(labels[i] + "读取失败：" + message(entry.reason)); });
+	const labels = ["文献库", "全文获取", "本地添加", "摘录", "知识整理", "入库任务", "学习摘录", "知识页草稿"];
+	[library, acquisition, local, excerpts, curation, tasks, answers, drafts].forEach((entry, i) => { if (entry.status === "rejected") result.issues.push(labels[i] + "读取失败：" + message(entry.reason)); });
 	const data = library.status === "fulfilled" ? library.value : undefined;
 	const objects = data?.papers.flatMap(p => p.objects) || [];
 	const bindings = new Map(objects.filter(o => o.kind === "annotation").map(o => [o.id, o.binding]));
@@ -114,6 +117,12 @@ export async function readPendingCenter(inputs: PendingInputs, signal: AbortSign
 				(r.answer.ref.kind === "topic" ? "主题学习" : r.answer.context.kind === "code" ? "代码阅读" : "资料阅读") + " · AI 回答" + (r.humanRevision ? "与人工修订稿" : "") + "。" + (source.state === "matched" ? "尚未标记整理完成，可回看并编辑。" : source.message),
 				"查看学习摘录", r.answer.context.location, { kind: "answer-excerpt", path: file.path }, { digest: file.digest, source });
 		}
+	}
+	if (drafts.status === "fulfilled") {
+		result.issues.push(...drafts.value.issues);
+		for (const draft of drafts.value.entries) add("draft:" + draft.id, "draft", draft.title,
+			draft.issues.length ? "草稿历史需复查：" + draft.issues.join("；") : draft.pending ? "草稿有未完成保存，请核对并恢复。" : "草稿已保存，正文与材料待审阅；尚未创建正式知识页。",
+			"继续编辑草稿", "knowledge-drafts/" + draft.id, { kind: "draft", id: draft.id }, draft.revision);
 	}
 	if (curation.status === "fulfilled") {
 		result.issues.push(...curation.value.issues);
