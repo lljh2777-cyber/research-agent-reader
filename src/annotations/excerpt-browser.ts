@@ -116,7 +116,7 @@ export class ExcerptBrowser extends Modal {
 		this.detailEl.createEl("p", { text: record.sourcePath });
 		if (record.pdfExcerpt) this.detailEl.createEl("p", { text: `PDF 第 ${record.pdfExcerpt.page} / ${record.pdfExcerpt.pageCount} 页（文件页码）` });
 		this.detailEl.createEl("p", { text: "整理状态：" + excerptOrganizationLabel(record), cls: "rar-excerpt-state" });
-		this.detailEl.createEl("p", { text: "整理完成表示当前摘录已处理，由你手动标记；原文变化或无法核对时仍需复查。", cls: "rar-library-muted" });
+		this.detailEl.createEl("p", { text: "整理完成由你手动标记；修改个人备注后重新待整理，原文变化或无法核对时仍需复查。", cls: "rar-library-muted" });
 		const sourceStatus = this.detailEl.createEl("p", { text: "正在核对原文…", attr: { role: "status" } });
 		const check = this.statusAction = new AbortController();
 		void this.service.status(snapshot, check.signal).then(text => { if (!check.signal.aborted && sourceStatus.isConnected) sourceStatus.setText(text); }, error => { if (!check.signal.aborted && sourceStatus.isConnected) sourceStatus.setText("暂时无法核对：" + String(error)); });
@@ -131,7 +131,7 @@ export class ExcerptBrowser extends Modal {
 			const saved = await this.service.saveNote(snapshot, this.draft, signal); signal.throwIfAborted();
 			this.selected = saved; this.draft = saved.record.manualText;
 			this.data.entries = this.data.entries.map(entry => entry.record.id === saved.record.id ? saved : entry);
-			this.message("个人备注已保存，原句与历史上下文保留。"); this.renderList(); this.renderDetail();
+			this.message(record.archiveStatus === "completed" && saved.record.archiveStatus === "none" ? "个人备注已保存并重新待整理；刷新待处理中心可查看。" : "个人备注已保存，原句与历史上下文保留。"); this.renderList(); this.renderDetail();
 		})).addClass("mod-cta");
 		this.button(actions, "重新读取（保留草稿）", () => void this.run(async signal => {
 			const latest = await this.service.load(record, signal); signal.throwIfAborted();

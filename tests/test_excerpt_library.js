@@ -91,6 +91,13 @@ let count=0;const test=async(name,run)=>{await run();count++;console.log("PASS e
    const unchanged=entry.text;assert.equal(patchExcerptOrganization(unchanged,complete,true,"ignored"),unchanged);const reopened=await new ExcerptLibraryService(f.app).setCompleted(complete,false);assert.equal(reopened.record.archiveStatus,"none");assert.ok(entry.text.includes("- 状态：待整理"));assert.equal(f.files.get(f.source).text,f.body);if(eol==="\r\n")assert.ok(!/(?<!\r)\n/.test(entry.text));
   }
  });
+ await test("editing a manually completed excerpt reopens work, while no-ops and archive jobs retain state",async()=>{
+  for(const eol of ["\n","\r\n"]){const f=await fixture(eol),entry=f.files.get(f.record.annotationPath);entry.text+=eol+"User appendix";let complete=await f.service.setCompleted(await f.service.load(f.record),true);
+   const raw=entry.text;assert.equal((await f.service.saveNote(complete,complete.record.manualText)).digest,complete.digest);assert.equal(entry.text,raw);
+   const changed=await f.service.saveNote(complete,"New understanding");assert.equal(changed.record.archiveStatus,"none");assert.ok(entry.text.includes("- 状态：待整理"));assert.ok(entry.text.endsWith("User appendix"));assert.equal(changed.record.aiText,complete.record.aiText);assert.deepEqual(changed.record.excerpt,complete.record.excerpt);assert.equal(f.files.get(f.source).text,f.body);if(eol==="\r\n")assert.ok(!/(?<!\r)\n/.test(entry.text));
+   complete=await f.service.setCompleted(changed,true);entry.text=entry.text.replace('"archiveRunId":""','"archiveRunId":"legacy-job"');const archived=await f.service.load(f.record),saved=await f.service.saveNote(archived,"Keep legacy archive");assert.equal(saved.record.archiveStatus,"completed");assert.equal(saved.record.archiveRunId,"legacy-job");
+  }
+ });
  await test("completion conflicts, cancellation, response loss and existing archive jobs",async()=>{
   const f=await fixture(),old=await f.service.load(f.record),entry=f.files.get(f.record.annotationPath);entry.text+="\nExternal edit";const before=entry.text;await assert.rejects(f.service.setCompleted(old,true),/其他窗口/);assert.equal(entry.text,before);
   const fresh=await f.service.load(f.record),c=new AbortController(),process=f.app.vault.process;f.app.vault.process=async(...args)=>{c.abort();return process(...args);};await assert.rejects(f.service.setCompleted(fresh,true,c.signal),/abort/i);assert.equal(entry.text,before);

@@ -41,7 +41,9 @@ export function patchExcerptNote(content: string, expected: ExcerptSnapshot, man
 	const start = content.indexOf(MANUAL_START) + MANUAL_START.length, end = content.indexOf(MANUAL_END);
 	const eol = content.includes("\r\n") ? "\r\n" : "\n";
 	let next = content.slice(0, start) + eol + note + eol + content.slice(end);
-	return updateMetadata(next, latest.record, {}, now);
+	const reopen = latest.record.archiveStatus === "completed" && canOrganizeExcerpt(latest.record);
+	next = updateMetadata(next, latest.record, reopen ? { archiveStatus: "none" } : {}, now);
+	return reopen ? updateOrganizationLabel(next, false) : next;
 }
 
 function updateMetadata(content: string, record: AnnotationRecord, patch: Record<string, unknown>, now: string): string {
@@ -66,7 +68,10 @@ export function patchExcerptOrganization(content: string, expected: ExcerptSnaps
 	if (!canOrganizeExcerpt(latest.record)) throw new Error("此摘录包含归档任务记录，请在原归档功能处理，未更改状态");
 	const archiveStatus = completed ? "completed" : "none";
 	if (latest.record.archiveStatus === archiveStatus) return content;
-	let next = updateMetadata(content, latest.record, { archiveStatus }, now);
+	return updateOrganizationLabel(updateMetadata(content, latest.record, { archiveStatus }, now), completed);
+}
+
+function updateOrganizationLabel(next: string, completed: boolean): string {
 	// Only replace the generated archive status line after the AI section.
 	const start = next.indexOf("<!-- agent-dashboard:ai-end -->") + "<!-- agent-dashboard:ai-end -->".length;
 	const end = next.indexOf("<!-- agent-dashboard:annotation-end ", start);

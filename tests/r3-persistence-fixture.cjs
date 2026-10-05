@@ -1,0 +1,17 @@
+"use strict";
+// Minimal disk-backed host adapter. Production storage, parsers and services run unchanged.
+const fs=require('node:fs'),path=require('node:path'),assert=require('node:assert/strict'),{loadReading}=require('./reading-test-helpers');
+const {TFile,mocks:base}=require('./excerpt-fixtures.cjs');
+class FileSystemAdapter { constructor(root){this.root=root;} getBasePath(){return this.root;} async stat(p){try{const s=fs.statSync(path.join(this.root,p));return{type:s.isDirectory()?'folder':'file',size:s.size};}catch(e){if(e.code==='ENOENT')return null;throw e;}} }
+const mocks={obsidian:{...base.obsidian,FileSystemAdapter}};
+exports.mocks=mocks;
+exports.environment=root=>{
+ const vaultRoot=path.join(root,'vault'),pluginRoot=path.join(root,'records');fs.mkdirSync(vaultRoot,{recursive:true});fs.mkdirSync(pluginRoot,{recursive:true});
+ const full=p=>{const value=path.resolve(vaultRoot,p);assert.ok(value.startsWith(vaultRoot+path.sep),'fixture root');return value;},objects=new Map();
+ const get=p=>{if(!fs.existsSync(full(p)))return null;const stat=fs.statSync(full(p));if(!objects.has(p))objects.set(p,stat.isDirectory()?{path:p}:new TFile(p));const f=objects.get(p);f.stat={size:stat.size};return f;};
+ const files=(dir='')=>{const out=[];for(const e of fs.readdirSync(dir?full(dir):vaultRoot,{withFileTypes:true})){const p=dir?dir+'/'+e.name:e.name;if(e.isDirectory())out.push(...files(p));else if(p.endsWith('.md'))out.push(get(p));}return out;};
+ const app={vault:{adapter:new FileSystemAdapter(vaultRoot),getAbstractFileByPath:get,getFileByPath:get,getMarkdownFiles:()=>files(),read:async f=>fs.readFileSync(full(f.path),'utf8'),cachedRead:async f=>fs.readFileSync(full(f.path),'utf8'),createFolder:async p=>fs.mkdirSync(full(p)),create:async(p,text)=>{fs.writeFileSync(full(p),text,{flag:'wx'});return get(p);},process:async(f,edit)=>{const next=edit(fs.readFileSync(full(f.path),'utf8'));fs.writeFileSync(full(f.path),next);get(f.path);}},metadataCache:{getFileCache:()=>({})}};
+ const {FileSourceStorage}=loadReading('sources/storage.ts'),{FileCurationStore}=loadReading('curation/store.ts'),{AnswerExcerptService}=loadReading('learning/answer-excerpts.ts',mocks),{readAnswerSnapshot}=loadReading('learning/answer-snapshot.ts',mocks),{ExcerptLibraryService}=loadReading('annotations/excerpt-library.ts',mocks),{CurationService}=loadReading('curation/service.ts',mocks),{CurationWriter}=loadReading('curation/writer.ts',mocks),{KnowledgeDraftStore}=loadReading('curation/draft-store.ts',mocks),{KnowledgePages}=loadReading('curation/page.ts',mocks),{VaultPageFiles}=loadReading('curation/page-files.ts',mocks);
+ const io=new FileSourceStorage(pluginRoot),answers=new AnswerExcerptService(app,(ref,s)=>readAnswerSnapshot(io,ref,s)),excerpts=new ExcerptLibraryService(app),workspace={ready:async()=>{},repository:{get:()=>assert.fail('unexpected reading session')},document:()=>assert.fail('unexpected source lookup')},curation=new CurationService(app,workspace,new FileCurationStore(pluginRoot),()=>assert.fail('unexpected model'),undefined,answers),writer=new CurationWriter(curation),drafts=new KnowledgeDraftStore(io),pageFiles=new VaultPageFiles(app),pages=new KnowledgePages(drafts,io,pageFiles);
+ return{app,vaultRoot,pluginRoot,io,answers,excerpts,curation,writer,drafts,pageFiles,pages,put:(p,text)=>{fs.mkdirSync(path.dirname(full(p)),{recursive:true});fs.writeFileSync(full(p),text,{flag:'wx'});},read:p=>fs.readFileSync(full(p),'utf8')};
+};
