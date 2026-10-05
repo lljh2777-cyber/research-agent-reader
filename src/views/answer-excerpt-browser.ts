@@ -1,10 +1,10 @@
 import { Modal, type App } from "obsidian";
-import { answerExcerptCompleted, answerExcerptText, type AnswerExcerptFile, type AnswerExcerptList, type AnswerExcerptService } from "../learning/answer-excerpts";
+import { answerExcerptCompleted, answerExcerptText, MAX_ANSWER_HUMAN_HISTORY, type AnswerExcerptFile, type AnswerExcerptList, type AnswerExcerptService } from "../learning/answer-excerpts";
 import type { AnswerSnapshot } from "../learning/answer-snapshot";
 
 export class AnswerExcerptBrowser extends Modal {
 	private data: AnswerExcerptList = { entries: [], issues: [] }; private selected?: AnswerExcerptFile; private draft = ""; private query = "";
-	private humanDraft = ""; private humanPreview?: { digest: string; text: string }; private filter = "all";
+	private humanDraft = ""; private humanRestore?: number; private humanPreview?: { digest: string; text: string; restoreFrom?: number }; private filter = "all";
 	private busy = false; private closed = true; private abort = new AbortController(); private check?: AbortController; private limit = 25;
 	private list!: HTMLElement; private detail!: HTMLElement; private status!: HTMLElement;
 	private get dirty(): boolean { return Boolean(this.selected && (this.draft !== this.selected.record.note || this.humanDraft !== (this.selected.record.humanRevision?.text || ""))); }
@@ -31,7 +31,7 @@ export class AnswerExcerptBrowser extends Modal {
 		if (input.dataset.saveHuman === "true") input.disabled ||= !this.humanPreview || this.humanPreview.digest !== this.selected?.digest || this.humanPreview.text !== this.humanDraft;
 	} }
 	private accept(file: AnswerExcerptFile, reset: "all" | "note" | "human" | "none"): void {
-		this.selected = file; this.humanPreview = undefined;
+		this.selected = file; this.humanPreview = undefined; this.humanRestore = undefined;
 		if (reset === "all" || reset === "note") this.draft = file.record.note;
 		if (reset === "all" || reset === "human") this.humanDraft = file.record.humanRevision?.text || "";
 		this.data.entries = this.data.entries.map(e => e.path === file.path ? file : e); this.renderList(); this.renderDetail();
@@ -43,7 +43,7 @@ export class AnswerExcerptBrowser extends Modal {
 	private async refresh(): Promise<void> {
 		if (this.dirty) return;
 		await this.run(async () => { this.status.setText("正在读取学习摘录…"); this.data = await this.service.list(this.abort.signal); this.abort.signal.throwIfAborted();
-			this.selected = this.data.entries.find(e => e.path === (this.selected?.path || this.initial)); this.draft = this.selected?.record.note || ""; this.humanDraft = this.selected?.record.humanRevision?.text || ""; this.humanPreview = undefined;
+			this.selected = this.data.entries.find(e => e.path === (this.selected?.path || this.initial)); this.draft = this.selected?.record.note || ""; this.humanDraft = this.selected?.record.humanRevision?.text || ""; this.humanPreview = undefined; this.humanRestore = undefined;
 			this.status.setText(`${this.data.entries.length} 份学习摘录。`); this.renderList(); this.renderDetail(); });
 	}
 	private renderList(): void {
@@ -89,24 +89,49 @@ export class AnswerExcerptBrowser extends Modal {
 		this.detail.createEl("h3", { text: "人工修订稿（基于 AI 回答）" });
 		this.detail.createEl("p", { text: "在这里保存自己的改写，不改动原始回答。内容或备注保存后重新待整理；修订稿仍不进入知识检索。" });
 		const saved = this.detail.createEl("details"); saved.createEl("summary", { text: "查看已保存修订稿" }); saved.createEl("pre", { text: record.humanRevision?.text || "尚未保存人工修订稿" });
+		this.renderHumanHistory(entry);
+		const restoreHint = this.humanRestore === undefined ? undefined : this.detail.createEl("p", { text: `已载入历史版本 ${this.humanRestore + 1}，预览并确认后将追加为新版本。继续编辑会按普通修订保存。` });
 		const input = this.detail.createEl("textarea", { attr: { rows: "6", maxlength: "20000", "aria-label": "编辑人工修订稿" } }); input.value = this.humanDraft;
 		const preview = this.detail.createDiv("rar-answer-human-preview");
-		input.oninput = () => { this.humanDraft = input.value; this.humanPreview = undefined; preview.empty(); this.sync(); };
-		if (this.humanPreview) { preview.createEl("h4", { text: "人工修订预览" }); preview.createEl("p", { text: "确认后保存下方人工内容，原始 AI 回答保持不变。" }); preview.createEl("pre", { text: this.humanPreview.text.trim() ? this.humanPreview.text : "清空已保存的人工修订稿" }); }
+		input.oninput = () => { this.humanDraft = input.value; this.humanRestore = undefined; restoreHint?.remove(); this.humanPreview = undefined; preview.empty(); this.sync(); };
+		if (this.humanPreview) { preview.createEl("h4", { text: "人工修订预览" }); preview.createEl("p", { text: this.humanPreview.restoreFrom === undefined ? "确认后保存下方人工内容，历史与原始 AI 回答保留。" : `确认后将历史版本 ${this.humanPreview.restoreFrom + 1} 追加为新的当前修订，保留其间版本。` }); preview.createEl("pre", { text: this.humanPreview.text.trim() ? this.humanPreview.text : "清空已保存的人工修订稿（保留历史）" }); }
 		const tools = this.detail.createDiv("rar-excerpt-actions");
 		this.button(tools, "以 AI 片段起草", () => {
 			if (this.humanDraft.trim()) { this.status.setText("修订框已有内容，请自行编辑或先放弃草稿；未覆盖。"); return; }
-			this.humanDraft = answerExcerptText(record); this.humanPreview = undefined; this.renderDetail();
+			this.humanDraft = answerExcerptText(record); this.humanRestore = undefined; this.humanPreview = undefined; this.renderDetail();
 		});
 		this.button(tools, "预览人工修订", () => void this.run(async () => {
 			const text = this.humanDraft, latest = await this.service.load(entry.path, this.abort.signal); this.abort.signal.throwIfAborted();
 			if (latest.digest !== entry.digest) throw new Error("学习摘录已被其他窗口修改，请重新读取；两个草稿仍保留");
-			if (text.length > 20000) throw new Error("人工修订稿超过两万字符"); this.humanPreview = { digest: entry.digest, text }; this.renderDetail();
+			if (text.length > 20000) throw new Error("人工修订稿超过两万字符"); this.humanPreview = { digest: entry.digest, text, restoreFrom: this.humanRestore }; this.renderDetail();
 		}));
 		const save = this.button(tools, "确认保存人工修订", () => {
 			if (!this.humanPreview || this.humanPreview.digest !== entry.digest || this.humanPreview.text !== this.humanDraft) return;
-			const text = this.humanPreview.text; void this.run(async () => { const file = await this.service.saveHumanRevision(entry, text, this.abort.signal); this.abort.signal.throwIfAborted(); this.status.setText("人工修订已保存；原始 AI 回答与个人备注保持不变。"); this.accept(file, "human"); });
+			const { text, restoreFrom } = this.humanPreview; void this.run(async () => { const file = restoreFrom === undefined ? await this.service.saveHumanRevision(entry, text, this.abort.signal) : await this.service.restoreHumanRevision(entry, restoreFrom, this.abort.signal); this.abort.signal.throwIfAborted(); this.status.setText("人工修订已保存；历史、原始 AI 回答与个人备注保留。"); this.accept(file, "human"); });
 		}); save.dataset.saveHuman = "true";
-		this.button(tools, "放弃修订草稿", () => { this.humanDraft = record.humanRevision?.text || ""; this.humanPreview = undefined; this.renderDetail(); });
+		this.button(tools, "放弃修订草稿", () => { this.humanDraft = record.humanRevision?.text || ""; this.humanRestore = undefined; this.humanPreview = undefined; this.renderDetail(); });
+	}
+	private renderHumanHistory(entry: AnswerExcerptFile): void {
+		const history = entry.record.humanHistory;
+		if (!history) { this.detail.createEl("p", { text: "下一次修改人工稿时将开始保留修订历史；此前已被覆盖的内容无法追溯。" }); return; }
+		const panel = this.detail.createEl("details", { cls: "rar-answer-human-history" });
+		panel.createEl("summary", { text: `人工修订历史 · ${history.length} 个版本（含起始快照）` });
+		panel.createEl("p", { text: `最多保留 ${MAX_ANSWER_HUMAN_HISTORY} 个版本；版本数或文件大小达到上限（2 MiB）会停止保存新修订。起始快照只保留启用历史时仍存在的人工稿。` });
+		let loaded = false;
+		panel.ontoggle = () => {
+			if (!panel.open || loaded) return; loaded = true;
+			for (let index = history.length - 1; index >= 0; index--) {
+				const item = history[index], row = panel.createEl("details");
+				const action = item.kind === "baseline" ? "起始快照" : item.kind === "restore" ? `恢复自版本 ${item.restoredFrom! + 1}` : item.text ? "人工修订" : "清空人工稿";
+				row.createEl("summary", { text: `版本 ${index + 1} · ${action} · ${item.updated}${index === history.length - 1 ? " · 当前" : ""}` });
+				row.createEl("pre", { text: item.text || "无人工修订稿" });
+				if (item.text === (entry.record.humanRevision?.text || "")) continue;
+				const button = this.button(row, `载入版本 ${index + 1} 到修订框`, () => {
+					if (this.humanDraft !== (entry.record.humanRevision?.text || "")) { this.status.setText("修订框已有未保存内容，请先保存或放弃草稿；未覆盖。"); return; }
+					this.humanDraft = item.text; this.humanRestore = index; this.humanPreview = undefined;
+					this.status.setText("历史内容已载入修订框，尚未写入。请预览并确认保存。"); this.renderDetail();
+				}); button.dataset.historyVersion = String(index);
+			} this.sync();
+		};
 	}
 }

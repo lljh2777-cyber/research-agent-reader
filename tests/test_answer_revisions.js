@@ -11,12 +11,12 @@ const inputs=service=>({library:async()=>({papers:[],readIssues:[],complete:true
 async function fixture(){const f=readingFixture(),record=prepareAnswerExcerpt(f.answer(),0,5,'Personal memo','2026-09-12T00:00:00.000Z'),saved=await f.service.save(record);return{...f,file:saved.file,record};}
 let count=0;async function test(name,fn){await fn();count++;console.log('PASS answer revisions: '+name);}
 (async()=>{
- await test('v1 viewing and no-op edits are byte-stable; v2 upgrade preserves the original and memo',async()=>{
+ await test('v1 viewing and no-op edits are byte-stable; history upgrade preserves the original and memo',async()=>{
   const f=await fixture(),raw=f.files.get(f.file.path).text,writes=f.writes.length;
   assert.equal((await f.service.list()).entries[0].record.version,1);await readAnswerExcerptPending(f.service,signal());assert.equal(f.writes.length,writes);
   assert.equal((await f.service.saveHumanRevision(f.file,'')).digest,f.file.digest);assert.equal((await f.service.setCompleted(f.file,false)).digest,f.file.digest);assert.equal(f.files.get(f.file.path).text,raw);
   const saved=await f.service.saveHumanRevision(f.file,'My revision\r\n```dataviewjs\napp.test()\n```\n[[not-evidence]]');
-  assert.equal(saved.record.version,2);assert.deepEqual(saved.record.answer,f.record.answer);assert.equal(saved.record.note,'Personal memo');assert.equal(saved.path,f.file.path);
+  assert.equal(saved.record.version,3);assert.deepEqual(saved.record.answer,f.record.answer);assert.equal(saved.record.note,'Personal memo');assert.equal(saved.path,f.file.path);
   assert.ok(f.files.get(saved.path).text.includes('````text\n'+saved.record.humanRevision.text+'\n````'));assert.equal(readAnswerExcerpt(f.files.get(saved.path).text,saved.path).digest,saved.digest);
   const reloaded=new AnswerExcerptService(f.app,(ref,s)=>readAnswerSnapshot(f.storage,ref,s));assert.deepEqual((await reloaded.load(saved.path)).record,saved.record);
   assert.equal((await reloaded.save(f.record)).file.record.humanRevision.text,saved.record.humanRevision.text);
@@ -44,7 +44,7 @@ let count=0;async function test(name,fn){await fn();count++;console.log('PASS an
   f.app.vault.process=async(...args)=>{await process(...args);throw Error('response lost');};const saved=await f.service.saveHumanRevision(f.file,'Committed revision');assert.equal(saved.record.humanRevision.text,'Committed revision');
   const cancel=new AbortController();f.app.vault.process=async(file,fn)=>{cancel.abort();return process(file,fn);};await assert.rejects(f.service.setCompleted(saved,true,cancel.signal),/abort/i);assert.equal(answerExcerptCompleted((await f.service.load(saved.path)).record),false);
  });
- await test('v2 validation rejects forged roles, dates, oversized drafts and mismatched visible content',async()=>{
+ await test('revision validation rejects forged roles, dates, oversized drafts and mismatched visible content',async()=>{
   const f=await fixture(),saved=await f.service.saveHumanRevision(f.file,'Human');
   for(const change of [r=>r.humanRevision.text='',r=>r.humanRevision.updated='bad',r=>r.organization.state='scientifically-verified',r=>r.version=1,r=>r.humanRevision=undefined]){const r=structuredClone(saved.record);change(r);assert.throws(()=>readAnswerExcerpt(renderAnswerExcerpt(r),saved.path));}
   const raw=f.files.get(saved.path).text;assert.throws(()=>readAnswerExcerpt(raw.replace('## 人工修订稿','## Verified paper'),saved.path));

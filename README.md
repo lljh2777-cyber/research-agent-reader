@@ -28,7 +28,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 `0.80.0` 接通 [R3.12 单页创建](docs/knowledge-pages-r312.md)：在已保存草稿中点击“创建知识页／查看建页记录”，选择文件名、查重并预览页面及索引／日志，确认后创建概念、方法或综合页面。支持部分失败后的重载恢复，保留人工编辑；内容仍标为待审阅，创建成功不代表证据核验通过。
 
-The `codex/research-learning-map` development branch is at `0.80.0`; the beta
+`0.81.0` 补齐 [R3.13 人工修订历史](docs/answer-history-r313.md)：学习回答摘录保留改写、清空与恢复记录；历史版本先载入编辑框，预览确认后追加为新版本。旧摘录首次实际修改才启用历史，最多 64 个版本并受 2 MiB 文件上限约束；原始 AI 快照、个人备注和已保存知识页草稿分别保留。
+
+The `codex/research-learning-map` development branch is at `0.81.0`; the beta
 release link above remains the published release.
 
 `0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；不为保存书目信息生成论文笔记。跨阶段待处理中心按路线归 R3。

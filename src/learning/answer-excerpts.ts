@@ -5,9 +5,12 @@ import { readingPathCode } from "../reading/export";
 import { ANSWER_EXCERPT_ROOT, validAnswerExcerptPath } from "./answer-excerpt-path";
 import { validateAnswerSnapshot, type AnswerSnapshot, type AnswerRef } from "./answer-snapshot";
 
+export interface AnswerHumanVersion { kind: "baseline" | "edit" | "restore"; text: string; updated: string; restoredFrom?: number; }
+export const MAX_ANSWER_HUMAN_HISTORY = 64;
 export interface AnswerExcerpt {
-	version: 1 | 2; id: string; answer: AnswerSnapshot; start: number; end: number; note: string; created: string; updated: string;
+	version: 1 | 2 | 3; id: string; answer: AnswerSnapshot; start: number; end: number; note: string; created: string; updated: string;
 	humanRevision?: { text: string; updated: string } | null;
+	humanHistory?: AnswerHumanVersion[];
 	organization?: { state: "pending" | "completed"; updated: string };
 }
 export interface AnswerExcerptFile { path: string; digest: string; record: AnswerExcerpt; }
@@ -20,7 +23,7 @@ const pathFor = (id: string): string => `${ANSWER_EXCERPT_ROOT}/${id}.md`;
 const identity = (answer: AnswerSnapshot, start: number, end: number): string => "answer-" + objectDigest({ answer: answer.digest, start, end }).slice(0, 48);
 const fence = (text: string): string => { let width = 3; for (const match of text.matchAll(/`+/g)) width = Math.max(width, match[0].length + 1); const ticks = "`".repeat(width); return ticks + "text\n" + text + "\n" + ticks; };
 export const answerExcerptText = (record: AnswerExcerpt): string => record.answer.content.slice(record.start, record.end);
-export const answerExcerptCompleted = (record: AnswerExcerpt): boolean => record.version === 2 && record.organization?.state === "completed";
+export const answerExcerptCompleted = (record: AnswerExcerpt): boolean => record.version >= 2 && record.organization?.state === "completed";
 const validDate = (value: unknown): value is string => typeof value === "string" && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
 export function prepareAnswerExcerpt(answer: AnswerSnapshot, start = 0, end = answer.content.length, note = "", date = new Date().toISOString()): AnswerExcerpt {
 	answer = validateAnswerSnapshot(answer);
@@ -43,21 +46,42 @@ export function renderAnswerExcerpt(record: AnswerExcerpt): string {
 		"来源位置：" + readingPathCode(a.context.location) + (r.kind === "topic" ? "；路线：" + readingPathCode(r.route) + "；请求：" + readingPathCode(a.context.requestId) + "；教学规则：" + readingPathCode(a.context.rule) : ""), "",
 		...(a.context.correction ? ["此处保留历史回答；已选核对节点：" + readingPathCode(a.context.correction), ""] : []),
 		"## AI 回答片段", "", fence(answerExcerptText(record)), "",
-		...(record.version === 2 ? ["## 人工修订稿（基于 AI 回答）", "", "由用户保存，不代表独立核验。原始 AI 回答保留在上方。", "", fence(record.humanRevision?.text || ""), ""] : []),
+		...(record.version >= 2 ? ["## 人工修订稿（基于 AI 回答）", "", "由用户保存，不代表独立核验。原始 AI 回答保留在上方。", "", fence(record.humanRevision?.text || ""), ""] : []),
+		...(record.version === 3 ? ["## 人工修订历史", "", `已保留 ${record.humanHistory?.length || 0} 个版本（含起始快照）。请在学习回答摘录中查看或预览恢复；启用历史前已被覆盖的内容无法追溯。`, ""] : []),
 		"## 个人备注", "", fence(record.note), "",
-		...(record.version === 2 ? ["## 整理状态", "", answerExcerptCompleted(record) ? "用户标记：整理完成" : "用户标记：待整理", "", "此标记不代表内容已经进入正式笔记或通过科学／教学核验。", ""] : []),
+		...(record.version >= 2 ? ["## 整理状态", "", answerExcerptCompleted(record) ? "用户标记：整理完成" : "用户标记：待整理", "", "此标记不代表内容已经进入正式笔记或通过科学／教学核验。", ""] : []),
 		"<!-- rar-answer-excerpt " + JSON.stringify(record).replace(/</g, "\\u003c").replace(/>/g, "\\u003e") + " -->", ""].join("\n");
 }
 export function readAnswerExcerpt(text: string, path: string): AnswerExcerptFile {
 	if (!validAnswerExcerptPath(path) || Buffer.byteLength(text) > MAX_FILE) throw new Error("学习摘录路径无效或超过读取上限");
 	const matches = [...text.matchAll(MARKER)]; if (matches.length !== 1) throw new Error("学习摘录凭据缺失或重复，请直接打开文档检查");
 	const r: AnswerExcerpt = JSON.parse(matches[0][1]), expected = prepareAnswerExcerpt(r.answer, r.start, r.end, r.note, r.created);
-	if (![1, 2].includes(r.version) || r.id !== expected.id || path !== pathFor(r.id) || !validDate(r.updated) || r.updated < r.created) throw new Error("学习摘录内容或凭据被修改，请直接打开文档核对；未覆盖用户内容");
+	if (![1, 2, 3].includes(r.version) || r.id !== expected.id || path !== pathFor(r.id) || !validDate(r.updated) || r.updated < r.created) throw new Error("学习摘录内容或凭据被修改，请直接打开文档核对；未覆盖用户内容");
 	if (r.version === 1 ? r.humanRevision !== undefined || r.organization !== undefined
 		: !r.organization || !["pending", "completed"].includes(r.organization.state) || !validDate(r.organization.updated) || r.organization.updated < r.created || r.organization.updated > r.updated
 			|| r.humanRevision !== null && (!r.humanRevision || typeof r.humanRevision.text !== "string" || !r.humanRevision.text.trim() || r.humanRevision.text.length > 20000 || !validDate(r.humanRevision.updated) || r.humanRevision.updated < r.created || r.humanRevision.updated > r.updated)) throw new Error("人工修订或整理状态凭据无效，未修改文件");
+	validateHumanHistory(r);
 	if (text !== renderAnswerExcerpt(r)) throw new Error("学习摘录内容或凭据被修改，请直接打开文档核对；未覆盖用户内容");
 	return { path, record: structuredClone(r), digest: fileHash(text) };
+}
+
+function validateHumanHistory(record: AnswerExcerpt): void {
+	const fail = (): never => { throw new Error("人工修订历史凭据无效，未修改文件"); };
+	if (record.version !== 3) { if (record.humanHistory !== undefined) fail(); return; }
+	const history = record.humanHistory;
+	if (!Array.isArray(history) || history.length < 2 || history.length > MAX_ANSWER_HUMAN_HISTORY) return fail();
+	for (let index = 0; index < history.length; index++) {
+		const item = history[index], previous = history[index - 1];
+		if (!item || !["baseline", "edit", "restore"].includes(item.kind) || (index === 0) !== (item.kind === "baseline")
+			|| typeof item.text !== "string" || item.text.length > 20000 || item.text !== "" && !item.text.trim()
+			|| !validDate(item.updated) || item.updated < record.created || item.updated > record.updated
+			|| previous && (item.updated < previous.updated || item.text === previous.text)) fail();
+		if (item.kind === "restore") {
+			if (!Number.isSafeInteger(item.restoredFrom) || item.restoredFrom! < 0 || item.restoredFrom! >= index || history[item.restoredFrom!].text !== item.text) fail();
+		} else if (item.restoredFrom !== undefined) fail();
+	}
+	const last = history[history.length - 1];
+	if (last.text ? record.humanRevision?.text !== last.text || record.humanRevision.updated !== last.updated : record.humanRevision !== null) fail();
 }
 
 export class AnswerExcerptService {
@@ -122,14 +146,27 @@ export class AnswerExcerptService {
 	saveHumanRevision(input: AnswerExcerptFile, text: string, signal?: AbortSignal): Promise<AnswerExcerptFile> {
 		if (typeof text !== "string" || text.length > 20000) return Promise.reject(new Error("人工修订稿超过两万字符"));
 		if (!text.trim()) text = "";
-		return this.mutate(input, (record, now) => text === (record.humanRevision?.text || "") ? record : this.reopen({ ...record, version: 2, humanRevision: text ? { text, updated: now } : null }, now), signal);
+		return this.mutate(input, (record, now) => this.appendHumanRevision(record, text, now), signal);
+	}
+	restoreHumanRevision(input: AnswerExcerptFile, index: number, signal?: AbortSignal): Promise<AnswerExcerptFile> {
+		return this.mutate(input, (record, now) => {
+			if (record.version !== 3 || !Number.isSafeInteger(index) || index < 0 || index >= record.humanHistory!.length) throw new Error("请选择已保存的人工修订历史版本");
+			return this.appendHumanRevision(record, record.humanHistory![index].text, now, index);
+		}, signal);
+	}
+	private appendHumanRevision(record: AnswerExcerpt, text: string, now: string, restoredFrom?: number): AnswerExcerpt {
+		if (text === (record.humanRevision?.text || "")) return record;
+		const history: AnswerHumanVersion[] = record.humanHistory || [{ kind: "baseline", text: record.humanRevision?.text || "", updated: record.humanRevision?.updated || record.updated }];
+		if (history.length >= MAX_ANSWER_HUMAN_HISTORY) throw new Error(`人工修订历史已达 ${MAX_ANSWER_HUMAN_HISTORY} 个版本上限，未删除历史或保存新修订；请保留当前草稿另行整理。`);
+		const item: AnswerHumanVersion = { kind: restoredFrom === undefined ? "edit" : "restore", text, updated: now, ...(restoredFrom === undefined ? {} : { restoredFrom }) };
+		return this.reopen({ ...record, version: 3, humanRevision: text ? { text, updated: now } : null, humanHistory: [...history, item] }, now);
 	}
 	setCompleted(input: AnswerExcerptFile, completed: boolean, signal?: AbortSignal): Promise<AnswerExcerptFile> {
 		if (typeof completed !== "boolean") return Promise.reject(new Error("整理状态无效"));
-		return this.mutate(input, (record, now) => answerExcerptCompleted(record) === completed ? record : { ...record, version: 2, humanRevision: record.humanRevision || null, organization: { state: completed ? "completed" : "pending", updated: now }, updated: now }, signal);
+		return this.mutate(input, (record, now) => answerExcerptCompleted(record) === completed ? record : { ...record, version: record.version === 3 ? 3 : 2, humanRevision: record.humanRevision || null, organization: { state: completed ? "completed" : "pending", updated: now }, updated: now }, signal);
 	}
 	private reopen(record: AnswerExcerpt, now: string): AnswerExcerpt {
-		return { ...record, ...(record.version === 2 ? { humanRevision: record.humanRevision || null, organization: { state: "pending" as const, updated: now } } : {}), updated: now };
+		return { ...record, ...(record.version >= 2 ? { humanRevision: record.humanRevision || null, organization: { state: "pending" as const, updated: now } } : {}), updated: now };
 	}
 	private mutate(input: AnswerExcerptFile, edit: (record: AnswerExcerpt, now: string) => AnswerExcerpt, signal?: AbortSignal): Promise<AnswerExcerptFile> {
 		const expected = structuredClone(input);
