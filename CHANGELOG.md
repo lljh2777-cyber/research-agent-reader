@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Storage validation and retained-copy rehearsal — 0.83.0
+
+- R4.2 首批候选接入生产格式、历史和记录间依赖校验，补充学习摘录到会话／节点的反向引用检查；旧记录的内存规范化单独标记，原始字节保留。
+- 新增 `pnpm storage:rehearse`，在新私有目录创建有限副本、核对内容并在独立进程读回；不复制混合配置，不切换路由，不覆盖或清理旧目录。
+- 测试库 76 个候选文件与 2 份学习摘录读回一致，62 个逻辑对象格式通过；两条旧演示证据引用仍缺失，完整依赖闭包未完成。详见 [R4.2 首批记录](docs/storage-validation-r42.md)。
+
 ### Read-only storage inventory — 0.82.0
 
 - 开始 R4.1：新增显式指定插件目录的只读盘点 CLI，区分持久历史、暂留事务、派生缓存、混合配置和未知文件，输出逐文件迁移位置预览与显式引用检查。
