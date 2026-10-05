@@ -1,6 +1,6 @@
 {
 	"name": "research-agent-reader",
-	"version": "0.81.1",
+	"version": "0.82.0",
 	"private": true,
 	"description": "Desktop research reader and optional local-agent dashboard for Obsidian",
 	"author": "Liao Li",
@@ -33,6 +33,8 @@
 		"test:r1": "node tests/run_r1_tests.js",
 		"test:r2": "node tests/run_r2_tests.js",
 		"test:r3": "node tests/run_r3_tests.js",
+		"test:r4": "node tests/test_storage_inventory.js",
+		"storage:inventory": "node scripts/storage-inventory.cjs",
 		"test:metadata-intake": "node tests/test_metadata_intake.js",
 		"test:manual-metadata": "node tests/test_manual_metadata.js",
 		"test:paper-intake": "node tests/test_paper_intake.js",

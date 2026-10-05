@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Read-only storage inventory — 0.82.0
+
+- 开始 R4.1：新增显式指定插件目录的只读盘点 CLI，区分持久历史、暂留事务、派生缓存、混合配置和未知文件，输出逐文件迁移位置预览与显式引用检查。
+- 增加读取上限、链接／junction 检查、来源变化检测、报告覆盖保护和凭据值隔离；候选指纹按需计算，未实现复制、清理或运行时路由切换。
+- 测试库盘点 230 个文件、76 个首批候选；`data.json` 混合保存问答与任务历史，须单独设计。新增 `pnpm test:r4`，详见 [R4.1 记录](docs/storage-inventory-r41.md)。
+
 ### R3 engineering closeout — 0.81.1
 
 - 修复原文摘录标记完成后修改个人备注仍被待处理列表隐藏的问题。实际修改后重新待整理；无变化保存及有关联任务的旧归档记录保留原状态，Markdown 与 PDF 凭据不变。

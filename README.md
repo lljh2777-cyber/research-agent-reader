@@ -32,7 +32,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 `0.81.1` 完成 [R3 工程收尾](docs/r3-closeout.md)：修复原文摘录修改备注后仍保持“整理完成”的问题，补齐五个独立进程间的真实磁盘恢复验证，并完成原生摘录、待处理、补充／撤销和新页中断续办。下一步进入 R4 只读存储盘点；科学与教学审阅仍单独验收。
 
-The `codex/research-learning-map` development branch is at `0.81.1`; the beta
+`0.82.0` 开始 [R4.1 只读存储盘点](docs/storage-inventory-r41.md)：新增 `pnpm storage:inventory`，逐文件区分持久记录、暂留历史、缓存与混合配置，检查显式引用并生成候选路径。此为开发命令行工具，尚未复制数据或切换插件存储；下一步在保留副本校验格式、历史和完整依赖。
+
+The `codex/research-learning-map` development branch is at `0.82.0`; the beta
 release link above remains the published release.
 
 `0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；不为保存书目信息生成论文笔记。跨阶段待处理中心按路线归 R3。
