@@ -44,12 +44,12 @@ export class KnowledgeDraftsModal extends Modal {
 		finally { if (!this.closed && this.action === action) { this.action = undefined; this.controls(); } }
 	}
 	private async renderList(signal: AbortSignal): Promise<void> {
-		const data = await this.plugin.getKnowledgeDrafts().summaries(signal); signal.throwIfAborted(); this.list.empty();
+		const data = await this.plugin.getKnowledgePages().summaries(signal); signal.throwIfAborted(); this.list.empty();
 		const details = this.list.createEl("details"); details.open = !this.draft; details.createEl("summary", { text: `已保存草稿 ${data.entries.length} 份` });
 		const search = details.createEl("input", { type: "search", attr: { "aria-label": "搜索知识页草稿", placeholder: "搜索标题或 ID" } }), rows = details.createDiv();
 		const render = () => { rows.empty(); for (const entry of data.entries.filter(e => (e.title + e.id).toLowerCase().includes(search.value.toLowerCase()))) {
 			const b = this.button(rows, entry.title, () => { if (this.clean()) void this.run(s => this.load(entry.id, false, s)); }); b.dataset.draftId = entry.id;
-			rows.createEl("p", { text: entry.id + ` · ${entry.saves} 个保存版本` + (entry.pending ? " · 有未完成保存" : "") + (entry.issues.length ? " · 需复查" : "") });
+			rows.createEl("p", { text: entry.id + ` · ${entry.saves} 个保存版本` + (entry.pending ? " · 有未完成保存" : "") + (entry.issues.length ? " · 需复查" : "") + (entry.page ? entry.page.complete ? " · 已创建知识页" : " · 建页待恢复" : "") });
 		} }; render(); search.oninput = render;
 		for (const issue of data.issues) details.createEl("p", { text: issue });
 		if (!data.entries.length) details.createEl("p", { text: "尚无草稿，可新建空白草稿，或从摘录详情开始。" });
@@ -63,7 +63,7 @@ export class KnowledgeDraftsModal extends Modal {
 		if (keep && (!this.draft || this.draft.id !== id || objectDigest(this.draft.material) !== objectDigest(latest.draft.material))) throw new Error("附带材料或草稿身份不同，请保留输入并另存新草稿。");
 		this.baseline = structuredClone(latest.draft); if (!keep) this.draft = structuredClone(latest.draft);
 		this.history = history; this.expected = history.current?.digest || null; this.preview = undefined; this.renderEditor();
-		this.status.setText(keep ? "已读取最新保存版本，当前输入保留；请对照下方版本记录后再保存。" : history.issues.length ? "草稿存在需复查记录，可查看历史或另存新草稿。" : history.pending.length ? "有未完成保存，请先预览恢复。" : "已恢复保存草稿，尚未创建正式知识页。");
+		this.status.setText(keep ? "已读取最新保存版本，当前输入保留；请对照下方版本记录后再保存。" : history.issues.length ? "草稿存在需复查记录，可查看历史或另存新草稿。" : history.pending.length ? "有未完成保存，请先预览恢复。" : "已恢复保存草稿；页面创建情况可查看建页记录。");
 	}
 	private renderEditor(): void {
 		this.editor.empty(); if (!this.draft) return; const draft = this.draft;
@@ -80,6 +80,7 @@ export class KnowledgeDraftsModal extends Modal {
 			else { const f = readAnswerExcerpt(m.raw, m.path); for (const role of Object.keys(ANSWER_CONTENT_ROLES) as AnswerContentRole[]) if (answerRoleText(f, role).trim()) check("草稿附带" + ANSWER_CONTENT_ROLES[role], m.roles.includes(role), value => { const set = new Set(m.roles); if (value) set.add(role); else set.delete(role); m.roles = (Object.keys(ANSWER_CONTENT_ROLES) as AnswerContentRole[]).filter(r => set.has(r)); }); }
 		}
 		const tools = this.editor.createDiv("rar-excerpt-actions");
+		if (this.history) this.button(tools, "创建知识页／查看建页记录", () => { if (!this.clean()) return; this.plugin.openKnowledgePage(draft.id); this.close(); });
 		this.button(tools, "预览草稿", () => { try { const input = structuredClone(draft); input.updated = new Date(Math.max(Date.now(), Date.parse(draft.updated), Date.parse(this.baseline!.updated))).toISOString(); const text = renderKnowledgeDraft(input); this.preview = { draft: input, expected: this.expected, key: objectDigest(draft) }; this.showPreview(text); } catch (error) { this.status.setText(String(error)); } });
 		this.button(tools, "重新读取（保留输入）", () => void this.run(signal => this.load(draft.id, true, signal)));
 		this.button(tools, "放弃未保存输入", () => { this.draft = structuredClone(this.baseline); this.preview = undefined; this.renderEditor(); this.status.setText("已回到最近读取的草稿。附带材料仍保留。"); });
@@ -106,7 +107,7 @@ export class KnowledgeDraftsModal extends Modal {
 		this.result.createEl("p", { text: "本次准备保存" }); this.result.createEl("pre", { text, cls: "curation-text" }); const preview = this.preview!;
 		this.button(this.result, "确认保存草稿", () => void this.run(async signal => {
 			if (this.preview !== preview || objectDigest(this.draft) !== preview.key || this.expected !== preview.expected) throw new Error("预览已变化，请重新核对");
-			const saved = await this.plugin.getKnowledgeDrafts().save(preview.draft, preview.expected, signal); await this.load(saved.draft.id, false, signal); await this.renderList(signal); this.status.setText("草稿已保存，可关闭后继续编辑。正式知识页尚未创建。");
+			const saved = await this.plugin.getKnowledgeDrafts().save(preview.draft, preview.expected, signal); await this.load(saved.draft.id, false, signal); await this.renderList(signal); this.status.setText("草稿已保存，可关闭后继续编辑。已创建的知识页不会随草稿更新。");
 		})).addClass("mod-cta"); this.status.setText("核对正文与附带材料后确认，仅保存草稿记录。");
 	}
 	private async recover(r: DraftRevision, signal: AbortSignal): Promise<void> { const saved = await this.plugin.getKnowledgeDrafts().resume(r, signal); await this.load(saved.draft.id, false, signal); await this.renderList(signal); this.status.setText("未完成保存已恢复，草稿版本已核对。"); }

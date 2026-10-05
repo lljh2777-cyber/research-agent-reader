@@ -120,8 +120,8 @@ export async function readPendingCenter(inputs: PendingInputs, signal: AbortSign
 	}
 	if (drafts.status === "fulfilled") {
 		result.issues.push(...drafts.value.issues);
-		for (const draft of drafts.value.entries) add("draft:" + draft.id, "draft", draft.title,
-			draft.issues.length ? "草稿历史需复查：" + draft.issues.join("；") : draft.pending ? "草稿有未完成保存，请核对并恢复。" : "草稿已保存，正文与材料待审阅；尚未创建正式知识页。",
+		for (const draft of drafts.value.entries) if (!draft.page?.complete || draft.issues.length || draft.pending) add("draft:" + draft.id, "draft", draft.title,
+			draft.issues.length ? "草稿历史需复查：" + draft.issues.join("；") : draft.pending ? "草稿有未完成保存，请核对并恢复。" : draft.page ? "建页未完成，请打开草稿中的建页记录并核对恢复：" + draft.page.path : "草稿已保存，正文与材料待审阅；尚未创建正式知识页。",
 			"继续编辑草稿", "knowledge-drafts/" + draft.id, { kind: "draft", id: draft.id }, draft.revision);
 	}
 	if (curation.status === "fulfilled") {

@@ -45,24 +45,25 @@ export function newKnowledgeDraft(material: DraftMaterial | null = null): Knowle
 }
 const literal = (s: string) => s.replace(/\\/g, "\\\\").replace(/([`*_{}\[\]()#+.!|~<>-])/g, "\\$1");
 const quote = (s: string) => s.split(/\r?\n/).map(line => "> " + literal(line)).join("\n");
-export function draftMaterialText(material: DraftMaterial | null): string {
+export function draftMaterialText(material: DraftMaterial | null, plainText = false): string {
 	const m = validateDraftMaterial(material); if (!m) return "没有附带材料。正文为用户草稿，来源与结论尚未核验。";
+	const selectedText = plainText ? (s: string) => s : quote;
 	if (m.kind === "excerpt") {
 		const r = readExcerptSnapshot(m.raw, { annotationPath: m.path, id: m.excerptId }).record;
-		return "保存时的原文摘录（文字记录，当前来源及科学结论待核对）：\n\n" + quote(r.selectedText) + "\n\n来源：" + readingPathCode(r.sourcePath)
+		return "保存时的原文摘录（文字记录，当前来源及科学结论待核对）：\n\n" + selectedText(r.selectedText) + "\n\n来源：" + readingPathCode(r.sourcePath)
 			+ (r.pdfExcerpt ? `；PDF 第 ${r.pdfExcerpt.page} / ${r.pdfExcerpt.pageCount} 页（文件页码）` : "")
 			+ `；字符 ${r.sourceAnchor!.start}–${r.sourceAnchor!.end}；原文版本 ` + readingPathCode((r.pdfExcerpt || r.excerpt)!.digest)
 			+ "\n\n摘录：" + readingPathCode(m.path) + "；快照：" + readingPathCode(m.digest)
-			+ (m.includeNote ? "\n\n个人备注（未核验）：\n\n" + quote(r.manualText) : "");
+			+ (m.includeNote ? "\n\n个人备注（未核验）：\n\n" + selectedText(r.manualText) : "");
 	}
 	const f = readAnswerExcerpt(m.raw, m.path), a = f.record.answer;
-	return "学习材料（AI 回答或基于 AI 的人工记录，不是论文证据）：\n\n" + m.roles.map(role => ANSWER_CONTENT_ROLES[role] + "：\n\n" + quote(answerRoleText(f, role))).join("\n\n")
+	return "学习材料（AI 回答或基于 AI 的人工记录，不是论文证据）：\n\n" + m.roles.map(role => ANSWER_CONTENT_ROLES[role] + "：\n\n" + selectedText(answerRoleText(f, role))).join("\n\n")
 		+ "\n\n摘录：" + readingPathCode(m.path) + "；快照：" + readingPathCode(m.digest) + "\n\n回答版本：" + readingPathCode(a.digest)
 		+ "；模型：" + readingPathCode(a.provider + " · " + a.model) + "；来源：" + readingPathCode(a.context.location);
 }
 export function renderKnowledgeDraft(raw: KnowledgeDraft): string {
 	const d = validateKnowledgeDraft(raw);
-	return "# " + literal(d.title) + "\n\n新知识页草稿 · " + DRAFT_KINDS[d.kind] + "\n\n尚未创建正式知识页，正文和材料均待审阅。\n\n## 用户草稿正文\n\n" + d.body
+	return "# " + literal(d.title) + "\n\n新知识页草稿 · " + DRAFT_KINDS[d.kind] + "\n\n正文和材料均待审阅，正式页面及创建进度请查看建页记录。\n\n## 用户草稿正文\n\n" + d.body
 		+ "\n\n## 附带材料（保存时的快照）\n\n" + draftMaterialText(d.material);
 }
 export async function readDraftMaterial(app: App, input: { kind: "excerpt"; ref: ExcerptRef; includeNote: boolean } | { kind: "answer"; path: string; roles: AnswerContentRole[] }, signal?: AbortSignal): Promise<DraftMaterial> {

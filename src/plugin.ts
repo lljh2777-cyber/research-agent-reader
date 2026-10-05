@@ -151,6 +151,9 @@ import { FileCurationStore } from "./curation/store";
 import { KnowledgeDraftStore } from "./curation/draft-store";
 import { readDraftMaterial } from "./curation/draft";
 import { KnowledgeDraftsModal } from "./views/knowledge-drafts";
+import { KnowledgePages } from "./curation/page";
+import { VaultPageFiles } from "./curation/page-files";
+import { KnowledgePageModal } from "./views/knowledge-page";
 import type { CurationContext, CurationReview } from "./curation/types";
 import { KnowledgeCurationModal, KnowledgeMaintenanceModal } from "./views/knowledge-curation";
 import { ExcerptCurationModal } from "./views/excerpt-curation";
@@ -372,6 +375,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private curationWriter?: CurationWriter;
 	private curationModals = new Set<Modal>();
 	private knowledgeDrafts?: KnowledgeDraftStore;
+	private knowledgePages?: KnowledgePages;
 	private annotationPopover: AnnotationPopover | null = null;
 	private excerptBrowser?: ExcerptBrowser;
 	private answerExcerptService?: AnswerExcerptService;
@@ -769,7 +773,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			library: s => this.inspectPaperLibrary(s), acquisitions: new FileAcquisitionStorage(directory, "production"),
 			local: s => readLocalPdfHistory(io, deviceId, undefined, s), excerpts: s => new ExcerptLibraryService(this.app).list(s),
 			answerExcerpts: s => readAnswerExcerptPending(this.getAnswerExcerpts(), s),
-			drafts: s => new KnowledgeDraftStore(io).summaries(s),
+			drafts: s => this.getKnowledgePages().summaries(s),
 			curation: async s => { const entries: SavedCurationPending[] = []; const summary = await readDashboardCuration(io, row => entries.push(row), s); return { entries, issues: summary.issues }; },
 			tasks: () => this.getTaskRuns(),
 		}, signal);
@@ -3107,6 +3111,8 @@ export default class AgentDashboardPlugin extends Plugin {
 	readDashboardCuration() { return readDashboardCuration(new FileSourceStorage(this.readingPluginDirectory())); }
 	openKnowledgeMaintenance(entry?: CurationNavigation): void { this.showCurationModal(new KnowledgeMaintenanceModal(this.app, this, entry)); }
 	getKnowledgeDrafts(): KnowledgeDraftStore { return this.knowledgeDrafts ||= new KnowledgeDraftStore(new FileSourceStorage(this.readingPluginDirectory())); }
+	getKnowledgePages(): KnowledgePages { return this.knowledgePages ||= new KnowledgePages(this.getKnowledgeDrafts(), new FileSourceStorage(this.readingPluginDirectory()), new VaultPageFiles(this.app)); }
+	openKnowledgePage(id: string): void { this.showCurationModal(new KnowledgePageModal(this.app, this, id)); }
 	openKnowledgeDrafts(id?: string): void { this.showCurationModal(new KnowledgeDraftsModal(this.app, this, id ? { id } : undefined)); }
 	private async openDraftFromExcerpt(input: Parameters<typeof readDraftMaterial>[1]): Promise<void> {
 		try { const material = await readDraftMaterial(this.app, input); if (!this.acquisitionClosing) this.showCurationModal(new KnowledgeDraftsModal(this.app, this, { material })); }

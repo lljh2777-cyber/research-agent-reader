@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Create knowledge pages from saved drafts — 0.80.0
+
+- 已保存草稿可创建单个概念、方法或综合页面，文件名、同名标题和草稿身份查重后预览页面、索引与日志；仅确认后写入。
+- 固定建页计划支持部分失败、取消和重载后的明确恢复。页面只创建，索引与日志有后续编辑时停止；完成后可打开页面，不重复保存或覆盖人工内容。
+- 正文与历史材料保留独立标签及待审阅状态，复用学习文本块隔离；草稿列表与待处理中心接通建页进度。未改动正式研究 Vault，未调用模型。
+- 13 组专项测试及原生冲突、写入失败、待处理返回、窄屏恢复和页面打开验收通过。只核对本轮相关文件，详见 [R3.12 记录](docs/knowledge-pages-r312.md)。
+
 ### Recoverable knowledge page drafts — 0.79.0
 
 - 知识整理与命令面板新增草稿入口，支持手写，或从 Markdown／PDF 原文摘录、学习摘录开始；原文、AI 回答、人工修订和备注保留明确角色。

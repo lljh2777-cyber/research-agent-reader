@@ -6,7 +6,7 @@ export const KNOWLEDGE_DRAFT_ROOT = "knowledge-drafts";
 const FILE_LIMIT = 4 * 1024 * 1024, READ_LIMIT = 16 * 1024 * 1024, SAVE_LIMIT = 64;
 export interface DraftRevision { version: 1; parent: string | null; draft: KnowledgeDraft; digest: string; }
 export interface DraftHistory { revisions: DraftRevision[]; pending: DraftRevision[]; current?: DraftRevision; issues: string[]; }
-export interface DraftSummary { id: string; title: string; updated: string; revision: string; saves: number; pending: number; issues: string[]; }
+export interface DraftSummary { id: string; title: string; updated: string; revision: string; saves: number; pending: number; issues: string[]; page?: { path: string; complete: boolean }; }
 export function draftRevision(draft: KnowledgeDraft, parent: string | null): DraftRevision {
 	if (parent !== null && !DRAFT_HASH.test(parent)) throw new Error("草稿前置版本无效");
 	const payload = { version: 1 as const, parent, draft: validateKnowledgeDraft(draft) }; return { ...payload, digest: objectDigest(payload) };

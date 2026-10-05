@@ -6918,3 +6918,6 @@ body.agent-dashboard-mineru-resizing {
 .rar-knowledge-drafts label { display: block; margin: 8px 0; }
 .rar-knowledge-drafts code, .rar-draft-list p, .rar-draft-list button { overflow-wrap: anywhere; white-space: normal; }
 .rar-knowledge-drafts input[type="checkbox"] { margin-right: 8px; }
+.rar-knowledge-page input[type="text"] { width: 100%; margin: 12px 0; }
+.rar-knowledge-page summary, .rar-knowledge-page p { overflow-wrap: anywhere; }
+.rar-knowledge-page button { white-space: normal; height: auto; min-height: 30px; }
