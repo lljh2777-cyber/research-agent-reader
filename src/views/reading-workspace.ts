@@ -483,7 +483,7 @@ export class ReadingWorkspaceView extends ItemView {
 		}
 		const content = element(article, "div", "reading-answer-content");
 		const placeholder = node.status === "failed" || node.status === "interrupted" ? "本单元尚未完成，可在下方重试。" : "正在准备讲解…";
-		try { void MarkdownRenderer.render(this.app, safeReadingMarkdown(node.content || this.plugin.getReadingEngine().streamed(this.sessionId, node.id) || placeholder), content, "", this.renderer).then(() => {
+		try { void MarkdownRenderer.render(this.app, safeReadingMarkdown(node.content || this.plugin.getReadingEngine().streamed(this.sessionId, node.id) || placeholder, node.evidence.map(e => e.id)), content, "", this.renderer).then(() => {
 			const first = content.firstElementChild;
 			if (first && /^H[1-6]$/.test(first.tagName) && first.textContent?.trim() === node.title.trim()) first.remove();
 			this.renderCitations(content, node);

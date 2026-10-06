@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Preserve adjacent reading citations — 0.83.1
+
+- 真实论文阅读验收发现连续证据标记会被当作 Markdown 引用式链接，造成引用丢失。阅读界面和学习导出现在保留已知证据的连续标记，点击仍返回准确原文位置；原始回答不改写。
+- 测试库完成一轮 PDF 主线讲解、一次支线追问及学习摘录保存／准确返回。两个完整可用性场景仍未收尾，后续范围见[当前执行清单](docs/usability-closeout.md)。
+
 ### Storage validation and retained-copy rehearsal — 0.83.0
 
 - R4.2 首批候选接入生产格式、历史和记录间依赖校验，补充学习摘录到会话／节点的反向引用检查；旧记录的内存规范化单独标记，原始字节保留。

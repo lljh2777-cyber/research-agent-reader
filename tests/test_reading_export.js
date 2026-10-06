@@ -12,6 +12,17 @@ const { contentHash } = loadReading("retrieval/chunks.ts");
 	const exported = readingExportContent(session, "branch", node.id); assert.match(exported, /支线内容/); assert.ok(!exported.includes("主线结论"));
 	const all = readingExportContent(session, "session", node.id); assert.ok(!all.includes("[[papers/")); assert.match(all, /papers\/a\/article.md/);
 	assert.ok(!safeReadingMarkdown("<script>alert(1)</script>\n```dataviewjs\napp.vault.delete(x)\n```\n![[papers/a]]").includes("```dataviewjs"));
+	const ids = ["text-2-0", "text-2-4459", "page-3"];
+	const adjacent = "依据 [text-2-0][text-2-4459][page-3]。";
+	assert.equal(safeReadingMarkdown(adjacent, ids).trim(), "依据 \\[text-2-0\\]\\[text-2-4459\\]\\[page-3\\]。");
+	const citationSession = structuredClone(session);
+	citationSession.nodes[0].content = adjacent;
+	citationSession.nodes[0].evidence = ids.map(id => ({ ...main.evidence[0], id }));
+	assert.ok(readingExportContent(citationSession, "session", main.id).includes("\\[text-2-0\\]\\[text-2-4459\\]\\[page-3\\]"));
+	assert.equal(citationSession.nodes[0].content, adjacent, "export does not rewrite saved answers");
+	for (const raw of ["[text-2-0][unknown]", "[label][text-2-0]", "![text-2-0][page-3]", "[text-2-0][page-3](https://example.com)", "[text-2-0][page-3]: https://example.com"]) {
+		assert.equal(safeReadingMarkdown(raw, ids), safeReadingMarkdown(raw), "ordinary links and unknown markers keep existing handling");
+	}
 	const files = new Map(); const app = { vault: { getAbstractFileByPath: (name) => files.has(name) ? new TFile(name) : null,
 		getMarkdownFiles: () => [...files.keys()].filter(name => name.endsWith(".md")).map(name => new TFile(name)), cachedRead: async file => files.get(file.path),
 		createFolder: async (name) => files.set(name, "folder"), create: async (name, text) => { assert.ok(!files.has(name)); files.set(name, text); return new TFile(name); },

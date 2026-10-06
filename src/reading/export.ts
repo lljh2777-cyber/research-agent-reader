@@ -4,9 +4,18 @@ import { sanitizeQueryNoteFilename } from "../services/query-note";
 import { contentHash, inKnowledgeScope } from "../retrieval/chunks";
 import type { ReadingSession } from "./types";
 import { codeFence } from "../code-reading/quote";
+import { readingCitations } from "./presentation";
 
-export function safeReadingMarkdown(text: string): string {
-	return safeLearningMarkdown(text, "请从证据窗口查看");
+export function safeReadingMarkdown(text: string, evidenceIds: string[] = []): string {
+	// Adjacent evidence markers otherwise look like Markdown reference links.
+	// Escape display brackets only for complete groups of known citations.
+	const display = text.replace(/\[[^\[\]\n]+\](?:\[[^\[\]\n]+\])+/g, (group, offset: number) => {
+		if (/[!\\\[]/.test(text[offset - 1] || "") || /[(:\[]/.test(text[offset + group.length] || "")) return group;
+		const citations = readingCitations(group, evidenceIds);
+		if (citations.map(c => c.raw).join("") !== group) return group;
+		return group.replace(/[\[\]]/g, bracket => "\\" + bracket);
+	});
+	return safeLearningMarkdown(display, "请从证据窗口查看");
 }
 export function readingPathCode(value: string): string {
 	const longest = Math.max(0, ...(value.match(/`+/g) || []).map((item) => item.length)); const fence = "`".repeat(longest + 1);
@@ -55,7 +64,7 @@ function exportBody(session: ReadingSession, scope: ReadingExportScope, nodeId: 
 		if (node.codeQuote) body.push("源码选区：" + readingPathCode(node.codeQuote.path) + "，第 " + node.codeQuote.startLine + "–" + node.codeQuote.endLine + " 行；文件版本 " + readingPathCode(node.codeQuote.sourceHash), "", codeFence(node.codeQuote.text, node.evidence.find(e => e.id === node.codeQuote!.evidenceId)?.language), "");
 		if (node.correction) body.push("核对版本：对应原回答 " + readingPathCode(node.correction.of) + "；" + (session.nodes.some(n => n.acceptedCorrectionId === node.id) ? "用户已选为后续背景" : "尚未选为后续背景") + "。", "");
 		if (node.acceptedCorrectionId) body.push("此处保留历史回答；用户已选用后续核对节点 " + readingPathCode(node.acceptedCorrectionId) + " 作为背景，请同时查阅该节点。", "");
-		body.push(safeReadingMarkdown(node.content), "", "依据：", "");
+		body.push(safeReadingMarkdown(node.content, node.evidence.map(e => e.id)), "", "依据：", "");
 		for (const evidence of node.evidence) body.push("- " + readingPathCode(evidence.id) + " " + (evidence.kind === "code" ? "项目代码" : evidence.kind === "paper" ? "本文" : "知识库补充") + "：" + readingPathCode(evidence.path)
 			+ (evidence.startLine ? "，第 " + evidence.startLine + "–" + evidence.endLine + " 行，文件版本 " + readingPathCode(evidence.sourceHash || "") : "")
 			+ (evidence.page ? "，第 " + evidence.page + " 页" : "") + (evidence.start !== undefined ? "，阅读文本字符 " + evidence.start + "–" + evidence.end : "") + (evidence.visualInspected ? "，已查看图像" : "")
