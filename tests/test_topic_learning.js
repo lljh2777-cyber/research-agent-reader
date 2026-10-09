@@ -5,6 +5,8 @@ const { loadReading } = require("./reading-test-helpers");
 const { createTopicSession, validateTopicSession, validateTopicIntent, validateTopicPlan, topicDigest } = loadReading("topic-learning/contracts.ts");
 const { TopicSessionStore, TOPIC_DIRECTORY } = loadReading("topic-learning/store.ts");
 const { TopicLearningService } = loadReading("topic-learning/service.ts");
+const { DirectReadingBackend } = loadReading("reading/backend.ts");
+const { TOPIC_PLAN_SCHEMA } = loadReading("topic-learning/planning.ts");
 const { validateReadingSession, createReadingSession } = loadReading("reading/session.ts");
 const { validateModulePlan } = loadReading("reading/planning.ts");
 const { readPaperLibrary } = loadReading("library/reader.ts");
@@ -32,6 +34,26 @@ async function fixture() {
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 
 (async () => {
+	// The provider must receive the output contract even without schema capability.
+	for (const structured of [false, true]) {
+		const f = await fixture(); let calls = 0;
+		const backend = new DirectReadingBackend({ capabilities: { vision: false }, async complete(payload) {
+			calls++;
+			const system = payload.messages.find(m => m.role === "system").content;
+			const schema = JSON.parse(system.slice(system.indexOf("{\"type\"")));
+			assert.deepEqual(schema, TOPIC_PLAN_SCHEMA);
+			assert.deepEqual(schema.required, ["version", "modules"]);
+			assert.deepEqual(schema.properties.modules.items.required, ["id", "title", "question", "objective", "prerequisites"]);
+			assert.equal(schema.additionalProperties, false);
+			assert.equal(schema.properties.modules.items.additionalProperties, false);
+			assert.deepEqual(JSON.parse(payload.messages[1].content), { action: "规划主题学习路线", ...intent });
+			assert.equal(Boolean(payload.responseSchema), structured);
+			if (structured) assert.deepEqual(payload.responseSchema.schema, schema);
+			return { text: JSON.stringify(plan) };
+		} }, "mock", "test-model", false, structured);
+		const result = await f.service.plan(f.id, f.initial.digest, backend);
+		assert.equal(calls, 1); assert.deepEqual(result.session.plan, plan);
+	}
 	// Source-free identity, strict separation from all existing reading modes.
 	const session = createTopicSession(intent);
 	assert.deepEqual(validateTopicSession(JSON.parse(JSON.stringify(session))), session);
