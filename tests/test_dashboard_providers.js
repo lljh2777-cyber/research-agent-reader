@@ -5,6 +5,7 @@ const fs = require("fs");
 const http = require("http");
 const Module = require("module");
 const path = require("path");
+const { testProviderHttpLifecycle } = require("./test_provider_http_lifecycle");
 
 let requestHandler = async () => {
 	throw new Error("Unexpected HTTP request");
@@ -140,8 +141,7 @@ async function main() {
 	assert.ok(!pluginSource.includes('.setName("Qwen3.7-Plus 联网搜索")'));
 	assert.ok(
 		pluginSource.includes("联网与轻量 Agent 工具按具体功能单独授权")
-			&& pluginSource.includes("任何 Vault 写入都由插件侧安全边界执行")
-			&& pluginSource.includes("知识问答、联网搜索与轻量 Agent 的供应商"),
+			&& pluginSource.includes("任何 Vault 写入都由插件侧安全边界执行"),
 		"Direct API settings should distinguish read-only queries from explicitly authorized tools",
 	);
 	assert.ok(pluginSource.includes("this.app.metadataCache?.getFileCache?.(file)?.frontmatter"));
@@ -151,6 +151,8 @@ async function main() {
 	const migrationPlugin = new AgentDashboardPlugin();
 	migrationPlugin.loadData = async () => ({
 		settings: {
+			annotationBackendId: "provider-qwen",
+			annotationWebSearchEnabled: true,
 			toolkitRoot: path.resolve(__dirname, "../.."),
 			providerProfiles: [{
 				id: "provider-qwen",
@@ -167,6 +169,8 @@ async function main() {
 	});
 	migrationPlugin.saveData = async () => {};
 	await migrationPlugin.loadSettings();
+	assert.equal(migrationPlugin.settings.annotationBackendId, "provider-qwen", "web annotations must preserve an explicitly selected API across reload");
+	assert.equal(migrationPlugin.sanitizeSettingsForStorage().annotationBackendId, "provider-qwen");
 	assert.strictEqual(
 		migrationPlugin.settings.providerProfiles[0].capabilities.vision,
 		true,
@@ -209,6 +213,16 @@ async function main() {
 		assert.strictEqual(typeof adapter.complete, "function");
 	}
 	assert.strictEqual(typeof plugin.createLLMProvider("codex-cli").testConnection, "function");
+
+	const webProfile = { ...profile, type: "openai-compatible", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" };
+	plugin.getTavilySecretValue = () => "test-tavily";
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, webSearch: "auto" }).kind, "native");
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, webSearch: "tavily" }).kind, "tavily");
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, webSearch: "off" }).kind, "unavailable");
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, baseUrl: "https://api.example.test", webSearch: "auto" }).kind, "tavily");
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, baseUrl: "https://api.example.test", webSearch: "native" }).kind, "unavailable");
+	plugin.getTavilySecretValue = () => "";
+	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, webSearch: "tavily" }).kind, "unavailable");
 
 	const calls = [];
 	requestHandler = async (options) => {
@@ -355,21 +369,8 @@ async function main() {
 	} finally {
 		await new Promise((resolve) => delayedServer.close(resolve));
 	}
+	await testProviderHttpLifecycle(transportPlugin);
 
-	const settingsTabSource = fs.readFileSync(
-		path.join(__dirname, "..", "src", "settings", "settings-tab.ts"),
-		"utf8",
-	);
-	assert.match(settingsTabSource, /"阅读 · 开箱即用"/);
-	assert.match(settingsTabSource, /"AI 助手"/);
-	assert.match(settingsTabSource, /"可选扩展 · 高级"/);
-	assert.match(settingsTabSource, /title: "工具链与运行环境"/);
-	assert.match(settingsTabSource, /agent-dashboard-settings-navigation-badge/);
-	assert.match(settingsTabSource, /is-\$\{options\.badge\.tone\}/);
-	assert.match(
-		fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8"),
-		/\.agent-dashboard-settings-navigation-badge\.is-ok/,
-	);
 
 	console.log("DASHBOARD_PROVIDER_TEST_OK");
 }

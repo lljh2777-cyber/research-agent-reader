@@ -1,4 +1,7 @@
+import { maskLearningBlocks } from "../learning/curated-block";
 import { TFile, type App } from "obsidian";
+import { isTopicExportPath } from "../topic-learning/export-path";
+import { isAnswerExcerptPath } from "../learning/answer-excerpt-path";
 
 const MAX_INDEX_FILES = 5000;
 const MAX_INDEX_BODY_CHARS = 24_000;
@@ -181,6 +184,10 @@ export class LexicalVaultRetriever {
 		return vault.getMarkdownFiles()
 			.filter((file): file is TFile => file instanceof TFile
 				&& !String(file.path || "").startsWith(".")
+				&& !isTopicExportPath(String(file.path || ""))
+				&& !isAnswerExcerptPath(String(file.path || ""))
+				&& this.app.metadataCache?.getFileCache?.(file)?.frontmatter?.type !== "learning-answer-excerpt"
+				&& this.app.metadataCache?.getFileCache?.(file)?.frontmatter?.type !== "topic-learning-record"
 				&& String(file.path || "").toLowerCase().endsWith(".md"));
 	}
 
@@ -254,7 +261,7 @@ export class LexicalVaultRetriever {
 			if (this.now() <= deadline) {
 				try {
 					const raw = await vault.cachedRead(file);
-					addTokens(document.bodyTokens, String(raw || "").slice(0, MAX_INDEX_BODY_CHARS), BODY_TOKEN_LIMIT);
+					addTokens(document.bodyTokens, maskLearningBlocks(String(raw || "")).slice(0, MAX_INDEX_BODY_CHARS), BODY_TOKEN_LIMIT);
 					document.bodyIndexed = true;
 				} catch {
 					// Unreadable file: keep the metadata-only entry and retry the

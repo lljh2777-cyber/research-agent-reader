@@ -41,6 +41,8 @@ import type {
 } from "./types";
 
 type UnknownRecord = Record<string, unknown>;
+export type MineruFileReader = (app: App, path: string, maxBytes: number) => Promise<Uint8Array>;
+const defaultFileReader: MineruFileReader = (app, path, maxBytes) => readTrustedVaultFile(filesystemAdapter(app), path, maxBytes);
 
 const MIB = 1024 * 1024;
 const MAX_ARTICLE_BYTES = MINERU_RESOURCE_LIMITS.articleBytes;
@@ -244,6 +246,7 @@ async function readRequiredBinary(
 	label: string,
 	maxBytes = MAX_MINERU_JSON_BYTES,
 	packagePath = "",
+	readFile: MineruFileReader = defaultFileReader,
 ): Promise<{ file: TFile; bytes: Uint8Array; text: string }> {
 	const file = findTFile(app, path);
 	if (!file) throw new Error(`缺少 ${label}：${path}`);
@@ -251,7 +254,7 @@ async function readRequiredBinary(
 	if (file.stat.size > maxBytes) {
 		throw new Error(`${label} 超过阅读器安全上限（${Math.round(maxBytes / MIB)} MiB）：${path}`);
 	}
-	const bytes = new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), path, maxBytes));
+	const bytes = new Uint8Array(await readFile(app, path, maxBytes));
 	return { file, bytes, text: decodeUtf8(bytes) };
 }
 
@@ -260,12 +263,13 @@ async function readOptionalJson(
 	path: string,
 	maxBytes = MAX_CONTRACT_BYTES,
 	packagePath = "",
+	readFile: MineruFileReader = defaultFileReader,
 ): Promise<unknown | null> {
 	const file = findTFile(app, path);
 	if (!file) return null;
 	if (packagePath) await assertPackageFileNoFollow(app, packagePath, file);
 	if (file.stat.size > maxBytes) throw new Error(`${path} 超过阅读器安全上限`);
-	const bytes = new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), path, maxBytes));
+	const bytes = new Uint8Array(await readFile(app, path, maxBytes));
 	if (bytes.byteLength > maxBytes) throw new Error(`${path} 实际读取结果超过阅读器安全上限`);
 	return parseJson(decodeUtf8(bytes), path);
 }
@@ -276,6 +280,7 @@ async function readOptionalDerivedJson(
 	issues: string[],
 	manifestRecord?: UnknownRecord,
 	packagePath = "",
+	readFile: MineruFileReader = defaultFileReader,
 ): Promise<unknown | null> {
 	try {
 		const file = findTFile(app, path);
@@ -288,7 +293,7 @@ async function readOptionalDerivedJson(
 		if (file.stat.size > MAX_CONTRACT_BYTES || Number(manifestRecord.size) !== file.stat.size) {
 			throw new Error("文件大小与 manifest.json 不一致或超过安全上限");
 		}
-		const bytes = new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), path, MAX_CONTRACT_BYTES));
+		const bytes = new Uint8Array(await readFile(app, path, MAX_CONTRACT_BYTES));
 		if (bytes.byteLength > MAX_CONTRACT_BYTES || bytes.byteLength !== file.stat.size) {
 			throw new Error("文件实际读取长度与记录不一致或超过安全上限");
 		}
@@ -656,6 +661,7 @@ async function verifyManifestOutputs(
 	article: { bytes: Uint8Array },
 	mineru: { bytes: Uint8Array },
 	pdfPath: string | null,
+	readFile: MineruFileReader = defaultFileReader,
 ): Promise<{ verifiedAssetBlobs: Map<string, Blob>; verifiedPdfBytes: Uint8Array | null }> {
 	if (Number(manifest.schema_version) !== 1) throw new Error("manifest.json 版本不受支持");
 	const records = manifestRecords(manifest.outputs, "outputs");
@@ -711,7 +717,7 @@ async function verifyManifestOutputs(
 			throw new Error(`原文包文件哈希与 manifest.json 不一致：${relativePath}`);
 		}
 		const bytes = knownBytes.get(relativePath)
-			|| new Uint8Array(await readTrustedVaultFile(filesystemAdapter(app), resolvedPath, maxBytes));
+			|| new Uint8Array(await readFile(app, resolvedPath, maxBytes));
 		if (bytes.byteLength !== expectedSize || bytes.byteLength > maxBytes) {
 			throw new Error(`原文包文件实际读取长度不一致或超过安全上限：${relativePath}`);
 		}
@@ -765,8 +771,8 @@ async function verifyManifestOutputs(
 				throw new Error("旧版 manifest.json 未完整绑定包内 source.pdf");
 			}
 			await assertPackageFileNoFollow(app, packagePath, file);
-			const bytes = new Uint8Array(await readTrustedVaultFile(
-				filesystemAdapter(app),
+			const bytes = new Uint8Array(await readFile(
+				app,
 				pdfPath,
 				MAX_PDF_BYTES,
 			));
@@ -1031,27 +1037,39 @@ function visualRepairPlanMatches(
 
 export class MineruPackageLoader {
 	private readonly app: App;
+	private readonly readFile: MineruFileReader;
 
-	constructor(app: App) {
+	constructor(app: App, private readonly options: { readFile?: MineruFileReader; signal?: AbortSignal } = {}) {
 		this.app = app;
+		this.readFile = async (app, path, maxBytes) => {
+			options.signal?.throwIfAborted();
+			const bytes = await (options.readFile || defaultFileReader)(app, path, maxBytes);
+			options.signal?.throwIfAborted();
+			if (bytes.byteLength > maxBytes) throw new Error("MinerU 实际读取超过文件上限");
+			return bytes;
+		};
 	}
 
 	async load(rawArticlePath: string): Promise<MineruReaderPackage> {
+		this.options.signal?.throwIfAborted();
 		const articlePath = normalizePackageArticlePath(rawArticlePath);
 		const packagePath = packagePathFromArticle(articlePath);
-		const article = await readRequiredBinary(this.app, articlePath, "article.md", MAX_ARTICLE_BYTES, packagePath);
+		if(await this.app.vault.adapter.exists(`${packagePath}/_source`,true))throw new Error("此目录使用独立原文包清单，不能作为 MinerU 或普通 Markdown 打开");
+		const article = await readRequiredBinary(this.app, articlePath, "article.md", MAX_ARTICLE_BYTES, packagePath, this.readFile);
 		const mineru = await readRequiredBinary(
 			this.app,
 			`${packagePath}/mineru-result.json`,
 			"mineru-result.json",
 			MAX_MINERU_JSON_BYTES,
 			packagePath,
+			this.readFile,
 		);
 		const manifestValue = await readOptionalJson(
 			this.app,
 			`${packagePath}/_extraction/manifest.json`,
 			MAX_MANIFEST_BYTES,
 			packagePath,
+			this.readFile,
 		);
 		const manifest = asRecord(manifestValue);
 		const outputRecords = manifestRecords(manifest.outputs, "outputs");
@@ -1064,6 +1082,7 @@ export class MineruPackageLoader {
 			`${packagePath}/_extraction/validation.json`,
 			MAX_VALIDATION_BYTES,
 			packagePath,
+			this.readFile,
 		);
 		const validation = asRecord(validationValue);
 		if (validation.status !== "passed") {
@@ -1071,7 +1090,7 @@ export class MineruPackageLoader {
 		}
 		const pdfPathCandidate = `${packagePath}/_extraction/source.pdf`;
 		const pdfPath = findTFile(this.app, pdfPathCandidate) ? pdfPathCandidate : null;
-		const verified = await verifyManifestOutputs(this.app, packagePath, manifest, article, mineru, pdfPath);
+		const verified = await verifyManifestOutputs(this.app, packagePath, manifest, article, mineru, pdfPath, this.readFile);
 		let renderMarkdown = article.text;
 		let sourceMarkdownDisposition: MineruReaderPackage["sourceMarkdownDisposition"] = "passive";
 		try {
@@ -1105,6 +1124,7 @@ export class MineruPackageLoader {
 			issues,
 			derivedRecords.get("_extraction/viewer-index.json"),
 			packagePath,
+			this.readFile,
 		);
 		let viewerIndex: MineruViewerIndex | null = null;
 		if (contractValue) {
@@ -1139,6 +1159,7 @@ export class MineruPackageLoader {
 				issues,
 				derivedRecords.get("_extraction/visual-repair.json"),
 				packagePath,
+				this.readFile,
 			);
 		const storedVisualRepair = repairValue ? normalizeRepair(repairValue) : null;
 		if (repairValue && !storedVisualRepair) {
@@ -1198,6 +1219,7 @@ export class MineruPackageLoader {
 		}
 		if (visualRepair) issues.push(...visualRepair.issues);
 		const externalPdfRecorded = Boolean(asRecord(manifest.source).path);
+		this.options.signal?.throwIfAborted();
 		return {
 			sourceKind: "mineru",
 			sourceMarkdownDisposition,

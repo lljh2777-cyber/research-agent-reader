@@ -1,0 +1,57 @@
+/* In-memory sources/storage; no source execution, API calls or file cleanup. */
+const assert = require("node:assert/strict");
+const path = require("node:path");
+const { loadReading, memoryStorage } = require("./reading-test-helpers");
+const { codeQuote, codeSelectionOffsets, codeFence } = loadReading("code-reading/quote.ts");
+const { openCodeProject } = loadReading("code-reading/source.ts");
+const { ReadingWorkspaceService } = loadReading("reading/workspace.ts");
+const { ReadingRepository } = loadReading("reading/store.ts");
+const { createReadingSession, addReadingNode, addReadingBranch, validateReadingSession } = loadReading("reading/session.ts");
+const { ReadingEngine, readingContext } = loadReading("reading/engine.ts");
+const { readingExportContent, readingNodeContentHash } = loadReading("reading/export.ts");
+const { validateCodeExplanation, CODE_ANSWER_FORMAT_ERROR } = loadReading("code-reading/teaching.ts");
+(async () => {
+	const line = "value_name = r'**\\x**' # 重复\r\n";
+	let source = Buffer.from(line.repeat(85));
+	const doc = await openCodeProject(path.resolve("quote.py"), { stat: async () => ({ file: true, size: source.length }), realpath: async p => p, read: async () => source });
+	const evidence = doc.evidence[0], second = doc.evidence[1];
+	const offsets = codeSelectionOffsets(evidence.text, line.replace(/\r\n/g, "\n"), line.replace(/\r\n/g, "\n"), line.repeat(78).replace(/\r\n/g, "\n"));
+	assert.deepEqual(offsets, { start: line.length, end: line.length * 2 });
+	const quote = codeQuote(evidence, offsets.start, offsets.end); assert.equal(quote.text, line); assert.equal(quote.startLine, 2); assert.equal(quote.endLine, 2);
+	assert.throws(() => codeSelectionOffsets(evidence.text, "", "value_name", ""), /选区已变化/);
+	assert.throws(() => codeQuote(evidence, -1, 3), /选区无效/); assert.throws(() => codeQuote(evidence, 3, 9000), /选区无效/);
+	assert.equal(codeFence("x = '```'", "python"), "````python\nx = '```'\n````");
+	validateCodeExplanation("返回 `value_name`。\n" + codeFence("x = '```'", "python"));
+	validateCodeExplanation("字面量 \\` 或 `` ` ``\n~~~python\nx = '`'\n~~~");
+	assert.throws(() => validateCodeExplanation("返回包含 `"), /代码标记未闭合/);
+	assert.throws(() => validateCodeExplanation("```python\nx = 1"), /代码标记未闭合/);
+	const storage = memoryStorage(), repo = new ReadingRepository(storage); const session = createReadingSession(doc.source); const main = addReadingNode(session, null); main.status = "done"; main.content = "背景";
+	await repo.add(session); let calls = 0; let malformed = false;
+	const workspace = { repository: repo, document: async () => doc, generate: async () => {} };
+	const engine = new ReadingEngine(workspace, () => ({ name: "test", model: "test", images: false, async complete(req) {
+		calls++; const input = JSON.parse(req.prompt);
+		if (req.system.includes("代码证据选择器")) { assert.deepEqual(input.codeQuote, quote); return JSON.stringify({ ids: [second.id], query: "value_name", needsVisual: false }); }
+		assert.deepEqual(input.codeQuote, quote); assert(input.evidence.some(e => e.id === evidence.id), "host includes quoted code when selector omits it");
+		return JSON.stringify({ title: "选区说明", content: "这段是赋值，未运行。[" + second.id + "]" + (malformed ? " 返回 `" : ""), evidenceIds: [second.id] });
+	} }));
+	const ask = (...args) => ReadingWorkspaceService.prototype.askCode.call(workspace, session.id, main.id, evidence.id, offsets.start, offsets.end, ...args);
+	const id = await ask("这段是什么意思"); assert.deepEqual(repo.get(session.id).nodes.at(-1).codeQuote, quote);
+	await engine.generate(session.id, id); assert.equal(calls, 2); assert.equal(repo.get(session.id).nodes.at(-1).status, "done");
+	malformed = true; const broken = await ask("检查未写完的回答"); await assert.rejects(engine.generate(session.id, broken), /代码标记未闭合/);
+	assert.equal(repo.get(session.id).nodes.at(-1).error, CODE_ANSWER_FORMAT_ERROR); assert.equal(repo.get(session.id).nodes.at(-1).status, "failed");
+	malformed = false; await engine.generate(session.id, broken); assert.equal(repo.get(session.id).nodes.at(-1).status, "done"); assert.equal(calls, 5, "retry reuses selected evidence");
+	const savedNode = structuredClone(repo.get(session.id).nodes.find(n => n.id === id)); assert.equal(savedNode.evidence.length, 2, "quoted source survives even if answer only cites another block");
+	const followup = await repo.transact(session.id, s => addReadingNode(s, savedNode.branchId, "为什么"));
+	assert(readingContext(repo.get(session.id), followup.id).includes(line));
+	const child = await repo.transact(session.id, s => addReadingNode(s, addReadingBranch(s, id).id, "另一问题"));
+	assert(readingContext(repo.get(session.id), child.id).includes(line));
+	const options = { created: "2026-09-08T00:00:00.000Z" }; const exported = readingExportContent(repo.get(session.id), "node", id, options); assert(exported.includes(line)); assert.match(exported, /analysis_depth: static-read/); assert.match(exported, /源码选区/); assert.match(exported, /保存的代码依据/);
+	const changed = structuredClone(savedNode); changed.codeQuote.text += "X"; assert.notEqual(readingNodeContentHash(changed), readingNodeContentHash(savedNode));
+	const corrupt = structuredClone(repo.get(session.id)); corrupt.nodes.find(n => n.id === id).codeQuote.startLine++;
+	assert.throws(() => validateReadingSession(corrupt), /选区与保存的依据不一致/);
+	const reloaded = new ReadingRepository(storage); await reloaded.load(); assert.equal(reloaded.errors.length, 0); assert.deepEqual(reloaded.get(session.id).nodes.find(n => n.id === id).codeQuote, quote);
+	const count = repo.get(session.id).nodes.length; storage.fail = true; await assert.rejects(ask("保存失败"), /disk full/); storage.fail = false; assert.equal(repo.get(session.id).nodes.length, count);
+	source = Buffer.from("value_name = 0\n"); await assert.rejects(ask("源码变化"), /源码已变化/); assert.equal(repo.get(session.id).nodes.length, count); assert.equal(calls, 5);
+	assert.equal(readingExportContent(repo.get(session.id), "node", id, options), exported, "export uses saved code after source changes");
+	console.log("CODE_READING_QUOTES_OK");
+})().catch(error => { console.error(error); process.exitCode = 1; });

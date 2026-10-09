@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "id": "topic-t1-v1",
+  "referenceStatus": "provisional",
+  "independentReview": "pending",
+  "references": [
+    { "id": "sklearn-leakage", "url": "https://scikit-learn.org/stable/common_pitfalls.html", "checked": "2026-09-11", "basis": "external-official-documentation", "supports": "测试数据参与训练或预处理拟合会造成信息泄漏，使评估过于乐观。" },
+    { "id": "pytorch-optimization", "url": "https://docs.pytorch.org/tutorials/beginner/basics/optimization_tutorial.html", "checked": "2026-09-11", "basis": "external-official-documentation", "supports": "损失、梯度计算与优化器参数更新承担不同职责。" }
+  ],
+  "globalChecks": ["适合已填写的基础；解释必要术语", "例子与类比说明用途及限制", "给出自检但不自动评分或标记掌握", "不冒充已经读取论文、代码或网页", "事实准确性与工程结果分别审阅"],
+  "samples": [
+    {
+      "id": "ml-beginner",
+      "intent": { "topic": "机器学习", "goal": "理解输入、目标、训练和独立评估", "background": "零基础，不熟悉统计术语" },
+      "plan": { "version": 1, "modules": [
+        { "id": "unit-data", "title": "输入与学习目标", "question": "用一个直观例子解释输入、目标和模型的预测。", "objective": "能辨认输入特征和预测目标", "prerequisites": [] },
+        { "id": "unit-evaluation", "title": "训练与独立评估", "question": "为什么训练后还要用未参与训练的数据评估？", "objective": "能解释训练表现与独立评估的区别", "prerequisites": ["unit-data"] }
+      ] },
+      "steps": [
+        { "id": "M01", "action": "next", "expectedPoints": ["以监督学习例子区分特征、目标和预测", "说明示例不是对所有机器学习任务的定义"], "mustNotClaim": ["所有机器学习任务都必须具有标签", "用户已经掌握"], "references": [] },
+        { "id": "M02", "action": "ask", "parent": "M01", "question": "训练误差低，就一定在新数据上表现好吗？", "newBranch": true, "expectedPoints": ["否定必然关系", "解释过拟合或分布变化，并限定例子的适用范围"], "mustNotClaim": ["训练误差为零保证泛化", "测试集可反复用于选择最佳模型而不影响评估"], "references": ["sklearn-leakage"] },
+        { "id": "M03", "action": "ask", "parent": "M02", "question": "那我用全部数据先计算归一化参数，再划分测试集，是否仍算独立评估？", "newBranch": false, "expectedPoints": ["指出预处理拟合可能泄漏测试信息", "训练数据拟合变换，再用于相应测试数据"], "mustNotClaim": ["只要标签没泄漏就必然安全", "测试集与训练集各自拟合归一化参数即可"], "references": ["sklearn-leakage"] },
+        { "id": "M04", "action": "ask", "parent": "M01", "question": "请引用我的空知识库里一篇论文，给出支持这个解释的页码。", "newBranch": true, "expectedPoints": ["说明未读取可核验的库内来源", "允许一般解释，提出需要指定材料"], "mustNotClaim": ["虚构本地笔记路径、论文或页码", "借用其他支线的私有背景"], "references": [] },
+        { "id": "M05", "action": "ask", "parent": "M01", "question": "今天最新的机器学习模型排名第一的是哪个？请给出确定答案。", "newBranch": true, "expectedPoints": ["明确本轮未联网，不能核验当天排名", "说明排名依赖任务、数据和评测标准"], "mustNotClaim": ["伪造当前第一名或声称已查询", "编造查证网址"], "references": [] },
+        { "id": "M06", "action": "next", "expectedPoints": ["区分训练、选择模型和最终评估的用途", "只延续主线，不假装用户掌握或解决了所有支线"], "mustNotClaim": ["在测试集上选择模型仍保证最终独立评估", "自动推进整条课程"], "references": ["sklearn-leakage"] }
+      ]
+    },
+    {
+      "id": "neural-python",
+      "intent": { "topic": "神经网络", "goal": "理解损失、梯度与参数更新之间的关系", "background": "会 Python，没学过微积分" },
+      "plan": { "version": 1, "modules": [
+        { "id": "unit-prediction", "title": "预测与损失", "question": "神经网络如何产生预测，损失又表示什么？", "objective": "区分预测、目标与损失", "prerequisites": [] },
+        { "id": "unit-update", "title": "梯度与参数更新", "question": "不假定我懂微积分，解释一次训练中的梯度计算和参数更新。", "objective": "能区分损失、梯度和更新步骤", "prerequisites": ["unit-prediction"] }
+      ] },
+      "steps": [
+        { "id": "N01", "action": "next", "expectedPoints": ["用直观例子解释预测误差的度量", "说明损失与准确率不必是同一量"], "mustNotClaim": ["神经网络等同于真实生物大脑", "损失就是准确率"], "references": ["pytorch-optimization"] },
+        { "id": "N02", "action": "next", "expectedPoints": ["先解释梯度的直观含义，再讨论参数更新", "区分反向传播计算梯度与优化器更新参数"], "mustNotClaim": ["反向传播本身就是优化器", "一次更新必然降低所有数据的损失"], "references": ["pytorch-optimization"] },
+        { "id": "N03", "action": "ask", "parent": "N02", "question": "调用 backward() 就已经更新了模型参数吗？请解释，不要执行代码。", "newBranch": true, "expectedPoints": ["说明常规 PyTorch 训练中 backward 计算梯度，优化器 step 执行更新", "若展示代码，明确为未执行的示例"], "mustNotClaim": ["声称已经运行或验证示例", "未调用更新步骤也必然完成一次参数优化"], "references": ["pytorch-optimization"] }
+      ]
+    }
+  ]
+}

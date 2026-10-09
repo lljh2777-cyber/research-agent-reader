@@ -1,0 +1,32 @@
+const assert = require("node:assert/strict");
+const { loadReading, memoryStorage } = require("./reading-test-helpers");
+const { createReadingSession, addReadingNode, addReadingBranch } = loadReading("reading/session.ts");
+const { ReadingRepository } = loadReading("reading/store.ts");
+const { ReadingEngine, readingContext } = loadReading("reading/engine.ts");
+const { resolveReadingQuote } = loadReading("reading/selection.ts");
+(async () => {
+	const markdown = "First **same words** near apples.\nLater **same words** near oranges.";
+	const quote = resolveReadingQuote("n", markdown, "same words", "Later ", " near oranges.");
+	assert.equal(quote.start, markdown.lastIndexOf("same words")); assert.equal(markdown.slice(quote.start, quote.end), quote.text);
+	assert.throws(() => resolveReadingQuote("n", "same same", "same"), /唯一定位/);
+	const formatted = resolveReadingQuote("n", "a **bold** word", "a bold word"); assert.equal(formatted.text, "a **bold** word");
+	const session = createReadingSession({ kind: "pdf", path: "a.pdf", fingerprint: "a".repeat(64), title: "paper" });
+	const main = addReadingNode(session, null); main.status = "done"; main.content = "main"; session.mainSummary = "frozen main";
+	const branch = addReadingBranch(session, main.id);
+	for (let i = 0; i < 9; i++) { const n = addReadingNode(session, branch.id, "q" + i); n.content = "history " + i + "x".repeat(4000); n.status = "done"; }
+	const sibling = addReadingBranch(session, main.id); const secret = addReadingNode(session, sibling.id, "unrelated"); secret.status = "done"; secret.content = "SIBLING_ONLY";
+	const target = addReadingNode(session, branch.id, "current"); session.mainSummary = "later main";
+	const repo = new ReadingRepository(memoryStorage()); await repo.add(session);
+	let summaryCalls = 0;
+	const backend = { complete: async () => { summaryCalls++; return JSON.stringify({ summary: "compressed history" }); } };
+	const engine = new ReadingEngine({ repository: repo }, () => backend);
+	await engine.prepareMemory(session.id, target.id, backend, new AbortController().signal);
+	const restored = repo.get(session.id); assert.equal(restored.nodes.length, 12); assert.equal(summaryCalls, 5);
+	const context = readingContext(restored, target.id); assert.ok(context.includes("frozen main")); assert.ok(context.includes("compressed history")); assert.ok(!context.includes("SIBLING_ONLY")); assert.ok(!context.includes("later main"));
+	assert.equal(restored.branches[0].summarizedCount, 5); assert.match(restored.nodes[1].content, /history 0/);
+	const failed = structuredClone(session); const repo2 = new ReadingRepository(memoryStorage()); await repo2.add(failed);
+	const engine2 = new ReadingEngine({ repository: repo2 }, () => backend);
+	await assert.rejects(engine2.prepareMemory(failed.id, target.id, { complete: async () => '{}' }, new AbortController().signal), /历史已保留/);
+	assert.equal(repo2.get(failed.id).branches[0].summarizedCount, 0);
+	console.log("READING_BRANCHES_OK");
+})().catch((e) => { console.error(e); process.exitCode = 1; });

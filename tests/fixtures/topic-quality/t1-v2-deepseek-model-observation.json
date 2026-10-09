@@ -1,0 +1,233 @@
+{
+  "version": 1,
+  "baselineId": "topic-t1-v2",
+  "baselineHash": "0b91391365d9a65e18bb7823fd3247bc03a6629be453cd482a8af246f4fa729b",
+  "instructionHash": "58826d844fd7612e2b8b01d8b0ba108deec0874cd5c1075bd9ca7fbbf4b2648e",
+  "inputHash": "6599d780460a30c1401314dd601a9a30255b9d47c7d3f5a3ee18c2d5cf43c73a",
+  "planHash": "e8e08b627c8e13277343280775dc89f7769e0fbe2743c88fd29ee6c0a626d5b0",
+  "runtimeHash": "81f041fc5fee2c53551c3c3fcab330f3b69770bdfed21357a59b570bf7b773b9",
+  "runnerHash": "86cc6bb3ed790c2f1a13f0fc225b68aa8429b976f4f3d43c20817efbeeeed279",
+  "suiteRegistryHash": "8baf34d2a2ee924adf2bd994ad3343b392ebdb942cc281a85ec131eda66d9f4e",
+  "pluginVersion": "0.56.1",
+  "pluginHash": "9e92b893d65c72cde3252597081c2244de0bc5e4deb29ef197b0a48518474cca",
+  "executionDate": "2026-09-11",
+  "mode": "live",
+  "promptVersion": "topic-teaching-v2",
+  "configuredModel": "deepseek-flash",
+  "reportedModels": [
+    "deepseek-flash"
+  ],
+  "upstreamModelIdentity": "not_independently_verified",
+  "providerRoute": "existing_openai_compatible_loopback_proxy",
+  "sampleCount": 2,
+  "questionCount": 9,
+  "requestsRetained": 9,
+  "responsesRetained": 9,
+  "answered": 9,
+  "automaticRetries": 0,
+  "modelAnswerStatus": "recorded_not_reviewed",
+  "independentReviewStatus": "pending",
+  "independentlyReviewedQuestions": 0,
+  "teachingPassRate": null,
+  "usage": {
+    "input": 12063,
+    "output": 20686,
+    "total": 32749,
+    "cachedInput": 4992,
+    "monetaryCost": null,
+    "source": "proxy_reported_not_independently_calibrated"
+  },
+  "usageWarnings": {
+    "textEqualsCompletionWithAdditionalReasoning": [],
+    "outputExceedsRequestedMaxTokens": []
+  },
+  "questions": [
+    {
+      "id": "M01",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [],
+      "teachingRequestHash": "66de6815af1ab9c9d0a58466a620322cb0b59965508517fb35c5fd5f793f66ee",
+      "requestHash": "426c6e294a2f9536e21333df00d4e821a404ddc52760c8865869af3f5237a1a3",
+      "responseHash": "6bed961e88a03d8b8f3e40ac371367675ffe93b7115f049b48c3e8f1106026ac",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 882,
+        "output": 1486,
+        "total": 2368,
+        "cachedInput": 0,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "M02",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "M01"
+      ],
+      "teachingRequestHash": "41f9b5d13a4ebf49daeea6419a025900012bd4ff37f43c81406d1f7377f206bf",
+      "requestHash": "04884d97ab976184f11df53cdaa9189476ae9702249735bc4d6d0366a643aa6c",
+      "responseHash": "068b1bcc3a2c41589058f3e3291087ec3e78e013fa8c256e9b57dd068e030faf",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1169,
+        "output": 2376,
+        "total": 3545,
+        "cachedInput": 512,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "M03",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "M01",
+        "M02"
+      ],
+      "teachingRequestHash": "267492524791abfda1de78831f3042bc3b0d1628abd9b4fdc8b71933fd726380",
+      "requestHash": "1157c086bc6dfbf4ffb52da0eb1cae1577039b0ec90dbff06c4a440ba160c97f",
+      "responseHash": "d0b00e05c444f3785b379dec22676a4756094cfd428a60755d3eb276bb688ce3",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1576,
+        "output": 2742,
+        "total": 4318,
+        "cachedInput": 640,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "M04",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "M01"
+      ],
+      "teachingRequestHash": "f077b94772ff2cc10d74d614b1a965888d3bb8e02d13ad5f5e8c61336be0fa1c",
+      "requestHash": "1e909dbd5c2301a56805e374bc327dcb31696ea82c776c54ca9b53aab06224ce",
+      "responseHash": "769efb0db6a2a1e2ca909824f6fc09998d1b97b12c0c4934638ac13ddee45a92",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1174,
+        "output": 333,
+        "total": 1507,
+        "cachedInput": 640,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "M05",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "M01"
+      ],
+      "teachingRequestHash": "cd1a2f9fc423f711e0f9610a2b6760a17f19da128f33912f188c1ac7ae5b8b7a",
+      "requestHash": "7d6885a08a204f982ecc5737ec55a968869e6a996cbda31f679d90d110d42a69",
+      "responseHash": "f527712306f42b9feef122fd4a3e7e305ce8e5e8d23f158d77bcae0241224df2",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1172,
+        "output": 533,
+        "total": 1705,
+        "cachedInput": 640,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "M06",
+      "sampleId": "ml-beginner",
+      "state": "answered",
+      "contextSteps": [
+        "M01"
+      ],
+      "teachingRequestHash": "d7275e6bf2a0599c16847712e15c37433039e3a2c1b79109bf8c85e1cdcb6ecb",
+      "requestHash": "effd7dc9a9d4c7fdb05b7827138c1961d7e4098570ace323be203001683c80a7",
+      "responseHash": "b249cb97d80deac0fe0f4c27325b65beb19e28cf46f45997ab1adc44a65d8b69",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1172,
+        "output": 3125,
+        "total": 4297,
+        "cachedInput": 768,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "N01",
+      "sampleId": "neural-python",
+      "state": "answered",
+      "contextSteps": [],
+      "teachingRequestHash": "96692284658643d9117d3c35e508ddfdaa384a12a85b3b872be27c183d1f0cad",
+      "requestHash": "688ca9406471baacb17bc1a01a59ca7f112b36e80f8ed1951761132420000f57",
+      "responseHash": "54a47bd040696357129736e9ed0a6ede5082cc50b15bcaf2457b6c8d1424d093",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 891,
+        "output": 1796,
+        "total": 2687,
+        "cachedInput": 512,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "N02",
+      "sampleId": "neural-python",
+      "state": "answered",
+      "contextSteps": [
+        "N01"
+      ],
+      "teachingRequestHash": "8ea48f643cacb7c75e522578b0ca63b59a92b9e87f307f4b5ab14d12cca77755",
+      "requestHash": "981512d886ef2b2d8818e336d099d985661358b7425492f438f2c332b43d6bff",
+      "responseHash": "ae057463b3b88883dcf7cd4d0f35d2065285f584fa22de6abeab55318374cb83",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 1589,
+        "output": 4001,
+        "total": 5590,
+        "cachedInput": 768,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    },
+    {
+      "id": "N03",
+      "sampleId": "neural-python",
+      "state": "answered",
+      "contextSteps": [
+        "N01",
+        "N02"
+      ],
+      "teachingRequestHash": "bbc91ea8a8f479523c3b9578d2f019a3f18fabf91929513cab9d8d30e044b161",
+      "requestHash": "f8261d9d63413cbc509eb982761f85e0f8eec167ea8e59b429d72d1711a7fb1d",
+      "responseHash": "5337a38e44e7bc45d0f3401d5ec7a173b50be6c77ef70cd01bc810d67007359f",
+      "reportedModel": "deepseek-flash",
+      "finishReason": "stop",
+      "usage": {
+        "input": 2438,
+        "output": 4294,
+        "total": 6732,
+        "cachedInput": 512,
+        "monetaryCost": null
+      },
+      "independentReview": "pending"
+    }
+  ]
+}

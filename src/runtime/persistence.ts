@@ -1,4 +1,5 @@
 import type { DashboardSettings } from "./settings";
+import { decodeSavedPdfRef } from "../papers/saved-pdf";
 import type {
 	ExecutionConfig,
 	LintReport,
@@ -9,6 +10,8 @@ import type {
 } from "../types/contracts";
 import { normalizeProviderProfile } from "../providers/profile";
 import { isCliBackendId } from "../config";
+import { normalizeIngestProgress } from "../agent/ingest-progress";
+import { decodeIntakeRef } from "../fulltext/contracts";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -123,6 +126,8 @@ export function normalizeTaskRunArtifacts(value: unknown): TaskRunArtifacts | un
 	return { articlePath, wikiPath, filesWritten };
 }
 
+function acquisitionReference(value:unknown):TaskRun["acquisitionSource"] {try{return decodeIntakeRef(value);}catch{return undefined;}}
+function savedPdfReference(value:unknown):TaskRun["savedPdfSource"] {try{return decodeSavedPdfRef(value);}catch{return undefined;}}
 export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 	if (!Array.isArray(value)) return [];
 	const boundedLimit = Math.max(5, Math.min(100, limit));
@@ -145,6 +150,9 @@ export function normalizeStoredTaskRuns(value: unknown, limit = 30): TaskRun[] {
 			cleanupPending: source.cleanupPending === true || undefined,
 			completionPending: source.completionPending === true || undefined,
 			artifacts: normalizeTaskRunArtifacts(source.artifacts),
+			acquisitionSource: source.actionId==="paper-ingest"?acquisitionReference(source.acquisitionSource):undefined,
+			savedPdfSource: source.actionId==="paper-ingest"?savedPdfReference(source.savedPdfSource):undefined,
+			ingestProgress: normalizeIngestProgress(source.ingestProgress),
 		};
 	});
 	return selectTaskRunsForPersistence(normalized, boundedLimit);
@@ -157,6 +165,8 @@ function selectTaskRunsForPersistence(taskRuns: TaskRun[], limit: number): TaskR
 		|| run.status === "queued"
 		|| run.cleanupPending === true
 		|| run.completionPending === true
+		|| !!run.acquisitionSource
+		|| !!run.savedPdfSource
 	));
 	return [...primary, ...exceptional].slice(0, 300);
 }

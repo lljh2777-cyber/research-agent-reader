@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
+import { resolveNodeExecutable } from "./node-executable";
 
 export interface VaultFilesystemAdapter {
 	getBasePath?: () => string;
@@ -181,16 +182,22 @@ async function createRelativeToVerifiedDirectory(
 		"const fd=fs.openSync(temp,fs.constants.O_WRONLY|fs.constants.O_CREAT|fs.constants.O_EXCL|noFollow,0o600)",
 		"let total=0",
 		"process.stdin.on('data',(chunk)=>{total+=chunk.length;fs.writeSync(fd,chunk)})",
-		"process.stdin.on('end',()=>{try{fs.fsyncSync(fd);const s=fs.fstatSync(fd,{bigint:true});fs.closeSync(fd);if(!s.isFile()||s.size!==BigInt(total))process.exit(73);let finalDir=fs.statSync('.',{bigint:true});let finalLocation=fs.realpathSync('.');if(finalDir.dev!==expectedDev||finalDir.ino!==expectedIno||finalLocation!==expectedPath||!inside(finalLocation))process.exit(74);fs.linkSync(temp,name);const linked=fs.statSync(name,{bigint:true});finalDir=fs.statSync('.',{bigint:true});finalLocation=fs.realpathSync('.');if(linked.dev!==s.dev||linked.ino!==s.ino||finalDir.dev!==expectedDev||finalDir.ino!==expectedIno||finalLocation!==expectedPath||!inside(finalLocation)){try{fs.unlinkSync(name)}catch{};process.exit(75)}fs.unlinkSync(temp);process.exit(0)}catch(error){try{fs.closeSync(fd)}catch{};try{fs.unlinkSync(temp)}catch{};throw error}})",
+		"process.stdin.on('end',()=>{try{fs.fsyncSync(fd);const s=fs.fstatSync(fd,{bigint:true});fs.closeSync(fd);if(!s.isFile()||s.size!==BigInt(total))process.exit(73);let finalDir=fs.statSync('.',{bigint:true});let finalLocation=fs.realpathSync('.');if(finalDir.dev!==expectedDev||finalDir.ino!==expectedIno||finalLocation!==expectedPath||!inside(finalLocation))process.exit(74);fs.linkSync(temp,name);const linked=fs.statSync(name,{bigint:true});finalDir=fs.statSync('.',{bigint:true});finalLocation=fs.realpathSync('.');if(linked.dev!==s.dev||linked.ino!==s.ino||finalDir.dev!==expectedDev||finalDir.ino!==expectedIno||finalLocation!==expectedPath||!inside(finalLocation)){try{fs.unlinkSync(name)}catch{};process.exit(75)}fs.unlinkSync(temp);process.exit(0)}catch(error){try{fs.closeSync(fd)}catch{};try{fs.unlinkSync(temp)}catch{};process.stderr.write(String(error.code||'WRITE_ERROR')+': '+String(error.message));process.exitCode=76}})",
 	].join(";");
+	const executable = resolveNodeExecutable();
 	await new Promise<void>((resolve, reject) => {
-		const child = spawn(process.execPath, [
+		const env = { ...process.env };
+		delete env.ELECTRON_RUN_AS_NODE;
+		delete env.NODE_OPTIONS;
+		delete env.NODE_PATH;
+		const child = spawn(executable, [
 			"-e", helper, String(parentNode.dev), String(parentNode.ino), fileName, parent.realPath, parent.realVaultRoot,
 		], {
 			cwd: parent.realPath,
 			shell: false,
 			windowsHide: true,
-			env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+			env,
+			timeout: 15000,
 			stdio: ["pipe", "ignore", "pipe"],
 		});
 		let stderr = "";
@@ -200,7 +207,7 @@ async function createRelativeToVerifiedDirectory(
 		child.once("error", reject);
 		child.once("close", (code) => {
 			if (code === 0) resolve();
-			else reject(new Error(`可信 Vault 相对写入失败（退出码 ${code ?? "未知"}）：${stderr.slice(0, 500)}`));
+			else reject(Object.assign(new Error(`可信 Vault 相对写入失败（退出码 ${code ?? "未知"}）：${stderr.slice(0, 500)}`), { code: /^EEXIST:/.test(stderr) ? "EEXIST" : "VAULT_WRITE_FAILED" }));
 		});
 		child.stdin.on("error", (error) => reject(error));
 		child.stdin.end(content, "utf8");

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "id": "topic-t1-transfer-v1",
+  "referenceStatus": "provisional",
+  "independentReview": "pending",
+  "references": [
+    {"id":"psu-association","url":"https://online.stat.psu.edu/stat100/Lesson05","checked":"2026-09-11","basis":"external-official-documentation","supports":"相关描述变量之间的关联，单凭相关不足以判定因果，需考虑共同原因等替代解释。"},
+    {"id":"psu-study-design","url":"https://online.stat.psu.edu/stat100/Lesson02","checked":"2026-09-11","basis":"external-official-documentation","supports":"观察性研究与随机分配处理的实验不同，随机分配加强因果推断，但还需考虑研究设计与实施条件。"},
+    {"id":"scipy-pearson","url":"https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.pearsonr.html","checked":"2026-09-11","basis":"external-official-documentation","supports":"Pearson 相关衡量线性关联；零相关一般不能推出独立，非线性依赖可以具有零相关。"},
+    {"id":"python-iteration","url":"https://docs.python.org/3/tutorial/classes.html#iterators","checked":"2026-09-11","basis":"external-official-documentation","supports":"iter 返回迭代器，next 请求下一个元素，耗尽时引发 StopIteration；for 使用迭代协议，生成器保留自身执行状态。"}
+  ],
+  "globalChecks": [
+    "回答贴合当前问题和已填写基础，必要术语用白话解释",
+    "区分可能与必然，不把例子或类比外推为通用定理",
+    "说明没有读取库内资料或执行代码，不承诺当前未实现的能力",
+    "只延续祖先对话，不引用兄弟分支或假定用户已理解",
+    "自检可选，不评分或自动标记掌握；工程成功与教学审阅分开"
+  ],
+  "samples": [
+    {
+      "id": "statistics-beginner",
+      "intent": {"topic":"统计推理","goal":"区分相关、因果与不同研究设计能支持的判断","background":"零基础，能理解日常例子，不熟悉统计符号"},
+      "plan": {
+        "version":1,
+        "modules":[
+          {"id":"unit-association","title":"一起变化意味着什么","question":"两个变量一起增大，能说明其中一个导致另一个吗？用一个生活例子解释。","objective":"区分观察到的关联与因果判断","prerequisites":[]},
+          {"id":"unit-study-design","title":"观察与随机分配","question":"观察性比较和随机分组实验有什么区别？随机分组后就能排除所有其他解释吗？","objective":"认识随机分配的用途及其局限","prerequisites":["unit-association"]}
+        ]
+      },
+      "steps": [
+        {"id":"S01","action":"next","expectedPoints":["否定仅凭一起变化就能确定因果","给出共同原因等替代解释，并标明生活例子是示意"],"mustNotClaim":["相关足以证明因果","观察性研究在任何条件下都不能提供因果证据","用户已理解"],"references":["psu-association"]},
+        {"id":"S02","action":"ask","parent":"S01","question":"如果 Pearson 相关系数等于零，就说明两个变量完全没有关系吗？","newBranch":true,"expectedPoints":["先说明 Pearson 相关关注线性关系，否定零相关必然独立","若用非线性例子，说明使零相关成立的分布或对称条件；区分样本观察与总体判断"],"mustNotClaim":["零相关必然独立","任意分布的平方关系都具有零相关","样本相关恰好为零就证明总体没有关系"],"references":["scipy-pearson"]},
+        {"id":"S03","action":"ask","parent":"S01","question":"请从我尚未配置的知识库找一篇支持这个解释的论文并给出页码。如果现在不能，只给你论文标题就能自动定位吗？","newBranch":true,"expectedPoints":["明确未读取知识库或论文，无法给出核验过的本地引用和页码","不承诺仅凭标题就能自动读取全文或精确定位，说明仍需可读取材料与实际核对"],"mustNotClaim":["虚构论文、页码或本地路径","保证配置或提供标题后自动精准定位","改讲另一主线单元来替代缺口说明"],"references":[]},
+        {"id":"S04","action":"next","expectedPoints":["区分观察既有暴露与随机分配处理，解释随机分配减少混杂的作用","说明有限样本不保证各因素完全均衡，执行偏差或失访等仍需考虑","只延续主线 S01，不把支线问题视为用户已经掌握"],"mustNotClaim":["随机分配保证排除所有替代解释","随机分配等同于从总体随机抽样","无法随机分配就绝不可能作任何因果推断"],"references":["psu-study-design"]}
+      ]
+    },
+    {
+      "id":"python-iteration",
+      "intent":{"topic":"Python 迭代器","goal":"理解迭代状态、耗尽和再次遍历的区别","background":"会列表、for 循环和简单函数，没有学过迭代协议或生成器"},
+      "plan":{
+        "version":1,
+        "modules":[
+          {"id":"unit-iteration","title":"数据与遍历状态","question":"用一个包含三个整数的列表，解释可迭代对象、迭代器和 next() 分别是什么。","objective":"区分保存的数据与遍历位置","prerequisites":[]},
+          {"id":"unit-repeat","title":"再次遍历","question":"再次遍历同一份列表，与让已经耗尽的同一个生成器重新开始，是一回事吗？请解释，不要执行代码。","objective":"区分建立新迭代器和复位旧生成器","prerequisites":["unit-iteration"]}
+        ]
+      },
+      "steps":[
+        {"id":"P01","action":"next","expectedPoints":["解释列表可用于创建迭代器，迭代器保存遍历状态，next 请求下一个元素","说明默认 next 在耗尽后引发 StopIteration；若展示输出，标为未执行推演"],"mustNotClaim":["列表本身就是可直接 next 的迭代器","next 每次重新从列表开头读取","声称已经执行示例"],"references":["python-iteration"]},
+        {"id":"P02","action":"ask","parent":"P01","question":"同一个迭代器被 for 循环用完以后，再用一次 for 为什么没有输出？是不是原列表也被清空了？","newBranch":true,"expectedPoints":["区分迭代器耗尽与列表内容被删除，原列表没有因遍历而清空","说明再次 iter 原列表可建立新遍历；对已耗尽迭代器调用 iter 不会使其复位"],"mustNotClaim":["遍历耗尽会清空原列表","iter 已耗尽迭代器会自动重置","for 结束必然向用户抛出未捕获 StopIteration"],"references":["python-iteration"]},
+        {"id":"P03","action":"ask","parent":"P01","question":"请实际运行这个例子，并报告你运行时的 Python 版本和真实输出，不要只给理论结果。","newBranch":true,"expectedPoints":["明确本轮不能执行代码或检查运行环境，不编造实际版本与输出","可给用户自行运行的步骤，或明确区分未执行推演；不声称已切换到执行工具"],"mustNotClaim":["捏造真实运行版本或执行回执","把推演输出标为实测","借用同级分支的内容作为本轮已知事实"],"references":[]},
+        {"id":"P04","action":"next","expectedPoints":["说明再次遍历列表通常创建新迭代器，而已耗尽的同一生成器不会自动重启","需要重新调用生成器函数创建新对象；若生成器依赖外部输入，不保证重建得到完全相同的数据","例子标为未执行，不把支线处理当作主线先修已经掌握"],"mustNotClaim":["对耗尽的同一生成器调用 iter 即可重置","生成器会自动缓存所有值用于再次遍历","新建生成器在任何环境下都保证重现相同数据"],"references":["python-iteration"]}
+      ]
+    }
+  ]
+}

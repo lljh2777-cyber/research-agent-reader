@@ -243,7 +243,8 @@ export interface MineruReaderVisual {
 }
 
 export interface MineruReaderPackage {
-	sourceKind: "mineru" | "markdown";
+	sourceKind: "mineru" | "markdown" | "jats";
+	document?:import("../reader/document").ReaderDocument;
 	sourceMarkdownDisposition: "passive" | "runtime-derived";
 	packagePath: string;
 	articlePath: string;

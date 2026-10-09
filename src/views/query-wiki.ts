@@ -1,3 +1,4 @@
+import { ROLE_LABELS } from "../retrieval/types";
 import {
 	ItemView,
 	MarkdownRenderer,
@@ -62,6 +63,8 @@ import type {
 } from "../types/contracts";
 
 type RetrievalTrace = Record<string, unknown> & {
+	knowledge?: import("../query/direct-query-service").RetrievalTrace["knowledge"];
+	knowledge_passages?: import("../query/direct-query-service").RetrievalTrace["knowledge_passages"];
 	stage?: string;
 	retrieval_label?: string;
 	lexical_terms?: string[];
@@ -708,7 +711,17 @@ export class QueryWikiView extends ItemView {
 				text: `查询词：${lexicalTerms.slice(0, 12).map((item) => String(item)).join("、")}`,
 			});
 		}
-		if (seeds.length) this.renderTraceGroup(content, "词法种子", seeds);
+		if (seeds.length) this.renderTraceGroup(content, trace.knowledge ? "检索候选" : "词法种子", seeds);
+		if (trace.knowledge) {
+			content.createEl("p", { text: trace.knowledge.scope ? "本轮限定论文：" + (trace.knowledge.scope.join("、") || "未找到对应来源") : "本轮范围：正式知识笔记" });
+			for (const warning of trace.knowledge.warnings || []) content.createEl("p", { cls: "query-wiki-trace-note", text: warning });
+			content.createEl("p", { text: "相关性仅用于排序；以下片段仍需核对证据是否充分。" });
+			for (const hit of trace.knowledge_passages || []) {
+				const item = content.createEl("details"); item.createEl("summary", { text: hit.path + " · " + hit.heading });
+				item.createEl("p", { text: "内容角色：" + (ROLE_LABELS[hit.role] || "未标注") + "；深度：" + hit.depth + "；原始来源：" + (hit.origins.join("、") || "未标注") });
+				item.createEl("pre", { cls: "reading-evidence-text", text: hit.text });
+			}
+		}
 		const expandedTerms = Array.isArray(trace.keyword_expansion?.terms)
 			? trace.keyword_expansion.terms
 			: [];

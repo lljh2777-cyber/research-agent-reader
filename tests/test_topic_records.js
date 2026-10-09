@@ -1,0 +1,39 @@
+"use strict";
+// Memory-only tests; no live requests, file writes or deletion.
+const assert=require('node:assert/strict');const {loadReading}=require('./reading-test-helpers');
+const {TopicSessionStore}=loadReading('topic-learning/store.ts'),{TopicLearningService}=loadReading('topic-learning/service.ts'),{TopicStudyStore}=loadReading('topic-learning/study-store.ts'),{TopicStudyService}=loadReading('topic-learning/study-service.ts');
+const {TopicStudyExports,topicExportNodes}=loadReading('topic-learning/export.ts'),{topicTeachingRequest}=loadReading('topic-learning/teaching.ts');
+const {TopicStudyController}=loadReading('topic-learning/study-workspace.ts');
+const {inKnowledgeScope}=loadReading('retrieval/chunks.ts');
+function io(){const files=new Map(),dirs=new Set();return{files,dirs,async read(p){return files.get(p)||null},async mkdir(p){dirs.add(p)},async create(p,b){if(files.has(p))throw Object.assign(Error('exists'),{code:'EEXIST'});files.set(p,Buffer.from(b))},async list(p){return [...dirs,...files.keys()].filter(k=>k.startsWith(p+'/')&&!k.slice(p.length+1).includes('/')).map(k=>({name:k.slice(p.length+1),directory:dirs.has(k)}))}}}
+async function fixture(){const storage=io(),topics=new TopicLearningService(new TopicSessionStore(storage)),sample=require('./fixtures/topic-quality/t1-v1.json').samples[0],first=await topics.create(sample.intent),edited=await topics.editPlan(first.session.id,first.digest,sample.plan),confirmed=await topics.confirmPlan(first.session.id,edited.digest),store=new TopicStudyStore(storage),service=new TopicStudyService(store,topics),route=await service.start(first.session.id,confirmed.digest),exports=new TopicStudyExports(service,storage);let calls=0;
+ const f={storage,store,service,exports,id:first.session.id,route,get:()=>service.get(first.session.id,route),calls:()=>calls};f.run=async action=>{await service.generate(f.id,route,(await f.get()).head,action,()=>({name:'Mock',model:'records',images:false,complete:async()=>{calls++;return JSON.stringify({title:'模拟讲解',content:'正文。[[wiki/sources/fake]]\n![remote](https://example.com/a.png)\n```dataviewjs\napp.vault.delete(file)\n```'})}}));return f.get()};return f}
+(async()=>{
+ const f=await fixture();let s=await f.run({kind:'next'}),main=s.nodes[0].id,prior=[...f.storage.files].map(([k,b])=>[k,b.toString()]);assert.equal(s.nodes[0].understanding,undefined);
+ const mark=async(state,node=main)=>{await f.service.mark(f.id,f.route,(await f.get()).head,node,state);return f.get()};
+ s=await mark('understood');assert.equal(s.nodes[0].understanding.actor,'user');assert.equal(f.calls(),1);for(const[k,b]of prior)assert.equal(f.storage.files.get(k).toString(),b);
+ const stable=s.head;await mark('understood');assert.equal((await f.get()).head,stable);await assert.rejects(f.service.mark(f.id,f.route,prior[0][0],main,'question'),/已变化/);
+ await assert.rejects(mark('constructor'),/有效标记/);await assert.rejects(f.store.append(f.id,f.route,s.head,{type:'understanding',nodeId:main,answerRequestId:s.nodes[0].attempts[0].requestId,actor:'model',state:'understood'}),/用户/);
+ s=await mark('unmarked');assert.equal(s.nodes[0].understanding.state,'unmarked');s=await mark('revisit');
+ s=await f.run({kind:'ask',parentId:main,question:'支线问题',newBranch:false});const branch=s.nodes.at(-1);assert.equal(branch.understanding,undefined);
+ s=await f.run({kind:'ask',parentId:branch.id,question:'分支里的另一条线',newBranch:true});const nested=s.nodes.at(-1);s=await f.run({kind:'next'});
+ assert.equal(topicExportNodes(s,'branch',branch.id).nodes.length,1);assert.equal(topicExportNodes(s,'branch',main).nodes.length,2);assert.equal(topicExportNodes(s,'session','').nodes.length,4);
+ const controller=new TopicStudyController(f.service,()=>{});await controller.open(f.id,f.route);controller.select(nested.id);await controller.mark('question');assert.equal(controller.selected.understanding.state,'question');assert.equal(controller.ui.mainFocusId,'main-unit-evaluation');
+ const writes=f.storage.files.size;let review=await f.exports.review(f.id,f.route,(await f.get()).head,'session',main);assert.equal(f.storage.files.size,writes);assert.match(review.text,/knowledge_source: "model-knowledge"/);assert.match(review.text,/用户自评/);assert.match(review.text,/仍有疑问/);assert.match(review.text,/未报告/);assert(!review.text.includes('[['));assert(!review.text.includes('```'));assert(!review.text.includes('!['));assert(!inKnowledgeScope(review.path));
+ const saved=await f.exports.save(review);assert.equal(saved.path,review.path);assert.equal((await f.exports.save(review)).reused,true);
+ await assert.rejects(f.exports.save({...review,text:review.text+'tampered'}),/预览已变化/);await assert.rejects(f.exports.save({...review,path:'wiki/sources/invalid.md'}),/预览已变化/);
+ f.storage.files.set(review.path,Buffer.from('用户手动修改'));await assert.rejects(f.exports.save(review),/被编辑/);const copy=await f.exports.save(review,true);assert.notEqual(copy.path,review.path);assert.equal(f.storage.files.get(review.path).toString(),'用户手动修改');assert.equal(f.storage.files.get(copy.path).toString(),review.text);
+ await mark('question');await assert.rejects(f.exports.save(review,true),/已变化/);
+ review=await f.exports.review(f.id,f.route,(await f.get()).head,'node',nested.id);const abort=new AbortController();abort.abort();const before=f.storage.files.size;await assert.rejects(f.exports.save(review,false,abort.signal));assert.equal(f.storage.files.size,before);
+ const mkdir=f.storage.mkdir;let changed=false;f.storage.mkdir=async p=>{await mkdir(p);if(!changed){changed=true;await mark('understood')}};await assert.rejects(f.exports.save(review),/已变化/);assert(!f.storage.files.has(review.path));f.storage.mkdir=mkdir;
+ review=await f.exports.review(f.id,f.route,(await f.get()).head,'node',nested.id);const create=f.storage.create;f.storage.create=async(p,b)=>{if(p.endsWith('.md')){f.storage.files.set(p,Buffer.from('partial'));throw Error('disk full')}await create(p,b)};await assert.rejects(f.exports.save(review),/disk full/);assert.equal(f.storage.files.get(review.path).toString(),'partial');f.storage.create=create;
+ const current=await f.get(),req=topicTeachingRequest(current,{id:'n-not-persisted',parentId:main,branchId:'b-test',moduleId:null,question:'继续？'},new AbortController().signal);assert(!req.prompt.includes('understanding'));assert(!req.prompt.includes('用户手动标记'));
+ // Formal retrieval and document-learning indexes exclude the new topic export domain.
+ class TFile{constructor(path){this.path=path;this.basename='机器学习';this.stat={mtime:1}}}
+ const files=[new TFile(review.path),new TFile('wiki/qa/moved-topic.md'),new TFile('wiki/qa/old-reading.md')],read=[];
+ const app={vault:{getMarkdownFiles:()=>files,cachedRead:async file=>{read.push(file.path);return '# 机器学习\n机器学习说明'}},metadataCache:{getFileCache:file=>({frontmatter:file.path.includes('moved-topic')?{type:'topic-learning-record'}:{}})}};
+ const {LexicalVaultRetriever}=loadReading('query/lexical-retrieval.ts',{obsidian:{TFile}});const retrieval=new LexicalVaultRetriever(app);await retrieval.retrieve('机器学习');assert.deepEqual([...new Set(read)],['wiki/qa/old-reading.md']);
+ read.length=0;const {LearningLibrary}=loadReading('curation/learning.ts');const library=new LearningLibrary(app,{ready:async()=>{},repository:{sessions:new Map()}},{read:async()=>null,write:async()=>{}},{},()=> 'lexical');assert.deepEqual((await library.documents()).map(d=>d.path),['wiki/qa/old-reading.md']);library.dispose();
+ const {readPaperLibrary}=loadReading('library/reader.ts');assert.equal((await readPaperLibrary(f.storage,io(),{vaultRoot:require('node:path').resolve('memory'),parseYaml:JSON.parse})).papers.length,0);
+ console.log('TOPIC_RECORDS_OK: manual marks, immutable answers, scopes, exact previews, duplicate/edit preservation, cancellation, failed writes and retrieval isolation');
+})().catch(e=>{console.error(e);process.exitCode=1});

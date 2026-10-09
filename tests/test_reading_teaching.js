@@ -1,0 +1,12 @@
+const assert = require("node:assert/strict");
+const { loadReading } = require("./reading-test-helpers");
+const { stableReadingResult, teachingPreference } = loadReading("reading/teaching.ts");
+const session = { outline: ["问题", "方法"], mainIds: ["n1"], nodes: [{ id: "n1", title: "研究问题", content: "问题解释", status: "done" }], teachingStyle: "methods" };
+const result = { title: "方法设计", content: "方法解释", outline: session.outline, completed: false };
+assert.equal(stableReadingResult(session, result).completed, true);
+assert.throws(() => stableReadingResult(session, { ...result, outline: ["改名", "方法"] }), /路线/);
+assert.throws(() => stableReadingResult(session, { ...result, title: "研究问题" }), /重复/);
+assert.throws(() => stableReadingResult(session, { ...result, content: "问题解释" }), /重复/);
+assert.throws(() => stableReadingResult({ ...session, outline: [] }, { ...result, outline: ["问题", "问题"] }), /重复/);
+assert.match(teachingPreference(session), /输入输出/);
+console.log("READING_TEACHING_OK");

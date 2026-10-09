@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { TaskRun, TaskRunArtifacts } from "../types/contracts";
+import { normalizeIngestProgress, type IngestProgress } from "../agent/ingest-progress";
 
 // `__dirname` is the installed Obsidian plugin directory in the production
 // bundle. Keep complete outputs beside data.json instead of coupling public
@@ -35,6 +36,7 @@ export interface TaskRunCompletionRecord {
 	error: string;
 	summary: string;
 	artifacts?: TaskRunArtifacts;
+	ingestProgress?: IngestProgress;
 }
 
 export interface TaskRunStorageCleanupResult {
@@ -204,6 +206,7 @@ export async function writeTaskRunOutput(
 		error: run.error,
 		summary: run.summary,
 		artifacts: run.artifacts,
+		ingestProgress: run.ingestProgress,
 	}, null, 2);
 	if (Buffer.byteLength(payload, "utf8") > MAX_SIDECAR_BYTES) {
 		throw new Error("任务输出 sidecar 超过 16 MiB 安全上限");
@@ -321,6 +324,7 @@ export function readTaskRunCompletion(
 		artifacts: payload.artifacts && typeof payload.artifacts === "object"
 			? payload.artifacts as TaskRunArtifacts
 			: undefined,
+		ingestProgress: normalizeIngestProgress(payload.ingestProgress),
 	};
 }
 

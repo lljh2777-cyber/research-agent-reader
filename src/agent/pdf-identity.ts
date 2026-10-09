@@ -75,6 +75,7 @@ export interface LocalPdfIdentityDeps {
 }
 
 export interface AuthorizedPdfSnapshot {
+	retainFiles?: boolean;
 	path: string;
 	directory: string;
 	originalFileName: string;
@@ -92,6 +93,41 @@ export interface AuthorizedPdfPageRaster {
 	viewportWidth: number;
 	viewportHeight: number;
 	scale: number;
+}
+
+/** Bounded text reading from the same bytes the reader confirmed during identity checks. */
+export async function readAuthorizedPdfText(snapshot: AuthorizedPdfSnapshot, signal: AbortSignal, pageNumber?: number,
+	deps: Pick<LocalPdfIdentityDeps, "readFile" | "loadPdfJs"> = {
+		readFile: async (file, abort) => new Uint8Array(await fs.promises.readFile(file, { signal: abort })),
+		loadPdfJs: async () => await loadPdfJs() as PdfJsApi,
+	}): Promise<string> {
+	const controller = new AbortController(); const abort = () => controller.abort();
+	signal.addEventListener("abort", abort, { once: true }); if (signal.aborted) abort();
+	const timer = setTimeout(abort, 20_000); let task: PdfLoadingTask | undefined;
+	const wait = <T>(promise: Promise<T>): Promise<T> => waitForAbortable(promise, controller.signal, "PDF 正文读取已取消或超时");
+	try {
+		const bytes = await wait(deps.readFile(snapshot.path, controller.signal));
+		if (bytes.length !== snapshot.size || bytes.length > MAX_LOCAL_PDF_BYTES || createHash("sha256").update(bytes).digest("hex") !== snapshot.sha256) throw new Error("PDF 授权快照已变化");
+		const pdfjs = await wait(deps.loadPdfJs()); task = pdfjs.getDocument({ data: bytes, isEvalSupported: false });
+		const pdf = await wait(task.promise);
+		if (!Number.isInteger(pdf.numPages) || pdf.numPages < 1 || pdf.numPages > MINERU_RESOURCE_LIMITS.pdfPages) throw new Error("PDF 页数无效或超限");
+		if (pageNumber !== undefined && (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > pdf.numPages)) throw new Error("PDF 页码超出范围");
+		const pages = pageNumber ? [pageNumber] : Array.from({ length: Math.min(3, pdf.numPages) }, (_, i) => i + 1);
+		const blocks: string[] = [];
+		for (const number of pages) {
+			const page = await wait(pdf.getPage(number));
+			try {
+				const content = await wait(page.getTextContent());
+				const text = pageTextFromVisibleItems(visibleFirstPageItems(content.items || [], page.getViewport({ scale: 1 })));
+				if (text.trim()) blocks.push(`PDF 第 ${number} 页（文字层，未核验图表）\n${text}`);
+			} finally { page.cleanup?.(); }
+		}
+		if (!blocks.length) throw new Error("PDF 所选页没有可读正文，请使用 MinerU OCR；未生成科学结论");
+		return blocks.join("\n\n");
+	} finally {
+		clearTimeout(timer); signal.removeEventListener("abort", abort);
+		if (task?.destroy) void task.destroy().catch(() => undefined);
+	}
 }
 
 function safeFileName(sourcePath: string): string {
@@ -356,7 +392,7 @@ function sameOpenedFile(before: fs.BigIntStats, after: fs.BigIntStats): boolean 
  */
 export async function createAuthorizedPdfSnapshot(
 	sourcePath: string,
-	options: { signal?: AbortSignal; stageRoot?: string } = {},
+	options: { signal?: AbortSignal; stageRoot?: string; expected?: {sha256:string;byteLength:number}; retainFiles?:boolean } = {},
 ): Promise<AuthorizedPdfSnapshot> {
 	if (!sourcePath || !/\.pdf$/i.test(sourcePath)) throw new Error("未提供可读取的 PDF");
 	if (options.signal?.aborted) throw abortError("PDF 授权快照已取消");
@@ -371,6 +407,7 @@ export async function createAuthorizedPdfSnapshot(
 		throw new Error("来源 PDF 在路径解析期间发生变化");
 	}
 	if (initial.size <= 0n) throw new Error("来源 PDF 为空");
+	if(options.expected && initial.size!==BigInt(options.expected.byteLength))throw new Error("来源 PDF 大小与获取快照不一致");
 	if (initial.size > BigInt(MAX_LOCAL_PDF_BYTES)) {
 		throw new Error("来源 PDF 超过 128 MiB 安全上限，未读取或上传");
 	}
@@ -399,27 +436,32 @@ export async function createAuthorizedPdfSnapshot(
 			}
 			const chunk = buffer.subarray(0, bytesRead);
 			hash.update(chunk);
-			await destination.write(chunk);
+			let written=0;while(written<chunk.length){const result=await destination.write(chunk.subarray(written));if(!result.bytesWritten)throw new Error("PDF 授权快照写入未前进");written+=result.bytesWritten;}
 		}
 		await destination.sync();
 		const openedAfter = await source.stat({ bigint: true });
 		if (!sameOpenedFile(openedBefore, openedAfter) || BigInt(position) !== openedAfter.size) {
 			throw new Error("来源 PDF 在授权快照复制期间发生变化");
 		}
+		const sha256=hash.digest("hex");
+		if(options.expected && (options.expected.sha256!==sha256 || options.expected.byteLength!==position))throw new Error("授权 PDF 与获取快照不一致，未读取论文内容或上传");
 		return {
 			path: snapshotPath,
 			directory,
 			originalFileName: safeFileName(sourcePath),
 			size: position,
-			sha256: hash.digest("hex"),
+			sha256,
+			...(options.retainFiles?{retainFiles:true}:{}),
 		};
 	} catch (error) {
 		try { await destination?.close(); } catch { /* Best effort. */ }
 		destination = null;
 		try { await source?.close(); } catch { /* Best effort. */ }
 		source = null;
-		try { await fs.promises.unlink(snapshotPath); } catch { /* File may not exist. */ }
-		try { await fs.promises.rmdir(directory); } catch { /* Keep unexpected contents for inspection. */ }
+		if(!options.retainFiles) {
+			try { await fs.promises.unlink(snapshotPath); } catch { /* File may not exist. */ }
+			try { await fs.promises.rmdir(directory); } catch { /* Keep unexpected contents for inspection. */ }
+		}
 		throw error;
 	} finally {
 		try { await destination?.close(); } catch { /* Best effort. */ }
@@ -428,7 +470,7 @@ export async function createAuthorizedPdfSnapshot(
 }
 
 export async function disposeAuthorizedPdfSnapshot(snapshot: AuthorizedPdfSnapshot | null): Promise<void> {
-	if (!snapshot) return;
+	if (!snapshot || snapshot.retainFiles) return;
 	try { await fs.promises.unlink(snapshot.path); } catch { /* Best effort. */ }
 	try { await fs.promises.rmdir(snapshot.directory); } catch (error) {
 		console.warn("Could not remove authorized PDF snapshot directory", error);
@@ -443,7 +485,7 @@ export async function disposeAuthorizedPdfSnapshot(snapshot: AuthorizedPdfSnapsh
 export async function renderAuthorizedPdfIdentityPage(
 	snapshot: AuthorizedPdfSnapshot,
 	pageNumber: number,
-	options: { signal?: AbortSignal } = {},
+	options: { signal?: AbortSignal; bytes?: Uint8Array } = {},
 ): Promise<AuthorizedPdfPageRaster> {
 	if (typeof document === "undefined") throw new Error("当前环境不能渲染 PDF 身份确认页面");
 	if (!Number.isInteger(pageNumber) || pageNumber < 1 || pageNumber > 3) {
@@ -464,7 +506,7 @@ export async function renderAuthorizedPdfIdentityPage(
 	let canvas: HTMLCanvasElement | null = null;
 	try {
 		const bytes = await waitForAbortable(
-			fs.promises.readFile(snapshot.path, { signal: renderController.signal }),
+			options.bytes ? Promise.resolve(new Uint8Array(options.bytes)) : fs.promises.readFile(snapshot.path, { signal: renderController.signal }),
 			renderController.signal,
 			"PDF 身份确认渲染已取消",
 		);

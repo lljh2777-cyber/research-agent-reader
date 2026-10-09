@@ -8,6 +8,7 @@ import {
 	normalizeAssetPath,
 } from "./normalization";
 import { logicalFigureOwnershipForPage } from "./figure-ownership";
+import { isStandaloneImageToken, markdownImagePattern } from "../reader/markdown-images";
 export {
 	alignedReaderScrollTop,
 	readerElementOffset,
@@ -29,7 +30,7 @@ import type {
 	NormalizedBbox,
 } from "./types";
 
-const IMAGE_TOKEN_RE = /!\[([^\]]*)\]\((?:<([^>]+)>|([^\s)]+))(?:\s+["'][^"']*["'])?\)|<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi;
+const IMAGE_TOKEN_RE = markdownImagePattern();
 
 interface CaptionPartEntry {
 	block: MineruViewerBlock;
@@ -881,12 +882,13 @@ function samePageCaptionDetails(
 	};
 }
 
-function markdownImageOccurrences(markdown: string): Map<string, MarkdownImageOccurrence> {
+function markdownImageOccurrences(markdown: string, standaloneImagesOnly = false): Map<string, MarkdownImageOccurrence> {
 	const occurrences = new Map<string, MarkdownImageOccurrence>();
 	let imageOrder = 0;
 	IMAGE_TOKEN_RE.lastIndex = 0;
 	let match: RegExpExecArray | null;
 	while ((match = IMAGE_TOKEN_RE.exec(markdown)) !== null) {
+		if (standaloneImagesOnly && !isStandaloneImageToken(markdown, match.index, IMAGE_TOKEN_RE.lastIndex)) continue;
 		const rawAssetPath = match[2] || match[3] || match[4];
 		if (!rawAssetPath) continue;
 		const id = `md-img-${String(imageOrder).padStart(4, "0")}`;
@@ -1247,8 +1249,9 @@ function suppressProjectedReaderText(
 	markdown: string,
 	visuals: readonly MineruReaderVisual[],
 	viewerIndex?: MineruViewerIndex,
+	standaloneImagesOnly = false,
 ): string {
-	const occurrences = markdownImageOccurrences(markdown);
+	const occurrences = markdownImageOccurrences(markdown, standaloneImagesOnly);
 	const ranges = new Map<string, { start: number; end: number }>();
 	const captionTexts = new Map<string, Set<string>>();
 	const localRangesByVisual = new Map<string, Array<{ start: number; end: number }>>();
@@ -1847,7 +1850,7 @@ export function prepareReaderMarkdown(
 	markdown: string,
 	visuals: readonly MineruReaderVisual[],
 	viewerIndex?: MineruViewerIndex,
-	options: { removeUnmappedImages?: boolean; maxProjectionWork?: number } = {},
+	options: { removeUnmappedImages?: boolean; maxProjectionWork?: number; standaloneImagesOnly?: boolean } = {},
 ): string {
 	const projectedWork = markdown.length * Math.max(1, visuals.length);
 	const maxProjectionWork = Math.max(1_000_000, options.maxProjectionWork || 96_000_000);
@@ -1870,7 +1873,8 @@ export function prepareReaderMarkdown(
 		IMAGE_TOKEN_RE.lastIndex = 0;
 		let passive = markdown.replace(
 			IMAGE_TOKEN_RE,
-			(_match, _alt: string, anglePath: string, plainPath: string, htmlPath: string) => {
+			(_match, _alt: string, anglePath: string, plainPath: string, htmlPath: string, offset: number) => {
+				if (options.standaloneImagesOnly && !isStandaloneImageToken(markdown, offset, offset + _match.length)) return _match;
 				const assetPath = normalizeAssetPath(anglePath || plainPath || htmlPath || "");
 				const imageId = `md-img-${String(imageOrder).padStart(4, "0")}`;
 				imageOrder += 1;
@@ -1950,7 +1954,7 @@ export function prepareReaderMarkdown(
 			assetCandidates.set(assetPath, candidates);
 		});
 	});
-	let prepared = suppressProjectedReaderText(markdown, visuals, viewerIndex);
+	let prepared = suppressProjectedReaderText(markdown, visuals, viewerIndex, options.standaloneImagesOnly);
 	const protectedTableRanges = atomicCaptures.flatMap((capture) => {
 		const start = prepared.indexOf(capture.tableText);
 		if (start < 0 || prepared.indexOf(capture.tableText, start + capture.tableText.length) >= 0) return [];
@@ -1962,6 +1966,7 @@ export function prepareReaderMarkdown(
 	prepared = prepared.replace(
 		IMAGE_TOKEN_RE,
 		(_match, _alt: string, anglePath: string, plainPath: string, htmlPath: string, offset: number) => {
+			if (options.standaloneImagesOnly && !isStandaloneImageToken(prepared, offset, offset + _match.length)) return _match;
 			const rawAssetPath = anglePath || plainPath || htmlPath;
 			if (!rawAssetPath) return _match;
 			const imageId = `md-img-${String(imageOrder).padStart(4, "0")}`;

@@ -371,10 +371,17 @@ export class MineruPdfRenderer {
 		canvas.height = height;
 	}
 
+	/** Release an evicted page without cancelling the retained page canvases. */
+	releaseCanvas(canvas: HTMLCanvasElement): void {
+		this.activeCanvasPixels -= this.canvasPixels.get(canvas) || 0;
+		this.canvasPixels.delete(canvas);
+		canvas.width = 0;
+		canvas.height = 0;
+	}
+
 	private releaseCanvasResources(): void {
 		for (const canvas of this.canvasPixels.keys()) {
-			canvas.width = 0;
-			canvas.height = 0;
+			this.releaseCanvas(canvas);
 		}
 		this.canvasPixels.clear();
 		this.activeCanvasPixels = 0;

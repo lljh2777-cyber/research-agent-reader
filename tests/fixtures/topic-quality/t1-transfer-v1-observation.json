@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "baselineHash": "d7036716f5bbc195b64d3ad530a1661c34848cde819e05af5d006aa15a0b2f43",
+  "instructionHash": "58826d844fd7612e2b8b01d8b0ba108deec0874cd5c1075bd9ca7fbbf4b2648e",
+  "inputHash": "81e65e392ac74401170837a67e32f15a0169f06089cf2a22c14e4fca4aa0fa69",
+  "sampleCount": 2,
+  "questionCount": 8,
+  "modelAnswerStatus": "not_run",
+  "independentReviewStatus": "pending"
+}

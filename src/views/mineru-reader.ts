@@ -15,7 +15,9 @@ import type { DashboardSettings } from "../runtime/settings";
 import { bboxToPercent } from "../mineru/normalization";
 import { resolvePackageAssetPath } from "../mineru/package-loader";
 import { MineruPdfRenderer } from "../mineru/pdf-renderer";
+import { PdfPageWindow } from "../mineru/pdf-page-window";
 import { ReaderDocumentLoader } from "../reader/document-loader";
+import { renderJatsBody } from "../reader/jats-renderer";
 import {
 	applyPdfCaptionContinuationRecovery,
 	alignedReaderScrollTop,
@@ -38,6 +40,8 @@ interface MineruReaderHost {
 	app: App;
 	settings: DashboardSettings;
 	openReaderSourceMarkdown?(articlePath: string): Promise<void>;
+	activateReadingWorkspace?(entry: import("../reading/entry").ReadingEntry): Promise<void>;
+	openJatsWiki?(key: string): Promise<void>;
 	openSelectionAnnotation(): Promise<void>;
 }
 
@@ -150,6 +154,7 @@ export class MineruReaderView extends ItemView {
 	private opened = false;
 	private resizeTimer: number | null = null;
 	private pdfFollowInteractionSource: "markdown" | "pdf" = "markdown";
+	private mountPdfPageWindow: ((pageNumber: number) => void) | null = null;
 	private readonly verifiedResourceUrls = new Map<string, string>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: MineruReaderHost) {
@@ -167,6 +172,9 @@ export class MineruReaderView extends ItemView {
 
 	getDisplayText(): string {
 		return this.readerPackage?.title || "文献阅读器";
+	}
+	private refreshTabTitle(): void {
+		(this.leaf as unknown as { updateHeader?: () => void }).updateHeader?.();
 	}
 
 	getIcon(): string {
@@ -198,6 +206,17 @@ export class MineruReaderView extends ItemView {
 		this.readerState.pdfPage = 1;
 		if (this.opened) await this.loadAndRender();
 		this.requestStateSave();
+	}
+
+	/** Explicit evidence navigation must also work in the figure display mode. */
+	revealReadingPage(page: number): void {
+		const article = this.markdownScroller?.querySelector<HTMLElement>(".agent-dashboard-mineru-article");
+		if (!article || !Number.isInteger(page) || page < 1) return;
+		this.readerState.markdownAnchor = "";
+		this.readerState.markdownPage = page; this.readerState.pdfPage = page;
+		this.restoreMarkdownPosition(article, { kind: "page", pageNumber: page });
+		if (this.readerState.mode === "pdf") this.scrollPdfToPage(page, "auto");
+		this.updateMarkdownPageStatus(); this.requestStateSave();
 	}
 
 	async onOpen(): Promise<void> {
@@ -234,13 +253,15 @@ export class MineruReaderView extends ItemView {
 		const generation = ++this.loadGeneration;
 		this.revokeVerifiedResourceUrls();
 		this.readerPackage = null;
+		this.refreshTabTitle();
 		await this.pdfRenderer.destroy();
 		this.renderLoading();
 		try {
 			const loaded = await this.loader.load(this.readerState.articlePath);
 			if (!this.opened || generation !== this.loadGeneration) return;
 			this.readerPackage = loaded;
-			if (loaded.sourceKind === "markdown") this.readerState.mode = "visuals";
+			this.refreshTabTitle();
+			if (loaded.sourceKind !== "mineru") {this.readerState.mode = "visuals";this.readerState.showLayoutBoxes=false;}
 			if (loaded.pdfPath && loaded.verifiedPdfBytes) {
 				try {
 					await this.pdfRenderer.loadBytes(loaded.verifiedPdfBytes);
@@ -303,6 +324,7 @@ export class MineruReaderView extends ItemView {
 		} catch (error) {
 			if (!this.opened || generation !== this.loadGeneration) return;
 			this.readerPackage = null;
+			this.refreshTabTitle();
 			await this.pdfRenderer.destroy();
 			this.renderError(error);
 		}
@@ -386,6 +408,19 @@ export class MineruReaderView extends ItemView {
 			text: readerPackage.title,
 			attr: { title: readerPackage.title },
 		});
+		if (readerPackage.sourceKind === "jats" && this.plugin.activateReadingWorkspace) {
+			const read = header.createEl("button", { text: "交互深读", attr: { "data-jats-action": "interactive" } });
+			this.onWorkspaceEvent(read, "click", () => { void this.plugin.activateReadingWorkspace!({ domain: "paper", source: { kind: "structured", path: readerPackage.articlePath } }).catch(error => new Notice(String(error))); });
+		}
+		if (readerPackage.sourceKind === "jats" && this.plugin.openJatsWiki) {
+			const wiki = header.createEl("button", { text: "论文笔记", attr: { "data-jats-action": "wiki" } });
+			this.onWorkspaceEvent(wiki, "click", () => { void this.plugin.openJatsWiki!(readerPackage.articlePath.split("/")[1]).catch(error => new Notice(String(error))); });
+		}
+	}
+
+	revealReadingBlock(blockId: string): void {
+		if (!this.readerPackage?.document?.structured?.blocks.some(b => b.id === blockId)) throw new Error("JATS 正文块不属于当前原文");
+		this.markdownScroller?.querySelector<HTMLElement>(`[data-jats-block="${CSS.escape(blockId)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
 	}
 
 	private async renderMarkdownPane(parent: HTMLElement): Promise<void> {
@@ -431,12 +466,16 @@ export class MineruReaderView extends ItemView {
 			readerPackage.articleMarkdown,
 			readerPackage.visuals,
 			readerPackage.viewerIndex,
-			{ removeUnmappedImages: readerPackage.sourceKind === "mineru" },
+			{
+				removeUnmappedImages: readerPackage.sourceKind === "mineru",
+				standaloneImagesOnly: readerPackage.sourceKind !== "mineru",
+			},
 		);
 		this.markdownComponent?.unload();
 		this.markdownComponent = new Component();
 		this.markdownComponent.load();
-		await MarkdownRenderer.render(
+		if(readerPackage.sourceKind==="jats")await renderJatsBody(this.app,readerPackage,article,this.markdownComponent,()=>this.opened&&this.readerPackage===readerPackage&&article.isConnected);
+		else await MarkdownRenderer.render(
 			this.app,
 			prepared,
 			article,
@@ -569,6 +608,7 @@ export class MineruReaderView extends ItemView {
 
 	private updateMarkdownPageStatus(): void {
 		if (!this.markdownPageStatus) return;
+		if(this.readerPackage?.sourceKind==="jats"){this.markdownPageStatus.setText("JATS · 章节与图表");this.markdownPageStatus.setAttribute("title","XML 正文没有 PDF 页码或布局框映射");return;}
 		if (this.readerPackage?.sourceKind === "markdown") {
 			this.markdownPageStatus.setText("Markdown · 网页全文");
 			this.markdownPageStatus.setAttribute("title", "普通 Markdown 图文阅读模式");
@@ -653,6 +693,7 @@ export class MineruReaderView extends ItemView {
 		const readerPackage = this.readerPackage;
 		if (!host || !readerPackage) return;
 		this.referenceAbortController?.abort();
+		this.mountPdfPageWindow = null;
 		this.referenceAbortController = new AbortController();
 		this.pdfRenderer.cancelPageRender();
 		this.pdfRenderer.cancelCropRender();
@@ -845,10 +886,22 @@ export class MineruReaderView extends ItemView {
 		this.onReferenceEvent(scroll, "focusin", () => this.pausePdfFollowingForReferenceInteraction());
 		const availableWidth = Math.max(260, scroll.clientWidth - 34);
 		const estimatedWidth = Math.floor(availableWidth * this.readerState.pdfZoom);
-		const pageWrappers: HTMLElement[] = [];
-		const firstPage = Math.max(1, this.readerState.pdfPage - 1);
-		const lastPage = Math.min(this.pdfRenderer.numPages, this.readerState.pdfPage + 1);
-		for (let pageNumber = firstPage; pageNumber <= lastPage; pageNumber += 1) {
+		const geometry = new PdfPageWindow(this.pdfRenderer.numPages, estimatedWidth / 0.7071);
+		const leadingInset = Number.parseFloat(window.getComputedStyle(scroll).paddingTop) || 0;
+		// We explicitly preserve the visible page when a measured height replaces
+		// its estimate; browser scroll anchoring must not apply a second correction.
+		scroll.style.overflowAnchor = "none";
+		const beforeSpacer = scroll.createDiv({ attr: { "aria-hidden": "true" } });
+		const afterSpacer = scroll.createDiv({ attr: { "aria-hidden": "true" } });
+		const pageWrappers = new Map<number, HTMLElement>();
+		let firstVisiblePage = this.readerState.pdfPage;
+		let lastVisiblePage = firstVisiblePage;
+		const updateSpacers = (): void => {
+			const range = geometry.range(firstVisiblePage, lastVisiblePage);
+			beforeSpacer.style.height = `${range.before}px`;
+			afterSpacer.style.height = `${range.after}px`;
+		};
+		const createPageWrapper = (pageNumber: number): HTMLElement => {
 			const pageWrapper = scroll.createDiv({
 				cls: "agent-dashboard-mineru-pdf-page is-loading",
 				attr: {
@@ -858,16 +911,19 @@ export class MineruReaderView extends ItemView {
 			});
 			pageWrapper.dataset.renderState = "idle";
 			pageWrapper.style.width = `${estimatedWidth}px`;
+			pageWrapper.style.height = `${geometry.height(pageNumber)}px`;
+			pageWrapper.style.marginBottom = pageNumber < geometry.pageCount ? `${geometry.gap}px` : "0";
 			pageWrapper.createDiv({
 				cls: "agent-dashboard-mineru-pdf-page-placeholder",
 				text: `正在载入第 ${pageNumber} 页…`,
 			});
 			const canvas = pageWrapper.createEl("canvas", { attr: { "aria-label": `PDF 第 ${pageNumber} 页内容` } });
 			canvas.hidden = true;
-			pageWrappers.push(pageWrapper);
-		}
+			return pageWrapper;
+		};
 
 		let renderQueue = Promise.resolve();
+		let scheduleVisiblePage = (): void => undefined;
 		const queuePageRender = (pageWrapper: HTMLElement): void => {
 			if (pageWrapper.dataset.renderState !== "idle") return;
 			pageWrapper.dataset.renderState = "queued";
@@ -884,6 +940,7 @@ export class MineruReaderView extends ItemView {
 						availableWidth,
 						this.readerState.pdfZoom,
 					);
+					if (generation !== this.referenceGeneration || !pageWrapper.isConnected) return;
 					if (this.pageHasSuspiciousBlankVisual(pageNumber, canvas)) {
 						pageWrapper.dataset.renderRetried = "true";
 						await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
@@ -895,8 +952,16 @@ export class MineruReaderView extends ItemView {
 						);
 					}
 					if (generation !== this.referenceGeneration || !pageWrapper.isConnected) return;
+					const anchorPage = geometry.pageAt(Math.max(0, scroll.scrollTop - leadingInset));
+					const anchorOffset = geometry.offset(anchorPage);
+					const previousScrollTop = scroll.scrollTop;
+					geometry.setHeight(pageNumber, size.height);
 					pageWrapper.style.width = `${Math.floor(size.width)}px`;
-					pageWrapper.style.height = `${Math.floor(size.height)}px`;
+					pageWrapper.style.height = `${geometry.height(pageNumber)}px`;
+					updateSpacers();
+					const anchorDelta = geometry.offset(anchorPage) - anchorOffset;
+					if (anchorDelta) scroll.scrollTop = previousScrollTop + anchorDelta;
+					scheduleVisiblePage();
 					const compatibilityImageCount = await this.paintPdfImageCompatibilityLayer(canvas, pageNumber);
 					if (generation !== this.referenceGeneration || !pageWrapper.isConnected) return;
 					if (compatibilityImageCount > 0) {
@@ -921,40 +986,56 @@ export class MineruReaderView extends ItemView {
 						".agent-dashboard-mineru-pdf-page-placeholder",
 					);
 					if (placeholder) placeholder.setText(`第 ${pageNumber} 页加载失败`);
+				} finally {
+					// A queued getPage/render can finish after its wrapper left the
+					// window. Release again so a late allocation cannot retain pixels.
+					if (generation !== this.referenceGeneration || !pageWrapper.isConnected) this.pdfRenderer.releaseCanvas(canvas);
 				}
 			}).catch(() => undefined);
 		};
 
-		const renderObserver = typeof IntersectionObserver !== "undefined"
-			? new IntersectionObserver((entries) => {
-				entries.forEach((entry) => {
-					if (entry.isIntersecting) queuePageRender(entry.target as HTMLElement);
-				});
-			}, { root: scroll, rootMargin: "1400px 0px", threshold: 0.01 })
-			: null;
-		if (renderObserver) {
-			pageWrappers.forEach((pageWrapper) => renderObserver.observe(pageWrapper));
-		} else {
+		const mountWindow = (first: number, last = first): void => {
+			const previousScrollTop = scroll.scrollTop;
+			firstVisiblePage = first;
+			lastVisiblePage = last;
+			const range = geometry.range(first, last);
+			for (const [pageNumber, pageWrapper] of pageWrappers) {
+				if (pageNumber >= range.first && pageNumber <= range.last) continue;
+				const canvas = pageWrapper.querySelector("canvas");
+				if (canvas) this.pdfRenderer.releaseCanvas(canvas);
+				pageWrapper.remove();
+				pageWrappers.delete(pageNumber);
+			}
+			for (let pageNumber = range.first; pageNumber <= range.last; pageNumber += 1) {
+				let pageWrapper = pageWrappers.get(pageNumber);
+				if (!pageWrapper) {
+					pageWrapper = createPageWrapper(pageNumber);
+					const nextPage = [...pageWrappers.keys()].filter((number) => number > pageNumber).sort((left, right) => left - right)[0];
+					scroll.insertBefore(pageWrapper, pageWrappers.get(nextPage) || afterSpacer);
+					pageWrappers.set(pageNumber, pageWrapper);
+				}
+			}
+			updateSpacers();
+			// DOM removal can temporarily clamp scrollTop before replacement
+			// spacers are sized. The full document geometry has not changed.
+			if (scroll.scrollTop !== previousScrollTop) scroll.scrollTop = previousScrollTop;
+			// Prioritize the visible page; overscan still uses the same serial
+			// queue and the renderer retains its cumulative canvas-pixel limit.
+			const focused = pageWrappers.get(this.readerState.pdfPage) || pageWrappers.get(first);
+			if (focused) queuePageRender(focused);
 			pageWrappers.forEach(queuePageRender);
-		}
-		this.referenceAbortController?.signal.addEventListener("abort", () => renderObserver?.disconnect(), { once: true });
+		};
+		this.mountPdfPageWindow = (pageNumber) => {
+			mountWindow(pageNumber, geometry.pageAt(geometry.offset(pageNumber) + scroll.clientHeight));
+		};
 
 		let scrollFrame = 0;
 		const updateVisiblePage = (): void => {
 			scrollFrame = 0;
 			if (generation !== this.referenceGeneration) return;
-			const probe = scroll.scrollTop + Math.min(scroll.clientHeight * 0.35, 260);
-			const scrollRect = scroll.getBoundingClientRect();
-			let currentPage = firstPage;
-			for (const pageWrapper of pageWrappers) {
-				const pageTop = readerElementOffset(
-					scroll.scrollTop,
-					pageWrapper.getBoundingClientRect().top,
-					scrollRect.top,
-				);
-				if (pageTop > probe) break;
-				currentPage = Number(pageWrapper.dataset.pageNumber || currentPage);
-			}
+			const top = Math.max(0, scroll.scrollTop - leadingInset);
+			const currentPage = geometry.pageAt(top + Math.min(scroll.clientHeight * 0.35, 260));
+			mountWindow(geometry.pageAt(top), geometry.pageAt(top + scroll.clientHeight));
 			pageInput.value = String(currentPage);
 			previous.disabled = currentPage <= 1;
 			next.disabled = currentPage >= this.pdfRenderer.numPages;
@@ -962,26 +1043,18 @@ export class MineruReaderView extends ItemView {
 			this.readerState.pdfPage = currentPage;
 			this.requestStateSave();
 		};
-		this.onReferenceEvent(scroll, "scroll", () => {
+		scheduleVisiblePage = () => {
 			if (scrollFrame) return;
 			scrollFrame = window.requestAnimationFrame(updateVisiblePage);
-		});
+		};
+		this.onReferenceEvent(scroll, "scroll", scheduleVisiblePage);
 		this.referenceAbortController?.signal.addEventListener("abort", () => {
 			if (scrollFrame) window.cancelAnimationFrame(scrollFrame);
 		}, { once: true });
 
-		const initialPage = pageWrappers.find((page) => Number(page.dataset.pageNumber) === this.readerState.pdfPage);
-		if (initialPage) {
-			const leadingInset = Number.parseFloat(window.getComputedStyle(scroll).paddingTop) || 0;
-			scroll.scrollTop = alignedReaderScrollTop(
-				scroll.scrollTop,
-				initialPage.getBoundingClientRect().top,
-				scroll.getBoundingClientRect().top,
-				leadingInset,
-			);
-			queuePageRender(initialPage);
-			pageWrappers.filter((page) => page !== initialPage).forEach(queuePageRender);
-		}
+		this.mountPdfPageWindow(this.readerState.pdfPage);
+		scroll.scrollTop = geometry.offset(this.readerState.pdfPage);
+		scheduleVisiblePage();
 		this.renderReferenceStatus(parent);
 	}
 
@@ -1132,7 +1205,7 @@ export class MineruReaderView extends ItemView {
 			state.createEl("p", {
 				text: readerPackage.sourceKind === "markdown"
 					? "正文仍可正常阅读；当前 Markdown 中没有识别到独立图片块。"
-					: "正文仍可正常阅读；当前 MinerU JSON 没有可解析的视觉资源。",
+					: readerPackage.sourceKind==="jats"?"正文与结构表格仍可阅读；图片未请求、缺失或尚不能显示，详见原文缺口记录。":"正文仍可正常阅读；当前 MinerU JSON 没有可解析的视觉资源。",
 			});
 			return;
 		}
@@ -1141,7 +1214,7 @@ export class MineruReaderView extends ItemView {
 		const toolbar = parent.createDiv({ cls: "agent-dashboard-mineru-visual-toolbar" });
 		const title = toolbar.createDiv();
 		title.createEl("strong", { text: visual.label });
-		const pageLabel = readerPackage.sourceKind === "markdown"
+		const pageLabel = readerPackage.sourceKind !== "mineru"
 			? `文中第 ${index + 1} 幅`
 			: visual.captionPageIdx !== undefined && visual.captionPageIdx !== visual.pageIdx
 				? `图第 ${visual.pageIdx + 1} 页 · 图注第 ${visual.captionPageIdx + 1} 页`
@@ -1194,6 +1267,11 @@ export class MineruReaderView extends ItemView {
 			const image = parent.createEl("img", {
 				attr: { alt: visual.label, loading: "eager" },
 			});
+			if(readerPackage.sourceKind==="jats"){
+				const fail=()=>{if(generation!==this.referenceGeneration||image.hidden)return;image.hidden=true;parent.createEl("p",{text:"此图片未能解码显示，已保留原始资源；文件校验通过不等于图像可读。",cls:"rar-fulltext-error"});};
+				this.onReferenceEvent(image,"error",fail);
+				this.onReferenceEvent(image,"load",()=>{if(!image.naturalWidth||!image.naturalHeight||image.naturalWidth>16000||image.naturalHeight>16000||image.naturalWidth*image.naturalHeight>40000000)fail();});
+			}
 			image.src = this.resourceUrl(visual.display.assetPath);
 			return;
 		}
@@ -1255,7 +1333,8 @@ export class MineruReaderView extends ItemView {
 		if (!readerPackage) return;
 		const status = parent.createDiv({ cls: "agent-dashboard-mineru-reference-status" });
 		const visual = this.currentVisual();
-		if (readerPackage.sourceKind === "markdown") {
+		if(readerPackage.sourceKind==="jats"){setIcon(status.createSpan(),"file-code");status.createSpan({text:"正文与图像来自同一 PMC XML 版本；按图号导航，没有 PDF 页面坐标。"});}
+		else if (readerPackage.sourceKind === "markdown") {
 			setIcon(status.createSpan(), "link");
 			status.createSpan({ text: "图片与紧邻图注来自原始 Markdown；Figure 编号仅补在阅读显示层。" });
 		} else if (visual?.captionStatus === "partial" && visual.captionPageIdx !== undefined) {
@@ -1485,8 +1564,9 @@ export class MineruReaderView extends ItemView {
 
 	private scrollPdfToPage(pageNumber: number, behavior: ScrollBehavior): void {
 		const scroll = this.referenceHost?.querySelector<HTMLElement>(".agent-dashboard-mineru-pdf-scroll");
-		const page = scroll?.querySelector<HTMLElement>(`[data-page-number="${pageNumber}"]`);
 		if (!scroll) return;
+		this.mountPdfPageWindow?.(pageNumber);
+		const page = scroll.querySelector<HTMLElement>(`[data-page-number="${pageNumber}"]`);
 		if (!page) {
 			this.readerState.pdfPage = Math.max(1, Math.min(this.pdfRenderer.numPages, pageNumber));
 			void this.renderReference();
@@ -1533,7 +1613,7 @@ export class MineruReaderView extends ItemView {
 	private async openAsset(assetPath: string): Promise<void> {
 		const readerPackage = this.readerPackage;
 		if (!readerPackage || !assetPath) return;
-		if (readerPackage.sourceKind === "mineru") {
+		if (readerPackage.sourceKind !== "markdown") {
 			const verifiedUrl = this.resourceUrl(assetPath);
 			if (!verifiedUrl) {
 				new Notice("未找到已验证的原始图片字节");
@@ -1557,8 +1637,8 @@ export class MineruReaderView extends ItemView {
 	private resourceUrl(assetPath: string): string {
 		const readerPackage = this.readerPackage;
 		if (!readerPackage) return "";
-		if (/^https?:\/\//i.test(assetPath)) return assetPath;
-		if (readerPackage.sourceKind === "mineru") {
+		if (/^https?:\/\//i.test(assetPath)) return readerPackage.sourceKind==="jats"?"":assetPath;
+		if (readerPackage.sourceKind !== "markdown") {
 			const normalized = assetPath.replace(/\\/g, "/").replace(/^\.\//, "");
 			const blob = readerPackage.verifiedAssetBlobs.get(normalized);
 			if (!blob) return "";
@@ -1583,6 +1663,7 @@ export class MineruReaderView extends ItemView {
 		this.pdfRenderer.cancelCropRender();
 		this.referenceAbortController?.abort();
 		this.referenceAbortController = null;
+		this.mountPdfPageWindow = null;
 		this.workspaceAbortController?.abort();
 		this.workspaceAbortController = null;
 		this.markdownComponent?.unload();
