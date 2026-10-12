@@ -2,6 +2,16 @@
 
 This checklist separates automated repository checks from the manual Obsidian checks that require a real desktop session.
 
+## Version delivery and publication
+
+The maintainer has authorized publishing future validated versions alongside their commits and pushes; no additional confirmation is required unless the maintainer pauses publication. Documentation-only changes without a version change do not republish an existing version.
+
+1. Keep `package.json`, `manifest.json`, and `versions.json` consistent. Update `CHANGELOG.md`, `docs/releases/<version>.md`, README download links, and the current-version references at the top of the roadmap and closeout record. Release notes must retain trial status, known issues, skipped checks, and review gaps.
+2. Complete relevant validation, commit and push the intended changes, then push an annotated tag matching the manifest version exactly, without a `v` prefix. Do not move an existing published tag.
+3. Confirm the Windows, macOS, and Linux CI for the tagged commit succeeds. The tag-triggered release workflow rebuilds, runs `verify:public`, checks the version, attests the artifacts, and creates a draft. Keep the draft unpublished if required checks fail.
+4. Inspect the draft with `gh release view <version>`. Confirm its only install assets are `main.js`, `manifest.json`, and `styles.css`, check the uploaded manifest, and confirm the artifact-attestation step succeeded. Use the workflow-built files.
+5. Publish the draft using the version's saved release notes and a title retaining the current trial status. For a normal version advance, mark it latest. Verify the public release URL, tag, draft status, and three assets before reporting completion.
+
 ## Automated
 
 - Run `pnpm verify:public` on Windows, macOS, and Linux through CI.

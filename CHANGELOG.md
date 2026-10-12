@@ -2,7 +2,9 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.84.2] - 2026-10-12
+
+本次受限试用发布补齐双栏设置与模式选择，安装与验收边界见[发布说明](docs/releases/0.84.2.md)。
 
 ### Reader bilingual preferences and layout choice — 0.84.2
 
