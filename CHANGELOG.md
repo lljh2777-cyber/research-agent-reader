@@ -2,7 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.84.1] - 2026-10-12
+
+本次公开发布汇总 `0.31.0` 之后的开发交付，保持受限试用身份；主要变化、安装方法与验收边界见[发布说明](docs/releases/0.84.1.md)。下列版本号记录各步开发历史。
+
+### Bilingual AI annotation source fidelity — 0.84.1
+
+- 双语 AI 批注只使用已复核的当前配对块，排除缺少英文凭据的相邻译文；新建与重开批注采用同一范围。中文译文、英文依据、一般知识与解释性推断分别标注，避免将时间顺序扩大为训练独立性或编造方法细节。
+- Direct API 明确报告输出截断时阻止解释进入保存，包括非空截断及推理 token 耗尽情形；不自动重试、提高额度或切换模型。
+- 四个固定选句的最后一轮真实回答通过开发者定向核对；先前错误、失败与全部 16 次调用用量保留。[验收记录](docs/bilingual-ai-acceptance.md)不代表整篇译文或独立科学／教学审阅完成。
+- 合并主线后修正旧测试夹具与当前检索、来源核验和 Markdown 技能加载约定的差异，四组双语回归加入默认 CI；Windows、macOS、Linux 自动化验证通过。
+
+### Existing bilingual Markdown reading — 0.84.0
+
+- 读取已有英文、中文及配对元数据，同一标签左英文、右中文；提供滚动联动开关，以及以任一栏位置为基准的单次同步，保存续读位置。
+- 两栏批注、摘录、列表返回、草稿与选择性整理保留语言、来源及版本区分。测试库原生操作和正常完整重启工程检查通过，详见[最小双语方案](docs/bilingual-reading-minimal.md)。
+- 只接入已有双语材料，完整翻译生成、修订与导出阶段继续暂缓。
+
+### Limited-trial usability closeout — 0.83.2
+
+- 修复未启用原生结构化输出时主题路线缺少完整 JSON 字段约定的问题，保持严格校验与单次请求。
+- 完成论文阅读及无资料主题学习两条限定场景的追问、依据／来源核对、保存与回看，以及正常退出后的完整宿主重启检查。[收尾记录](docs/usability-closeout.md)保留实际回答、开发者核对与剩余审阅缺口。
 
 ### Preserve adjacent reading citations — 0.83.1
 

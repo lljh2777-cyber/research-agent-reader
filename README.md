@@ -20,9 +20,10 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
-> Public release status: `0.31.0` beta is published at
-> [GitHub Releases](https://github.com/lljh2777-cyber/research-agent-reader/releases/latest).
-> The plugin is not yet listed in the Obsidian Community directory.
+> 受限试用版本：`0.84.1`。安装文件见
+> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.84.1)，
+> 更新范围与验收边界见[发布说明](docs/releases/0.84.1.md)。
+> 尚未上架 Obsidian 社区插件目录。
 
 `0.76.0` 新增 [R3.8 学习摘录补充](docs/answer-excerpt-curation-r38.md)：从学习回答摘录分别选择 AI 片段、人工修订与备注，预览后补充到已有概念、方法或综合笔记；保留内容角色，复用修订恢复与撤销。学习文本块排除本插件的正式证据检索，不据此补写论文来源笔记。
 
@@ -41,9 +42,6 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 `0.82.0` 开始 [R4.1 只读存储盘点](docs/storage-inventory-r41.md)：新增 `pnpm storage:inventory`，逐文件区分持久记录、暂留历史、缓存与混合配置，检查显式引用并生成候选路径。此为开发命令行工具，尚未复制数据或切换插件存储；下一步在保留副本校验格式、历史和完整依赖。
 
 `0.83.0` 交付 [R4.2 首批生产校验与副本读回](docs/storage-validation-r42.md)：复用生产校验器检查历史和记录间关系，新增 `pnpm storage:rehearse`，在保留副本上验证独立进程读取。测试库发现两条旧演示证据引用缺失；完整依赖闭包与正式存储切换尚未完成。
-
-The `codex/research-learning-map` development branch is at `0.83.1`; the beta
-release link above remains the published release.
 
 `0.62.0` 开始 [R2：无需模型添加文献信息](docs/metadata-intake-r2.md)。在「文献库 → 添加文献信息」输入 DOI、PMID、PMCID 或支持的论文链接，查询、核对后仅保存书目信息，并直接在库中查看。保留作者、年份与查询来源，重复标识复用已有记录；不为保存书目信息生成论文笔记。跨阶段待处理中心按路线归 R3。
 
@@ -169,6 +167,13 @@ Advanced actions remain unavailable until the user explicitly configures a
 compatible toolkit project and executable paths.
 
 ## Installation
+
+### Release install
+
+从 [0.84.1 Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.84.1)
+分别下载 `main.js`、`manifest.json`、`styles.css`，放入
+`<vault>/.obsidian/plugins/research-agent-reader/`，再在社区插件设置中启用
+**Research Agent Reader**。已有安装可禁用插件、替换这三个文件，再重新启用。
 
 ### Development install
 
