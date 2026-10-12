@@ -24,6 +24,9 @@ const request = { executable: process.execPath, model: "Exact-Model", system: "�
 	assert.equal((await real.generate({ ...request, timeoutMs: 30000 }, echo, () => {})).text, request.user);
 	const longArgs = { ...adapter, invocation: () => ({ args: ["-e", "process.stdout.write(JSON.stringify({text:process.argv[1]}))", "文".repeat(7000)] }) };
 	assert.equal((await real.generate({ ...request, timeoutMs: 30000 }, longArgs, () => {})).text, "文".repeat(7000));
+	const firstCwd = captured.cwd;
+	await service.generate(request, adapter, () => {});
+	assert.notEqual(captured.cwd, firstCwd, "requests cannot reuse prior launch/context files");
 	await real.dispose(); await service.dispose();
 	console.log("CLI_TEXT_OK (exact args, UTF-8 stdin, failures, cancellation, disposal, native process)");
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -6,12 +6,13 @@ export const CODEBUDDY_ANNOTATION_MODEL = "step-5-preview";
 const CODEBUDDY_DENIED_TOOLS = ["Bash", "PowerShell", "Read", "Write", "Edit", "Glob", "Grep", "Agent", "ToolSearch", "WebSearch", "WebFetch", "Skill", "Task", "TaskOutput", "TaskStop", "TodoWrite", "SendUserMessage", "SendMessage", "EnterPlanMode", "ExitPlanMode", "TeamCreate", "TeamDelete", "NotebookEdit", "REPL", "TaskCreate", "TaskGet", "TaskUpdate", "TaskList", "SkillManage", "AskUserQuestion", "AskUserForStructuredInput", "StructuredOutput", "DeferExecuteTool", "LSP", "ImageGen", "LibraryUpload", "VideoGen", "AudioTranscribe", "Artifact", "ArtifactControl", "EnterWorktree", "LeaveWorktree", "CronCreate", "CronDelete", "CronList", "WeChatReply", "WeComReply", "PushNotification", "ReportFindings", "ComputerUse", "ListMcpResources", "ReadMcpResource", "WaitForMcpServers", "Workflow", "Monitor", "A2AGetAgentCard", "A2ASendMessage", "A2AGetTask", "A2ACancelTask", "MessageColleague", "SpeakInChannel", "ChannelTasks", "CreateColleague", "CreateChannel", "ListColleagues"];
 
 /** Claude-style NDJSON is parsed only after successful process-tree closure. */
-export function parsePrintResult(stdout: string, requestedModel: string): CliTextResult {
+export function parsePrintResult(stdout: string, requestedModel: string, usageKeysAreModels = true): CliTextResult {
 	const events = stdout.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>);
 	const results = events.filter(event => event.type === "result");
 	if (results.length !== 1) throw new Error("CLI 未返回唯一的完成结果；解释未保存");
 	const final = results[0];
 	if (final.is_error || final.subtype !== "success") throw new Error(`CLI 未完成解释：${String(final.result || final.subtype || "未知错误").slice(0, 800)}`);
+	if (final.stop_reason === "max_tokens" || final.stop_reason === "length") throw new Error("CLI 输出达到上限，解释不完整；未保存");
 	const models = new Set<string>();
 	for (const event of events) {
 		const message = event.message as Record<string, unknown> | undefined;
@@ -25,7 +26,7 @@ export function parsePrintResult(stdout: string, requestedModel: string): CliTex
 			if (Array.isArray(message.content) && message.content.some(block => block && typeof block === "object" && (block as Record<string, unknown>).type === "tool_use")) throw new Error("CLI 尝试调用工具；解释未保存");
 		}
 	}
-	if (final.modelUsage && typeof final.modelUsage === "object") for (const model of Object.keys(final.modelUsage)) models.add(model);
+	if (usageKeysAreModels && final.modelUsage && typeof final.modelUsage === "object") for (const model of Object.keys(final.modelUsage)) models.add(model);
 	if ([...models].some(model => model.toLowerCase() !== requestedModel.toLowerCase())) throw new Error(`CLI 返回的模型与所选 ${requestedModel} 不一致；解释未保存`);
 	const rawUsage = final.usage && typeof final.usage === "object" ? final.usage as Record<string, unknown> : {};
 	const usage: Record<string, number> = {};

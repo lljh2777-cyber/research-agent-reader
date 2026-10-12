@@ -1496,7 +1496,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		}
 		const annotationBackendId = String(this.settings.annotationBackendId || "auto");
 		if (
-			!["auto", "codex-cli", "claude-code", "opencode", "codebuddy"].includes(annotationBackendId)
+			!["auto", "codex-cli", "claude-code", "opencode", "codebuddy", "qoderclicn"].includes(annotationBackendId)
 			&& !normalizedProfiles.some(
 				(profile) => profile.id === annotationBackendId && profile.lastTest?.ok,
 			)

@@ -16,8 +16,9 @@ export interface CliTextAdapter {
 	label: string;
 	npmPackage?: string;
 	binName?: string;
-	invocation(model: string, system: string): { args: string[]; env?: NodeJS.ProcessEnv };
+	invocation(model: string, system: string, user?: string): { args: string[]; env?: NodeJS.ProcessEnv };
 	parse(stdout: string, requestedModel: string): CliTextResult;
+	input?(user: string): string;
 }
 
 export interface CliTextRequest {
@@ -49,7 +50,6 @@ export function resolveTextCliCommand(executable: string, adapter: CliTextAdapte
 export class CliTextService {
 	private readonly active = new Map<AbortController, Promise<unknown>>();
 	private closing = false;
-	private cwd = "";
 	constructor(private readonly runProcess: (request: MineruProcessRequest) => Promise<MineruProcessResult> = runMineruProcessCommand) {}
 
 	generate(request: CliTextRequest, adapter: CliTextAdapter, registerCancel: (cancel: () => void) => void): Promise<CliTextResult> {
@@ -61,13 +61,14 @@ export class CliTextService {
 			if (!model || model.length > 200 || /[\r\n\0]/.test(model)) throw new Error("请选择准确的 CLI 模型 ID");
 			if (!request.user.trim() || request.user.length > 100000 || request.system.length > 20000) throw new Error("批注输入为空或超过上限");
 			const command = resolveTextCliCommand(request.executable, adapter);
-			const invocation = adapter.invocation(model, request.system);
+			const invocation = adapter.invocation(model, request.system, request.user);
+			if (process.platform === "win32" && invocation.args.reduce((n, arg) => n + arg.length + 3, command.command.length) > 28000) throw new Error("CLI 提示词超过 Windows 启动上限，请选择较短段落");
 			// A unique empty directory prevents loading Vault/project instructions.
-			this.cwd ||= fs.mkdtempSync(path.join(os.tmpdir(), "research-reader-cli-"));
+			const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "research-reader-cli-"));
 			const result = await this.runProcess({
 				command: command.command, baseArgs: command.baseArgs, cliArgs: invocation.args,
-				cwd: this.cwd, signal: controller.signal,
-				input: request.user, env: invocation.env,
+				cwd, signal: controller.signal,
+				input: adapter.input ? adapter.input(request.user) : request.user, env: invocation.env,
 				timeoutMs: Math.max(1000, Math.min(300000, request.timeoutMs || 120000)),
 			});
 			if (controller.signal.aborted || this.closing || result.exitCode === 130) throw new Error("批注解释已取消");

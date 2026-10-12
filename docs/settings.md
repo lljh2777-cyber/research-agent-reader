@@ -1,5 +1,7 @@
 # 设置使用说明
 
+`0.87.0` 在「批注 AI」增加 Qoder CLI CN，使用本机 `qoderclicn` 并明确传入 `--model Qwen3.8-Flash`。支持路径检测、准确模型 ID、生成时间上限与来源记录，沿用 CLI 登录；操作见[本机 CLI 批注](cli-annotation-backends.md)。
+
 `0.86.0` 在「批注 AI」增加 CodeBuddy。选择 Step-5-Preview 时明确调用 `step-5-preview`，支持检测／填写本机程序路径、自定义模型 ID 和生成时间上限。沿用 CLI 登录，仅提供文字解释；已有浅层联网开关需关闭。操作与记录见[本机 CLI 批注](cli-annotation-backends.md)。
 
 设置首页默认展示六个常用入口。可以按「阅读与批注」「模型与连接」「文献与知识库」「系统与数据」筛选；「更多设置」收纳本地 CLI、任务策略与运行环境。

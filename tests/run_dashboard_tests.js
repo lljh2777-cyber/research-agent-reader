@@ -7,6 +7,7 @@ const projectRoot = path.resolve(__dirname, "..");
 const commands = [
 	[process.execPath, ["tests/test_cli_text.js"]],
 	[process.execPath, ["tests/test_codebuddy_annotations.js"]],
+	[process.execPath, ["tests/test_qoder_annotations.js"]],
 	[process.execPath, ["tests/test_settings_navigation.js"]],
 	[process.execPath, ["tests/test_reader_preferences.js"]],
 	[process.execPath, ["tests/test_manual_split_reading.js"]],

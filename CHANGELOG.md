@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.87.0] - 2026-10-12
+
+- 批注新增 Qoder CLI CN，检测本机 `qoderclicn` 并明确传入 `--model Qwen3.8-Flash`，沿用本机登录。
+- 关闭工具、MCP、Hooks、会话持久化和自动重试；正文作为显式查询参数传入，复用取消、超时、完整结果与来源核对。Qoder 的费用汇总键与实际模型分开处理。
+- 验证记录见[本机 CLI 批注](docs/cli-annotation-backends.md)，主题学习及独立科学／教学审阅边界保持。
+
 ## [0.86.0] - 2026-10-12
 
 - 批注新增 CodeBuddy，界面显示 Step-5-Preview，调用明确传入 `--model step-5-preview`，沿用本机登录并支持手动程序路径与自定义模型 ID。

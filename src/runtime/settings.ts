@@ -14,7 +14,7 @@ import { resolveMineruCommand } from "../agent/mineru-publish";
 export type ClaudeConfigSource = "official" | "cc-switch";
 export type CodexConfigSource = "official" | "cc-switch";
 export type OpenCodeConfigSource = "official" | "cc-switch";
-export type CliExecutableKind = "codex" | "claude" | "opencode" | "mineru" | "obsidian" | "codebuddy";
+export type CliExecutableKind = "codex" | "claude" | "opencode" | "mineru" | "obsidian" | "codebuddy" | "qoderclicn";
 export type CliExecutableDetectionSource =
 	| "environment"
 	| "common"
@@ -134,6 +134,7 @@ const MANAGED_CODEX_BIN_ROOT = process.env.LOCALAPPDATA
 	: "";
 const CLI_ENVIRONMENT_VARIABLES: Record<CliExecutableKind, string> = {
 	codebuddy: "CODEBUDDY_CLI_PATH",
+	qoderclicn: "QODER_CLI_CN_PATH",
 	codex: "CODEX_CLI_PATH",
 	claude: "CLAUDE_CODE_PATH",
 	opencode: "OPENCODE_PATH",
@@ -142,6 +143,7 @@ const CLI_ENVIRONMENT_VARIABLES: Record<CliExecutableKind, string> = {
 };
 const CLI_COMMAND_NAMES: Record<CliExecutableKind, string> = {
 	codebuddy: "codebuddy",
+	qoderclicn: "qoderclicn",
 	codex: "codex",
 	claude: "claude",
 	opencode: "opencode",
@@ -170,6 +172,8 @@ export interface DashboardSettings {
 	annotationBackendId: string;
 	annotationCodeBuddyExecutable: string;
 	annotationCodeBuddyModel: string;
+	annotationQoderExecutable: string;
+	annotationQoderModel: string;
 	annotationCliTimeoutSeconds: number;
 	annotationCodexModel: string;
 	annotationCodexReasoningEffort: string;
@@ -335,6 +339,14 @@ function commonCliCandidates(kind: CliExecutableKind): string[] {
 	const homeDirectory = process.env.HOME || userProfile;
 	const appData = process.env.APPDATA;
 	const localAppData = process.env.LOCALAPPDATA;
+	if (kind === "qoderclicn") return [
+		joinFromEnvironment(userProfile, ".qoder-cn", "bin", "qoderclicn", "qoderclicn.exe"),
+		joinFromEnvironment(userProfile, ".qoder-cn", "bin", "qoderclicn.exe"),
+		joinFromEnvironment(appData, "npm", "qoderclicn.cmd"),
+		joinFromEnvironment(homeDirectory, ".qoder-cn", "bin", "qoderclicn", "qoderclicn"),
+		joinFromEnvironment(homeDirectory, ".local", "bin", "qoderclicn"),
+		"/usr/local/bin/qoderclicn", "/opt/homebrew/bin/qoderclicn",
+	];
 	if (kind === "codebuddy") return [
 		joinFromEnvironment(appData, "npm", "codebuddy.cmd"),
 		joinFromEnvironment(userProfile, ".local", "bin", "codebuddy.exe"),
@@ -665,6 +677,8 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	annotationBackendId: "auto",
 	annotationCodeBuddyExecutable: detectCliExecutable("codebuddy").executable,
 	annotationCodeBuddyModel: "step-5-preview",
+	annotationQoderExecutable: detectCliExecutable("qoderclicn").executable,
+	annotationQoderModel: "Qwen3.8-Flash",
 	annotationCliTimeoutSeconds: 120,
 	annotationCodexModel: "",
 	annotationCodexReasoningEffort: "medium",

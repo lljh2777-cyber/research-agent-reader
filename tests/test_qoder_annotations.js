@@ -1,0 +1,24 @@
+const assert = require("node:assert/strict");
+const { loadReading } = require("./reading-test-helpers");
+const { qoderTextAdapter: adapter } = loadReading("runtime/qoder-text.ts");
+const { AnnotationService } = loadReading("annotations/annotation-service.ts");
+(async () => {
+	const invocation = adapter.invocation("Qwen3.8-Flash", "Explain supplied evidence", "中文\n$() context");
+	assert.equal(invocation.args[invocation.args.indexOf("--model") + 1], "Qwen3.8-Flash");
+	assert.equal(invocation.args[invocation.args.indexOf("--max-model-request-retries") + 1], "0");
+	assert.equal(invocation.args[invocation.args.indexOf("--tools") + 1], ""); assert.ok(!invocation.args.includes("--max-turns"), "installed CLI does not advertise this flag");
+	assert.equal(invocation.args.at(-1), "中文\n$() context"); assert.equal(adapter.input("context"), "");
+	const output = JSON.stringify({ type: "system", subtype: "init", model: "Qwen3.8-Flash", tools: [] }) + "\n" + JSON.stringify({ type: "result", subtype: "success", result: "这是相关关系，不能据此确认因果。", modelUsage: { qfmodel: {} } });
+	const parsed = adapter.parse(output, "Qwen3.8-Flash"); assert.equal(parsed.reportedModel, "Qwen3.8-Flash"); assert.equal(parsed.costUsd, undefined);
+	assert.throws(() => adapter.parse(output.replace('"Qwen3.8-Flash"', '"Auto"'), "Qwen3.8-Flash"));
+	assert.throws(() => adapter.parse(output + "\n" + JSON.stringify({ type: "assistant", message: { model: "Auto" } }), "Qwen3.8-Flash"));
+	assert.throws(() => adapter.parse(output.replace('"subtype":"success"', '"subtype":"success","stop_reason":"max_tokens"'), "Qwen3.8-Flash"));
+	let request, calls = 0;
+	const cli = { generate: async (r, a) => { calls++; request = r; assert.equal(a.label, "Qoder CLI CN"); return parsed; } };
+	const settings = { annotationBackendId: "qoderclicn", annotationQoderExecutable: "native", annotationQoderModel: "Qwen3.8-Flash", annotationCliTimeoutSeconds: 120 };
+	const service = new AnnotationService({}, { settings }, cli);
+	const selection = { sourcePath: "papers/fixture/article.md", selectedText: "association", section: "Results", context: "Association does not establish causation." };
+	assert.equal((await service.generateExplanation(selection, () => {})).provider, "Qoder CLI CN"); assert.equal(request.model, "Qwen3.8-Flash");
+	settings.annotationWebSearchEnabled = true; await assert.rejects(service.generateExplanation(selection, () => {}), /关闭浅层联网/); assert.equal(calls, 1);
+	console.log("QODER_ANNOTATIONS_OK (installed arguments, exact model, no retry, metadata, routing)");
+})().catch(error => { console.error(error); process.exitCode = 1; });

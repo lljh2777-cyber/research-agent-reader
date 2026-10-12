@@ -12,6 +12,7 @@ import { getCliBackendLabel, isCliBackendId, type CliBackendId } from "../config
 import { generateDirectExplanation } from "./direct-explanation";
 import { CliTextService } from "../runtime/cli-text";
 import { codeBuddyTextAdapter } from "../runtime/codebuddy-text";
+import { qoderTextAdapter } from "../runtime/qoder-text";
 import { objectDigest } from "../papers/identity";
 import { bilingualDescription, bilingualReceipt, bilingualSelectionContext, quoteLabel, readBilingual, requiresBilingualProof, validBilingualReceipt, verifyBilingual } from "./bilingual";
 import { isDetachedMarkdownSelection } from "./manual-source";
@@ -806,14 +807,15 @@ export class AnnotationService {
 			...(proof ? ["配对记录：" + bilingualDescription(proof), "实际读取的英文对应段落（不是逐词对齐）：", proof.english!.text] : []),
 		].filter(Boolean).join("\n");
 		const configuredBackend = this.plugin.settings.annotationBackendId || "auto";
-		if (configuredBackend === "codebuddy") {
-			if (webSearchEnabled) throw new Error("CodeBuddy 批注暂未启用联网，请关闭浅层联网解释");
+		if (configuredBackend === "codebuddy" || configuredBackend === "qoderclicn") {
+			const qoder = configuredBackend === "qoderclicn", adapter = qoder ? qoderTextAdapter : codeBuddyTextAdapter;
+			if (webSearchEnabled) throw new Error(`${adapter.label} 批注暂未启用联网，请关闭浅层联网解释`);
 			const result = await this.cliText.generate({
-				executable: this.plugin.settings.annotationCodeBuddyExecutable,
-				model: this.plugin.settings.annotationCodeBuddyModel,
+				executable: qoder ? this.plugin.settings.annotationQoderExecutable : this.plugin.settings.annotationCodeBuddyExecutable,
+				model: qoder ? this.plugin.settings.annotationQoderModel : this.plugin.settings.annotationCodeBuddyModel,
 				system, user, timeoutMs: this.plugin.settings.annotationCliTimeoutSeconds * 1000,
-			}, codeBuddyTextAdapter, registerCancel);
-			return { text: result.text, provider: "CodeBuddy", model: result.reportedModel || `请求：${result.requestedModel}（CLI 未报告实际模型）`,
+			}, adapter, registerCancel);
+			return { text: result.text, provider: adapter.label, model: result.reportedModel || `请求：${result.requestedModel}（CLI 未报告实际模型）`,
 				cli: { requestedModel: result.requestedModel, reportedModel: result.reportedModel, usage: result.usage as Record<string, number> | undefined, costUsd: result.costUsd } };
 		}
 		const selectedDirectProfile = configuredBackend === "auto"
