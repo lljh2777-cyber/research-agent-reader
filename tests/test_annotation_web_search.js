@@ -70,6 +70,18 @@ const base = { profile, system: "Explain a selected phrase.", user: "Local conte
 	}
 	const noSources = await generateDirectExplanation({ ...base, backend: { kind: "tavily", search: async () => [] }, provider: { complete: async () => ({ text: "基于语境解释。" }) } });
 	assert.match(noSources.text, /尚未经联网核验/);
+	for (const response of [
+		{ text: "", raw: { choices: [{ finish_reason: "length" }] } },
+		{ text: "A plausible but truncated claim", raw: { choices: [{ finish_reason: "length" }] } },
+		{ text: "Partial Responses output", raw: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } },
+		{ text: "Partial Anthropic output", raw: { stop_reason: "max_tokens" } },
+	]) {
+		let calls = 0;
+		await assert.rejects(() => generateDirectExplanation({ ...base, provider: { complete: async () => { calls++; return response; } } }), /输出达到上限.*推理 token/);
+		assert.equal(calls, 1, "no automatic retry or token increase for truncated/empty output");
+	}
+	await assert.rejects(() => generateDirectExplanation({ ...base, provider: { complete: async () => ({ text: "", raw: { choices: [{ finish_reason: "stop" }] } }) } }), /空解释/);
+	assert.equal((await generateDirectExplanation({ ...base, provider: { complete: async () => ({ text: "Complete answer", raw: { choices: [{ finish_reason: "stop" }] } }) } })).text, "Complete answer");
 	const bareNative = await generateDirectExplanation({ ...base, backend: { kind: "native", protocol: "qwen" }, provider: { complete: async () => ({ text: "原始文献见 https://arxiv.org/abs/2005.11401。" }) } });
 	assert.match(bareNative.text, /来源（供应商回答提供）/); assert.ok(!bareNative.text.includes("未返回可追溯链接"));
 	await assert.rejects(() => generateDirectExplanation({ ...base, backend: { kind: "tavily", search: async () => [source(1)] }, provider: { complete: async () => ({ text: "See https://unread.example.org [1]" }) } }), /未检索到的来源链接/);

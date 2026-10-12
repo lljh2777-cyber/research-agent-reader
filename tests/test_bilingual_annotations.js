@@ -63,11 +63,19 @@ let count=0; async function check(name,fn){fixture=make();await fn(fixture);coun
  await check("AI request identifies translation, actual English and model knowledge; cancellation stops late output",async f=>{
   const calls=[],profile={id:"mock",name:"Mock",model:"mock",timeoutSeconds:1,lastTest:{ok:true}};
   const plugin={settings:{annotationBackendId:"mock",annotationWebSearchEnabled:false,annotationMaxTokens:600},getProviderProfile:()=>profile,createLLMProvider:()=>({complete:async request=>{calls.push(request);return {text:"Model background (test)."};}})};
-  const service=new api.AnnotationService(f.app,plugin),s=selection(f);await service.generateExplanation(s,()=>{});
+  const service=new api.AnnotationService(f.app,plugin),s=selection(f);s.context="UNPAIRED_NEIGHBOR says 999 independently confirmed metabolites.";await service.generateExplanation(s,()=>{});
   assert.equal(calls.length,1);assert.match(calls[0].messages[0].content,/模型一般知识/);assert.match(calls[0].messages[0].content,/不可当作作者英文原句/);assert.match(calls[0].messages[1].content,/中文译文摘录/);assert.ok(calls[0].messages[1].content.includes(s.bilingual.english.text));assert.equal(f.writes.length,0);
-  f.files.get(f.root+"/paper.md").text+="\n";await assert.rejects(service.generateExplanation(s,()=>{}),/变化/);assert.equal(calls.length,1);
+  assert.ok(!calls[0].messages[1].content.includes("UNPAIRED_NEIGHBOR"),"unverified neighboring translation is not paper evidence");assert.ok(calls[0].messages[1].content.includes(f.zh.slice(s.bilingual.block.start,s.bilingual.block.end)),"current translation block comes from verified bytes");
+  const r=await service.createAnnotation(s,{aiText:"baseline"}),reopened=await service.getRecordExplanationContext(r);await service.generateExplanation(reopened,()=>{});assert.deepEqual(calls[1],calls[0],"new and reopened records share the same bounded evidence");
+  await service.generateExplanation(selection(f,"en"),()=>{});assert.match(calls[2].messages[1].content,/英文来源摘录/);assert.ok(!calls[2].messages[0].content.includes("首段以‘译文对照：’"),"English selection does not receive Chinese-quote instructions");assert.ok(!calls[2].messages[1].content.includes("当前块译文"));
+  f.files.get(f.root+"/paper.md").text+="\n";await assert.rejects(service.generateExplanation(s,()=>{}),/变化/);assert.equal(calls.length,3);
   f.files.get(f.root+"/paper.md").text=f.en;plugin.createLLMProvider=()=>({complete:async()=>new Promise(()=>{})});let cancel;
   const pending=service.generateExplanation(s,c=>{cancel=c;});for(let i=0;i<20&&!cancel;i++)await new Promise(r=>setTimeout(r,1));assert.ok(cancel);cancel();await assert.rejects(pending,/已取消/);
+ });
+ await check("oversized translated current block stops before any model call",async f=>{
+  const text=f.zh.replaceAll("重复的所选文字。","前".repeat(17000)+"重复的所选文字。");f.files.get(f.root+"/paper.zh-CN.md").text=text;f.doc=api.createBilingualDocument(f.root+"/paper.md",Buffer.from(f.en),Buffer.from(text),Buffer.from(f.metadata));
+  let calls=0;const profile={id:"mock",name:"Mock",model:"mock",timeoutSeconds:1,lastTest:{ok:true}},plugin={settings:{annotationBackendId:"mock",annotationWebSearchEnabled:false,annotationMaxTokens:600},getProviderProfile:()=>profile,createLLMProvider:()=>({complete:async()=>{calls++;return {text:"must not run"};}})};
+  await assert.rejects(new api.AnnotationService(f.app,plugin).generateExplanation(selection(f),()=>{}),/当前段落超过请求上限/);assert.equal(calls,0);assert.equal(f.writes.length,0);
  });
  console.log(`Bilingual annotations: ${count} groups passed`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -84,6 +84,13 @@ export async function generateDirectExplanation(options: DirectExplanationOption
 				registerCancel: (cancel) => { cancelActive = cancel; if (signal.aborted) cancel(); },
 			});
 			signal.throwIfAborted();
+			const raw = result.raw;
+			const choices = Array.isArray(raw?.choices) ? raw.choices : [];
+			const incomplete = raw?.incomplete_details as { reason?: unknown } | undefined;
+			if (raw?.stop_reason === "max_tokens" || choices.some(choice => choice && typeof choice === "object" && choice.finish_reason === "length")
+				|| raw?.status === "incomplete" && incomplete?.reason === "max_output_tokens") {
+				throw new Error("模型输出达到上限，解释未完整返回（额度可能包含推理 token）；请调高批注最大输出 token 或选择其他模型后重试");
+			}
 			let text = String(result.text || "").trim();
 			if (!text) throw new Error("模型返回了空解释");
 			if (backend?.kind === "tavily") {
