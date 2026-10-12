@@ -107,6 +107,7 @@ function fakeApp(files, statOverrides = new Map(), fullRoot = "") {
 			adapter: {
 				getBasePath: () => vaultRoot,
 				getFullPath: (filePath) => path.join(vaultRoot, ...String(filePath || "").split("/")),
+				exists: async (filePath) => fs.existsSync(path.join(vaultRoot, ...String(filePath || "").split("/"))),
 			},
 			getAbstractFileByPath(filePath) { return tFiles.get(filePath) || null; },
 			async readBinary(file) {
