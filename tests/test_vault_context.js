@@ -457,7 +457,7 @@ async function testRetrievalDispatcher() {
 		},
 	});
 
-	plugin.settings = { toolkitRoot: "", pythonExecutable: "" };
+	plugin.settings = { toolkitRoot: "", pythonExecutable: "", knowledgeRetrievalMode: "lexical" };
 	const defaultTrace = await plugin.runVaultRetrievalPreflight("run-1", "问题", []);
 	assert.equal(defaultTrace.engine, "in-plugin-lexical");
 	assert.equal(defaultTrace.retriever_fallback, undefined);
@@ -466,7 +466,7 @@ async function testRetrievalDispatcher() {
 
 	const toolkitDir = fs.mkdtempSync(path.join(os.tmpdir(), "rar-toolkit-"));
 	try {
-		plugin.settings = { toolkitRoot: toolkitDir, pythonExecutable: process.execPath };
+		plugin.settings = { toolkitRoot: toolkitDir, pythonExecutable: process.execPath, knowledgeRetrievalMode: "lexical" };
 		const missingTrace = await plugin.runVaultRetrievalPreflight("run-2", "问题", []);
 		assert.equal(missingTrace.engine, "in-plugin-lexical");
 		assert.equal(missingTrace.retriever_fallback, undefined);
@@ -507,7 +507,29 @@ async function testRetrievalDispatcher() {
 		assert.match(String(failedTrace.retriever_fallback.reason), /Python 进程退出码 1/);
 		assert.equal(lexicalCalls.length, 3);
 	} finally {
-		fs.rmSync(toolkitDir, { recursive: true, force: true });
+		console.log("RETRIEVAL_DISPATCHER_FIXTURE_RETAINED: " + toolkitDir);
+	}
+}
+
+async function testKnowledgeRetrievalDispatcher() {
+	for (const mode of ["rerank", "hybrid"]) {
+		const plugin = Object.create(DashboardPlugin.prototype);
+		plugin.settings = { knowledgeRetrievalMode: mode };
+		plugin.getLexicalRetriever = () => { throw new Error("Must route through knowledge retrieval"); };
+		plugin.resolveToolkitRetrieval = () => { throw new Error("Must not probe the toolkit for knowledge modes"); };
+		const signal = new AbortController().signal, calls = [];
+		plugin.searchKnowledge = async (query, options) => {
+			calls.push({ query, options });
+			return { mode, scope: ["wiki/a.md"], warnings: [], indexedChunks: 1, totalChunks: 1,
+				hits: [{ path: "wiki/a.md", title: "A", score: 6, role: "evidence", text: "Exact evidence", input: "internal model input", vectorKey: "internal-key" }] };
+		};
+		const trace = await plugin.runVaultRetrievalPreflight("knowledge-run", "question", ["term"], signal);
+		assert.deepStrictEqual(calls, [{ query: "question term", options: { identityQuery: "question", signal } }]);
+		assert.equal(trace.stage, "in-plugin-" + mode);
+		assert.deepStrictEqual(trace.candidate_paths, ["wiki/a.md"]);
+		assert.equal(trace.knowledge_passages[0].text, "Exact evidence");
+		assert.equal(trace.knowledge_passages[0].input, undefined);
+		assert.equal(trace.knowledge_passages[0].vectorKey, undefined);
 	}
 }
 
@@ -943,7 +965,7 @@ async function testRunVaultActionToolkitGuard() {
 		// The guard must run before any stop-file directory is created.
 		assert.equal(fs.existsSync(path.join(emptyRoot, "tool-library")), false);
 	} finally {
-		fs.rmSync(emptyRoot, { recursive: true, force: true });
+		console.log("TOOLKIT_GUARD_FIXTURE_RETAINED: " + emptyRoot);
 	}
 }
 
@@ -1275,7 +1297,10 @@ async function testDirectApiWebQuery() {
 	assert.match(adaptersSource, /body\.plugins = \[\{ id: "web_search", max_results: webSearch\.maxResults \|\| 5 \}\]/);
 	assert.match(adaptersSource, /body\.enable_search = true/);
 	const pluginSource = fs.readFileSync(path.join(pluginRoot, "src", "plugin.ts"), "utf8");
-	assert.match(pluginSource, /private resolveWebSearchBackend\(profile: ProviderProfile\)/);
+	assert.deepStrictEqual(
+		DashboardPlugin.prototype.resolveWebSearchBackend.call({}, nativeProfile),
+		{ kind: "native", protocol: "openrouter" },
+	);
 	assert.match(pluginSource, /directProfileSupportsWebSearch\(profileId: string\): boolean/);
 }
 
@@ -1292,6 +1317,7 @@ Promise.resolve()
 	.then(() => testExpansionTermQuota())
 	.then(() => testReadVaultEvidencePackets())
 	.then(() => testRetrievalDispatcher())
+	.then(() => testKnowledgeRetrievalDispatcher())
 	.then(() => testKeywordExpansionTrigger())
 	.then(() => testQueryWikiTraceRendering())
 	.then(() => testVaultSourcePathEndToEnd())
