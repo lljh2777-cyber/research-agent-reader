@@ -17,6 +17,8 @@ export interface AnnotationSelection {
 	sourceRevision?: ExcerptRevision;
 	pdfExcerpt?: PdfExcerptReceipt;
 	bilingual?: BilingualReceipt;
+	/** A live manually paired Markdown pane saves annotations without editing the source. */
+	detached?: boolean;
 }
 
 export interface AnnotationRecord {

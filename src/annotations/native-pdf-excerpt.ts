@@ -3,7 +3,7 @@ import { bytesDigest } from "../papers/identity";
 import { PDF_EXCERPT_MAX_BYTES, PDF_EXCERPT_MAX_PAGES, pdfPageText, pdfReceipt, pdfRecordSelection, preparePdfExcerpt, supportsPdfExcerpt, type PdfPageText } from "./pdf-excerpt";
 import type { AnnotationRecord, AnnotationSelection } from "./types";
 
-interface PdfDocument {
+export interface PdfDocument {
 	numPages: number;
 	getData(): Promise<Uint8Array>;
 	getPage(page: number): Promise<{ getTextContent(options: { disableNormalization: true }): Promise<{ items: unknown[] }> }>;
@@ -15,13 +15,28 @@ interface NativePdf {
 	viewer?: { child?: { pdfViewer?: { pdfDocument?: PdfDocument; pdfViewer?: { getPageView(index: number): { div: HTMLElement } | undefined; currentPageNumber: number } } } };
 }
 const element = (node: Node): Element | null => node.nodeType === 1 ? node as Element : node.parentElement;
+export interface EmbeddedPdfSelection { file: TFile; document: PdfDocument; isCurrent(): boolean; }
+const embeddedPdfs = new WeakMap<Element, () => EmbeddedPdfSelection | undefined>();
+/** Only a live renderer can bind a PDF; Markdown attributes cannot supply provenance. */
+export function bindEmbeddedPdfSelection(root: Element, read: () => EmbeddedPdfSelection | undefined): void { embeddedPdfs.set(root, read); }
+function selectionView(app: App): { view: NativePdf; isCurrent(): boolean } | undefined {
+	const selected = typeof document === "undefined" ? undefined : document.defaultView?.getSelection();
+	for (let node = selected?.anchorNode ? element(selected.anchorNode) : null; node; node = node.parentElement) {
+		const read = embeddedPdfs.get(node), current = read?.();
+		if (!current) continue;
+		const root = node as HTMLElement, doc = current.document;
+		return { view: { getViewType: () => "pdf", file: current.file, contentEl: root, viewer: { child: { pdfViewer: { pdfDocument: doc } } } }, isCurrent: () => !!root.isConnected && current.isCurrent() && read?.()?.document === doc };
+	}
+	const leaf = app.workspace.activeLeaf, view = native(leaf);
+	return view ? { view, isCurrent: () => app.workspace.activeLeaf === leaf && native(leaf) === view } : undefined;
+}
 const failure = (): Error => new Error("请在原生 PDF 同一页的文字层中重新划选文字；跨页、扫描图片或不兼容的文字层暂不支持");
 function native(leaf: WorkspaceLeaf | null | undefined): NativePdf | undefined {
 	const view = leaf?.view as unknown as NativePdf | undefined;
 	return view?.getViewType() === "pdf" && view.file instanceof TFile && supportsPdfExcerpt(view.file.path) ? view : undefined;
 }
 export function hasNativePdfSelection(app: App): boolean {
-	const view = native(app.workspace.activeLeaf), selection = view?.contentEl.ownerDocument.defaultView?.getSelection();
+	const view = selectionView(app)?.view, selection = view?.contentEl.ownerDocument.defaultView?.getSelection();
 	return Boolean(view && selection?.rangeCount === 1 && !selection.isCollapsed && view.contentEl.contains(selection.getRangeAt(0).startContainer)
 		&& element(selection.getRangeAt(0).startContainer)?.closest(".textLayer"));
 }
@@ -57,7 +72,7 @@ function validateLayer(layer: HTMLElement, page: PdfPageText): void {
 	if (page.items.some((item, i) => item.str && !seen.has(i))) throw failure();
 }
 export async function captureNativePdfSelection(app: App): Promise<AnnotationSelection> {
-	const leaf = app.workspace.activeLeaf, view = native(leaf), selection = view?.contentEl.ownerDocument.defaultView?.getSelection();
+	const current = selectionView(app), view = current?.view, selection = view?.contentEl.ownerDocument.defaultView?.getSelection();
 	if (!view?.file || !selection || selection.rangeCount !== 1 || selection.isCollapsed) throw failure();
 	const range = selection.getRangeAt(0).cloneRange(), layer = element(range.startContainer)?.closest<HTMLElement>(".textLayer"), last = element(range.endContainer)?.closest(".textLayer");
 	const pageEl = layer?.closest<HTMLElement>(".page[data-page-number]"), doc = view.viewer?.child?.pdfViewer?.pdfDocument, sourcePath = view.file.path;
@@ -68,7 +83,7 @@ export async function captureNativePdfSelection(app: App): Promise<AnnotationSel
 	const shown = await doc.getData();
 	if (shown.length !== bytes.length || bytesDigest(shown) !== bytesDigest(bytes)) throw new Error("阅读器仍显示另一版本的 PDF，请关闭此页并重新打开后划选");
 	const text = pdfPageText((await (await doc.getPage(page)).getTextContent({ disableNormalization: true })).items);
-	if (app.workspace.activeLeaf !== leaf || view.file?.path !== sourcePath || view.viewer?.child?.pdfViewer?.pdfDocument !== doc || !layer.isConnected) throw new Error("PDF 阅读视图已变化，请重新选择");
+	if (!current?.isCurrent() || view.file?.path !== sourcePath || view.viewer?.child?.pdfViewer?.pdfDocument !== doc || !layer.isConnected) throw new Error("PDF 阅读视图已变化，请重新选择");
 	validateLayer(layer, text);
 	const start = boundary(layer, text, range.startContainer, range.startOffset), end = boundary(layer, text, range.endContainer, range.endOffset);
 	if (end - start > 600) throw new Error("单次最多保存 600 个字符，请缩小 PDF 选区");

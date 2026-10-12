@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { parseAcquisitionInput } from "../fulltext/contracts";
 import { SourceCatalog } from "../papers/catalog";
-import { bytesDigest, safeCitekey } from "../papers/identity";
+import { bytesDigest, objectDigest, safeCitekey } from "../papers/identity";
 import { noteIdentifiers } from "../papers/note-identity";
 import { loadSourcePackage } from "../sources/package";
 import type { SourceStorage } from "../sources/storage";
@@ -196,9 +196,15 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 			}
 			const bilingual = record.provenance.bilingual;
 			if (bilingual) {
-				const en = markdown.get(bilingual.root + "/paper.md"), zh = markdown.get(bilingual.root + "/paper.zh-CN.md"), metadata = await v.read(bilingual.root + "/translation.json", 256 * 1024);
-				if (en === undefined || zh === undefined || !metadata || !anchor || text?.slice(anchor.start, anchor.end) !== record.selectedText || bytesDigest(new TextEncoder().encode(en)) !== bilingual.digests.en || bytesDigest(new TextEncoder().encode(zh)) !== bilingual.digests["zh-CN"] || bytesDigest(metadata) !== bilingual.digests.metadata || bilingual.english && en.slice(bilingual.english.start, bilingual.english.end) !== bilingual.english.text) { binding.state = "changed"; binding.reason = "双语资料缺失或版本已变化；保留历史内容，需复查"; }
+				const selected = bilingual.files;
+				const enBytes = selected ? await v.read(selected.en, 16 * 1024 * 1024) : undefined, zhBytes = selected ? await v.read(selected.zh, 16 * 1024 * 1024) : undefined;
+				const en = selected ? enBytes ? decode(enBytes) : undefined : markdown.get(bilingual.root + "/paper.md"), zh = selected ? zhBytes ? decode(zhBytes) : undefined : markdown.get(bilingual.root + "/paper.zh-CN.md");
+				const metadata = selected && !selected.metadata ? undefined : await v.read(selected?.metadata || bilingual.root + "/translation.json", 256 * 1024);
+				const metadataDigest = selected && !selected.metadata ? objectDigest(selected) : metadata ? bytesDigest(metadata) : "";
+				const selectedText = bilingual.language === "en" ? en : zh;
+				if (en === undefined || zh === undefined || !anchor || selectedText?.slice(anchor.start, anchor.end) !== record.selectedText || bytesDigest(new TextEncoder().encode(en)) !== bilingual.digests.en || bytesDigest(new TextEncoder().encode(zh)) !== bilingual.digests["zh-CN"] || metadataDigest !== bilingual.digests.metadata || bilingual.english && en.slice(bilingual.english.start, bilingual.english.end) !== bilingual.english.text) { binding.state = "changed"; binding.reason = "双语资料缺失或版本已变化；保留历史内容，需复查"; }
 				else if (source && source.source.verification.state === "verified") { binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "双语文字与保存版本一致；结构对应与译文含义仍需核对"; }
+				else if (selected) { binding.state = "unresolved"; binding.reason = "手动配对的文件版本与选区一致；论文身份及译文对应仍需核对"; }
 			} else if (isTranslationPath(record.sourcePath)) { binding.state = "unresolved"; binding.reason = "历史译文摘录缺少双语配对凭据，未推断来源"; }
 			objects.push({ kind: "annotation", id: name + "#" + record.id, annotationPath: name, title: (record.roles.includes("translation_quote") ? "译文 · " : "") + (record.section || record.selectedText.slice(0, 80)), identifiers: {},
 				roles: record.roles, provenance: record.provenance, binding });

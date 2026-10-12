@@ -6950,3 +6950,25 @@ body.agent-dashboard-mineru-resizing {
 .agent-bilingual-article { user-select: text; -webkit-user-select: text; }
 .agent-bilingual-article table { max-width: 100%; }
 @media (max-width: 600px) { .agent-bilingual-workspace { overflow-x: auto; grid-template-columns: minmax(260px, var(--bilingual-left, 1fr)) 6px minmax(260px, var(--bilingual-right, 1fr)); } }
+/* User-selected documents share one tab, with separate file headers and scrollers. */
+.agent-manual-split-reader { display: flex; flex-direction: column; min-height: 0; padding: 8px !important; gap: 8px; }
+.agent-split-tabs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px; border-radius: 10px; background: var(--background-secondary); }
+.agent-split-tab { display: flex; align-items: center; gap: 8px; flex: 1 1 200px; min-width: 0; padding: 5px 8px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); }
+.agent-split-tab > span { font-size: var(--font-ui-small); color: var(--text-muted); white-space: nowrap; }
+.agent-split-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-split-tab .agent-split-file-name { flex: 1; text-align: left; border: 0; box-shadow: none; background: transparent; }
+.agent-split-content { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 8px; }
+.agent-split-content.agent-bilingual-shell { padding: 0; }
+.agent-split-content > .agent-bilingual-workspace { flex: 1; min-height: 0; }
+.agent-split-message { font-size: var(--font-ui-small); color: var(--text-muted); overflow-wrap: anywhere; }
+.agent-split-message:empty { display: none; }
+.agent-split-picker-file { overflow-wrap: anywhere; color: var(--text-muted); }
+.agent-split-picker-choice { display: block; width: 100%; margin-top: 10px; text-align: left; }
+.agent-split-md-pdf .agent-bilingual-pane-heading { flex-wrap: wrap; }
+.agent-split-pdf-page-input { width: 60px; }
+.agent-split-pdf-scroll { padding: 12px; background: var(--background-secondary); }
+.agent-split-pdf-page { position: relative; margin: 0 auto; background: white; }
+.agent-split-pdf-page canvas { display: block; }
+.agent-split-pdf-page .textLayer { position: absolute; inset: 0; overflow: hidden; line-height: 1; text-align: initial; transform-origin: 0 0; z-index: 2; }
+.agent-split-pdf-page .textLayer span, .agent-split-pdf-page .textLayer br { position: absolute; color: transparent; white-space: pre; cursor: text; transform-origin: 0 0; }
+.agent-split-pdf-page .textLayer ::selection { background: rgba(80, 120, 255, .35); }

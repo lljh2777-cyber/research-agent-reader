@@ -5,7 +5,7 @@ import type { AnnotationRecord, AnnotationSelection } from "./types";
 export interface ExcerptRevision { algorithm: "markdown-utf8-sha256"; digest: string; length: number; }
 export interface ExcerptReceipt extends ExcerptRevision { version: 1; context: string; contextStart: number; }
 export const excerptRevision = (content: string): ExcerptRevision => ({ algorithm: "markdown-utf8-sha256", digest: bytesDigest(new TextEncoder().encode(content)), length: content.length });
-export const supportsExcerpt = (path: string): boolean => /^(papers|Clippings)\/.+\.md$/.test(path) && !path.split("/").some(p => !p || p === "." || p === "..") && !/[\\:\r\n]/.test(path);
+export const supportsExcerpt = (path: string): boolean => path.length <= 600 && /\.md$/i.test(path) && !path.split("/").some(p => !p || p === "." || p === ".." || /[. ]$/.test(p)) && !/[\\<>:"|?*\x00-\x1f]/.test(path);
 export function validExcerpt(value: unknown, anchor: AnnotationRecord["sourceAnchor"], selected: string): value is ExcerptReceipt {
 	const r = value as ExcerptReceipt | undefined;
 	return Boolean(r && r.version === 1 && r.algorithm === "markdown-utf8-sha256" && typeof r.digest === "string" && /^[a-f0-9]{64}$/.test(r.digest)

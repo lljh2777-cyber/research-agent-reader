@@ -48,6 +48,8 @@ interface MineruReaderHost {
 	activateReadingWorkspace?(entry: import("../reading/entry").ReadingEntry): Promise<void>;
 	openJatsWiki?(key: string): Promise<void>;
 	openSelectionAnnotation(): Promise<void>;
+	chooseSplitReading?(path: string, leaf?: WorkspaceLeaf): void;
+	addReadingModeMenu?(menu: import("obsidian").Menu, path: string, leaf?: WorkspaceLeaf): void;
 }
 
 const DEFAULT_STATE: MineruReaderViewState = {
@@ -199,6 +201,7 @@ export class MineruReaderView extends ItemView {
 	getState(): Record<string, unknown> {
 		return { ...this.readerState, ...(this.bilingualReader ? { bilingualState: this.bilingualReader.snapshot() } : {}) };
 	}
+	onPaneMenu(menu: import("obsidian").Menu, source: string): void { super.onPaneMenu(menu, source); if (this.readerState.articlePath) this.plugin.addReadingModeMenu?.(menu, this.readerState.articlePath, this.leaf); }
 	async openBilingualExcerpt(record: AnnotationRecord, signal?: AbortSignal): Promise<void> {
 		await verifyBilingual(this.app, record, signal); signal?.throwIfAborted();
 		await this.setArticlePath(record.sourcePath); this.readerState.bilingual = true;
@@ -456,10 +459,11 @@ export class MineruReaderView extends ItemView {
 		const layout = header.createEl("select", { cls: "agent-dashboard-reader-layout", attr: { "aria-label": "双栏阅读模式" } });
 		layout.createEl("option", { value: "reference", text: "正文＋图文／PDF" });
 		const bilingual = layout.createEl("option", { value: "bilingual", text: "英文＋中文" });
-		bilingual.disabled = !isBilingualEntry(readerPackage.articlePath);
-		if (bilingual.disabled) layout.title = "英文／中文双栏需要 Clippings 内已有的规范双语资料";
+		bilingual.disabled = !isBilingualEntry(readerPackage.articlePath) && !this.plugin.chooseSplitReading;
+		if (!isBilingualEntry(readerPackage.articlePath)) bilingual.textContent = "英文＋中文（选择文件…）";
 		layout.value = this.readerState.bilingual ? "bilingual" : "reference";
 		this.onWorkspaceEvent(layout, "change", () => this.switchReaderLayout(layout.value === "bilingual"));
+		if (this.plugin.chooseSplitReading) { const choose = header.createEl("button", { text: "选择双栏文件…", attr: { type: "button" } }); this.onWorkspaceEvent(choose, "click", () => this.plugin.chooseSplitReading!(readerPackage.articlePath, this.leaf)); }
 		if (readerPackage.sourceKind === "jats" && this.plugin.openJatsWiki) {
 			const wiki = header.createEl("button", { text: "论文笔记", attr: { "data-jats-action": "wiki" } });
 			this.onWorkspaceEvent(wiki, "click", () => { void this.plugin.openJatsWiki!(readerPackage.articlePath.split("/")[1]).catch(error => new Notice(String(error))); });
@@ -467,7 +471,7 @@ export class MineruReaderView extends ItemView {
 	}
 
 	private switchReaderLayout(bilingual: boolean): void {
-		if (bilingual && !isBilingualEntry(this.readerState.articlePath)) return;
+		if (bilingual && !isBilingualEntry(this.readerState.articlePath)) { this.plugin.chooseSplitReading?.(this.readerState.articlePath, this.leaf); return; }
 		if (bilingual === this.readerState.bilingual) return;
 		if (this.bilingualReader) this.readerState.bilingualState = this.bilingualReader.snapshot();
 		this.readerState.bilingual = bilingual;

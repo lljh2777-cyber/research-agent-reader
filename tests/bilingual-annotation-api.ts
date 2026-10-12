@@ -1,6 +1,6 @@
 export { AnnotationService, readAnnotationRecords } from "../src/annotations/annotation-service";
 export { ExcerptLibraryService, readExcerptSnapshot, patchExcerptNote } from "../src/annotations/excerpt-library";
-export { createBilingualDocument } from "../src/reader/bilingual-document";
+export { createBilingualDocument, loadSelectedBilingualDocument } from "../src/reader/bilingual-document";
 export { bilingualReceipt, quoteLabel, verifyBilingual, validBilingualReceipt } from "../src/annotations/bilingual";
 export { excerptRevision } from "../src/annotations/excerpt";
 export { readLibraryAnnotations } from "../src/library/annotation-reader";

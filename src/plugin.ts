@@ -20,6 +20,9 @@ import { readPaperLibrary } from "./library/reader";
 import { libraryNavigation } from "./library/browser";
 import type { LibraryObjectSummary } from "./library/types";
 import { PaperLibraryView, PAPER_LIBRARY_VIEW_TYPE } from "./views/paper-library";
+import { ManualSplitReaderView, MANUAL_SPLIT_VIEW_TYPE } from "./views/manual-split-reader";
+import { ReadingModePicker, chooseReadingFile, type ReadingChoice } from "./views/reading-mode-picker";
+import { normalizeManualSplit, type ManualSplitState } from "./reader/manual-split";
 import { documentLearningEntry, type LearningEntry } from "./learning/entry";
 import { TopicLearningService } from "./topic-learning/service";
 import { TopicSessionStore } from "./topic-learning/store";
@@ -524,35 +527,16 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerEvent(this.app.vault.on("delete", file => this.curationService?.noteChange(file.path)));
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { this.curationService?.noteChange(oldPath); this.curationService?.noteChange(file.path); }));
 		this.registerView(MINERU_READER_VIEW_TYPE, (leaf) => new MineruReaderView(leaf, this));
+		this.registerView(MANUAL_SPLIT_VIEW_TYPE, leaf => new ManualSplitReaderView(leaf, this));
 		this.app.workspace.onLayoutReady(() => {
 			this.consolidateMineruReaderLeaves();
 			void this.reconcileMissingPublishedPackages();
-			const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-			if (markdownView?.file && this.isConfiguredReaderMarkdownFile(markdownView.file)) {
-				void this.activateMineruReaderView(markdownView.file.path, markdownView.leaf);
-			}
 		});
 		this.registerEvent(this.app.workspace.on("file-open", (file) => {
 			if (file?.extension === "md") this.lastContextFile = file;
-			if (!this.isConfiguredReaderMarkdownFile(file)) return;
-			const normalizedPath = normalizePath(file.path);
-			if (this.readerAutoOpenBypass.delete(normalizedPath)) return;
-			window.setTimeout(() => {
-				let markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView?.file?.path !== file.path) markdownView = null;
-				if (!markdownView) {
-					this.app.workspace.iterateAllLeaves((leaf) => {
-						if (
-							!markdownView
-							&& leaf.view instanceof MarkdownView
-							&& leaf.view.file?.path === file.path
-						) markdownView = leaf.view;
-					});
-				}
-				if (markdownView) void this.activateMineruReaderView(file.path, markdownView.leaf);
-			}, 50);
 		}));
-		this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
+		this.registerEvent(this.app.workspace.on("file-menu", (menu, file, _source, leaf) => {
+			if (file instanceof TFile && ["md", "pdf"].includes(file.extension.toLowerCase())) this.addReadingModeMenu(menu, file.path, leaf);
 			if (!this.isReaderDocumentFile(file)) return;
 			menu.addItem((item) => {
 				item
@@ -799,7 +783,15 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (this.excerptBrowser) { new Notice("摘录窗口已打开，请先完成当前操作"); return; }
 		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true), ref => this.showCurationModal(new ExcerptCurationModal(this.app, this, ref)), {
 			read: (ref, signal) => this.readExcerptHistory(ref, signal), open: (ref, entry, signal) => this.openExcerptHistoryTarget(ref, entry, signal),
-		}, () => this.openAnswerExcerptBrowser(), ref => { void this.openDraftFromExcerpt({ kind: "excerpt", ref, includeNote: false }); }, async (record, signal) => { signal?.throwIfAborted(); await this.activateMineruReaderView(record.sourcePath); signal?.throwIfAborted(); const view = this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE).find(l => l.view instanceof MineruReaderView)?.view; if (!(view instanceof MineruReaderView)) throw new Error("双语阅读器未打开"); await view.openBilingualExcerpt(record, signal); });
+		}, () => this.openAnswerExcerptBrowser(), ref => { void this.openDraftFromExcerpt({ kind: "excerpt", ref, includeNote: false }); }, async (record, signal) => {
+			signal?.throwIfAborted();
+			if (record.bilingual?.files) {
+				const files = record.bilingual.files;
+				const view = await this.openManualSplit({ mode: "bilingual", left: files.en, right: files.zh, entry: record.sourcePath, ratio: this.settings.mineruReaderBilingualSplitRatio, linked: false, markdownProgress: 0, pdfPage: 1, pdfProgress: 0 });
+				signal?.throwIfAborted(); await view.revealExcerpt(record); return;
+			}
+			await this.activateMineruReaderView(record.sourcePath); signal?.throwIfAborted(); const view = this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE).find(l => l.view instanceof MineruReaderView)?.view; if (!(view instanceof MineruReaderView)) throw new Error("双语阅读器未打开"); await view.openBilingualExcerpt(record, signal);
+		});
 		this.excerptBrowser = modal; modal.open();
 	}
 	readExcerptHistory(ref: ExcerptRef, signal: AbortSignal) { return readExcerptHistory(new FileSourceStorage(this.readingPluginDirectory()), ref, signal); }
@@ -3968,7 +3960,38 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	isReaderDocumentFile(file: unknown): file is TFile {
-		return this.isMineruArticleFile(file) || this.isConfiguredReaderMarkdownFile(file);
+		return file instanceof TFile && file.extension.toLowerCase() === "md";
+	}
+	addReadingModeMenu(menu: Menu, path: string, leaf?: WorkspaceLeaf): void {
+		menu.addItem(item => item.setTitle("选择阅读方式…").setIcon("columns-2").setSection("research-reader").onClick(() => this.chooseSplitReading(path, leaf)));
+	}
+	chooseSplitReading(path: string, leaf?: WorkspaceLeaf): void {
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile) || !["md", "pdf"].includes(file.extension.toLowerCase())) { new Notice("请选择知识库内的 Markdown 或 PDF 文件"); return; }
+		new ReadingModePicker(this.app, file, choice => { void this.startSplitReading(file, choice, leaf).catch(error => new Notice(String(error instanceof Error ? error.message : error))); }).open();
+	}
+	private async startSplitReading(file: TFile, choice: ReadingChoice, leaf?: WorkspaceLeaf): Promise<void> {
+		if (choice === "figures") { await this.activateMineruReaderView(file.path, leaf); const reader = (leaf?.view instanceof MineruReaderView ? leaf.view : this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE)[0]?.view); if (reader instanceof MineruReaderView) await reader.setState({ ...reader.getState(), bilingual: false, mode: "visuals" }, { history: false }); return; }
+		const extension = choice === "md-pdf" && file.extension === "md" ? "pdf" : "md";
+		const label = choice === "english" ? "选择中文译文" : choice === "chinese" ? "选择英文原文" : "选择 " + extension.toUpperCase();
+		const second = await chooseReadingFile(this.app, extension, file.path, label); if (!second) return;
+		if (this.app.vault.getAbstractFileByPath(file.path) !== file || this.app.vault.getAbstractFileByPath(second.path) !== second) throw new Error("文件在选择期间已移动或缺失，请重新选择");
+		const left = choice === "chinese" || file.extension === "pdf" ? second.path : file.path, right = left === file.path ? second.path : file.path;
+		await this.openManualSplit({ mode: choice === "md-pdf" ? "md-pdf" : "bilingual", left, right, entry: file.path, linked: this.settings.mineruReaderBilingualLinked, ratio: this.settings.mineruReaderBilingualSplitRatio, markdownProgress: 0, pdfPage: 1, pdfProgress: 0, pdfZoom: this.settings.mineruReaderPdfZoom }, leaf);
+	}
+	async openManualSplit(state: ManualSplitState, preferredLeaf?: WorkspaceLeaf): Promise<ManualSplitReaderView> {
+		const normalized = normalizeManualSplit(state);
+		for (const path of [normalized.left, normalized.right]) if (!(this.app.vault.getAbstractFileByPath(path) instanceof TFile)) throw new Error("所选文件已缺失：" + path);
+		const leaf = preferredLeaf || this.app.workspace.getLeaf("tab");
+		await this.app.workspace.revealLeaf(leaf);
+		await leaf.setViewState({ type: MANUAL_SPLIT_VIEW_TYPE, state: { ...normalized }, active: true });
+		await this.app.workspace.revealLeaf(leaf); this.app.workspace.requestSaveLayout();
+		if (!(leaf.view instanceof ManualSplitReaderView)) throw new Error("双栏阅读器未打开");
+		return leaf.view;
+	}
+	async openSplitSource(path: string, leaf: WorkspaceLeaf): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(path); if (!(file instanceof TFile)) { new Notice("原文件已缺失，请从双栏顶部更换文件"); return; }
+		await leaf.openFile(file, { active: true }); await this.app.workspace.revealLeaf(leaf);
 	}
 
 	async openReadingEvidence(articlePath: string, page?: number, blockId?: string): Promise<void> {

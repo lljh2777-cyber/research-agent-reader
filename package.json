@@ -1,6 +1,6 @@
 {
 	"name": "research-agent-reader",
-	"version": "0.84.2",
+	"version": "0.85.0",
 	"private": true,
 	"description": "Desktop research reader and optional local-agent dashboard for Obsidian",
 	"author": "Liao Li",
@@ -47,6 +47,7 @@
 		"test:fulltext": "node tests/test_fulltext_acquisition.js && node tests/test_fulltext_storage.js && node tests/test_fulltext_transport.js && node tests/test_fulltext_pmc.js && node tests/test_fulltext_oa.js && node tests/test_fulltext_intake_safety.js",
 		"test:annotations": "node tests/test_annotation_web_search.js && node tests/test_annotation_source_integrity.js && node tests/test_dashboard_annotations.js",
 		"test:bilingual": "node tests/test_reader_preferences.js && node tests/test_bilingual_document.js && node tests/test_bilingual_rendering.js && node tests/test_bilingual_position.js && node tests/test_bilingual_annotations.js",
+		"test:split-reading": "node tests/test_manual_split_reading.js && node tests/test_pdf_excerpts.js",
 		"test:sources": "node tests/test_source_intake.js && node tests/test_source_storage.js && node tests/test_source_agent.js",
 		"test:library": "node tests/test_library_projection.js && node tests/test_library_reader.js && node tests/test_paper_records.js && node tests/test_paper_record_storage.js && node tests/test_library_compatibility.js",
 		"benchmark:library": "node --expose-gc tests/benchmark_library.js 100 && node --expose-gc tests/benchmark_library.js 500 && node --expose-gc tests/benchmark_library.js 1000",

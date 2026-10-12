@@ -1,4 +1,4 @@
-import { bytesDigest } from "../papers/identity";
+import { bytesDigest, objectDigest } from "../papers/identity";
 import { excerptRevision, type ExcerptRevision } from "../annotations/excerpt";
 import type { SourceStorage } from "../sources/storage";
 import { markdownImagePattern } from "./markdown-images";
@@ -17,7 +17,16 @@ export interface BilingualDocument {
 	root: string; metadataPath: string; metadataDigest: string; title: string; status: string; humanReview: string;
 	sourceVersion: string | null; stale: boolean; syncAvailable: boolean; issues: string[];
 	files: Record<BilingualLanguage, BilingualFile>; pairs: BilingualPair[];
+	selectedFiles?: SelectedBilingualFiles;
 }
+export interface SelectedBilingualFiles { en: string; zh: string; metadata?: string; }
+export function validSelectedBilingualFiles(value: unknown): value is SelectedBilingualFiles {
+	const p = value as SelectedBilingualFiles | undefined;
+	return !!p && typeof p.en === "string" && typeof p.zh === "string" && p.en !== p.zh
+		&& [p.en, p.zh].every(v => pathParts(v) && /\.md$/i.test(v))
+		&& (p.metadata === undefined || p.metadata === selectedMetadataPath(p.en));
+}
+export function selectedMetadataPath(en: string): string { const at = en.lastIndexOf("/"); return (at < 0 ? "" : en.slice(0, at + 1)) + "translation.json"; }
 export const BILINGUAL_MARKDOWN_LIMIT = 16 * 1024 * 1024;
 const MAX_BLOCKS = 10000;
 const pathParts = (value: string): boolean => value.length <= 600 && !/[\\<>:"|?*\x00-\x1f]/.test(value)
@@ -129,4 +138,34 @@ export async function loadBilingualDocument(io: Pick<SourceStorage, "read">, ent
 	// Re-read only the three inputs; do not trust a pair assembled across edits.
 	for (let i = 0; i < inputs.length; i++) { signal?.throwIfAborted(); const after = await io.read(inputs[i], limits[i]); if (!after || !Buffer.from(after).equals(Buffer.from(bytes[i]))) throw new Error("双语资料在加载期间变化，请重新打开"); }
 	signal?.throwIfAborted(); if (doc.issues.length) { doc.syncAvailable = false; doc.pairs = []; } return doc;
+}
+
+/** The user chooses both files. A scroll position never supplies an English evidence block. */
+export async function loadSelectedBilingualDocument(io: Pick<SourceStorage, "read">, selected: SelectedBilingualFiles, signal?: AbortSignal): Promise<BilingualDocument> {
+	if (!validSelectedBilingualFiles(selected)) throw new Error("请选择知识库内两个不同的 Markdown 文件，并明确英文和中文来源");
+	if (isBilingualEntry(selected.en) && bilingualPaths(selected.en).zh === selected.zh) {
+		try { const canonical = await loadBilingualDocument(io, selected.en, signal); if (canonical.syncAvailable) return canonical; }
+		catch (error) { signal?.throwIfAborted(); /* Explicitly selected files can still be read without trusting invalid pairing metadata. */ }
+	}
+	const paths = [selected.en, selected.zh], bytes: Uint8Array[] = [];
+	for (const path of paths) { signal?.throwIfAborted(); const b = await io.read(path, BILINGUAL_MARKDOWN_LIMIT); if (!b) throw new Error("所选文件缺失：" + path); bytes.push(b); }
+	const make = (path: string, b: Uint8Array): BilingualFile => { const text = decode(b); return { path, text, digest: bytesDigest(b), revision: excerptRevision(text), ...parseBilingualMarkdown(text) }; };
+	const en = make(selected.en, bytes[0]), zh = make(selected.zh, bytes[1]), metadataPath = selectedMetadataPath(selected.en);
+	const metadataBytes = await io.read(metadataPath, 256 * 1024); signal?.throwIfAborted();
+	let meta: Record<string, unknown> | undefined;
+	if (metadataBytes) { try { const candidate = JSON.parse(decode(metadataBytes).replace(/^\uFEFF/, "")); if (candidate?.schemaVersion === 1 && candidate.sourceFile === selected.en.split("/").pop() && candidate.translationFile === selected.zh.split("/").pop() && selected.zh.slice(0, selected.zh.lastIndexOf("/") + 1) === selected.en.slice(0, selected.en.lastIndexOf("/") + 1)) meta = candidate; } catch { /* An unrelated or damaged record cannot choose the user's files. */ } }
+	const files: SelectedBilingualFiles = { en: selected.en, zh: selected.zh, ...(meta ? { metadata: metadataPath } : {}) };
+	const version = meta?.sourceVersion as Record<string, unknown> | undefined;
+	const sourceVersion = version?.algorithm === "sha256" && typeof version.value === "string" && /^[a-f0-9]{64}$/.test(version.value) ? version.value : null;
+	const stale = meta?.stale === true || !!sourceVersion && sourceVersion !== en.digest;
+	const structureMatches = en.blocks.length > 0 && en.blocks.length === zh.blocks.length && en.blocks.every((b, i) => b.signature === zh.blocks[i].signature);
+	const syncAvailable = !!sourceVersion && !stale && structureMatches;
+	const pairs = syncAvailable ? en.blocks.map((block, i) => ({ id: "p-" + i, en: block, "zh-CN": zh.blocks[i] })) : [];
+	const issues = syncAvailable ? [] : ["手动选择的文件尚无有效段落对应凭据；同步仅按阅读进度，不能据此确认译文或英文依据"];
+	for (let i = 0; i < paths.length; i++) { signal?.throwIfAborted(); const after = await io.read(paths[i], BILINGUAL_MARKDOWN_LIMIT); if (!after || bytesDigest(after) !== bytesDigest(bytes[i])) throw new Error("所选文件在加载期间变化，请重新打开"); }
+	if (meta) { const after = await io.read(metadataPath, 256 * 1024); if (!after || bytesDigest(after) !== bytesDigest(metadataBytes!)) throw new Error("配对记录在加载期间变化，请重新打开"); }
+	signal?.throwIfAborted();
+	return { root: selected.en.slice(0, Math.max(0, selected.en.lastIndexOf("/"))), metadataPath: meta ? metadataPath : "", metadataDigest: meta ? bytesDigest(metadataBytes!) : objectDigest(files), title: en.path.split("/").pop() || "双栏阅读",
+		status: ["not-started", "in-progress", "needs-review", "reviewed", "failed"].includes(String(meta?.status)) ? String(meta!.status) : "unknown",
+		humanReview: meta?.humanReview === "reviewed" ? "reviewed" : meta?.humanReview === "not-reviewed" ? "not-reviewed" : "unknown", sourceVersion, stale, syncAvailable, issues, files: { en, "zh-CN": zh }, pairs, selectedFiles: files };
 }

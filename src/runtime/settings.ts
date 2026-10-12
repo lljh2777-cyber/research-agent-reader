@@ -637,7 +637,7 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	knowledgeRetrievalMode: "lexical",
 	knowledgeSecretId: "siliconflow",
 	toolkitRoot: "",
-	readerMarkdownFolders: ["papers", "Clippings"],
+	readerMarkdownFolders: [],
 	obsidianCliExecutable: findPreferredObsidianCliExecutable(),
 	codexExecutable: findPreferredCodexExecutable(),
 	codexConfigSource: "official",

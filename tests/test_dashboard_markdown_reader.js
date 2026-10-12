@@ -152,7 +152,8 @@ assert.match(view, /restoreTarget\.kind === "top"/);
 assert.doesNotMatch(view, /sourceKind === "mineru" \? this\.readerState\.currentVisualId/);
 assert.doesNotMatch(view, /article\.scrollIntoView\(\{ block: "start" \}\)/);
 assert.match(view, /getFirstLinkpathDest/);
-assert.match(settings, /readerMarkdownFolders: \["papers", "Clippings"\]/);
-assert.match(settingsTab, /默认阅读目录/);
+assert.match(settings, /readerMarkdownFolders: \[\]/);
+assert.doesNotMatch(settingsTab, /\.setName\("默认阅读目录"\)/);
+assert.match(plugin, /chooseSplitReading/);
 
 console.log("DASHBOARD_MARKDOWN_READER_TESTS_OK");

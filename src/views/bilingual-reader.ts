@@ -15,7 +15,7 @@ export function bilingualRenderMarkdown(file: BilingualFile): string {
 	return result + file.text.slice(cursor);
 }
 export interface BilingualPane { language: BilingualLanguage; scroller: HTMLElement; article: HTMLElement; anchors: Map<string, HTMLElement>; }
-export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; annotate?(): Promise<void>; ratio?: number; onRatio?(ratio: number): void; defaultLinked?: boolean; state?: unknown; onState?(state: BilingualReadingState): void; }
+export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; hideOrdinary?: boolean; annotate?(): Promise<void>; ratio?: number; onRatio?(ratio: number): void; defaultLinked?: boolean; state?: unknown; onState?(state: BilingualReadingState): void; }
 const STATUS: Record<string, string> = { "not-started": "尚未翻译", "in-progress": "翻译中", "needs-review": "译文待复核", reviewed: "记录标为已审阅", failed: "翻译记录失败", unknown: "译文状态未确认" };
 
 export class BilingualReader extends Component {
@@ -34,15 +34,17 @@ export class BilingualReader extends Component {
 		const { app, host, document: doc, signal } = this.options;
 		host.classList.add("agent-bilingual-shell");
 		const toolbar = host.createDiv({ cls: "agent-bilingual-toolbar" });
-		toolbar.createEl("span", { text: "双语对照 · 结构对应，语义仍需核对" });
+		const progressSync = !!doc.selectedFiles && !doc.syncAvailable;
+		const canSync = doc.syncAvailable || progressSync;
+		toolbar.createEl("span", { text: progressSync ? "双语阅读 · 按阅读进度同步，段落对应未确认" : "双语对照 · 结构对应，语义仍需核对" });
 		const linkedLabel = toolbar.createEl("label", { cls: "agent-bilingual-linked" });
 		this.linkedInput = linkedLabel.createEl("input", { attr: { type: "checkbox", "aria-label": "双栏联动" } });
-		linkedLabel.createSpan({ text: "双栏联动" }); this.linkedInput.checked = this.state.linked; this.linkedInput.disabled = !doc.syncAvailable;
-		this.linkedInput.addEventListener("change", () => { this.state.linked = this.linkedInput!.checked && doc.syncAvailable && !this.invalidated; if (this.state.linked) this.synchronize(this.state.active); this.publish(); }, { signal });
+		linkedLabel.createSpan({ text: "双栏联动" }); this.linkedInput.checked = this.state.linked; this.linkedInput.disabled = !canSync;
+		this.linkedInput.addEventListener("change", () => { this.state.linked = this.linkedInput!.checked && canSync && !this.invalidated; if (this.state.linked) this.synchronize(this.state.active); this.publish(); }, { signal });
 		this.message = toolbar.createSpan({ cls: "agent-bilingual-sync-message", attr: { role: "status" } });
 		const status = toolbar.createEl("span", { text: STATUS[doc.status] + (doc.humanReview === "reviewed" ? " · 人工审阅记录已存在" : " · 人工审阅未确认"), cls: "agent-bilingual-status" });
 		status.setAttribute("title", doc.stale ? "译文英语来源已过期" : "结构对应不代表译文含义已经核验");
-		const ordinary = toolbar.createEl("button", { text: "返回单语图文", attr: { type: "button" } }); ordinary.addEventListener("click", this.options.ordinary, { signal });
+		if (!this.options.hideOrdinary) { const ordinary = toolbar.createEl("button", { text: "返回单语图文", attr: { type: "button" } }); ordinary.addEventListener("click", this.options.ordinary, { signal }); }
 		if (doc.issues.length) host.createEl("p", { text: doc.issues.join("；"), cls: "agent-bilingual-issues", attr: { role: "status" } });
 		const workspace = host.createDiv({ cls: "agent-bilingual-workspace" });
 		let ratio = Math.max(0.3, Math.min(0.7, this.options.ratio ?? 0.5));
@@ -51,8 +53,9 @@ export class BilingualReader extends Component {
 		for (const language of ["en", "zh-CN"] as const) {
 			if (signal.aborted) return;
 			const file = doc.files[language], pane = workspace.createEl("section", { cls: "agent-bilingual-pane", attr: { "aria-label": language === "en" ? "英文原文" : "中文译文", "data-bilingual-language": language } });
-			const heading = pane.createDiv({ cls: "agent-bilingual-pane-heading" }); heading.createEl("strong", { text: language === "en" ? "英文原文" : "中文译文" });
-			const sync = heading.createEl("button", { text: "以本栏同步另一栏", attr: { type: "button", "data-bilingual-sync": language } }); sync.disabled = !doc.syncAvailable;
+			const heading = pane.createDiv({ cls: "agent-bilingual-pane-heading" }); heading.createEl("strong", { text: language === "en" ? "英文原文" : "中文译文", attr: { title: file.path } });
+			heading.createSpan({ text: file.path.split("/").pop(), cls: "agent-split-file-name", attr: { title: file.path } });
+			const sync = heading.createEl("button", { text: "以本栏同步另一栏", attr: { type: "button", "data-bilingual-sync": language } }); sync.disabled = !canSync;
 			sync.addEventListener("click", () => { this.activate(language); this.synchronize(language); }, { signal });
 			const annotate = heading.createEl("button", { text: "批注", attr: { type: "button", "data-bilingual-annotate": language } });
 			annotate.disabled = !this.options.annotate;
@@ -131,7 +134,15 @@ export class BilingualReader extends Component {
 		this.programmatic.add(language); pane.scroller.scrollTop = top;
 	}
 	synchronize(from: BilingualLanguage): void {
-		if (this.invalidated || !this.options.document.syncAvailable || this.options.signal.aborted) return;
+		if (this.invalidated || this.options.signal.aborted) return;
+		if (this.options.document.selectedFiles && !this.options.document.syncAvailable) {
+			const source = this.panes.get(from), to = from === "en" ? "zh-CN" : "en", target = this.panes.get(to);
+			if (!source || !target) return;
+			const progress = source.scroller.scrollTop / Math.max(1, source.scroller.scrollHeight - source.scroller.clientHeight);
+			this.programmatic.add(to); target.scroller.scrollTop = progress * Math.max(0, target.scroller.scrollHeight - target.scroller.clientHeight);
+			this.capture(from); this.capture(to); this.message?.setText("已按阅读进度同步；对应段落仍需核对"); this.publish(); return;
+		}
+		if (!this.options.document.syncAvailable) return;
 		this.capture(from); const target = from === "en" ? "zh-CN" : "en", position = correspondingBilingualPosition(this.options.document, from, this.state.positions[from]);
 		if (!position || !this.panes.get(target)?.anchors.has(position.blockId)) { this.message?.setText("此处没有可定位的对应段落"); return; }
 		this.state.positions[target] = position; this.restore(target); this.capture(target); this.message?.setText(""); this.publish();

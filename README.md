@@ -10,7 +10,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 `0.84.1` 完成[双语真实 AI 批注定向验收](docs/bilingual-ai-acceptance.md)：修复相邻译文混入英文证据、收紧无据推断，并阻止截断解释保存。最后四个固定选句的关键含义和来源边界通过开发者核对，历轮失败与用量留存；输出额度不足仍可能失败，独立整篇译文／科学审阅继续待完成。
 
-`0.84.2` 补齐[双栏设置与模式选择](docs/settings.md#文献阅读器双栏设置0842)：默认可选正文＋PDF、正文＋图片与图注、英文＋中文；双语有独立的联动与英文栏宽默认值，阅读器顶部可切换当前布局，续读沿用已保存状态。测试库与公开下载版本同步为 `0.84.2`，验收边界见[发布说明](docs/releases/0.84.2.md)。
+`0.84.2` 补齐[双栏设置与模式选择](docs/settings.md#文献阅读器双栏设置0842)：双语有独立的联动与英文栏宽默认值，阅读器顶部可切换当前布局，续读沿用已保存状态。该版本的设置与验收记录保留为历史交付。
+
+`0.85.0` 接入[手动选择文件的双栏阅读](docs/manual-split-reading.md)：从文件右键菜单或内容页更多选项选择阅读方式，再选择另一份文件；支持当前知识库任意目录、任意文件名的 Markdown＋PDF 或英文＋中文，同一标签显示两栏，可更换文件、同步、批注和续读。普通 Markdown 不再按目录自动接管。未确认对应段落时仅按阅读进度同步，中文 AI 对照解释在调用前停止，个人批注与摘录仍可保存。
 
 [主题学习](docs/topic-study-t12.md)支持无资料的逐单元讲解、主支线对话和学习导图，并可[手动标记理解状态、预览与导出记录](docs/topic-records-t13.md)。入口为「主题路线（预览）→ 确认路线 → 打开学习预览」，页面打开与重载不自动调用模型。`0.56.1` 新增 [T1.3C 教学规则版本化与同题对照](docs/topic-teaching-t13c.md)：新请求使用 v2，旧 v1 回答和导出保持可读。两版九题首次回答均已留档；v2 更短、部分追问更聚焦，但仍有事实错误和过度承诺，不能认定教学质量提升，继续保持开发预览。
 
@@ -22,9 +24,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
-> 受限试用版本：`0.84.2`。安装文件见
-> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.84.2)，
-> 更新范围与验收边界见[发布说明](docs/releases/0.84.2.md)。
+> 受限试用版本：`0.85.0`。安装文件见
+> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.85.0)，
+> 更新范围与验收边界见[发布说明](docs/releases/0.85.0.md)。
 > 尚未上架 Obsidian 社区插件目录。
 
 `0.76.0` 新增 [R3.8 学习摘录补充](docs/answer-excerpt-curation-r38.md)：从学习回答摘录分别选择 AI 片段、人工修订与备注，预览后补充到已有概念、方法或综合笔记；保留内容角色，复用修订恢复与撤销。学习文本块排除本插件的正式证据检索，不据此补写论文来源笔记。
@@ -172,7 +174,7 @@ compatible toolkit project and executable paths.
 
 ### Release install
 
-从 [0.84.2 Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.84.2)
+从 [0.85.0 Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.85.0)
 分别下载 `main.js`、`manifest.json`、`styles.css`，放入
 `<vault>/.obsidian/plugins/research-agent-reader/`，再在社区插件设置中启用
 **Research Agent Reader**。已有安装可禁用插件、替换这三个文件，再重新启用。
@@ -201,12 +203,13 @@ release of Research Agent Reader. Release tags exactly match the version in
 
 ## Reader setup
 
-The default reader folders are `papers` and `Clippings`. Change them under
-**Settings → Research Agent Reader → 文献阅读器**. Markdown source files are never
-rewritten merely to support the two-pane reader; inferred figure labels exist
-only in the reading view.
+右键知识库内的 Markdown 或 PDF，或从内容页右上角选择「选择阅读方式…」，
+选择阅读组合后再选择另一份文件。不限制目录与文件名，普通 Markdown 不自动接管。
+两份文件显示在同一标签，可更换、退出、同步和批注。默认联动、栏宽与 PDF 缩放在
+**设置 → Research Agent Reader → 文献阅读器** 中调整。操作与来源边界见
+[手动双栏阅读](docs/manual-split-reading.md)。
 
-`papers/` 与 `Clippings/` 的批注独立保存在 `wiki/annotations/`，不改写原文。
+`papers/`、`Clippings/` 以及手动双栏中的批注独立保存在 `wiki/annotations/`，不改写原文。
 重新划选同一段文字并打开批注，可查看或编辑已保存的内容；批注文档中的来源以路径记录。
 Wiki 笔记继续使用原有的行内批注链接。
 

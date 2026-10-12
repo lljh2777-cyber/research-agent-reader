@@ -47,7 +47,6 @@ import {
 	getCodexConfigSourceLabel,
 	getOpenCodeConfigSourceLabel,
 	getOpenCodeDefaultModelLabel,
-	normalizeReaderMarkdownFolders,
 	type ActionExecutionDefault,
 	type CliExecutableKind,
 } from "../runtime/settings";
@@ -840,25 +839,12 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.createSettingsPageHeader(
 			containerEl,
 			"文献阅读器",
-			"指定接管的 Markdown 目录，选择新打开文献的双栏模式。图文／PDF 双栏用于正文与参考图；英文／中文双栏读取已有配对资料，分别设置联动与栏宽。已保存的阅读状态优先。",
+			"右键任意 Markdown／PDF 文件，或在内容页右上角选择“选择阅读方式”，再选择另一份文件。双栏在同一标签内显示，不限制目录与文件名。已保存的阅读状态优先。",
 			true,
 		);
 		new Setting(containerEl)
-			.setName("默认阅读目录")
-			.setDesc("每行一个 Vault 相对目录。打开这些目录下的 Markdown 时，当前标签页会自动切换到文献阅读器；留空可关闭自动接管。")
-			.addTextArea((textArea) => {
-				textArea.inputEl.addClass("agent-dashboard-reader-folders-input");
-				textArea
-					.setPlaceholder("papers\nClippings")
-					.setValue(this.plugin.settings.readerMarkdownFolders.join("\n"))
-					.onChange(async (value) => {
-						this.plugin.settings.readerMarkdownFolders = normalizeReaderMarkdownFolders(value);
-						await this.plugin.saveSettings();
-					});
-			});
-		new Setting(containerEl)
 			.setName("默认双栏模式")
-			.setDesc("选择新打开文献的初始模式。英文／中文仅用于 Clippings 内已有的规范双语资料；缺少配对时提示并回到普通图文阅读。阅读器顶部也可单独切换当前文献的模式。")
+			.setDesc("单份 Markdown 在文献阅读器中的初始布局。双栏文件可通过菜单手动选择；已有配对资料仍可沿用双语默认值。打开普通文件不自动接管标签。")
 			.addDropdown((dropdown) => dropdown
 				.addOption("pdf", "正文＋原始 PDF")
 				.addOption("visuals", "正文＋图片与图注")
@@ -871,7 +857,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("英文／中文双栏").setHeading();
 		new Setting(containerEl)
 			.setName("双语双栏默认联动")
-			.setDesc("首次打开双语对照时，滚动任一栏会按对应段落同步另一栏。关闭后仍可使用两侧的单次同步按钮；续读沿用已保存的联动状态。")
+			.setDesc("首次打开手动双栏或双语对照时默认联动。有有效配对记录时按对应段落同步，否则仅按阅读进度同步；两侧仍有单次同步按钮。续读沿用已保存状态。")
 			.addToggle((toggle) => toggle
 				.setValue(this.plugin.settings.mineruReaderBilingualLinked)
 				.onChange(async (value) => {

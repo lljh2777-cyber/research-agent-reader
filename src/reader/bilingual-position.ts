@@ -15,7 +15,7 @@ export function normalizeBilingualState(value: unknown, doc: BilingualDocument, 
 		return digests[language] === doc.files[language].digest && doc.files[language].blocks.some(b => b.id === saved.blockId)
 			? { blockId: String(saved.blockId), progress: bounded(saved.progress) } : { blockId: doc.files[language].blocks[0]?.id || "", progress: 0 };
 	};
-	return { linked: doc.syncAvailable && (typeof input.linked === "boolean" ? input.linked : defaultLinked), active: input.active === "zh-CN" ? "zh-CN" : "en",
+	return { linked: (doc.syncAvailable || !!doc.selectedFiles) && (typeof input.linked === "boolean" ? input.linked : defaultLinked), active: input.active === "zh-CN" ? "zh-CN" : "en",
 		digests: { en: doc.files.en.digest, "zh-CN": doc.files["zh-CN"].digest }, positions: { en: position("en"), "zh-CN": position("zh-CN") } };
 }
 function ordered(geometry: BilingualGeometry[]): BilingualGeometry[] { return geometry.filter(b => Number.isFinite(b.top)).sort((a, b) => a.top - b.top); }

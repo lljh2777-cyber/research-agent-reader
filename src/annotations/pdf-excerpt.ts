@@ -18,8 +18,8 @@ export interface PdfExcerptReceipt {
 }
 export interface PdfTextItem { str: string; hasEOL: boolean; }
 export interface PdfPageText { items: PdfTextItem[]; starts: number[]; text: string; hash: string; }
-export const supportsPdfExcerpt = (path: string): boolean => /^(papers|Clippings)\/.+\.pdf$/i.test(path)
-	&& !path.split("/").some(p => !p || p === "." || p === "..") && !/[\\:\x00-\x1f]/.test(path);
+export const supportsPdfExcerpt = (path: string): boolean => path.length <= 600 && /\.pdf$/i.test(path)
+	&& !path.split("/").some(p => !p || p === "." || p === ".." || /[. ]$/.test(p)) && !/[\\<>:"|?*\x00-\x1f]/.test(path);
 const hash = (value: unknown): boolean => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 const integer = (value: number, min: number, max: number): boolean => Number.isSafeInteger(value) && value >= min && value <= max;
 
