@@ -1,5 +1,6 @@
 import { readAnnotationRecords } from "../annotations/annotation-service";
 import type { LibraryContentRole, LibraryAnnotationProvenance } from "./types";
+import { isTranslationPath } from "../annotations/bilingual";
 
 export interface LibraryAnnotationReadRecord {
 	id: string;
@@ -41,7 +42,7 @@ export function readLibraryAnnotations(content: string, annotationPath: string, 
 			const body = content.slice(frontmatter![0].length), manual = section(body, "manual"), ai = section(body, "ai");
 			return { records: [{ id: raw.id, sourcePath: source.path, selectedText: quote.exact, section: heading.text,
 				anchor: { start: Number(position.start), end: Number(position.end), prefix: quote.prefix, suffix: quote.suffix },
-				roles: ["original_quote", ...(manual ? ["personal_note" as const] : []), ...(ai ? ["ai_explanation" as const] : [])],
+				roles: [isTranslationPath(source.path) ? "translation_quote" : "original_quote", ...(manual ? ["personal_note" as const] : []), ...(ai ? ["ai_explanation" as const] : [])],
 				provenance: { format: "annotation-schema-2", sourcePath: source.path, sourceRevision: source.revision, vaultId: source.vaultId },
 			}], errors: [] };
 		} catch (error) { return { records: [], errors: [error instanceof Error ? error.message : "旧批注读取失败"] }; }
@@ -49,7 +50,7 @@ export function readLibraryAnnotations(content: string, annotationPath: string, 
 	const result = readAnnotationRecords(content, annotationPath);
 	return { errors: result.errors, records: result.records.map(record => ({
 		id: record.id, sourcePath: record.sourcePath, selectedText: record.selectedText, section: record.section, anchor: record.sourceAnchor,
-		roles: ["original_quote", ...(record.manualText ? ["personal_note" as const] : []), ...(record.aiText ? ["ai_explanation" as const] : [])],
-		provenance: { format: record.pdfExcerpt ? "dashboard-pdf-excerpt-1" : record.excerpt ? "dashboard-excerpt-1" : "dashboard-blocks", sourcePath: record.sourcePath, ...((record.pdfExcerpt || record.excerpt) ? { sourceRevision: (record.pdfExcerpt || record.excerpt)!.digest } : {}) },
+		roles: [record.bilingual?.language === "zh-CN" || isTranslationPath(record.sourcePath) ? "translation_quote" : "original_quote", ...(record.manualText ? ["personal_note" as const] : []), ...(record.aiText ? ["ai_explanation" as const] : [])],
+		provenance: { format: record.pdfExcerpt ? "dashboard-pdf-excerpt-1" : record.excerpt ? "dashboard-excerpt-1" : "dashboard-blocks", sourcePath: record.sourcePath, ...(record.bilingual ? { bilingual: record.bilingual } : {}), ...((record.pdfExcerpt || record.excerpt) ? { sourceRevision: (record.pdfExcerpt || record.excerpt)!.digest } : {}) },
 	})) };
 }

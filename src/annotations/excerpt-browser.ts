@@ -1,6 +1,8 @@
 import { App, Modal, TFile, type WorkspaceLeaf } from "obsidian";
 import { canOrganizeExcerpt, excerptOrganizationLabel, ExcerptLibraryService, type ExcerptList, type ExcerptRef, type ExcerptSnapshot } from "./excerpt-library";
 import type { ExcerptHistoryHost } from "./excerpt-history";
+import { bilingualDescription, quoteLabel } from "./bilingual";
+import type { AnnotationRecord } from "./types";
 
 /** Local, model-free excerpt browser. Drafts stay visible until explicitly saved or discarded. */
 export class ExcerptBrowser extends Modal {
@@ -21,7 +23,7 @@ export class ExcerptBrowser extends Modal {
 	private searchEl!: HTMLInputElement;
 	private refreshEl!: HTMLButtonElement;
 	private get dirty(): boolean { return Boolean(this.selected && this.draft !== this.selected.record.manualText); }
-	constructor(app: App, private readonly initial?: ExcerptRef, private readonly didClose?: () => void, openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>, private readonly curate?: (ref: ExcerptRef) => void, private readonly history?: ExcerptHistoryHost, private readonly answers?: () => void, private readonly knowledgeDraft?: (ref: ExcerptRef) => void) { super(app); this.service = new ExcerptLibraryService(app, openMarkdown); }
+	constructor(app: App, private readonly initial?: ExcerptRef, private readonly didClose?: () => void, openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>, private readonly curate?: (ref: ExcerptRef) => void, private readonly history?: ExcerptHistoryHost, private readonly answers?: () => void, private readonly knowledgeDraft?: (ref: ExcerptRef) => void, openBilingual?: (record: AnnotationRecord, signal?: AbortSignal) => Promise<void>) { super(app); this.service = new ExcerptLibraryService(app, openMarkdown, openBilingual); }
 	onOpen(): void {
 		this.closed = false; this.setTitle("摘录"); this.modalEl.addClass("rar-excerpt-modal");
 		this.contentEl.createEl("p", { text: "查找保存的原句与个人备注。选择一条摘录后核对来源；备注可以独立修改。", cls: "rar-library-muted" });
@@ -102,7 +104,7 @@ export class ExcerptBrowser extends Modal {
 			});
 			row.addClass("rar-excerpt-row"); row.dataset.excerptId = entry.record.id; row.setAttribute("aria-pressed", String(this.selected?.record.id === entry.record.id));
 			row.createSpan({ text: entry.record.selectedText }); row.createEl("small", { text: entry.record.sourcePath });
-			row.createEl("small", { text: excerptOrganizationLabel(entry.record) });
+			row.createEl("small", { text: quoteLabel(entry.record) + " · " + excerptOrganizationLabel(entry.record) });
 		}
 		if (matches.length > this.limit) this.button(this.listEl, "显示更多摘录", () => { this.limit += 50; this.renderList(); });
 		this.syncControls();
@@ -111,9 +113,10 @@ export class ExcerptBrowser extends Modal {
 		this.statusAction?.abort(); this.detailEl.empty(); const snapshot = this.selected;
 		if (!snapshot) { this.detailEl.createEl("p", { text: "选择摘录，查看原句、历史上下文和个人备注。" }); return; }
 		const record = snapshot.record;
-		this.detailEl.createEl("h3", { text: "原文摘录" });
+		this.detailEl.createEl("h3", { text: quoteLabel(record) });
 		this.detailEl.createEl("blockquote", { text: record.selectedText });
 		this.detailEl.createEl("p", { text: record.sourcePath });
+		if (record.bilingual) { this.detailEl.createEl("p", { text: bilingualDescription(record.bilingual) }); if (record.bilingual.english) { this.detailEl.createEl("h3", { text: "英文对应段落（结构对应，语义待核对）" }); this.detailEl.createEl("pre", { text: record.bilingual.english.text }); } }
 		if (record.pdfExcerpt) this.detailEl.createEl("p", { text: `PDF 第 ${record.pdfExcerpt.page} / ${record.pdfExcerpt.pageCount} 页（文件页码）` });
 		this.detailEl.createEl("p", { text: "整理状态：" + excerptOrganizationLabel(record), cls: "rar-excerpt-state" });
 		this.detailEl.createEl("p", { text: "整理完成由你手动标记；修改个人备注后重新待整理，原文变化或无法核对时仍需复查。", cls: "rar-library-muted" });

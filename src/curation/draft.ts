@@ -3,6 +3,7 @@ import { TFile, type App } from "obsidian";
 import { objectDigest } from "../papers/identity";
 import { contentHash } from "../retrieval/chunks";
 import { readExcerptSnapshot, ExcerptLibraryService, type ExcerptRef } from "../annotations/excerpt-library";
+import { bilingualDescription, quoteLabel } from "../annotations/bilingual";
 import { readAnswerExcerpt, type AnswerExcerptService } from "../learning/answer-excerpts";
 import { ANSWER_CONTENT_ROLES, answerRoleText, type AnswerContentRole } from "./answer-excerpt";
 import { readingPathCode } from "../reading/export";
@@ -50,10 +51,11 @@ export function draftMaterialText(material: DraftMaterial | null, plainText = fa
 	const selectedText = plainText ? (s: string) => s : quote;
 	if (m.kind === "excerpt") {
 		const r = readExcerptSnapshot(m.raw, { annotationPath: m.path, id: m.excerptId }).record;
-		return "保存时的原文摘录（文字记录，当前来源及科学结论待核对）：\n\n" + selectedText(r.selectedText) + "\n\n来源：" + readingPathCode(r.sourcePath)
+		return "保存时的" + quoteLabel(r) + "（文字记录，当前来源及科学结论待核对）：\n\n" + selectedText(r.selectedText) + "\n\n来源：" + readingPathCode(r.sourcePath)
 			+ (r.pdfExcerpt ? `；PDF 第 ${r.pdfExcerpt.page} / ${r.pdfExcerpt.pageCount} 页（文件页码）` : "")
 			+ `；字符 ${r.sourceAnchor!.start}–${r.sourceAnchor!.end}；原文版本 ` + readingPathCode((r.pdfExcerpt || r.excerpt)!.digest)
 			+ "\n\n摘录：" + readingPathCode(m.path) + "；快照：" + readingPathCode(m.digest)
+			+ (r.bilingual ? "\n\n" + bilingualDescription(r.bilingual) + (r.bilingual.english ? "\n\n英文对应段落（结构对应，语义待核对）：\n\n" + selectedText(r.bilingual.english.text) : "\n\n英文对应段落未确认。") : "")
 			+ (m.includeNote ? "\n\n个人备注（未核验）：\n\n" + selectedText(r.manualText) : "");
 	}
 	const f = readAnswerExcerpt(m.raw, m.path), a = f.record.answer;

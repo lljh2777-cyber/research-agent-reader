@@ -1,5 +1,6 @@
 import type { ExcerptReceipt, ExcerptRevision } from "./excerpt";
 import type { PdfExcerptReceipt } from "./pdf-excerpt";
+import type { BilingualReceipt } from "./bilingual";
 export type AnnotationArchiveStatus = "none" | "pending" | "completed" | "failed";
 
 export interface AnnotationSelection {
@@ -15,6 +16,7 @@ export interface AnnotationSelection {
 	anchorRect: DOMRect;
 	sourceRevision?: ExcerptRevision;
 	pdfExcerpt?: PdfExcerptReceipt;
+	bilingual?: BilingualReceipt;
 }
 
 export interface AnnotationRecord {
@@ -27,6 +29,7 @@ export interface AnnotationRecord {
 	sourceAnchor?: { start: number; end: number; prefix: string; suffix: string };
 	excerpt?: ExcerptReceipt;
 	pdfExcerpt?: PdfExcerptReceipt;
+	bilingual?: BilingualReceipt;
 	manualText: string;
 	aiText: string;
 	aiProvider: string;

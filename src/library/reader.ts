@@ -6,6 +6,7 @@ import { noteIdentifiers } from "../papers/note-identity";
 import { loadSourcePackage } from "../sources/package";
 import type { SourceStorage } from "../sources/storage";
 import { readLibraryAnnotations } from "./annotation-reader";
+import { isTranslationPath } from "../annotations/bilingual";
 import { validateReadingSession } from "../reading/session";
 import { structuredFingerprint } from "../reading/structured-source";
 import { readingCategory } from "../reading/catalog";
@@ -153,7 +154,7 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 	} catch (error) { issue("sources", "papers", error); }
 	await walk("Clippings", "sources", async name => {
 		const bytes = await v.read(name, 16 * 1024 * 1024); if (!bytes) throw new Error("剪藏文件已不存在");
-		const text = decode(bytes); markdown.set(name, text);
+		const text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); markdown.set(name, text);
 		let meta: ReturnType<typeof metadata> = { identifiers: {} }; try { meta = metadata(text); } catch (error) { issue("sources", name, error); }
 		addSource({ kind: "source", id: name, title: meta.title || fileName(name), ...meta, source: { format: "markdown", path: name, saved: true, verification: { state: "verified", fingerprint: bytesDigest(bytes) } } });
 	});
@@ -193,7 +194,13 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 			} else if (record.provenance.sourceRevision) {
 				if (binding.state !== "changed") binding.reason = "旧批注保留来源版本；仓库标识及版本算法尚未确认，保持独立";
 			}
-			objects.push({ kind: "annotation", id: name + "#" + record.id, annotationPath: name, title: record.section || record.selectedText.slice(0, 80), identifiers: {},
+			const bilingual = record.provenance.bilingual;
+			if (bilingual) {
+				const en = markdown.get(bilingual.root + "/paper.md"), zh = markdown.get(bilingual.root + "/paper.zh-CN.md"), metadata = await v.read(bilingual.root + "/translation.json", 256 * 1024);
+				if (en === undefined || zh === undefined || !metadata || !anchor || text?.slice(anchor.start, anchor.end) !== record.selectedText || bytesDigest(new TextEncoder().encode(en)) !== bilingual.digests.en || bytesDigest(new TextEncoder().encode(zh)) !== bilingual.digests["zh-CN"] || bytesDigest(metadata) !== bilingual.digests.metadata || bilingual.english && en.slice(bilingual.english.start, bilingual.english.end) !== bilingual.english.text) { binding.state = "changed"; binding.reason = "双语资料缺失或版本已变化；保留历史内容，需复查"; }
+				else if (source && source.source.verification.state === "verified") { binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "双语文字与保存版本一致；结构对应与译文含义仍需核对"; }
+			} else if (isTranslationPath(record.sourcePath)) { binding.state = "unresolved"; binding.reason = "历史译文摘录缺少双语配对凭据，未推断来源"; }
+			objects.push({ kind: "annotation", id: name + "#" + record.id, annotationPath: name, title: (record.roles.includes("translation_quote") ? "译文 · " : "") + (record.section || record.selectedText.slice(0, 80)), identifiers: {},
 				roles: record.roles, provenance: record.provenance, binding });
 		}
 	});

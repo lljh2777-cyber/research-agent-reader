@@ -5,6 +5,7 @@ import { curationParagraphs, curationTarget } from "../curation/policy";
 import { prepareExcerptCuration, validateExcerptContext } from "../curation/excerpt";
 import type { CurationReview, CurationRevision } from "../curation/types";
 import { curationChangeWindow } from "./knowledge-curation";
+import { bilingualDescription, quoteLabel } from "../annotations/bilingual";
 
 /** One saved excerpt -> explicit target/paragraph -> full file preview -> guarded existing writer. */
 export class ExcerptCurationModal extends Modal {
@@ -42,7 +43,8 @@ export class ExcerptCurationModal extends Modal {
 	}
 	private renderSource(): void {
 		this.sourceEl.empty(); const r = this.snapshot!.record;
-		this.sourceEl.createEl("h3", { text: "所选原句" }); this.sourceEl.createEl("blockquote", { text: r.selectedText }); this.sourceEl.createEl("p", { text: r.sourcePath });
+		this.sourceEl.createEl("h3", { text: quoteLabel(r) }); this.sourceEl.createEl("blockquote", { text: r.selectedText }); this.sourceEl.createEl("p", { text: r.sourcePath });
+		if (r.bilingual) { this.sourceEl.createEl("p", { text: bilingualDescription(r.bilingual) }); if (r.bilingual.english) { this.sourceEl.createEl("h3", { text: "英文对应段落（结构对应，语义待核对）" }); this.sourceEl.createEl("blockquote", { text: r.bilingual.english.text }); } }
 		if (r.pdfExcerpt) this.sourceEl.createEl("p", { text: `PDF 第 ${r.pdfExcerpt.page} / ${r.pdfExcerpt.pageCount} 页（文件页码）。补充前会核对文件和原页文字；论文来源笔记还须匹配已登记原文包的身份与版本。` });
 		const context = this.sourceEl.createEl("details"); context.createEl("summary", { text: "保存时的上下文" }); context.createEl("pre", { text: (r.pdfExcerpt || r.excerpt)!.context, cls: "curation-text" });
 		this.sourceEl.createEl("p", { text: "个人备注（不作为论文证据）" }); this.sourceEl.createEl("pre", { text: r.manualText || "尚无个人备注", cls: "curation-text" });

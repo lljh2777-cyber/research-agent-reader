@@ -3,6 +3,7 @@ import { readAnnotationRecords } from "./annotation-service";
 import { excerptMatches, excerptRevision, prepareExcerpt } from "./excerpt";
 import { openPdfExcerpt, pdfExcerptStatus } from "./native-pdf-excerpt";
 import type { AnnotationRecord } from "./types";
+import { verifyBilingual } from "./bilingual";
 
 export interface ExcerptRef { annotationPath: string; id: string; }
 export interface ExcerptSnapshot { record: AnnotationRecord; digest: string; }
@@ -55,7 +56,7 @@ function updateMetadata(content: string, record: AnnotationRecord, patch: Record
 	next = next.replace(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/, (_all, start: string, body: string, end: string) => start + body.replace(/^updated: [^\r\n]*/m, `updated: ${JSON.stringify(now)}`) + end);
 	const old = "- 更新：" + record.updatedAt;
 	const blockStart = next.indexOf("<!-- agent-dashboard:annotation-start ");
-	const contextStart = next.indexOf("### 保存时的原文上下文", blockStart);
+	const contextStart = next.slice(blockStart).search(/### 保存时的(?:原文|译文)上下文/) + blockStart;
 	const at = next.indexOf(old, blockStart);
 	if (at >= 0 && at < contextStart) next = next.slice(0, at) + "- 更新：" + now + next.slice(at + old.length);
 	return next;
@@ -81,7 +82,7 @@ function updateOrganizationLabel(next: string, completed: boolean): string {
 }
 
 export class ExcerptLibraryService {
-	constructor(private readonly app: App, private readonly openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>) {}
+	constructor(private readonly app: App, private readonly openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>, private readonly openBilingual?: (record: AnnotationRecord, signal?: AbortSignal) => Promise<void>) {}
 	async load(ref: ExcerptRef, signal?: AbortSignal): Promise<ExcerptSnapshot> {
 		const stable = { annotationPath: ref.annotationPath, id: ref.id };
 		signal?.throwIfAborted();
@@ -110,6 +111,7 @@ export class ExcerptLibraryService {
 		if (latest.digest !== snapshot.digest) return "摘录文档已变化，请重新读取后核对来源与最新备注";
 		const record = latest.record;
 		if (record.pdfExcerpt) return pdfExcerptStatus(this.app, record, signal);
+		try { await verifyBilingual(this.app, record, signal); } catch (error) { signal?.throwIfAborted(); return String(error instanceof Error ? error.message : error); }
 		const file = this.app.vault.getAbstractFileByPath(record.sourcePath);
 		if (!(file instanceof TFile)) return "原文已缺失；保留历史摘录，需复查";
 		if (file.stat?.size > 32 * 1024 * 1024) return "原文超过核对上限，保留历史摘录，需复查";
@@ -147,6 +149,7 @@ export class ExcerptLibraryService {
 	}
 	async openSource(ref: ExcerptRef, signal?: AbortSignal): Promise<void> {
 		const snapshot = await this.load(ref, signal), record = snapshot.record;
+		if (!record.pdfExcerpt) await verifyBilingual(this.app, record, signal);
 		if (record.pdfExcerpt) {
 			await openPdfExcerpt(this.app, record, async () => {
 				if ((await this.load(record, signal)).digest !== snapshot.digest) throw new Error("摘录在打开期间变化，请重新读取");
@@ -161,9 +164,10 @@ export class ExcerptLibraryService {
 		const anchor = record.sourceAnchor!;
 		// Confirm that the canonical ID still describes this exact occurrence.
 		const { algorithm, digest, length } = record.excerpt!;
-		const prepared = prepareExcerpt({ sourcePath: record.sourcePath, selectedText: record.selectedText, sourceStart: anchor.start, sourceEnd: anchor.end, prefix: anchor.prefix, suffix: anchor.suffix, sourceRevision: { algorithm, digest, length }, section: "", context: "", isTableCell: false, anchorRect: {} as DOMRect }, content);
+		const prepared = prepareExcerpt({ sourcePath: record.sourcePath, selectedText: record.selectedText, sourceStart: anchor.start, sourceEnd: anchor.end, prefix: anchor.prefix, suffix: anchor.suffix, sourceRevision: { algorithm, digest, length }, bilingual: record.bilingual, section: "", context: "", isTableCell: false, anchorRect: {} as DOMRect }, content);
 		if (prepared.id !== record.id) throw new Error("摘录位置与记录 ID 不一致，请复查文档");
 		signal?.throwIfAborted();
+		if (record.bilingual && this.openBilingual) { await this.openBilingual(record, signal); if ((await this.load(record, signal)).digest !== snapshot.digest) throw new Error("摘录在打开期间变化，请重新读取"); return; }
 		const leaf = this.openMarkdown ? await this.openMarkdown(file) : this.app.workspace.getLeaf("tab");
 		if (!this.openMarkdown) await leaf.openFile(file, { active: true, state: { mode: "source" } });
 		signal?.throwIfAborted();

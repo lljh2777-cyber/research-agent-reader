@@ -58,6 +58,7 @@ import { FileSourceStorage } from "./sources/storage";
 import { readDashboardCuration, type CurationNavigation } from "./services/dashboard-curation";
 import { libraryCodeLinks, codeLinkStillPresent, type LibraryCodeLink } from "./library/code-links";
 import { openSourceSave } from "./papers/source-save-modal";
+import { isTranslationPath } from "./annotations/bilingual";
 import { JatsIntakeService } from "./jats/intake";
 import { openJatsSave } from "./jats/modal";
 import { JatsWikiService } from "./jats/wiki-service";
@@ -797,7 +798,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (this.excerptBrowser) { new Notice("摘录窗口已打开，请先完成当前操作"); return; }
 		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true), ref => this.showCurationModal(new ExcerptCurationModal(this.app, this, ref)), {
 			read: (ref, signal) => this.readExcerptHistory(ref, signal), open: (ref, entry, signal) => this.openExcerptHistoryTarget(ref, entry, signal),
-		}, () => this.openAnswerExcerptBrowser(), ref => { void this.openDraftFromExcerpt({ kind: "excerpt", ref, includeNote: false }); });
+		}, () => this.openAnswerExcerptBrowser(), ref => { void this.openDraftFromExcerpt({ kind: "excerpt", ref, includeNote: false }); }, async (record, signal) => { signal?.throwIfAborted(); await this.activateMineruReaderView(record.sourcePath); signal?.throwIfAborted(); const view = this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE).find(l => l.view instanceof MineruReaderView)?.view; if (!(view instanceof MineruReaderView)) throw new Error("双语阅读器未打开"); await view.openBilingualExcerpt(record, signal); });
 		this.excerptBrowser = modal; modal.open();
 	}
 	readExcerptHistory(ref: ExcerptRef, signal: AbortSignal) { return readExcerptHistory(new FileSourceStorage(this.readingPluginDirectory()), ref, signal); }
@@ -916,6 +917,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	private async archiveAnnotation(record: AnnotationRecord): Promise<void> {
 		if (!this.annotationService) return;
+		if (record.bilingual || isTranslationPath(record.sourcePath)) { new Notice("双语内容请保存摘录后，通过草稿或整理预览核对来源；本入口未归档"); return; }
 		const action = ACTION_BY_ID.get("synthesis");
 		if (!action) {
 			new Notice("综合分析操作未注册");

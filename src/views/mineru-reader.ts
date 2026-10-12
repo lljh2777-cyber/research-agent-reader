@@ -20,6 +20,8 @@ import { ReaderDocumentLoader } from "../reader/document-loader";
 import { isBilingualEntry, loadBilingualDocument } from "../reader/bilingual-document";
 import { FileSourceStorage } from "../sources/storage";
 import { BilingualReader } from "./bilingual-reader";
+import { verifyBilingual } from "../annotations/bilingual";
+import type { AnnotationRecord } from "../annotations/types";
 import { renderJatsBody } from "../reader/jats-renderer";
 import {
 	applyPdfCaptionContinuationRecovery,
@@ -190,6 +192,14 @@ export class MineruReaderView extends ItemView {
 
 	getState(): Record<string, unknown> {
 		return { ...this.readerState, ...(this.bilingualReader ? { bilingualState: this.bilingualReader.snapshot() } : {}) };
+	}
+	async openBilingualExcerpt(record: AnnotationRecord, signal?: AbortSignal): Promise<void> {
+		await verifyBilingual(this.app, record, signal); signal?.throwIfAborted();
+		await this.setArticlePath(record.sourcePath); this.readerState.bilingual = true;
+		await this.renderWorkspace(); signal?.throwIfAborted();
+		await verifyBilingual(this.app, record, signal);
+		if (this.readerState.articlePath !== record.sourcePath || !this.bilingualReader) throw new Error("双语视图已切换，未执行旧定位");
+		this.bilingualReader.reveal(record); this.requestStateSave();
 	}
 
 	async setState(state: unknown, _result: ViewStateResult): Promise<void> {
@@ -388,7 +398,7 @@ export class MineruReaderView extends ItemView {
 				if (!adapter.getBasePath) throw new Error("双语阅读需要桌面本地文件系统");
 				const doc = await loadBilingualDocument(new FileSourceStorage(adapter.getBasePath()), readerPackage.articlePath, signal);
 				if (signal.aborted || !this.opened || this.readerPackage !== readerPackage) return;
-				this.bilingualReader = new BilingualReader({ app: this.app, host: shell, document: doc, signal, ratio: this.readerState.bilingualRatio, state: this.readerState.bilingualState, onState: state => { this.readerState.bilingualState = state; this.requestStateSave(); }, onRatio: ratio => { this.readerState.bilingualRatio = ratio; this.requestStateSave(); }, ordinary: () => { this.readerState.bilingualState = this.bilingualReader?.snapshot(); this.readerState.bilingual = false; this.requestStateSave(); void this.renderWorkspace(); } });
+				this.bilingualReader = new BilingualReader({ app: this.app, host: shell, document: doc, signal, annotate: () => this.plugin.openSelectionAnnotation(), ratio: this.readerState.bilingualRatio, state: this.readerState.bilingualState, onState: state => { this.readerState.bilingualState = state; this.requestStateSave(); }, onRatio: ratio => { this.readerState.bilingualRatio = ratio; this.requestStateSave(); }, ordinary: () => { this.readerState.bilingualState = this.bilingualReader?.snapshot(); this.readerState.bilingual = false; this.requestStateSave(); void this.renderWorkspace(); } });
 				this.bilingualReader.load(); await this.bilingualReader.render(); return;
 			} catch (error) {
 				if (signal.aborted) return;

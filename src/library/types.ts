@@ -4,13 +4,14 @@ import type { ReadingEvidence, ReadingLearningState, ReadingSession, ReadingSour
 
 /** View contracts shared by the pure projection and read adapters; persistence is separate. */
 export type LibraryIdentifiers = ResolvedIdentity["identifiers"];
-export type LibraryContentRole = "original_quote" | "ai_explanation" | "personal_note" | "external_material" | "synthesis";
+export type LibraryContentRole = "original_quote" | "translation_quote" | "ai_explanation" | "personal_note" | "external_material" | "synthesis";
 export interface LibraryAnnotationProvenance {
 	format: "dashboard-blocks" | "annotation-schema-2" | "dashboard-excerpt-1" | "dashboard-pdf-excerpt-1";
 	sourcePath: string;
 	/** Preserve external revision and Vault identifiers without assuming their algorithms. */
 	sourceRevision?: string;
 	vaultId?: string;
+	bilingual?: import("../annotations/bilingual").BilingualReceipt;
 }
 export type LibraryEvidenceReference = ReadingEvidence;
 export type PaperReadingState = "unmarked" | "not_started" | "reading" | "completed" | "revisit";

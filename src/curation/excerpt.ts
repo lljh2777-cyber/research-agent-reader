@@ -10,6 +10,8 @@ import { readingPathCode } from "../reading/export";
 import { curationParagraphs, curationTarget, protectedPrefix } from "./policy";
 import type { CurationContext, CurationSuggestion } from "./types";
 import { PDF_EXCERPT_RULE, readPdfExcerptSource, validatePdfExcerptContext, pdfExcerptTargetCompatible } from "./pdf-excerpt";
+import { bilingualDescription, quoteLabel, validBilingualReceipt, verifyBilingual } from "../annotations/bilingual";
+import { literalLearningBlock } from "../learning/curated-block";
 
 const RULE = "excerpt-curation-v1";
 const meta = (text: string): Record<string, unknown> => parseYaml(protectedPrefix(text).replace(/^\uFEFF?---\r?\n|\r?\n---(?:\r?\n|$)/g, "")) || {};
@@ -19,6 +21,11 @@ const literal = (text: string): string => text.replace(/\\/g, "\\\\").replace(/(
 export function excerptAddition(context: CurationContext): string {
 	const input = context.excerpt!, r = input.snapshot.record;
 	const quote = (value: string) => value.split(/\r?\n/).map(line => "> " + literal(line)).join("\n");
+	if (r.bilingual) return literalLearningBlock(quoteLabel(r) + "（双语阅读材料，待核对，不作正式论文证据）：\n\n" + r.selectedText
+		+ "\n\n来源：" + readingPathCode(r.sourcePath) + `；字符 ${r.sourceAnchor!.start}–${r.sourceAnchor!.end}；摘录 ` + readingPathCode(r.annotationPath)
+		+ "\n\n" + bilingualDescription(r.bilingual)
+		+ (r.bilingual.english ? "\n\n英文对应段落（结构对应，语义待核对）：\n\n" + r.bilingual.english.text : "\n\n英文对应段落未确认。")
+		+ (input.includeManual ? "\n\n个人备注（用户记录，未作论文证据核验）：\n\n" + r.manualText : ""));
 	if (r.pdfExcerpt) {
 		const receipt = r.pdfExcerpt, proof = input.pdfSource!;
 		return "PDF 原文摘录（文字记录，未作图表核验）：\n\n" + quote(r.selectedText)
@@ -39,6 +46,7 @@ export function excerptSuggestion(context: CurationContext): CurationSuggestion 
 export function validateExcerptContext(context: CurationContext): void {
 	const input = context.excerpt, r = input?.snapshot?.record;
 	const pdf = input?.sourceMode === "pdf";
+	if (r?.bilingual && !validBilingualReceipt(r.bilingual, r.sourcePath, r.sourceAnchor, r.selectedText)) throw new Error("双语摘录凭据无效");
 	if (pdf) validatePdfExcerptContext(context);
 	if (!input || context.answerExcerpt || input.version !== 1 || !r || !r.sourceAnchor || (!pdf && (!r.excerpt || r.pdfExcerpt || input.pdfSource || !supportsExcerpt(r.sourcePath)))
 		|| !["markdown", "article", "structured", "pdf"].includes(input.sourceMode) || typeof input.includeManual !== "boolean"
@@ -109,6 +117,7 @@ export async function prepareExcerptCuration(app: App, ref: ExcerptRef, targetPa
 export async function verifyExcerptCuration(app: App, context: CurationContext, targetHash: string, signal?: AbortSignal): Promise<void> {
 	validateExcerptContext(context); signal?.throwIfAborted(); const input = context.excerpt!, r = input.snapshot.record;
 	const current = await new ExcerptLibraryService(app).load(r, signal);
+	if (!r.pdfExcerpt) await verifyBilingual(app, r, signal);
 	if (current.digest !== input.snapshot.digest || objectDigest(current.record) !== objectDigest(r)) throw new Error("摘录或个人备注已变化，请重新准备预览");
 	let sourceText = "";
 	if (input.sourceMode === "pdf") {
@@ -118,7 +127,7 @@ export async function verifyExcerptCuration(app: App, context: CurationContext, 
 		const original = await source(app, r.sourcePath, signal); sourceText = original.text;
 		if (original.mode !== input.sourceMode || objectDigest(original.source) !== objectDigest(context.source) || !excerptMatches(r, original.text)) throw new Error("原文版本已变化，请重新核对摘录");
 		const anchor = r.sourceAnchor!, receipt = r.excerpt!;
-		const prepared = prepareExcerpt({ sourcePath: r.sourcePath, selectedText: r.selectedText, sourceStart: anchor.start, sourceEnd: anchor.end, prefix: anchor.prefix, suffix: anchor.suffix, sourceRevision: { algorithm: receipt.algorithm, digest: receipt.digest, length: receipt.length }, section: "", context: "", isTableCell: false, anchorRect: {} as DOMRect }, original.text);
+		const prepared = prepareExcerpt({ sourcePath: r.sourcePath, selectedText: r.selectedText, sourceStart: anchor.start, sourceEnd: anchor.end, prefix: anchor.prefix, suffix: anchor.suffix, sourceRevision: { algorithm: receipt.algorithm, digest: receipt.digest, length: receipt.length }, bilingual: r.bilingual, section: "", context: "", isTableCell: false, anchorRect: {} as DOMRect }, original.text);
 		if (prepared.id !== r.id) throw new Error("摘录 ID 与准确位置不一致");
 	}
 	const target = await read(app, context.target.path, 1000000);

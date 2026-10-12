@@ -8,6 +8,7 @@ import {
 
 import type { AnnotationService } from "./annotation-service";
 import { supportsExcerpt } from "./excerpt";
+import { bilingualDescription, isTranslationPath, quoteLabel } from "./bilingual";
 import type {
 	AnnotationDraft,
 	AnnotationExplanation,
@@ -146,7 +147,7 @@ export class AnnotationPopover extends Component {
 		if (this.selection?.pdfExcerpt || (this.selection?.sourceRevision && supportsExcerpt(this.selection.sourcePath))) {
 			const excerpt = actions.createEl("button", { cls: "agent-annotation-choice", attr: { type: "button" } });
 			const icon = excerpt.createSpan({ cls: "agent-annotation-choice-icon" }); setIcon(icon, "bookmark-plus");
-			const label = excerpt.createDiv(); label.createEl("strong", { text: "保存摘录" }); label.createSpan({ text: "保留原句、上下文和个人备注，无需模型" });
+			const label = excerpt.createDiv(); label.createEl("strong", { text: "保存摘录" }); label.createSpan({ text: "保留所选文字、上下文和个人备注，无需模型" });
 			excerpt.addEventListener("click", () => this.renderExcerpt());
 		}
 		if (this.selection?.pdfExcerpt) { this.position(); return; }
@@ -301,6 +302,7 @@ export class AnnotationPopover extends Component {
 			aiProvider: explanation.provider,
 			aiModel: explanation.model,
 		};
+		if (this.selection?.bilingual || isTranslationPath(this.selection?.sourcePath || "")) { archive.disabled = true; archive.setText("双语内容请经摘录预览整理"); }
 		save.addEventListener("click", () => void this.saveNew(draft, save));
 		archive.addEventListener("click", async () => {
 			const record = await this.saveNew(draft, archive, false);
@@ -321,7 +323,7 @@ export class AnnotationPopover extends Component {
 			const record = this.record, status = element.createEl("p", { text: "正在核对摘录来源…", attr: { role: "status" } });
 			void this.service.getExcerptStatus(record).then(text => { if (!this.closed && this.record === record && status.isConnected) status.setText(text); }, () => { if (status.isConnected) status.setText("暂时无法核对原文，保留历史摘录"); });
 			this.renderTextSection(element, "个人备注", record.manualText, "没有填写个人备注");
-			const context = element.createEl("details"); context.createEl("summary", { text: "保存时的原文上下文" }); context.createEl("pre", { text: (record.pdfExcerpt || record.excerpt)!.context, attr: { style: "white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto" } });
+			const context = element.createEl("details"); context.createEl("summary", { text: record.bilingual?.language === "zh-CN" ? "保存时的译文上下文" : "保存时的原文上下文" }); context.createEl("pre", { text: (record.pdfExcerpt || record.excerpt)!.context, attr: { style: "white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto" } });
 			element.createEl("p", { text: "打开摘录列表，可回到原文或编辑个人备注。" });
 			const footer = this.renderFooter(element);
 			if (this.onOpenExcerpt) {
@@ -361,6 +363,7 @@ export class AnnotationPopover extends Component {
 		const footer = this.renderFooter(element);
 		if (
 			this.record.aiText
+			&& !this.record.bilingual && !isTranslationPath(this.record.sourcePath)
 			&& this.record.archiveStatus !== "pending"
 			&& this.record.archiveStatus !== "completed"
 		) {
@@ -513,6 +516,8 @@ export class AnnotationPopover extends Component {
 	}
 
 	private renderHeader(parent: HTMLElement, selectedText: string, subtitle: string): void {
+		const source = this.record || this.selection;
+		if (source) { parent.createEl("p", { text: quoteLabel(source), cls: "agent-annotation-source-role" }); if (source.bilingual) { const details = parent.createEl("details"); details.createEl("summary", { text: "双语来源与审阅状态" }); details.createEl("p", { text: bilingualDescription(source.bilingual) }); if (source.bilingual.english) details.createEl("pre", { text: source.bilingual.english.text, attr: { style: "white-space:pre-wrap;max-height:140px;overflow:auto" } }); } }
 		const header = parent.createDiv({
 			cls: "agent-annotation-header",
 			attr: { "data-agent-drag-handle": "true" },

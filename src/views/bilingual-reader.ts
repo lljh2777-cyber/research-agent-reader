@@ -1,4 +1,6 @@
 import { Component, MarkdownRenderer, Modal, type App } from "obsidian";
+import { bindBilingualSelection } from "../annotations/bilingual";
+import type { AnnotationRecord } from "../annotations/types";
 import type { BilingualBlock, BilingualDocument, BilingualFile, BilingualLanguage } from "../reader/bilingual-document";
 import { bilingualPositionAt, bilingualScrollTarget, correspondingBilingualPosition, normalizeBilingualState, type BilingualGeometry, type BilingualReadingState } from "../reader/bilingual-position";
 
@@ -13,7 +15,7 @@ export function bilingualRenderMarkdown(file: BilingualFile): string {
 	return result + file.text.slice(cursor);
 }
 export interface BilingualPane { language: BilingualLanguage; scroller: HTMLElement; article: HTMLElement; anchors: Map<string, HTMLElement>; }
-export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; ratio?: number; onRatio?(ratio: number): void; state?: unknown; onState?(state: BilingualReadingState): void; }
+export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; annotate?(): Promise<void>; ratio?: number; onRatio?(ratio: number): void; state?: unknown; onState?(state: BilingualReadingState): void; }
 const STATUS: Record<string, string> = { "not-started": "尚未翻译", "in-progress": "翻译中", "needs-review": "译文待复核", reviewed: "记录标为已审阅", failed: "翻译记录失败", unknown: "译文状态未确认" };
 
 export class BilingualReader extends Component {
@@ -50,13 +52,18 @@ export class BilingualReader extends Component {
 			const heading = pane.createDiv({ cls: "agent-bilingual-pane-heading" }); heading.createEl("strong", { text: language === "en" ? "英文原文" : "中文译文" });
 			const sync = heading.createEl("button", { text: "以本栏同步另一栏", attr: { type: "button", "data-bilingual-sync": language } }); sync.disabled = !doc.syncAvailable;
 			sync.addEventListener("click", () => { this.activate(language); this.synchronize(language); }, { signal });
-			heading.createSpan({ text: "批注适配开发中", cls: "agent-bilingual-pending" });
+			const annotate = heading.createEl("button", { text: "批注", attr: { type: "button", "data-bilingual-annotate": language } });
+			annotate.disabled = !this.options.annotate;
+			annotate.addEventListener("mousedown", event => event.preventDefault(), { signal });
+			annotate.addEventListener("click", () => { this.activate(language); const selection = window.getSelection(); if (!selection?.anchorNode || !article.contains(selection.anchorNode) || !selection.focusNode || !article.contains(selection.focusNode)) { this.message?.setText("请先在本栏选择文字"); return; } void this.options.annotate?.(); }, { signal });
 			const scroller = pane.createDiv({ cls: "agent-bilingual-scroll markdown-reading-view", attr: { tabindex: "0" } });
 			const article = scroller.createEl("article", { cls: "markdown-rendered agent-bilingual-article", attr: { "data-bilingual-document": doc.root } });
 			await MarkdownRenderer.render(app, bilingualRenderMarkdown(file), article, file.path, this);
 			if (signal.aborted || !article.isConnected) return;
-			// Until role propagation is delivered, this preview has no ordinary-source annotation outlet.
+			// Discard offsets supplied by rendering transformed Markdown; bind the raw source below.
 			article.querySelectorAll("[data-agent-annotation-source]").forEach(el => el.removeAttribute("data-agent-annotation-source"));
+			article.dataset.agentAnnotationSource = file.path;
+			bindBilingualSelection(article, element => { if (this.invalidated || signal.aborted) throw new Error("双语资料已变化或关闭，请重新打开划选"); const block = this.blockForElement(language, element); if (!block) throw new Error("无法确定本栏选区段落"); return { document: doc, language, block }; });
 			const anchors = this.bindAnchors(article, file); this.scopeLinks(article, language);
 			article.addEventListener("click", event => {
 				const target = event.target instanceof Element ? event.target.closest("img") as HTMLImageElement | null : null;
@@ -125,6 +132,25 @@ export class BilingualReader extends Component {
 	}
 	private publish(): void { this.options.onState?.(structuredClone(this.state)); }
 	snapshot(): BilingualReadingState { for (const language of ["en", "zh-CN"] as const) this.capture(language); return structuredClone(this.state); }
+	reveal(record: AnnotationRecord): void {
+		const proof = record.bilingual; if (!proof || this.invalidated || this.options.signal.aborted) throw new Error("双语定位已失效");
+		const pane = this.panes.get(proof.language), block = this.options.document.files[proof.language].blocks.find(b => b.id === proof.block.id);
+		if (!pane || !block) throw new Error("双语段落不存在");
+		this.activate(proof.language); this.state.positions[proof.language] = { blockId: block.id, progress: 0 }; this.restore(proof.language);
+		// Search only inside this raw block's rendered paragraph, never elsewhere in the article.
+		const elements = [...pane.article.querySelectorAll<HTMLElement>("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6")].filter(el => this.blockForElement(proof.language, el)?.id === block.id);
+		const matches = elements.filter(el => el.textContent?.includes(record.selectedText) && ![...el.children].some(child => child.textContent?.includes(record.selectedText)));
+		if (matches.length !== 1) throw new Error("对应段落已打开，渲染选区无法唯一确认；请核对保存的文字");
+		const text = matches[0].textContent || "", at = text.indexOf(record.selectedText);
+		if (text.indexOf(record.selectedText, at + record.selectedText.length) >= 0) throw new Error("对应段落已打开，重复文字未自动定位；请核对保存的文字");
+		const walker = document.createTreeWalker(matches[0], NodeFilter.SHOW_TEXT), range = document.createRange(); let cursor = 0, started = false, ended = false;
+		for (let node = walker.nextNode(); node; node = walker.nextNode()) { const next = cursor + (node.textContent?.length || 0); if (!started && at < next) { range.setStart(node, at - cursor); started = true; } if (started && at + record.selectedText.length <= next) { range.setEnd(node, at + record.selectedText.length - cursor); ended = true; break; } cursor = next; }
+		if (!ended || range.toString() !== record.selectedText) throw new Error("渲染选区与保存文字不一致");
+		window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(range);
+		matches[0].classList.add("agent-bilingual-excerpt-target"); matches[0].scrollIntoView({ block: "center" }); this.capture(proof.language);
+		if (this.state.linked) this.synchronize(proof.language); else this.publish();
+		this.message?.setText(quoteLanguage(proof.language) + "已定位保存时的选句所在段落：" + record.selectedText.slice(0, 80));
+	}
 	private bindAnchors(article: HTMLElement, file: BilingualFile): Map<string, HTMLElement> {
 		const anchors = new Map<string, HTMLElement>();
 		for (const marker of article.querySelectorAll<HTMLElement>("[data-bilingual-anchor]")) {
@@ -162,3 +188,4 @@ export class BilingualReader extends Component {
 		return result;
 	}
 }
+const quoteLanguage = (language: BilingualLanguage): string => language === "en" ? "英文来源" : "中文译文";

@@ -6938,5 +6938,7 @@ body.agent-dashboard-mineru-resizing {
 .agent-bilingual-article { max-width: none; overflow-wrap: anywhere; }
 .agent-bilingual-article img { max-width: 100%; height: auto; cursor: zoom-in; }
 .agent-bilingual-article .agent-bilingual-marker { height: 0; margin: 0; padding: 0; line-height: 0; }
+.agent-bilingual-excerpt-target { outline: 2px solid var(--interactive-accent); outline-offset: 3px; }
+.agent-bilingual-article { user-select: text; -webkit-user-select: text; }
 .agent-bilingual-article table { max-width: 100%; }
 @media (max-width: 600px) { .agent-bilingual-workspace { overflow-x: auto; grid-template-columns: minmax(260px, var(--bilingual-left, 1fr)) 6px minmax(260px, var(--bilingual-right, 1fr)); } }

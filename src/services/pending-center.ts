@@ -1,6 +1,7 @@
 import { acquisitionActive, decodeJob, PHASE_LABELS, type AcquisitionJob } from "../fulltext/contracts";
 import type { AcquisitionStorage } from "../fulltext/repository";
 import type { ExcerptList, ExcerptRef } from "../annotations/excerpt-library";
+import { quoteLabel } from "../annotations/bilingual";
 import type { LibraryReadResult } from "../library/reader";
 import type { LibraryObjectRef } from "../library/types";
 import type { LocalPdfHistory } from "../papers/local-pdf-intake";
@@ -104,7 +105,7 @@ export async function readPendingCenter(inputs: PendingInputs, signal: AbortSign
 			const binding = bindings.get(r.annotationPath + "#" + r.id);
 			if (r.archiveStatus === "completed" && binding?.state === "matched") continue;
 			const unresolvedCompletion = r.archiveStatus === "completed" && binding?.state !== "changed";
-			add("excerpt:" + r.id, binding?.state === "changed" || unresolvedCompletion ? "review" : "excerpt", r.selectedText,
+			add("excerpt:" + r.id, binding?.state === "changed" || unresolvedCompletion ? "review" : "excerpt", (r.bilingual ? quoteLabel(r) + " · " : "") + r.selectedText,
 				binding?.state === "changed" ? "原文版本已变化，请核对历史摘录。" : unresolvedCompletion ? "摘录已标记整理完成，但当前原文无法核对，请复查来源。" : "摘录尚未标记整理完成，可回看原句、个人备注与整理历史。",
 				"查看摘录", r.sourcePath, { kind: "excerpt", ref: { annotationPath: r.annotationPath, id: r.id } }, { digest: snapshot.digest, binding: binding || null });
 		}

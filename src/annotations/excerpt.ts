@@ -24,7 +24,7 @@ export function prepareExcerpt(selection: AnnotationSelection, content: string):
 		|| content.slice(start, end) !== text || content.slice(Math.max(0, start - selection.prefix.length), start) !== selection.prefix
 		|| content.slice(end, end + selection.suffix.length) !== selection.suffix) throw new Error("选区与原文位置不一致，请重新选择");
 	const contextStart = Math.max(0, start - 1300), receipt: ExcerptReceipt = { version: 1, ...excerptRevision(content), contextStart, context: content.slice(contextStart, end + 1300) };
-	const id = "ann-excerpt-" + objectDigest({ path: selection.sourcePath, revision: selection.sourceRevision, start, end }).slice(0, 48);
+	const id = "ann-excerpt-" + objectDigest({ path: selection.sourcePath, revision: selection.sourceRevision, start, end, ...(selection.bilingual ? { bilingual: selection.bilingual } : {}) }).slice(0, 48);
 	return { id, receipt };
 }
 export function excerptMatches(record: AnnotationRecord, content: string): boolean {
