@@ -3,6 +3,13 @@ import type { PdfExcerptReceipt } from "./pdf-excerpt";
 import type { BilingualReceipt } from "./bilingual";
 export type AnnotationArchiveStatus = "none" | "pending" | "completed" | "failed";
 
+export interface AnnotationCliReceipt {
+	requestedModel: string;
+	reportedModel?: string;
+	usage?: Record<string, number>;
+	costUsd?: number;
+}
+
 export interface AnnotationSelection {
 	sourcePath: string;
 	selectedText: string;
@@ -36,6 +43,7 @@ export interface AnnotationRecord {
 	aiText: string;
 	aiProvider: string;
 	aiModel: string;
+	aiCli?: AnnotationCliReceipt;
 	createdAt: string;
 	updatedAt: string;
 	archiveStatus: AnnotationArchiveStatus;
@@ -48,6 +56,7 @@ export interface AnnotationExplanation {
 	text: string;
 	provider: string;
 	model: string;
+	cli?: AnnotationCliReceipt;
 }
 
 export interface AnnotationDraft {
@@ -55,6 +64,7 @@ export interface AnnotationDraft {
 	aiText?: string;
 	aiProvider?: string;
 	aiModel?: string;
+	aiCli?: AnnotationCliReceipt;
 }
 
 export interface AnnotationSectionMarker {

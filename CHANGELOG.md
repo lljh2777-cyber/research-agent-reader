@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.86.0] - 2026-10-12
+
+- 批注新增 CodeBuddy，界面显示 Step-5-Preview，调用明确传入 `--model step-5-preview`，沿用本机登录并支持手动程序路径与自定义模型 ID。
+- 插件内共用调用层通过 UTF-8 标准输入传递上下文，使用独立会话、无工具和禁用 Hooks 的配置；失败、截断、模型身份不符或联网未支持时阻止保存，保留模型与用量记录。
+- 生成、保存、来源不变与重载检查按测试库记录验收；主题学习继续预览，独立科学／教学审阅待完成。见[CLI 批注](docs/cli-annotation-backends.md)。
+
 All notable changes to this project will be documented in this file.
 
 ## [0.85.2] - 2026-10-12

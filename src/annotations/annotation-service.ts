@@ -10,6 +10,8 @@ import {
 import type AgentDashboardPlugin from "../plugin";
 import { getCliBackendLabel, isCliBackendId, type CliBackendId } from "../config";
 import { generateDirectExplanation } from "./direct-explanation";
+import { CliTextService } from "../runtime/cli-text";
+import { codeBuddyTextAdapter } from "../runtime/codebuddy-text";
 import { objectDigest } from "../papers/identity";
 import { bilingualDescription, bilingualReceipt, bilingualSelectionContext, quoteLabel, readBilingual, requiresBilingualProof, validBilingualReceipt, verifyBilingual } from "./bilingual";
 import { isDetachedMarkdownSelection } from "./manual-source";
@@ -38,7 +40,24 @@ const AI_END = "<!-- agent-dashboard:ai-end -->";
 const CONTEXT_LIMIT = 2600;
 const MAX_SELECTION_LENGTH = 600;
 
+function normalizeCliReceipt(value: unknown): AnnotationRecord["aiCli"] {
+	if (!value || typeof value !== "object") return undefined;
+	const receipt = value as Record<string, unknown>;
+	if (typeof receipt.requestedModel !== "string" || !receipt.requestedModel.trim() || receipt.requestedModel.length > 200) return undefined;
+	const usage: Record<string, number> = {};
+	if (receipt.usage && typeof receipt.usage === "object") for (const key of ["input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"]) {
+		const v = (receipt.usage as Record<string, unknown>)[key];
+		if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) usage[key] = v;
+	}
+	return { requestedModel: receipt.requestedModel,
+		...(typeof receipt.reportedModel === "string" && receipt.reportedModel.length <= 200 ? { reportedModel: receipt.reportedModel } : {}),
+		...(Object.keys(usage).length ? { usage } : {}),
+		...(typeof receipt.costUsd === "number" && Number.isFinite(receipt.costUsd) && receipt.costUsd >= 0 ? { costUsd: receipt.costUsd } : {}),
+	};
+}
+
 interface AnnotationMeta {
+	aiCli?: AnnotationRecord["aiCli"];
 	id: string;
 	sourcePath: string;
 	selectedText: string;
@@ -214,6 +233,7 @@ function parseMeta(raw: string): AnnotationMeta | null {
 			...(value.bilingual ? { bilingual: value.bilingual } : {}),
 			aiProvider: String(value.aiProvider || ""),
 			aiModel: String(value.aiModel || ""),
+			...(value.aiCli ? { aiCli: normalizeCliReceipt(value.aiCli) } : {}),
 			createdAt: String(value.createdAt || ""),
 			updatedAt: String(value.updatedAt || ""),
 			archiveStatus: status === "pending" || status === "completed" || status === "failed"
@@ -266,7 +286,10 @@ export class AnnotationService {
 	constructor(
 		private readonly app: App,
 		private readonly plugin: AgentDashboardPlugin,
+		private readonly cliText = new CliTextService(),
 	) {}
+
+	async dispose(): Promise<void> { await this.cliText.dispose(); }
 
 	private async selectionProvenance(path: string, content: string, start: number, end: number, captured?: ReturnType<typeof bilingualSelectionContext>): Promise<Pick<AnnotationSelection, "bilingual">> {
 		if (!captured && !requiresBilingualProof(this.app, path)) return {};
@@ -602,6 +625,7 @@ export class AnnotationService {
 			aiText: sanitizeEmbeddedText(draft.aiText),
 			aiProvider: String(draft.aiProvider || ""),
 			aiModel: String(draft.aiModel || ""),
+			aiCli: normalizeCliReceipt(draft.aiCli),
 			createdAt: now,
 			updatedAt: now,
 			archiveStatus: "none",
@@ -688,6 +712,7 @@ export class AnnotationService {
 				: sanitizeEmbeddedText(draft.aiText),
 			aiProvider: draft.aiProvider === undefined ? latest.aiProvider : String(draft.aiProvider || ""),
 			aiModel: draft.aiModel === undefined ? latest.aiModel : String(draft.aiModel || ""),
+			aiCli: draft.aiProvider === undefined ? latest.aiCli : normalizeCliReceipt(draft.aiCli),
 			updatedAt: new Date().toISOString(),
 		};
 		await this.writeRecord(updated);
@@ -781,6 +806,16 @@ export class AnnotationService {
 			...(proof ? ["配对记录：" + bilingualDescription(proof), "实际读取的英文对应段落（不是逐词对齐）：", proof.english!.text] : []),
 		].filter(Boolean).join("\n");
 		const configuredBackend = this.plugin.settings.annotationBackendId || "auto";
+		if (configuredBackend === "codebuddy") {
+			if (webSearchEnabled) throw new Error("CodeBuddy 批注暂未启用联网，请关闭浅层联网解释");
+			const result = await this.cliText.generate({
+				executable: this.plugin.settings.annotationCodeBuddyExecutable,
+				model: this.plugin.settings.annotationCodeBuddyModel,
+				system, user, timeoutMs: this.plugin.settings.annotationCliTimeoutSeconds * 1000,
+			}, codeBuddyTextAdapter, registerCancel);
+			return { text: result.text, provider: "CodeBuddy", model: result.reportedModel || `请求：${result.requestedModel}（CLI 未报告实际模型）`,
+				cli: { requestedModel: result.requestedModel, reportedModel: result.reportedModel, usage: result.usage as Record<string, number> | undefined, costUsd: result.costUsd } };
+		}
 		const selectedDirectProfile = configuredBackend === "auto"
 			? this.plugin.getProviderProfile(this.plugin.settings.activeProviderId)
 			: !["codex-cli", "claude-code", "opencode"].includes(configuredBackend)
@@ -1004,6 +1039,7 @@ export class AnnotationService {
 			...(record.bilingual ? { bilingual: record.bilingual } : {}),
 			aiProvider: record.aiProvider,
 			aiModel: record.aiModel,
+			...(record.aiCli ? { aiCli: normalizeCliReceipt(record.aiCli) } : {}),
 			createdAt: record.createdAt,
 			updatedAt: record.updatedAt,
 			archiveStatus: record.archiveStatus,

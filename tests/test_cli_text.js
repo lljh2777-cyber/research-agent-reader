@@ -22,6 +22,8 @@ const request = { executable: process.execPath, model: "Exact-Model", system: "�
 	const real = new CliTextService();
 	const echo = { ...adapter, invocation: () => ({ args: ["-e", "let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify({text:s})))"] }) };
 	assert.equal((await real.generate({ ...request, timeoutMs: 30000 }, echo, () => {})).text, request.user);
+	const longArgs = { ...adapter, invocation: () => ({ args: ["-e", "process.stdout.write(JSON.stringify({text:process.argv[1]}))", "文".repeat(7000)] }) };
+	assert.equal((await real.generate({ ...request, timeoutMs: 30000 }, longArgs, () => {})).text, "文".repeat(7000));
 	await real.dispose(); await service.dispose();
 	console.log("CLI_TEXT_OK (exact args, UTF-8 stdin, failures, cancellation, disposal, native process)");
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import * as path from "node:path";
+import * as fs from "node:fs";
+import { randomUUID } from "node:crypto";
 
 import { windowsJobWrappedCommand } from "./windows-job-runner";
 
@@ -77,8 +79,15 @@ export function runMineruProcessCommand(
 		if (mineruToken) mineruEnv.MINERU_TOKEN = mineruToken;
 		const requestedArgs = [...request.baseArgs, ...request.cliArgs];
 		const usesWindowsJob = platform === "win32" && !control.spawnProcess;
+		// CLI system prompts can exceed Windows' command limit when encoded twice.
+		// Keep the launch descriptor in the private empty CLI cwd; input stays stdin.
+		let payloadFile: string | undefined;
+		if (usesWindowsJob && request.input !== undefined) {
+			payloadFile = path.join(request.cwd, `launch-${randomUUID()}.json`);
+			fs.writeFileSync(payloadFile, JSON.stringify({ command: request.command, args: requestedArgs, cwd: request.cwd }), { encoding: "utf8", flag: "wx", mode: 0o600 });
+		}
 		const launch = usesWindowsJob
-			? windowsJobWrappedCommand(control.windowsRoot || process.env.SystemRoot || "C:\\Windows", request.command, requestedArgs, request.cwd)
+			? windowsJobWrappedCommand(control.windowsRoot || process.env.SystemRoot || "C:\\Windows", request.command, requestedArgs, request.cwd, payloadFile)
 			: { command: request.command, args: requestedArgs };
 		const child = spawnProcess(launch.command, launch.args, {
 			cwd: request.cwd,

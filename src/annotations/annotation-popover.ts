@@ -301,6 +301,7 @@ export class AnnotationPopover extends Component {
 			aiText: explanation.text,
 			aiProvider: explanation.provider,
 			aiModel: explanation.model,
+			aiCli: explanation.cli,
 		};
 		if (this.selection?.bilingual || isTranslationPath(this.selection?.sourcePath || "")) { archive.disabled = true; archive.setText("双语内容请经摘录预览整理"); }
 		save.addEventListener("click", () => void this.saveNew(draft, save));
@@ -426,6 +427,7 @@ export class AnnotationPopover extends Component {
 					aiText: ai.value,
 					aiProvider: this.record?.aiProvider,
 					aiModel: this.record?.aiModel,
+					aiCli: this.record?.aiCli,
 				});
 				new Notice("批注已保存");
 				this.renderExisting();
@@ -465,6 +467,7 @@ export class AnnotationPopover extends Component {
 				...this.record,
 				aiProvider: explanation.provider,
 				aiModel: explanation.model,
+				aiCli: explanation.cli,
 			};
 			button.setText("已生成");
 		} catch (error) {

@@ -34,6 +34,7 @@ import {
 	type ProviderProfile,
 } from "../providers/profile";
 import type { ProviderModel } from "../providers/shared";
+import { CODEBUDDY_ANNOTATION_MODEL } from "../runtime/codebuddy-text";
 import {
 	CONFIGURABLE_ACTION_IDS,
 	DEFAULT_ACTION_EXECUTION_DEFAULTS,
@@ -297,7 +298,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			}
 			case "annotations": {
 				const id = s.annotationBackendId || "auto";
-				return { text: id === "auto" ? "自动选择后端" : `当前后端 · ${isCliBackendId(id) ? getCliBackendLabel(id) : s.providerProfiles.find(p => p.id === id)?.name || "待重新选择"}` };
+				return { text: id === "auto" ? "自动选择后端" : `当前后端 · ${id === "codebuddy" ? "CodeBuddy" : isCliBackendId(id) ? getCliBackendLabel(id) : s.providerProfiles.find(p => p.id === id)?.name || "待重新选择"}` };
 			}
 			case "retrieval": return { text: s.knowledgeRetrievalMode === "lexical" ? "关键词检索" : `${s.knowledgeRetrievalMode === "hybrid" ? "混合检索" : "关键词＋重排"}${s.knowledgeSecretId ? " · 已指定凭据" : " · 待配置凭据"}` };
 			case "mineru": return { text: `${s.mineruServiceMode === "private" ? "私有服务" : "官方服务"} · ${s.mineruDefaultModel.toUpperCase()}` };
@@ -1590,7 +1591,8 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					.addOption("auto", "自动选择")
 					.addOption("codex-cli", "Agent · Codex CLI")
 					.addOption("claude-code", "Agent · Claude Code")
-					.addOption("opencode", "Agent · OpenCode");
+					.addOption("opencode", "Agent · OpenCode")
+					.addOption("codebuddy", "CLI · CodeBuddy");
 				verifiedProfiles.forEach((profile) => {
 					dropdown.addOption(profile.id, `Direct API · ${profile.name}`);
 				});
@@ -1602,6 +1604,10 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						this.display();
 					});
 			});
+		if (backendId === "codebuddy") {
+			this.renderNativeAnnotationCliSettings(containerEl);
+			return;
+		}
 		this.renderAnnotationWebSearchSettings(containerEl, backendId);
 
 		if (backendId === "auto") {
@@ -1647,6 +1653,22 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					})
 			);
 		this.renderAnnotationTokenSetting(containerEl, true);
+	}
+
+	private renderNativeAnnotationCliSettings(containerEl: HTMLElement): void {
+		const settings = this.plugin.settings;
+		this.createProviderSectionHeader(containerEl, "CodeBuddy 批注", "沿用本机 CLI 登录。每次独立生成，解释只使用提供的文字和模型一般知识；免费权益以你的当前账号为准。");
+		new Setting(containerEl).setName("CLI 程序路径").setDesc("支持原生程序或官方 npm 启动器。npm 安装需要系统 PATH 中可用的独立 Node.js。")
+			.addText(text => text.setValue(settings.annotationCodeBuddyExecutable).onChange(async value => { settings.annotationCodeBuddyExecutable = value.trim(); await this.plugin.saveSettings(); }))
+			.addButton(button => button.setButtonText("自动检测").onClick(async () => { const detected = detectCliExecutable("codebuddy"); if (!detected.found) { new Notice("未检测到 CodeBuddy，请填写本机程序路径"); return; } settings.annotationCodeBuddyExecutable = detected.executable; await this.plugin.saveSettings(); this.display(); }));
+		new Setting(containerEl).setName("模型").setDesc("Step-5-Preview 的调用 ID 为 step-5-preview，每次明确指定模型。")
+			.addDropdown(dropdown => { dropdown.addOption(CODEBUDDY_ANNOTATION_MODEL, "Step-5-Preview"); if (settings.annotationCodeBuddyModel && settings.annotationCodeBuddyModel !== CODEBUDDY_ANNOTATION_MODEL) dropdown.addOption(settings.annotationCodeBuddyModel, settings.annotationCodeBuddyModel); dropdown.setValue(settings.annotationCodeBuddyModel).onChange(async value => { settings.annotationCodeBuddyModel = value; await this.plugin.saveSettings(); this.display(); }); });
+		new Setting(containerEl).setName("自定义模型 ID").setDesc("需要其他模型时填写其准确 ID；修改只影响批注。")
+			.addText(text => text.setValue(settings.annotationCodeBuddyModel).onChange(async value => { settings.annotationCodeBuddyModel = value.trim().slice(0, 200); await this.plugin.saveSettings(); }));
+		new Setting(containerEl).setName("生成时间上限").setDesc("单次解释的总时间；超时后停止本次进程。")
+			.addSlider(slider => slider.setLimits(30, 300, 30).setDynamicTooltip().setValue(settings.annotationCliTimeoutSeconds).onChange(async value => { settings.annotationCliTimeoutSeconds = value; await this.plugin.saveSettings(); }));
+		new Setting(containerEl).setName("浅层联网解释").setDesc("此后端当前提供文字解释；已有联网设置开启时需关闭后再生成。")
+			.addToggle(toggle => toggle.setValue(settings.annotationWebSearchEnabled).setDisabled(!settings.annotationWebSearchEnabled).onChange(async value => { settings.annotationWebSearchEnabled = value; await this.plugin.saveSettings(); this.display(); }));
 	}
 
 	private renderAnnotationWebSearchSettings(

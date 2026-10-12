@@ -14,7 +14,7 @@ import { resolveMineruCommand } from "../agent/mineru-publish";
 export type ClaudeConfigSource = "official" | "cc-switch";
 export type CodexConfigSource = "official" | "cc-switch";
 export type OpenCodeConfigSource = "official" | "cc-switch";
-export type CliExecutableKind = "codex" | "claude" | "opencode" | "mineru" | "obsidian";
+export type CliExecutableKind = "codex" | "claude" | "opencode" | "mineru" | "obsidian" | "codebuddy";
 export type CliExecutableDetectionSource =
 	| "environment"
 	| "common"
@@ -133,6 +133,7 @@ const MANAGED_CODEX_BIN_ROOT = process.env.LOCALAPPDATA
 	? path.join(process.env.LOCALAPPDATA, "OpenAI", "Codex", "bin")
 	: "";
 const CLI_ENVIRONMENT_VARIABLES: Record<CliExecutableKind, string> = {
+	codebuddy: "CODEBUDDY_CLI_PATH",
 	codex: "CODEX_CLI_PATH",
 	claude: "CLAUDE_CODE_PATH",
 	opencode: "OPENCODE_PATH",
@@ -140,6 +141,7 @@ const CLI_ENVIRONMENT_VARIABLES: Record<CliExecutableKind, string> = {
 	obsidian: "OBSIDIAN_CLI_PATH",
 };
 const CLI_COMMAND_NAMES: Record<CliExecutableKind, string> = {
+	codebuddy: "codebuddy",
 	codex: "codex",
 	claude: "claude",
 	opencode: "opencode",
@@ -166,6 +168,9 @@ export interface DashboardSettings {
 	openCodeModel: string;
 	openCodeReasoningEffort: string;
 	annotationBackendId: string;
+	annotationCodeBuddyExecutable: string;
+	annotationCodeBuddyModel: string;
+	annotationCliTimeoutSeconds: number;
 	annotationCodexModel: string;
 	annotationCodexReasoningEffort: string;
 	annotationCodexServiceTier: "default" | "fast";
@@ -330,6 +335,12 @@ function commonCliCandidates(kind: CliExecutableKind): string[] {
 	const homeDirectory = process.env.HOME || userProfile;
 	const appData = process.env.APPDATA;
 	const localAppData = process.env.LOCALAPPDATA;
+	if (kind === "codebuddy") return [
+		joinFromEnvironment(appData, "npm", "codebuddy.cmd"),
+		joinFromEnvironment(userProfile, ".local", "bin", "codebuddy.exe"),
+		joinFromEnvironment(homeDirectory, ".local", "bin", "codebuddy"),
+		"/usr/local/bin/codebuddy", "/opt/homebrew/bin/codebuddy", "/usr/bin/codebuddy",
+	];
 	if (kind === "obsidian") {
 		if (process.platform === "win32") {
 			return [
@@ -652,6 +663,9 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	openCodeModel: "opencode/mimo-v2.5-free",
 	openCodeReasoningEffort: "medium",
 	annotationBackendId: "auto",
+	annotationCodeBuddyExecutable: detectCliExecutable("codebuddy").executable,
+	annotationCodeBuddyModel: "step-5-preview",
+	annotationCliTimeoutSeconds: 120,
 	annotationCodexModel: "",
 	annotationCodexReasoningEffort: "medium",
 	annotationCodexServiceTier: "default",

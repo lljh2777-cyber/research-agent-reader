@@ -2,6 +2,8 @@
 
 Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据为基础的科研文献阅读与知识沉淀：保存可靠来源、逐步理解论文、核对依据，并将有价值的阅读内容整理为可复用笔记。
 
+`0.86.0` 新增[CodeBuddy 批注](docs/cli-annotation-backends.md)：选择 Step-5-Preview，调用明确使用 `step-5-preview`；插件直接启动本机 CLI，生成后由用户保存。保留英文依据、模型一般知识、实际模型与用量记录，主题学习继续预览。
+
 当前处于[现有版本可用性收尾](docs/usability-closeout.md)后的受限试用，以实际使用反馈和独立科学／教学审阅为主。R4 后续迁移、R5 翻译、R6 专题对照和 T2 资料辅助暂缓；已交付功能与历史记录保留。[开发路线](docs/development-roadmap.md)记录当前安排与长期路线，以下版本条目属于历史交付，不代表当前排期。
 
 `0.83.2` 已完成两条限定场景的操作闭环及正常退出后的完整重启检查，作为受限试用基线。可按[简短试用指引](docs/usability-closeout.md#简短试用指引)开始使用；独立科学／教学审阅仍待完成，主题学习保留预览身份。
@@ -28,9 +30,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
-> 受限试用版本：`0.85.2`。安装文件见
-> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.85.2)，
-> 更新范围与验收边界见[发布说明](docs/releases/0.85.2.md)。
+> 受限试用版本：`0.86.0`。安装文件见
+> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.86.0)，
+> 更新范围与验收边界见[发布说明](docs/releases/0.86.0.md)。
 > 尚未上架 Obsidian 社区插件目录。
 
 `0.76.0` 新增 [R3.8 学习摘录补充](docs/answer-excerpt-curation-r38.md)：从学习回答摘录分别选择 AI 片段、人工修订与备注，预览后补充到已有概念、方法或综合笔记；保留内容角色，复用修订恢复与撤销。学习文本块排除本插件的正式证据检索，不据此补写论文来源笔记。
@@ -154,6 +156,7 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
   updates.
 - Detects optional Codex CLI, Claude Code, OpenCode, MinerU, Python, R, and
   Obsidian CLI installations without installing or updating them.
+- 批注可使用本机 CodeBuddy 的 Step-5-Preview，支持准确模型 ID、独立无头请求和来源记录；详见[本机 CLI 批注](docs/cli-annotation-backends.md)。
 - Supports optional Research Vault Toolkit workflows for deep reading, code
   analysis, vault linting, and OKF export.
 
@@ -178,7 +181,7 @@ compatible toolkit project and executable paths.
 
 ### Release install
 
-从 [0.85.2 Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.85.2)
+从 [0.86.0 Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.86.0)
 分别下载 `main.js`、`manifest.json`、`styles.css`，放入
 `<vault>/.obsidian/plugins/research-agent-reader/`，再在社区插件设置中启用
 **Research Agent Reader**。已有安装可禁用插件、替换这三个文件，再重新启用。
@@ -275,6 +278,9 @@ Depending on features the user explicitly configures or starts, the plugin can:
 - read a configured project directory outside the vault;
 - launch local Codex CLI, Claude Code, OpenCode, MinerU, Python, R, or Obsidian
   CLI processes;
+- launch a selected CodeBuddy CLI for text annotations using its existing
+  authentication; prompts go to its configured model service, and private
+  temporary launch descriptors remain without automatic deletion;
 - send selected prompts, retrieved note excerpts, explicitly attached images,
   and a bounded first-page text excerpt used by paper-intake identity checks to
   a configured model provider; PDF preflight parsing itself remains local and

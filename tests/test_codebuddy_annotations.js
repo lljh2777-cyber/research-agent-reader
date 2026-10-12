@@ -1,0 +1,25 @@
+const assert = require("node:assert/strict");
+const { loadReading } = require("./reading-test-helpers");
+const { codeBuddyTextAdapter: adapter, parsePrintResult } = loadReading("runtime/codebuddy-text.ts");
+const { AnnotationService, readAnnotationRecords } = loadReading("annotations/annotation-service.ts");
+const success = (extra = {}) => JSON.stringify({ type: "system", subtype: "init", model: "step-5-preview", tools: [] }) + "\n" + JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "原文依据：作者报告了相关关系。一般知识：相关关系本身不能证明因果。", usage: { input_tokens: 30, output_tokens: 20 }, ...extra });
+(async () => {
+	const invocation = adapter.invocation("step-5-preview", "只解释给定证据");
+	assert.equal(invocation.args[invocation.args.indexOf("--model") + 1], "step-5-preview");
+	assert.equal(invocation.args[invocation.args.indexOf("--tools") + 1], ""); assert.ok(invocation.args.includes("--no-session-persistence")); assert.ok(!invocation.args.includes("--fallback-model"));
+	assert.equal(JSON.parse(invocation.args[invocation.args.indexOf("--settings") + 1]).disableAllHooks, true);
+	assert.equal(parsePrintResult(success(), "step-5-preview").reportedModel, "step-5-preview");
+	assert.deepEqual(parsePrintResult(success(), "step-5-preview").usage, { input_tokens: 30, output_tokens: 20 });
+	for (const bad of [success({ is_error: true }), success({ subtype: "error_max_turns" }), success({ modelUsage: { "other-model": {} } }), success().replace('"tools":[]', '"tools":["Read"]'), success().replace('"model":"step-5-preview"', '"model":"other"'), success() + "\n" + JSON.stringify({ type: "assistant", message: { stop_reason: "max_tokens" } })]) assert.throws(() => parsePrintResult(bad, "step-5-preview"));
+	assert.throws(() => parsePrintResult('{"type":"assistant"}', "step-5-preview"));
+	const calls = [];
+	const cli = { generate: async (...args) => { calls.push(args); return parsePrintResult(success(), "step-5-preview"); }, dispose: async () => {} };
+	const settings = { annotationBackendId: "codebuddy", annotationCodeBuddyModel: "step-5-preview", annotationCodeBuddyExecutable: "fixture", annotationCliTimeoutSeconds: 120, annotationWebSearchEnabled: false };
+	const service = new AnnotationService({}, { settings }, cli);
+	const selection = { sourcePath: "papers/fixture/article.md", section: "Results", selectedText: "associated", context: "The authors report an association, not causation." };
+	const answer = await service.generateExplanation(selection, () => {});
+	assert.equal(answer.provider, "CodeBuddy"); assert.equal(answer.model, "step-5-preview"); assert.equal(calls[0][0].model, "step-5-preview");
+	assert.match(calls[0][0].system, /模型一般知识/); assert.match(calls[0][0].user, /association, not causation/);
+	settings.annotationWebSearchEnabled = true; await assert.rejects(service.generateExplanation(selection, () => {}), /关闭浅层联网/); assert.equal(calls.length, 1);
+	console.log("CODEBUDDY_ANNOTATIONS_OK (model arguments, receipts, complete-only output, routing, zero-call web guard)");
+})().catch(error => { console.error(error); process.exitCode = 1; });

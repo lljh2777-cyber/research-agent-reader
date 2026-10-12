@@ -638,6 +638,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.knowledgeService?.dispose();
 		await this.readingWorkspace?.dispose();
 		this.annotationPopover?.close();
+		await this.annotationService?.dispose();
 		this.excerptBrowser?.dispose();
 		this.pendingCenter?.close();
 		this.hideAnnotationChip();
@@ -1495,7 +1496,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		}
 		const annotationBackendId = String(this.settings.annotationBackendId || "auto");
 		if (
-			!["auto", "codex-cli", "claude-code", "opencode"].includes(annotationBackendId)
+			!["auto", "codex-cli", "claude-code", "opencode", "codebuddy"].includes(annotationBackendId)
 			&& !normalizedProfiles.some(
 				(profile) => profile.id === annotationBackendId && profile.lastTest?.ok,
 			)
