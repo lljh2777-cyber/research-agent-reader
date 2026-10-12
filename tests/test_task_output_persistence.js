@@ -35,6 +35,7 @@ const buildResult = esbuild.buildSync({
 	format: "cjs",
 	platform: "node",
 	target: "node20",
+	loader: { ".md": "text" },
 	external: ["obsidian", "electron"],
 	logLevel: "silent",
 });
