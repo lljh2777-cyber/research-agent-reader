@@ -3372,7 +3372,7 @@ async function testContinuousPdfScrolling() {
 		}
 	}
 	const { MineruReaderView } = loadTsModule("src/views/mineru-reader.ts", {
-		obsidian: { ItemView: class {}, setIcon() {} },
+		obsidian: { ItemView: class {}, Component: class {}, setIcon() {} },
 	});
 	const instance = Object.create(MineruReaderView.prototype);
 	const root = new Element();

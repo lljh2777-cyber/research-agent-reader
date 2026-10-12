@@ -17,6 +17,9 @@ import { resolvePackageAssetPath } from "../mineru/package-loader";
 import { MineruPdfRenderer } from "../mineru/pdf-renderer";
 import { PdfPageWindow } from "../mineru/pdf-page-window";
 import { ReaderDocumentLoader } from "../reader/document-loader";
+import { isBilingualEntry, loadBilingualDocument } from "../reader/bilingual-document";
+import { FileSourceStorage } from "../sources/storage";
+import { BilingualReader } from "./bilingual-reader";
 import { renderJatsBody } from "../reader/jats-renderer";
 import {
 	applyPdfCaptionContinuationRecovery,
@@ -99,6 +102,8 @@ function normalizeState(
 		: null;
 	return {
 		articlePath: String(record.articlePath || ""),
+		...(typeof record.bilingual === "boolean" ? { bilingual: record.bilingual } : {}),
+		...(typeof record.bilingualRatio === "number" ? { bilingualRatio: boundedNumber(record.bilingualRatio, 0.5, 0.3, 0.7) } : {}),
 		mode,
 		followPdfReading: typeof record.followPdfReading === "boolean"
 			? record.followPdfReading
@@ -149,6 +154,7 @@ export class MineruReaderView extends ItemView {
 	private workspaceAbortController: AbortController | null = null;
 	private referenceAbortController: AbortController | null = null;
 	private markdownComponent: Component | null = null;
+	private bilingualReader: BilingualReader | null = null;
 	private loadGeneration = 0;
 	private referenceGeneration = 0;
 	private opened = false;
@@ -200,6 +206,8 @@ export class MineruReaderView extends ItemView {
 	async setArticlePath(articlePath: string): Promise<void> {
 		if (articlePath === this.readerState.articlePath && this.readerPackage) return;
 		this.readerState.articlePath = articlePath;
+		delete this.readerState.bilingual;
+		delete this.readerState.bilingualRatio;
 		this.readerState.currentVisualId = "";
 		this.readerState.markdownAnchor = "";
 		this.readerState.markdownPage = 1;
@@ -371,6 +379,21 @@ export class MineruReaderView extends ItemView {
 		this.contentEl.addClass("agent-dashboard-mineru-reader-view");
 		const shell = this.contentEl.createDiv({ cls: "agent-dashboard-mineru-reader-shell" });
 		this.renderDocumentIdentity(shell, readerPackage);
+		if (this.readerState.bilingual && isBilingualEntry(readerPackage.articlePath)) {
+			const signal = this.workspaceAbortController.signal;
+			try {
+				const adapter = this.app.vault.adapter as { getBasePath?: () => string };
+				if (!adapter.getBasePath) throw new Error("双语阅读需要桌面本地文件系统");
+				const doc = await loadBilingualDocument(new FileSourceStorage(adapter.getBasePath()), readerPackage.articlePath, signal);
+				if (signal.aborted || !this.opened || this.readerPackage !== readerPackage) return;
+				this.bilingualReader = new BilingualReader({ app: this.app, host: shell, document: doc, signal, ratio: this.readerState.bilingualRatio, onRatio: ratio => { this.readerState.bilingualRatio = ratio; this.requestStateSave(); }, ordinary: () => { this.readerState.bilingual = false; this.requestStateSave(); void this.renderWorkspace(); } });
+				this.bilingualReader.load(); await this.bilingualReader.render(); return;
+			} catch (error) {
+				if (signal.aborted) return;
+				new Notice("无法进入双语对照：" + (error instanceof Error ? error.message : String(error)));
+				this.readerState.bilingual = false; this.requestStateSave(); await this.renderWorkspace(); return;
+			}
+		}
 		const workspace = shell.createDiv({ cls: "agent-dashboard-mineru-workspace" });
 		workspace.style.setProperty(
 			"--agent-dashboard-mineru-markdown-width",
@@ -411,6 +434,10 @@ export class MineruReaderView extends ItemView {
 		if (readerPackage.sourceKind === "jats" && this.plugin.activateReadingWorkspace) {
 			const read = header.createEl("button", { text: "交互深读", attr: { "data-jats-action": "interactive" } });
 			this.onWorkspaceEvent(read, "click", () => { void this.plugin.activateReadingWorkspace!({ domain: "paper", source: { kind: "structured", path: readerPackage.articlePath } }).catch(error => new Notice(String(error))); });
+		}
+		if (isBilingualEntry(readerPackage.articlePath) && !this.readerState.bilingual) {
+			const bilingual = header.createEl("button", { text: "双语对照", attr: { type: "button", "data-bilingual-action": "open" } });
+			this.onWorkspaceEvent(bilingual, "click", () => { this.readerState.bilingual = true; this.requestStateSave(); void this.renderWorkspace(); });
 		}
 		if (readerPackage.sourceKind === "jats" && this.plugin.openJatsWiki) {
 			const wiki = header.createEl("button", { text: "论文笔记", attr: { "data-jats-action": "wiki" } });
@@ -1658,6 +1685,7 @@ export class MineruReaderView extends ItemView {
 	}
 
 	private clearWorkspaceLifecycle(): void {
+		this.bilingualReader?.unload(); this.bilingualReader = null;
 		this.referenceGeneration += 1;
 		this.pdfRenderer.cancelPageRender();
 		this.pdfRenderer.cancelCropRender();

@@ -263,6 +263,8 @@ export interface MineruReaderPackage {
 }
 
 export interface MineruReaderViewState {
+	bilingual?: boolean;
+	bilingualRatio?: number;
 	articlePath: string;
 	mode: MineruReaderMode;
 	followPdfReading: boolean;
