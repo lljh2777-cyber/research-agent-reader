@@ -54,7 +54,7 @@ Recommended public images:
 
 1. Reader overview at 1200 × 800 showing body text on the left and figure/caption on the right.
 2. Web Clipper Markdown with an inferred `Fig. 1` label.
-3. Settings page showing configurable reader folders and the core/optional-toolkit boundary.
+3. Settings page showing manual reading preferences and the core/optional-toolkit boundary.
 4. Dashboard health result showing built-in scope and the excluded `papers/` and `Clippings/` roots.
 
 Keep source screenshots in a future `screenshots/` directory only after they have been reviewed for privacy and licensing.

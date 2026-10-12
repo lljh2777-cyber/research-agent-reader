@@ -42,14 +42,16 @@ This disposable Vault was generated from the standalone repository. It contains 
 
 1. Open this folder as a Vault in Obsidian Desktop.
 2. Enable community plugins, then enable **Research Agent Reader**.
-3. Open \`Clippings/Web Clipper sample.md\`; it should open in the research reader automatically.
+3. Open \`Clippings/Web Clipper sample.md\`; it should remain a normal Markdown tab. Use its file context menu or More options → 选择阅读方式… → 正文＋图片与图注 to open the research reader explicitly.
 4. Confirm that the left pane contains body text without the image or caption.
 5. Confirm that the right pane shows the image, inferred label \`Fig. 1\`, and its caption.
-6. Open \`papers/Plain Markdown paper.md\`; it should also use the reader.
-7. Select a sentence in the reading pane: a floating 批注 chip should appear next to the selection (the pane header also has a 批注 button). Open it, type a short note, and save — this works without any AI backend. Confirm the source text gains an annotation link and \`wiki/annotations/\` contains the note. Wiki notes support the same flow in both editing (Live Preview) and reading mode; a custom hotkey (e.g. Shift+S) can be bound to the 批注所选文字 command under Settings → Hotkeys.
+6. Open \`papers/Plain Markdown paper.md\`; it should also remain a normal tab until you explicitly choose a reading mode.
+7. Select a sentence in the reader, open the 批注 chip or pane-header button, type a short note, and save without an AI backend. Confirm \`wiki/annotations/\` contains the note and the original Markdown remains unchanged. Regular Wiki editing keeps its existing inline annotation behavior; a hotkey can be assigned to 批注所选文字.
 8. Run **Knowledge base health check**; it should work without Python or a toolkit path.
 9. Open Research Agent Reader settings. Core features should be described as available and the optional toolkit as unconfigured.
 10. Try an advanced AI action. It should show an actionable missing-toolkit message without breaking the reader.
+11. Right-click \`Manual/English sample.md\` → 选择阅读方式… → current file as English, then choose \`Manual/中文样本.md\`. Confirm one tab contains English on the left and Chinese on the right, each with file name, annotation and one-shot sync controls. The pair has no translation metadata: synchronization must say reading progress, and Chinese AI contrast must stop before any provider call.
+12. Toggle linked scrolling, resize the divider, save independent excerpts and reload the plugin. Confirm both selected paths and saved state return; canceling a file replacement must retain the pair. Add a local PDF if you also want to exercise Markdown＋PDF; this generated fixture does not include one.
 
 Do not use this generated Vault for real notes.
 `);
@@ -72,9 +74,21 @@ title: "Plain Markdown paper"
 ---
 # Plain Markdown paper
 
-The configured papers folder also opens ordinary Markdown in the two-pane reader.
+Ordinary Markdown can be opened explicitly in the reader, without configuring a folder.
 
 This fixture intentionally contains no cross-root links.
+`);
+writeUtf8("Manual/English sample.md", `# Manual reading sample
+
+A manual reading pair keeps both source files unchanged.
+
+Matching reading progress does not verify scientific conclusions or translation accuracy.
+`);
+writeUtf8("Manual/中文样本.md", `# 手动阅读样本
+
+手动配对阅读保持两份来源文件不变。
+
+相同阅读进度不代表科学结论或翻译准确性已经核验。
 `);
 writeUtf8("wiki/index.md", `---
 type: moc
@@ -96,6 +110,8 @@ const requiredFiles = [
 	".obsidian/plugins/research-agent-reader/manifest.json",
 	".obsidian/plugins/research-agent-reader/styles.css",
 	"Clippings/Web Clipper sample.md",
+	"Manual/English sample.md",
+	"Manual/中文样本.md",
 	"papers/Plain Markdown paper.md",
 	"wiki/index.md",
 ];
