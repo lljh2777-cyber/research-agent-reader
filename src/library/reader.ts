@@ -72,8 +72,8 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 		return relative;
 	};
 	const metadata = (text: string): { title?: string; identifiers: LibraryIdentifiers; citekey?: string } => {
-		if (!/^---\r?\n/.test(text)) return { identifiers: {} };
-		const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
+		if (!/^\uFEFF?---\r?\n/.test(text)) return { identifiers: {} };
+		const match = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(text);
 		if (!match) throw new Error("文献属性未闭合");
 		const value = options.parseYaml(match[1]);
 		if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("文献属性不是对象");

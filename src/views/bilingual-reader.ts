@@ -24,6 +24,8 @@ export class BilingualReader extends Component {
 	private readonly programmatic = new Set<BilingualLanguage>();
 	private frame = 0;
 	private resizeFrame = 0;
+	private readyFrame = 0;
+	private restoring = true;
 	private linkedInput?: HTMLInputElement;
 	private message?: HTMLElement;
 	private invalidated = false;
@@ -75,7 +77,7 @@ export class BilingualReader extends Component {
 			this.panes.set(language, { language, scroller, article, anchors });
 			for (const type of ["wheel", "pointerdown", "touchstart", "keydown", "focusin"] as const) pane.addEventListener(type, () => this.activate(language), { signal, passive: type === "wheel" || type === "touchstart" });
 			scroller.addEventListener("scroll", () => {
-				if (this.programmatic.has(language) || this.options.signal.aborted) return;
+				if (this.restoring || this.programmatic.has(language) || this.options.signal.aborted) return;
 				this.capture(language);
 				if (this.frame) cancelAnimationFrame(this.frame);
 				this.frame = requestAnimationFrame(() => { this.frame = 0; this.capture(language); if (this.state.linked && this.state.active === language) this.synchronize(language); else this.publish(); });
@@ -96,7 +98,11 @@ export class BilingualReader extends Component {
 			this.resizeFrame = requestAnimationFrame(() => { this.resizeFrame = 0; if (signal.aborted) return; for (const language of ["en", "zh-CN"] as const) this.restore(language); });
 		});
 		for (const pane of this.panes.values()) { resize.observe(pane.article); resize.observe(pane.scroller); }
-		signal.addEventListener("abort", () => { resize.disconnect(); cancelAnimationFrame(this.frame); cancelAnimationFrame(this.resizeFrame); }, { once: true });
+		// Obsidian requests view state while rendering/visibility is still settling.
+		// Keep saved anchors until the mounted layout can actually restore them.
+		const ready = (): void => { if (signal.aborted) return; if ([...this.panes.values()].some(p => !p.article.isConnected || p.scroller.clientHeight <= 0 || p.article.getBoundingClientRect().height <= 0)) { this.readyFrame = requestAnimationFrame(ready); return; } for (const language of ["en", "zh-CN"] as const) this.restore(language); this.readyFrame = requestAnimationFrame(() => { if (signal.aborted) return; this.restoring = false; this.publish(); }); };
+		this.readyFrame = requestAnimationFrame(ready);
+		signal.addEventListener("abort", () => { resize.disconnect(); cancelAnimationFrame(this.frame); cancelAnimationFrame(this.resizeFrame); cancelAnimationFrame(this.readyFrame); }, { once: true });
 		const changed = (path: string): void => {
 			if (signal.aborted) return;
 			if (![doc.files.en.path, doc.files["zh-CN"].path, doc.metadataPath].includes(path)) return;
@@ -115,7 +121,7 @@ export class BilingualReader extends Component {
 		return [...pane.anchors].map(([blockId, element]) => ({ blockId, top: pane.scroller.scrollTop + element.getBoundingClientRect().top - top }));
 	}
 	private capture(language: BilingualLanguage): void {
-		const pane = this.panes.get(language); if (!pane) return;
+		const pane = this.panes.get(language); if (!pane || this.restoring || this.options.signal.aborted || !pane.article.isConnected || pane.scroller.clientHeight <= 0 || pane.scroller.scrollHeight <= pane.scroller.clientHeight || pane.article.getBoundingClientRect().height <= 0) return;
 		const position = bilingualPositionAt(this.geometry(language), pane.scroller.scrollTop, pane.scroller.scrollHeight); if (position) this.state.positions[language] = position;
 	}
 	private restore(language: BilingualLanguage): void {
@@ -147,7 +153,9 @@ export class BilingualReader extends Component {
 		for (let node = walker.nextNode(); node; node = walker.nextNode()) { const next = cursor + (node.textContent?.length || 0); if (!started && at < next) { range.setStart(node, at - cursor); started = true; } if (started && at + record.selectedText.length <= next) { range.setEnd(node, at + record.selectedText.length - cursor); ended = true; break; } cursor = next; }
 		if (!ended || range.toString() !== record.selectedText) throw new Error("渲染选区与保存文字不一致");
 		window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(range);
-		matches[0].classList.add("agent-bilingual-excerpt-target"); matches[0].scrollIntoView({ block: "center" }); this.capture(proof.language);
+		matches[0].classList.add("agent-bilingual-excerpt-target"); matches[0].scrollIntoView({ block: "center" });
+		const position = bilingualPositionAt(this.geometry(proof.language), pane.scroller.scrollTop, pane.scroller.scrollHeight); if (position) this.state.positions[proof.language] = position;
+		this.capture(proof.language);
 		if (this.state.linked) this.synchronize(proof.language); else this.publish();
 		this.message?.setText(quoteLanguage(proof.language) + "已定位保存时的选句所在段落：" + record.selectedText.slice(0, 80));
 	}

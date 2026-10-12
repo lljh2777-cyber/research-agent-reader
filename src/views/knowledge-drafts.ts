@@ -3,6 +3,7 @@ import type AgentDashboardPlugin from "../plugin";
 import { objectDigest } from "../papers/identity";
 import { DRAFT_KINDS, newKnowledgeDraft, renderKnowledgeDraft, draftMaterialStatus, type KnowledgeDraft, type DraftMaterial } from "../curation/draft";
 import { readExcerptSnapshot } from "../annotations/excerpt-library";
+import { quoteLabel } from "../annotations/bilingual";
 import { readAnswerExcerpt } from "../learning/answer-excerpts";
 import { ANSWER_CONTENT_ROLES, answerRoleText, type AnswerContentRole } from "../curation/answer-excerpt";
 import { type DraftHistory, type DraftRevision } from "../curation/draft-store";
@@ -88,7 +89,7 @@ export class KnowledgeDraftsModal extends Modal {
 		this.button(tools, "核对附带材料", () => void this.run(async signal => { this.status.setText(await draftMaterialStatus(this.app, this.plugin.getAnswerExcerpts(), draft.material, signal)); }));
 		const material = this.editor.createEl("details"); material.createEl("summary", { text: "附带材料（固定快照，不随正文编辑改变）" });
 		// The full draft preview below contains the same fixed material; raw source metadata is never rendered as HTML.
-		material.createEl("pre", { cls: "curation-text", text: draft.material ? (draft.material.kind === "excerpt" ? "原文摘录" : "学习摘录（AI / 人工记录）") + " · " + draft.material.path + "\n保存后即使来源缺失，也保留当时材料；核对按钮检查当前版本。" : "手写草稿，无附带材料。" });
+		material.createEl("pre", { cls: "curation-text", text: draft.material ? (draft.material.kind === "excerpt" ? quoteLabel(readExcerptSnapshot(draft.material.raw, { annotationPath: draft.material.path, id: draft.material.excerptId }).record) : "学习摘录（AI / 人工记录）") + " · " + draft.material.path + "\n保存后即使来源缺失，也保留当时材料；核对按钮检查当前版本。" : "手写草稿，无附带材料。" });
 		if (this.history) {
 			for (const issue of this.history.issues) this.editor.createEl("p", { text: issue });
 			const versions = this.editor.createEl("details"); versions.createEl("summary", { text: `版本记录 · ${this.history.revisions.length} 个已保存 · ${this.history.pending.length} 个待恢复` });

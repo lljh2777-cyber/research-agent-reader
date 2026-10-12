@@ -16,7 +16,7 @@ export class ExcerptCurationModal extends Modal {
 	constructor(app: App, private plugin: AgentDashboardPlugin, private ref: ExcerptRef, private initial?: CurationReview) { super(app); }
 	onOpen(): void {
 		this.closed = false; this.setTitle("将摘录补充到已有笔记"); this.modalEl.addClass("curation-modal", "rar-excerpt-curation");
-		this.contentEl.createEl("p", { text: "选择已有笔记和插入位置，核对原句与可选个人备注。预览不改写笔记，确认后保存修订；不调用模型。" });
+		this.contentEl.createEl("p", { text: "选择已有笔记和插入位置，核对所选文字与可选个人备注。预览不改写笔记，确认后保存修订；不调用模型。" });
 		this.status = this.contentEl.createEl("p", { attr: { role: "status", "aria-live": "polite" } });
 		this.sourceEl = this.contentEl.createDiv(); this.choices = this.contentEl.createDiv("rar-excerpt-curation-choices"); this.result = this.contentEl.createDiv();
 		const footer = this.contentEl.createDiv("rar-excerpt-actions");
@@ -53,7 +53,7 @@ export class ExcerptCurationModal extends Modal {
 		this.choices.empty(); const r = this.snapshot!.record;
 		if (this.initial) {
 			this.choices.createEl("p", { text: "已保存整理批次：" + this.initial.id + " · " + this.initial.context.target.path });
-			this.choices.createEl("p", { text: this.includeManual ? "该批次包含原句和当时的个人备注。" : "该批次只包含原句。" });
+			this.choices.createEl("p", { text: this.includeManual ? "该批次包含所选文字和当时的个人备注。" : "该批次只包含所选文字。" });
 			if (this.initial.suggestions.some(s => s.decision === "applied")) {
 				this.status.setText("本批已有修订记录，请在历史中核对应用或撤销状态。");
 				const revision = [...this.plugin.getCurationService().revisions.values()].find(r => r.reviewId === this.initial!.id && !r.undoOf);
@@ -93,7 +93,7 @@ export class ExcerptCurationModal extends Modal {
 			signal.throwIfAborted(); const preview = await this.plugin.getCurationWriter().preview(this.review!.id, ["s-0"], undefined, undefined, signal); signal.throwIfAborted();
 			this.preview = preview; this.renderPreview(); this.status.setText("预览已准备；请核对所有文件变化后确认。关闭会保留整理批次，可从知识整理返回。");
 		}));
-		this.status.setText("原句与个人备注已读取；尚未选择补充内容。");
+		this.status.setText("所选文字与个人备注已读取；尚未选择补充内容。");
 	}
 	private resetPreview(): void { this.preview = undefined; this.result.empty(); }
 	private renderPreview(): void {

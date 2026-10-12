@@ -43,8 +43,8 @@ let count=0; async function check(name,fn){fixture=make();await fn(fixture);coun
  await check("library keeps BOM offsets, language role and paired change in pending binding",async f=>{
   const r=await f.service.createExcerpt(selection(f,"en"));
   const io={read:async p=>f.files.get(p)?.text===undefined?null:Buffer.from(f.files.get(p).text),list:async dir=>{const entries=new Map();for(const p of f.files.keys()){if(!p.startsWith(dir+"/"))continue;const rest=p.slice(dir.length+1),name=rest.split("/")[0];entries.set(name,{name,directory:rest.includes("/")});}return [...entries.values()];}};
-  const scan=()=>api.readPaperLibrary(io,{read:async()=>null,list:async()=>[]},{vaultRoot:path.resolve("memory"),parseYaml:()=>({})});
-  const before=await scan(),object=before.papers.flatMap(p=>p.objects).find(o=>o.kind==="annotation"&&o.annotationPath===r.annotationPath);assert.ok(object);assert.equal(object.binding.state,"matched");
+  const scan=()=>api.readPaperLibrary(io,{read:async()=>null,list:async()=>[]},{vaultRoot:path.resolve("memory"),parseYaml:text=>text.includes("title: Example")?{title:"English example"}:{}});
+  const before=await scan(),object=before.papers.flatMap(p=>p.objects).find(o=>o.kind==="annotation"&&o.annotationPath===r.annotationPath);assert.ok(object);assert.equal(object.binding.state,"matched");assert.equal(before.papers.flatMap(p=>p.objects).find(o=>o.kind==="source"&&o.source.path===f.root+"/paper.md").title,"English example");
   f.files.get(f.root+"/paper.zh-CN.md").text+="\n";const after=await scan(),changed=after.papers.flatMap(p=>p.objects).find(o=>o.kind==="annotation"&&o.annotationPath===r.annotationPath);assert.equal(changed.binding.state,"changed");
  });
  await check("forged language/ranges/snapshots fail; legacy translated record stays unconfirmed",async f=>{
