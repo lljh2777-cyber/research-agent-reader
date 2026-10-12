@@ -6955,6 +6955,8 @@ body.agent-dashboard-mineru-resizing {
 .agent-split-tabs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 6px; border-radius: 10px; background: var(--background-secondary); }
 .agent-split-tab { display: flex; align-items: center; gap: 8px; flex: 1 1 200px; min-width: 0; padding: 5px 8px; border: 1px solid var(--background-modifier-border); border-radius: 8px; background: var(--background-primary); }
 .agent-split-tab > span { font-size: var(--font-ui-small); color: var(--text-muted); white-space: nowrap; }
+.agent-split-tabs .agent-split-swap { flex: 0 0 auto; width: 34px; height: 34px; padding: 7px; }
+.agent-split-swap svg { width: 18px; height: 18px; }
 .agent-split-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-split-tab .agent-split-file-name { flex: 1; text-align: left; border: 0; box-shadow: none; background: transparent; }
 .agent-split-content { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 8px; }

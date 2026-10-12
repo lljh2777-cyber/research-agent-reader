@@ -9,6 +9,7 @@ const commands = [
 	[process.execPath, ["tests/test_reader_preferences.js"]],
 	[process.execPath, ["tests/test_manual_split_reading.js"]],
 	[process.execPath, ["tests/test_reading_file_tree.js"]],
+	[process.execPath, ["tests/test_split_swap.js"]],
 	[process.execPath, ["tests/run_reading_tests.js"]],
 	[process.execPath, ["tests/test_bilingual_document.js"]],
 	[process.execPath, ["tests/test_bilingual_rendering.js"]],

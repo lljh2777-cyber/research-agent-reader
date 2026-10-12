@@ -3,6 +3,7 @@ import { bindBilingualSelection } from "../annotations/bilingual";
 import type { AnnotationRecord } from "../annotations/types";
 import type { BilingualBlock, BilingualDocument, BilingualFile, BilingualLanguage } from "../reader/bilingual-document";
 import { bilingualPositionAt, bilingualScrollTarget, correspondingBilingualPosition, normalizeBilingualState, type BilingualGeometry, type BilingualReadingState } from "../reader/bilingual-position";
+import { applySplitLayout, sourceSplitRatio } from "./split-layout";
 
 /** Markers affect rendering only. Source offsets remain those of the unmodified files. */
 export function bilingualRenderMarkdown(file: BilingualFile): string {
@@ -15,7 +16,7 @@ export function bilingualRenderMarkdown(file: BilingualFile): string {
 	return result + file.text.slice(cursor);
 }
 export interface BilingualPane { language: BilingualLanguage; scroller: HTMLElement; article: HTMLElement; anchors: Map<string, HTMLElement>; }
-export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; hideOrdinary?: boolean; annotate?(): Promise<void>; ratio?: number; onRatio?(ratio: number): void; defaultLinked?: boolean; state?: unknown; onState?(state: BilingualReadingState): void; }
+export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; hideOrdinary?: boolean; annotate?(): Promise<void>; ratio?: number; reversed?: boolean; onRatio?(ratio: number): void; defaultLinked?: boolean; state?: unknown; onState?(state: BilingualReadingState): void; }
 const STATUS: Record<string, string> = { "not-started": "尚未翻译", "in-progress": "翻译中", "needs-review": "译文待复核", reviewed: "记录标为已审阅", failed: "翻译记录失败", unknown: "译文状态未确认" };
 
 export class BilingualReader extends Component {
@@ -29,7 +30,10 @@ export class BilingualReader extends Component {
 	private linkedInput?: HTMLInputElement;
 	private message?: HTMLElement;
 	private invalidated = false;
-	constructor(readonly options: BilingualReaderOptions) { super(); this.state = normalizeBilingualState(options.state, options.document, options.defaultLinked); }
+	private reversed: boolean;
+	private applyLayout?: () => void;
+	constructor(readonly options: BilingualReaderOptions) { super(); this.state = normalizeBilingualState(options.state, options.document, options.defaultLinked); this.reversed = options.reversed === true; }
+	setReversed(reversed: boolean): void { if (this.options.signal.aborted) return; this.snapshot(); this.reversed = reversed; this.applyLayout?.(); }
 	async render(): Promise<void> {
 		const { app, host, document: doc, signal } = this.options;
 		host.classList.add("agent-bilingual-shell");
@@ -48,11 +52,11 @@ export class BilingualReader extends Component {
 		if (doc.issues.length) host.createEl("p", { text: doc.issues.join("；"), cls: "agent-bilingual-issues", attr: { role: "status" } });
 		const workspace = host.createDiv({ cls: "agent-bilingual-workspace" });
 		let ratio = Math.max(0.3, Math.min(0.7, this.options.ratio ?? 0.5));
-		const applyRatio = (): void => { workspace.style.setProperty("--bilingual-left", ratio + "fr"); workspace.style.setProperty("--bilingual-right", (1 - ratio) + "fr"); };
+		const applyRatio = this.applyLayout = (): void => applySplitLayout(workspace, ratio, this.reversed);
 		applyRatio();
 		for (const language of ["en", "zh-CN"] as const) {
 			if (signal.aborted) return;
-			const file = doc.files[language], pane = workspace.createEl("section", { cls: "agent-bilingual-pane", attr: { "aria-label": language === "en" ? "英文原文" : "中文译文", "data-bilingual-language": language } });
+			const file = doc.files[language], pane = workspace.createEl("section", { cls: "agent-bilingual-pane", attr: { "aria-label": language === "en" ? "英文原文" : "中文译文", "data-bilingual-language": language, "data-split-side": language === "en" ? "left" : "right" } });
 			const heading = pane.createDiv({ cls: "agent-bilingual-pane-heading" }); heading.createEl("strong", { text: language === "en" ? "英文原文" : "中文译文", attr: { title: file.path } });
 			heading.createSpan({ text: file.path.split("/").pop(), cls: "agent-split-file-name", attr: { title: file.path } });
 			const sync = heading.createEl("button", { text: "以本栏同步另一栏", attr: { type: "button", "data-bilingual-sync": language } }); sync.disabled = !canSync;
@@ -87,14 +91,15 @@ export class BilingualReader extends Component {
 			}, { signal, passive: true });
 			if (language === "en") {
 				const splitter = workspace.createDiv({ cls: "agent-bilingual-splitter", attr: { role: "separator", tabindex: "0", "aria-label": "调整英文与中文栏宽", "aria-orientation": "vertical", "aria-valuemin": "30", "aria-valuemax": "70", "aria-valuenow": String(Math.round(ratio * 100)) } });
-				const change = (next: number): void => { for (const l of ["en", "zh-CN"] as const) this.capture(l); ratio = Math.max(0.3, Math.min(0.7, next)); applyRatio(); splitter.setAttribute("aria-valuenow", String(Math.round(ratio * 100))); this.options.onRatio?.(ratio); };
+				const change = (next: number): void => { for (const l of ["en", "zh-CN"] as const) this.capture(l); ratio = Math.max(0.3, Math.min(0.7, next)); applyRatio(); this.options.onRatio?.(ratio); };
 				let dragging = false;
 				splitter.addEventListener("pointerdown", event => { event.preventDefault(); dragging = true; splitter.setPointerCapture(event.pointerId); }, { signal });
-				splitter.addEventListener("pointermove", event => { if (!dragging) return; const rect = workspace.getBoundingClientRect(); if (rect.width) change((event.clientX - rect.left) / rect.width); }, { signal });
+				splitter.addEventListener("pointermove", event => { if (!dragging) return; const rect = workspace.getBoundingClientRect(); if (rect.width) change(sourceSplitRatio((event.clientX - rect.left) / rect.width, this.reversed)); }, { signal });
 				for (const event of ["pointerup", "pointercancel", "lostpointercapture"] as const) splitter.addEventListener(event, () => { dragging = false; }, { signal });
-				splitter.addEventListener("keydown", event => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); change(ratio + (event.key === "ArrowLeft" ? -0.02 : 0.02)); }, { signal });
+				splitter.addEventListener("keydown", event => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); change(ratio + (event.key === "ArrowLeft" ? -0.02 : 0.02) * (this.reversed ? -1 : 1)); }, { signal });
 			}
 		}
+		applyRatio();
 		for (const language of ["en", "zh-CN"] as const) this.restore(language);
 		const resize = new ResizeObserver(() => {
 			if (this.resizeFrame) cancelAnimationFrame(this.resizeFrame);

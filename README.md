@@ -16,6 +16,8 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 `0.85.1` 将中英文 Markdown 合并为一个阅读选项，第二份文件改用可展开、折叠和搜索的目录树。选择页核对当前文件语言并预览英文／中文配对；文件名不明确时需要手动确认，始终按左英文、右中文打开。Markdown＋PDF 和更换栏内文件也使用目录树。
 
+`0.85.2` 在两份文件名之间增加「交换左右位置」按钮，可将中文或 PDF 放在左侧。交换保留文件语言、批注来源、阅读位置和各文档宽度，重载后恢复显示顺序。
+
 [主题学习](docs/topic-study-t12.md)支持无资料的逐单元讲解、主支线对话和学习导图，并可[手动标记理解状态、预览与导出记录](docs/topic-records-t13.md)。入口为「主题路线（预览）→ 确认路线 → 打开学习预览」，页面打开与重载不自动调用模型。`0.56.1` 新增 [T1.3C 教学规则版本化与同题对照](docs/topic-teaching-t13c.md)：新请求使用 v2，旧 v1 回答和导出保持可读。两版九题首次回答均已留档；v2 更短、部分追问更聚焦，但仍有事实错误和过度承诺，不能认定教学质量提升，继续保持开发预览。
 
 [T1.3D](docs/topic-quality-t13d.md) 保持 v2 规则不变，完成统计推理与 Python 迭代器两组八题首次真实答题，并核对旧答中的事实与能力承诺。新题仍暴露概念外推问题，独立教学审阅待完成，不能据此扩大教学质量声明。
@@ -26,9 +28,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
-> 受限试用版本：`0.85.1`。安装文件见
-> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.85.1)，
-> 更新范围与验收边界见[发布说明](docs/releases/0.85.1.md)。
+> 受限试用版本：`0.85.2`。安装文件见
+> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.85.2)，
+> 更新范围与验收边界见[发布说明](docs/releases/0.85.2.md)。
 > 尚未上架 Obsidian 社区插件目录。
 
 `0.76.0` 新增 [R3.8 学习摘录补充](docs/answer-excerpt-curation-r38.md)：从学习回答摘录分别选择 AI 片段、人工修订与备注，预览后补充到已有概念、方法或综合笔记；保留内容角色，复用修订恢复与撤销。学习文本块排除本插件的正式证据检索，不据此补写论文来源笔记。
@@ -176,7 +178,7 @@ compatible toolkit project and executable paths.
 
 ### Release install
 
-从 [0.85.1 Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.85.1)
+从 [0.85.2 Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.85.2)
 分别下载 `main.js`、`manifest.json`、`styles.css`，放入
 `<vault>/.obsidian/plugins/research-agent-reader/`，再在社区插件设置中启用
 **Research Agent Reader**。已有安装可禁用插件、替换这三个文件，再重新启用。
