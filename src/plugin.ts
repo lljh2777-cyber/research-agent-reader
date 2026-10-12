@@ -21,7 +21,8 @@ import { libraryNavigation } from "./library/browser";
 import type { LibraryObjectSummary } from "./library/types";
 import { PaperLibraryView, PAPER_LIBRARY_VIEW_TYPE } from "./views/paper-library";
 import { ManualSplitReaderView, MANUAL_SPLIT_VIEW_TYPE } from "./views/manual-split-reader";
-import { ReadingModePicker, chooseReadingFile, type ReadingChoice } from "./views/reading-mode-picker";
+import { ReadingModePicker, chooseReadingFile, chooseBilingualReadingFile, type ReadingChoice } from "./views/reading-mode-picker";
+import { bilingualFileOrder } from "./reader/reading-file-tree";
 import { normalizeManualSplit, type ManualSplitState } from "./reader/manual-split";
 import { documentLearningEntry, type LearningEntry } from "./learning/entry";
 import { TopicLearningService } from "./topic-learning/service";
@@ -3972,11 +3973,11 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	private async startSplitReading(file: TFile, choice: ReadingChoice, leaf?: WorkspaceLeaf): Promise<void> {
 		if (choice === "figures") { await this.activateMineruReaderView(file.path, leaf); const reader = (leaf?.view instanceof MineruReaderView ? leaf.view : this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE)[0]?.view); if (reader instanceof MineruReaderView) await reader.setState({ ...reader.getState(), bilingual: false, mode: "visuals" }, { history: false }); return; }
-		const extension = choice === "md-pdf" && file.extension === "md" ? "pdf" : "md";
-		const label = choice === "english" ? "选择中文译文" : choice === "chinese" ? "选择英文原文" : "选择 " + extension.toUpperCase();
-		const second = await chooseReadingFile(this.app, extension, file.path, label); if (!second) return;
+		const extension = choice === "md-pdf" && file.extension.toLowerCase() === "md" ? "pdf" : "md";
+		const bilingual = choice === "bilingual" ? await chooseBilingualReadingFile(this.app, file.path) : undefined;
+		const second = choice === "bilingual" ? bilingual?.file : await chooseReadingFile(this.app, extension, file.path, "选择 " + extension.toUpperCase()); if (!second) return;
 		if (this.app.vault.getAbstractFileByPath(file.path) !== file || this.app.vault.getAbstractFileByPath(second.path) !== second) throw new Error("文件在选择期间已移动或缺失，请重新选择");
-		const left = choice === "chinese" || file.extension === "pdf" ? second.path : file.path, right = left === file.path ? second.path : file.path;
+		const { left, right } = bilingual ? bilingualFileOrder(file.path, second.path, bilingual.currentLanguage) : file.extension.toLowerCase() === "pdf" ? { left: second.path, right: file.path } : { left: file.path, right: second.path };
 		await this.openManualSplit({ mode: choice === "md-pdf" ? "md-pdf" : "bilingual", left, right, entry: file.path, linked: this.settings.mineruReaderBilingualLinked, ratio: this.settings.mineruReaderBilingualSplitRatio, markdownProgress: 0, pdfPage: 1, pdfProgress: 0, pdfZoom: this.settings.mineruReaderPdfZoom }, leaf);
 	}
 	async openManualSplit(state: ManualSplitState, preferredLeaf?: WorkspaceLeaf): Promise<ManualSplitReaderView> {

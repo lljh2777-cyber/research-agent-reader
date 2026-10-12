@@ -87,7 +87,8 @@ export class ManualSplitReaderView extends ItemView {
 	}
 	private async replace(side: "left" | "right"): Promise<void> {
 		const signal = this.controller?.signal, before = this.state!;
-		const file = await chooseReadingFile(this.app, before.mode === "md-pdf" && side === "right" ? "pdf" : "md", before[side === "left" ? "right" : "left"], "选择" + (side === "left" ? "左栏" : "右栏") + "文件");
+		const title = before.mode === "bilingual" ? "选择" + (side === "left" ? "英文原文" : "中文译文") : "选择" + (side === "left" ? "左栏 Markdown" : "右栏 PDF");
+		const file = await chooseReadingFile(this.app, before.mode === "md-pdf" && side === "right" ? "pdf" : "md", before[side === "left" ? "right" : "left"], title);
 		if (!file || signal?.aborted || this.state !== before) return;
 		if (file.path === before[side]) return;
 		const next = normalizeManualSplit({ ...before, [side]: file.path, entry: before.entry === before[side] ? file.path : before.entry, bilingualState: undefined, digests: undefined, markdownProgress: 0, pdfPage: 1, pdfProgress: 0 });

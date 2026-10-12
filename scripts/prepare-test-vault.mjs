@@ -50,7 +50,7 @@ This disposable Vault was generated from the standalone repository. It contains 
 8. Run **Knowledge base health check**; it should work without Python or a toolkit path.
 9. Open Research Agent Reader settings. Core features should be described as available and the optional toolkit as unconfigured.
 10. Try an advanced AI action. It should show an actionable missing-toolkit message without breaking the reader.
-11. Right-click \`Manual/English sample.md\` → 选择阅读方式… → current file as English, then choose \`Manual/中文样本.md\`. Confirm one tab contains English on the left and Chinese on the right, each with file name, annotation and one-shot sync controls. The pair has no translation metadata: synchronization must say reading progress, and Chinese AI contrast must stop before any provider call.
+11. Right-click \`Manual/English sample.md\` → 选择阅读方式… → 英文＋中文 Markdown (one option). In the directory tree confirm the current language is 英文原文, expand Manual and select \`中文样本.md\`, then open the pair. Search must retain folder ancestry; clearing search restores the tree. Also start from the Chinese file and confirm left English / right Chinese. Confirm each pane has file name, annotation and one-shot sync controls. The pair has no translation metadata: synchronization must say reading progress, and Chinese AI contrast must stop before any provider call.
 12. Toggle linked scrolling, resize the divider, save independent excerpts and reload the plugin. Confirm both selected paths and saved state return; canceling a file replacement must retain the pair. Add a local PDF if you also want to exercise Markdown＋PDF; this generated fixture does not include one.
 
 Do not use this generated Vault for real notes.
