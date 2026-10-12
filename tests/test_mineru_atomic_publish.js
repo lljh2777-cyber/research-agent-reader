@@ -320,6 +320,8 @@ async function testVersionOutputCannotLeakHostPaths(fixture) {
 async function testCleanupFailureIsReported(fixture) {
 	const citekey = "cleanup_failure_2026";
 	const originalRmdirSync = fs.rmdirSync;
+	const originalWarn = console.warn, warnings = [];
+	console.warn = (...args) => warnings.push(args);
 	fs.rmdirSync = function injectedRmdirFailure(target, options) {
 		if (path.basename(String(target)).startsWith(`.${citekey}.staging-`)) {
 			throw new Error("injected cleanup failure");
@@ -332,10 +334,17 @@ async function testCleanupFailureIsReported(fixture) {
 				renamePackage() { throw new Error("injected commit failure"); },
 			},
 		});
-		assert.match(error.message, /staging 清理失败并保留/);
-		assert.equal(stagingEntries(fixture, citekey).length, 1);
+		assert.match(error.message, /包原子提交失败；最终目录未创建/);
+		assert.match(error.message, /暂存目录已保留/);
+		assert.match(error.message, /injected commit failure/);
+		const retained = stagingEntries(fixture, citekey);
+		assert.equal(retained.length, 1);
+		assert.ok(error.message.includes(retained[0]), "error identifies the actual retained staging directory");
+		assert.equal(fs.existsSync(path.join(fixture.vaultRoot, "papers", citekey)), false);
+		assert.ok(warnings.some(args => args[1]?.message === "injected cleanup failure"), "cleanup failure remains visible in diagnostics");
 	} finally {
 		fs.rmdirSync = originalRmdirSync;
+		console.warn = originalWarn;
 	}
 }
 
