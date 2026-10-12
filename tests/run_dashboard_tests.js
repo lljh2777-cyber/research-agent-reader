@@ -7,6 +7,10 @@ const projectRoot = path.resolve(__dirname, "..");
 const commands = [
 	[process.execPath, ["tests/test_settings_navigation.js"]],
 	[process.execPath, ["tests/run_reading_tests.js"]],
+	[process.execPath, ["tests/test_bilingual_document.js"]],
+	[process.execPath, ["tests/test_bilingual_rendering.js"]],
+	[process.execPath, ["tests/test_bilingual_position.js"]],
+	[process.execPath, ["tests/test_bilingual_annotations.js"]],
 	[process.execPath, ["tests/test_release_metadata.js"]],
 	[process.execPath, ["tests/test_dashboard_providers.js"]],
 	[process.execPath, ["tests/test_dashboard_direct_api_boundary.js"]],
