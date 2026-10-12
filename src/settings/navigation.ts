@@ -24,7 +24,7 @@ export const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string }>
 export const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ page:"fulltext",category:"knowledge",title:"全文来源",icon:"download",description:"PMC PDF、Unpaywall 开放来源回退与联系邮箱。",keywords:"DOI PMID PMCID PDF 全文 获取 下载 邮箱 email OA Unpaywall PMC" },
 	{ page: "reader", category: "reading", title: "文献阅读器", icon: "book-open-text", common: true,
-		description: "接管目录、图文双栏与阅读版式。", keywords: "PDF Markdown MinerU article.md 缩放 栏宽 跟随 版面框" },
+		description: "接管目录、图文／PDF 双栏与英文／中文对照。", keywords: "PDF Markdown MinerU article.md 缩放 栏宽 跟随 版面框 双语 英文 中文 译文 联动 同步 bilingual" },
 	{ page: "direct-api", category: "connections", title: "Direct API", icon: "plug-zap", common: true,
 		description: "为深读、问答和 Agent 配置模型服务。", keywords: "AI 助手 LLM Provider OpenAI OpenRouter API Key 密钥 凭据 SecretStorage endpoint 联网 Tavily 超时 文献入库" },
 	{ page: "annotations", category: "reading", title: "批注 AI", icon: "message-square-text", common: true,

@@ -16,7 +16,7 @@ module.exports = async function bilingualCloseout(app, outputDirectory) {
   for(const name of ["paper.md","paper.zh-CN.md"]){
    await p.activateMineruReaderView(root+"/"+name);view=app.workspace.activeLeaf.view;
    if(view.bilingualReader)click(view.contentEl,"返回单语图文");
-   await until(()=>view.contentEl.querySelector('[data-bilingual-action="open"]'));click(view.contentEl,"双语对照");await until(()=>view.bilingualReader?.panes.size===2);await frames();
+   await until(()=>view.contentEl.querySelector('[aria-label="双栏阅读模式"], [data-bilingual-action="open"]'));const layout=view.contentEl.querySelector('[aria-label="双栏阅读模式"]');if(layout){layout.value="bilingual";layout.dispatchEvent(new Event("change"));}else click(view.contentEl,"双语对照");await until(()=>view.bilingualReader?.panes.size===2);await frames();
    check(view.bilingualReader.panes.get("en").article.dataset.agentAnnotationSource===root+"/paper.md"&&view.bilingualReader.panes.get("zh-CN").article.dataset.agentAnnotationSource===root+"/paper.zh-CN.md","real "+name+" entry opens English left and Chinese right");
   }
   for(const language of ["en","zh-CN"]){

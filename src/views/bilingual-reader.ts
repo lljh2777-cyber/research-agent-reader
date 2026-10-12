@@ -15,7 +15,7 @@ export function bilingualRenderMarkdown(file: BilingualFile): string {
 	return result + file.text.slice(cursor);
 }
 export interface BilingualPane { language: BilingualLanguage; scroller: HTMLElement; article: HTMLElement; anchors: Map<string, HTMLElement>; }
-export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; annotate?(): Promise<void>; ratio?: number; onRatio?(ratio: number): void; state?: unknown; onState?(state: BilingualReadingState): void; }
+export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; annotate?(): Promise<void>; ratio?: number; onRatio?(ratio: number): void; defaultLinked?: boolean; state?: unknown; onState?(state: BilingualReadingState): void; }
 const STATUS: Record<string, string> = { "not-started": "尚未翻译", "in-progress": "翻译中", "needs-review": "译文待复核", reviewed: "记录标为已审阅", failed: "翻译记录失败", unknown: "译文状态未确认" };
 
 export class BilingualReader extends Component {
@@ -29,7 +29,7 @@ export class BilingualReader extends Component {
 	private linkedInput?: HTMLInputElement;
 	private message?: HTMLElement;
 	private invalidated = false;
-	constructor(readonly options: BilingualReaderOptions) { super(); this.state = normalizeBilingualState(options.state, options.document); }
+	constructor(readonly options: BilingualReaderOptions) { super(); this.state = normalizeBilingualState(options.state, options.document, options.defaultLinked); }
 	async render(): Promise<void> {
 		const { app, host, document: doc, signal } = this.options;
 		host.classList.add("agent-bilingual-shell");

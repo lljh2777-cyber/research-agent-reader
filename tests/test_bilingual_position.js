@@ -12,6 +12,8 @@ assert.equal(correspondingBilingualPosition({...doc,syncAvailable:false},"en",{b
 const saved={linked:false,active:"zh-CN",digests:{en:"english","zh-CN":"chinese"},positions:{en:{blockId:"b-1",progress:0.5},"zh-CN":{blockId:"b-2",progress:0.2}}};
 assert.deepEqual(normalizeBilingualState(saved,doc),saved);
 assert.equal(normalizeBilingualState(null,doc).linked,true);
+assert.equal(normalizeBilingualState(null,doc,false).linked,false,"fresh reader uses the configured linked default");
+assert.equal(normalizeBilingualState({...saved,linked:true},doc,false).linked,true,"saved linked choice overrides the configured default");
 assert.deepEqual(normalizeBilingualState(saved,{...doc,files:{...doc.files,en:{...doc.files.en,digest:"changed"}}}).positions.en,{blockId:"b-0",progress:0});
 assert.deepEqual(normalizeBilingualState({...saved,positions:{en:{blockId:"b-1",progress:NaN}}},doc).positions.en,{blockId:"b-1",progress:0});
 assert.equal(normalizeBilingualState(saved,{...doc,syncAvailable:false}).linked,false);

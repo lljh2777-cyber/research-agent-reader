@@ -4900,8 +4900,15 @@
 	align-items: center;
 	min-width: 0;
 	padding: 8px 14px 9px;
+	flex-wrap: wrap;
+	gap: 8px;
 	border-bottom: 1px solid var(--agent-dashboard-mineru-border-strong);
 	background: var(--background-primary);
+}
+
+.agent-dashboard-reader-layout {
+	max-width: 100%;
+	flex: 0 1 auto;
 }
 
 .agent-dashboard-mineru-document-identity,

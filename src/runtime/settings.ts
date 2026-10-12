@@ -30,8 +30,21 @@ export interface CliExecutableDetection {
 }
 
 export type MineruServiceMode = "official" | "private";
-export type MineruReaderDefaultMode = "pdf" | "visuals";
+export type MineruReaderDefaultMode = "pdf" | "visuals" | "bilingual";
 export type MineruReaderRenderQuality = "standard" | "high";
+
+export function normalizeReaderModeSettings(stored: Record<string, unknown>): Pick<DashboardSettings,
+	"mineruReaderDefaultMode" | "mineruReaderBilingualLinked" | "mineruReaderBilingualSplitRatio"> {
+	const ratio = stored.mineruReaderBilingualSplitRatio;
+	return {
+		mineruReaderDefaultMode: stored.mineruReaderDefaultMode === "bilingual" ? "bilingual"
+			: stored.mineruReaderDefaultMode === "visuals" ? "visuals" : "pdf",
+		mineruReaderBilingualLinked: typeof stored.mineruReaderBilingualLinked === "boolean"
+			? stored.mineruReaderBilingualLinked : DEFAULT_SETTINGS.mineruReaderBilingualLinked,
+		mineruReaderBilingualSplitRatio: typeof ratio === "number" && Number.isFinite(ratio)
+			? Math.max(0.3, Math.min(0.7, ratio)) : DEFAULT_SETTINGS.mineruReaderBilingualSplitRatio,
+	};
+}
 
 export type ActionRunnerPreference = "auto" | "light" | "cli";
 
@@ -177,6 +190,8 @@ export interface DashboardSettings {
 	mineruDefaultArticleWikiSource: ArticleWikiSource;
 	mineruConfirmRemoteUpload: boolean;
 	mineruReaderDefaultMode: MineruReaderDefaultMode;
+	mineruReaderBilingualLinked: boolean;
+	mineruReaderBilingualSplitRatio: number;
 	mineruReaderFollowPdfReading: boolean;
 	mineruReaderFollowVisualReading: boolean;
 	mineruReaderShowLayoutBoxes: boolean;
@@ -661,6 +676,8 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	mineruDefaultArticleWikiSource: "auto",
 	mineruConfirmRemoteUpload: false,
 	mineruReaderDefaultMode: "pdf",
+	mineruReaderBilingualLinked: true,
+	mineruReaderBilingualSplitRatio: 0.5,
 	mineruReaderFollowPdfReading: true,
 	mineruReaderFollowVisualReading: true,
 	mineruReaderShowLayoutBoxes: true,

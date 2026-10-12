@@ -14,6 +14,7 @@ for (const [question, expected] of [
 	["embedding", "retrieval"], ["PDF OCR", "mineru"], ["导出", "data"],
 	["Codex 路径", "runtime"], ["  cLaUdE  ", "claude"], ["划选", "annotations"],
 	["Unpaywall 邮箱", "fulltext"],
+	["双语 联动", "reader"], ["英文 中文", "reader"],
 ]) {
 	assert.ok(pages("common", question).includes(expected), `${question} should find ${expected}`);
 	assert.deepEqual(pages("reading", question), pages("all", question), "search must cover hidden categories");

@@ -91,6 +91,7 @@ import {
 	migrateLegacySettingsKeys,
 	normalizeActionExecutionDefaults,
 	normalizeReaderMarkdownFolders,
+	normalizeReaderModeSettings,
 } from "./runtime/settings";
 import type { DashboardSettings } from "./runtime/settings";
 import { reconcilePublishedVaultTree } from "./runtime/vault-tree-reconcile";
@@ -1443,9 +1444,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			? storedSettings.mineruDefaultArticleWikiSource
 			: "auto";
 		this.settings.mineruConfirmRemoteUpload = storedSettings.mineruConfirmRemoteUpload === true;
-		this.settings.mineruReaderDefaultMode = storedSettings.mineruReaderDefaultMode === "visuals"
-			? "visuals"
-			: "pdf";
+		Object.assign(this.settings, normalizeReaderModeSettings(storedSettings));
 		this.settings.mineruReaderFollowPdfReading = storedSettings.mineruReaderFollowPdfReading !== false;
 		this.settings.mineruReaderFollowVisualReading = storedSettings.mineruReaderFollowVisualReading !== false;
 		this.settings.mineruReaderShowLayoutBoxes = storedSettings.mineruReaderShowLayoutBoxes !== false;

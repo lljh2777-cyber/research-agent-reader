@@ -840,7 +840,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.createSettingsPageHeader(
 			containerEl,
 			"文献阅读器",
-			"指定默认接管的 Markdown 目录，并设置新打开阅读器的初始双栏状态。MinerU 包继续使用结构化图文与原 PDF；普通 Markdown 使用紧邻图片的图注。",
+			"指定接管的 Markdown 目录，选择新打开文献的双栏模式。图文／PDF 双栏用于正文与参考图；英文／中文双栏读取已有配对资料，分别设置联动与栏宽。已保存的阅读状态优先。",
 			true,
 		);
 		new Setting(containerEl)
@@ -857,16 +857,39 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					});
 			});
 		new Setting(containerEl)
-			.setName("默认右栏模式")
-			.setDesc("选择打开文章时优先显示原始 PDF 或图片与图注。")
+			.setName("默认双栏模式")
+			.setDesc("选择新打开文献的初始模式。英文／中文仅用于 Clippings 内已有的规范双语资料；缺少配对时提示并回到普通图文阅读。阅读器顶部也可单独切换当前文献的模式。")
 			.addDropdown((dropdown) => dropdown
-				.addOption("pdf", "原始 PDF")
-				.addOption("visuals", "图片与图注")
+				.addOption("pdf", "正文＋原始 PDF")
+				.addOption("visuals", "正文＋图片与图注")
+				.addOption("bilingual", "英文＋中文（已有双语资料）")
 				.setValue(this.plugin.settings.mineruReaderDefaultMode)
 				.onChange(async (value) => {
-					this.plugin.settings.mineruReaderDefaultMode = value === "visuals" ? "visuals" : "pdf";
+					this.plugin.settings.mineruReaderDefaultMode = value === "bilingual" ? "bilingual" : value === "visuals" ? "visuals" : "pdf";
 					await this.plugin.saveSettings();
 				}));
+		new Setting(containerEl).setName("英文／中文双栏").setHeading();
+		new Setting(containerEl)
+			.setName("双语双栏默认联动")
+			.setDesc("首次打开双语对照时，滚动任一栏会按对应段落同步另一栏。关闭后仍可使用两侧的单次同步按钮；续读沿用已保存的联动状态。")
+			.addToggle((toggle) => toggle
+				.setValue(this.plugin.settings.mineruReaderBilingualLinked)
+				.onChange(async (value) => {
+					this.plugin.settings.mineruReaderBilingualLinked = value;
+					await this.plugin.saveSettings();
+				}));
+		new Setting(containerEl)
+			.setName("双语英文栏宽度")
+			.setDesc("英文／中文双栏中左侧英文的初始比例，范围 30%–70%；50% 表示两栏等宽。阅读器中的拖动与续读状态独立保存。")
+			.addSlider((slider) => slider
+				.setLimits(0.3, 0.7, 0.02)
+				.setDynamicTooltip()
+				.setValue(this.plugin.settings.mineruReaderBilingualSplitRatio)
+				.onChange(async (value) => {
+					this.plugin.settings.mineruReaderBilingualSplitRatio = Math.max(0.3, Math.min(0.7, value));
+					await this.plugin.saveSettings();
+				}));
+		new Setting(containerEl).setName("正文＋图文／PDF 双栏").setHeading();
 		new Setting(containerEl)
 			.setName("原始 PDF 跟随正文页")
 			.setDesc("新阅读器默认根据左侧正文最上方内容同步到对应 PDF 页。")
@@ -907,7 +930,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				}));
 		new Setting(containerEl)
 			.setName("Markdown 栏宽度")
-			.setDesc("双栏中左侧 Markdown 的初始比例，范围 42%–78%。")
+			.setDesc("图文／PDF 双栏中左侧 Markdown 的初始比例，范围 42%–78%；英文／中文使用上方独立的英文栏宽度。")
 			.addSlider((slider) => slider
 				.setLimits(0.42, 0.78, 0.02)
 				.setDynamicTooltip()

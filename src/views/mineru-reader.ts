@@ -67,7 +67,9 @@ const DEFAULT_STATE: MineruReaderViewState = {
 function defaultStateForSettings(settings: DashboardSettings): MineruReaderViewState {
 	return {
 		...DEFAULT_STATE,
-		mode: settings.mineruReaderDefaultMode,
+		mode: settings.mineruReaderDefaultMode === "visuals" ? "visuals" : "pdf",
+		bilingual: settings.mineruReaderDefaultMode === "bilingual",
+		bilingualRatio: settings.mineruReaderBilingualSplitRatio ?? 0.5,
 		followPdfReading: settings.mineruReaderFollowPdfReading,
 		followVisualReading: settings.mineruReaderFollowVisualReading,
 		showLayoutBoxes: settings.mineruReaderShowLayoutBoxes,
@@ -102,10 +104,14 @@ function normalizeState(
 	const legacyFollowReading = typeof record.followReading === "boolean"
 		? record.followReading
 		: null;
+	const savedReferenceMode = record.mode === "pdf" || record.mode === "visuals";
 	return {
 		articlePath: String(record.articlePath || ""),
-		...(typeof record.bilingual === "boolean" ? { bilingual: record.bilingual } : {}),
-		...(typeof record.bilingualRatio === "number" ? { bilingualRatio: boundedNumber(record.bilingualRatio, 0.5, 0.3, 0.7) } : {}),
+		bilingual: isBilingualEntry(String(record.articlePath || ""))
+			&& (typeof record.bilingual === "boolean" ? record.bilingual : !savedReferenceMode && defaults.bilingual === true),
+		bilingualRatio: typeof record.bilingualRatio === "number"
+			? boundedNumber(record.bilingualRatio, defaults.bilingualRatio ?? 0.5, 0.3, 0.7)
+			: defaults.bilingualRatio ?? 0.5,
 		...(record.bilingualState && typeof record.bilingualState === "object" ? { bilingualState: record.bilingualState as MineruReaderViewState["bilingualState"] } : {}),
 		mode,
 		followPdfReading: typeof record.followPdfReading === "boolean"
@@ -217,8 +223,8 @@ export class MineruReaderView extends ItemView {
 	async setArticlePath(articlePath: string): Promise<void> {
 		if (articlePath === this.readerState.articlePath && this.readerPackage) return;
 		this.readerState.articlePath = articlePath;
-		delete this.readerState.bilingual;
-		delete this.readerState.bilingualRatio;
+		this.readerState.bilingual = isBilingualEntry(articlePath) && this.plugin.settings.mineruReaderDefaultMode === "bilingual";
+		this.readerState.bilingualRatio = this.plugin.settings.mineruReaderBilingualSplitRatio ?? 0.5;
 		delete this.readerState.bilingualState;
 		this.readerState.currentVisualId = "";
 		this.readerState.markdownAnchor = "";
@@ -398,7 +404,7 @@ export class MineruReaderView extends ItemView {
 				if (!adapter.getBasePath) throw new Error("双语阅读需要桌面本地文件系统");
 				const doc = await loadBilingualDocument(new FileSourceStorage(adapter.getBasePath()), readerPackage.articlePath, signal);
 				if (signal.aborted || !this.opened || this.readerPackage !== readerPackage) return;
-				this.bilingualReader = new BilingualReader({ app: this.app, host: shell, document: doc, signal, annotate: () => this.plugin.openSelectionAnnotation(), ratio: this.readerState.bilingualRatio, state: this.readerState.bilingualState, onState: state => { this.readerState.bilingualState = state; this.requestStateSave(); }, onRatio: ratio => { this.readerState.bilingualRatio = ratio; this.requestStateSave(); }, ordinary: () => { this.readerState.bilingualState = this.bilingualReader?.snapshot(); this.readerState.bilingual = false; this.requestStateSave(); void this.renderWorkspace(); } });
+				this.bilingualReader = new BilingualReader({ app: this.app, host: shell, document: doc, signal, annotate: () => this.plugin.openSelectionAnnotation(), ratio: this.readerState.bilingualRatio, defaultLinked: this.plugin.settings.mineruReaderBilingualLinked, state: this.readerState.bilingualState, onState: state => { this.readerState.bilingualState = state; this.requestStateSave(); }, onRatio: ratio => { this.readerState.bilingualRatio = ratio; this.requestStateSave(); }, ordinary: () => this.switchReaderLayout(false) });
 				this.bilingualReader.load(); await this.bilingualReader.render(); return;
 			} catch (error) {
 				if (signal.aborted) return;
@@ -447,14 +453,26 @@ export class MineruReaderView extends ItemView {
 			const read = header.createEl("button", { text: "交互深读", attr: { "data-jats-action": "interactive" } });
 			this.onWorkspaceEvent(read, "click", () => { void this.plugin.activateReadingWorkspace!({ domain: "paper", source: { kind: "structured", path: readerPackage.articlePath } }).catch(error => new Notice(String(error))); });
 		}
-		if (isBilingualEntry(readerPackage.articlePath) && !this.readerState.bilingual) {
-			const bilingual = header.createEl("button", { text: "双语对照", attr: { type: "button", "data-bilingual-action": "open" } });
-			this.onWorkspaceEvent(bilingual, "click", () => { this.readerState.bilingual = true; this.requestStateSave(); void this.renderWorkspace(); });
-		}
+		const layout = header.createEl("select", { cls: "agent-dashboard-reader-layout", attr: { "aria-label": "双栏阅读模式" } });
+		layout.createEl("option", { value: "reference", text: "正文＋图文／PDF" });
+		const bilingual = layout.createEl("option", { value: "bilingual", text: "英文＋中文" });
+		bilingual.disabled = !isBilingualEntry(readerPackage.articlePath);
+		if (bilingual.disabled) layout.title = "英文／中文双栏需要 Clippings 内已有的规范双语资料";
+		layout.value = this.readerState.bilingual ? "bilingual" : "reference";
+		this.onWorkspaceEvent(layout, "change", () => this.switchReaderLayout(layout.value === "bilingual"));
 		if (readerPackage.sourceKind === "jats" && this.plugin.openJatsWiki) {
 			const wiki = header.createEl("button", { text: "论文笔记", attr: { "data-jats-action": "wiki" } });
 			this.onWorkspaceEvent(wiki, "click", () => { void this.plugin.openJatsWiki!(readerPackage.articlePath.split("/")[1]).catch(error => new Notice(String(error))); });
 		}
+	}
+
+	private switchReaderLayout(bilingual: boolean): void {
+		if (bilingual && !isBilingualEntry(this.readerState.articlePath)) return;
+		if (bilingual === this.readerState.bilingual) return;
+		if (this.bilingualReader) this.readerState.bilingualState = this.bilingualReader.snapshot();
+		this.readerState.bilingual = bilingual;
+		this.requestStateSave();
+		void this.renderWorkspace();
 	}
 
 	revealReadingBlock(blockId: string): void {

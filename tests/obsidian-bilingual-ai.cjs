@@ -26,7 +26,7 @@ module.exports = async function bilingualAI(app, options) {
  };
  try {
   await p.activateMineruReaderView(plan.root+"/paper."+(test.language==="en"?"md":"zh-CN.md"));view=app.workspace.activeLeaf.view;
-  await until(()=>view.contentEl.querySelector('[data-bilingual-action="open"]'));view.contentEl.querySelector('[data-bilingual-action="open"]').click();await until(()=>view.bilingualReader?.panes.size===2&&!view.bilingualReader.restoring);
+  if(!view.bilingualReader){await until(()=>view.contentEl.querySelector('[aria-label="双栏阅读模式"], [data-bilingual-action="open"]'));const layout=view.contentEl.querySelector('[aria-label="双栏阅读模式"]');if(layout){layout.value="bilingual";layout.dispatchEvent(new Event("change"));}else view.contentEl.querySelector('[data-bilingual-action="open"]').click();}await until(()=>view.bilingualReader?.panes.size===2&&!view.bilingualReader.restoring);
   const reader=view.bilingualReader,pane=reader.panes.get(test.language),paragraph=[...pane.article.querySelectorAll("p")].find(el=>reader.blockForElement(test.language,el)?.id===test.blockId&&el.textContent.includes(test.selectedText));assert.ok(paragraph,"selected rendered paragraph");
   const nodes=[],walker=document.createTreeWalker(paragraph,NodeFilter.SHOW_TEXT);let node,text="";while((node=walker.nextNode())){nodes.push({node,start:text.length,end:text.length+node.textContent.length});text+=node.textContent;}
   const from=text.indexOf(test.selectedText),to=from+test.selectedText.length;assert.ok(from>=0&&text.indexOf(test.selectedText,from+1)<0,"unique selected text");
