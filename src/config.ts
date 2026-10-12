@@ -41,6 +41,8 @@ export const MODEL_OPTIONS: readonly ModelOption[] = [
 ];
 
 export const OPENCODE_ZEN_FREE_MODELS: readonly ModelOption[] = [
+	{ id: "opencode/step-5-preview-free", label: "Step-5-Preview", description: "用户指定的当前免费候选", supportsFast: false },
+	{ id: "opencode/mimo-v2.6-flash-free", label: "mimo-v2.6-flash", description: "用户指定的当前免费候选", supportsFast: false },
 	{
 		id: "opencode/mimo-v2.5-free",
 		label: "MiMo-V2.5 Free",

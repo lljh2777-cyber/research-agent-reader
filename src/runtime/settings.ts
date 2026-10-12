@@ -685,7 +685,7 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	annotationCodexServiceTier: "default",
 	annotationClaudeModel: "",
 	annotationClaudeReasoningEffort: "medium",
-	annotationOpenCodeModel: "",
+	annotationOpenCodeModel: "opencode/step-5-preview-free",
 	annotationOpenCodeReasoningEffort: "medium",
 	annotationMaxTokens: 900,
 	annotationWebSearchEnabled: false,

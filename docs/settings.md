@@ -1,5 +1,7 @@
 # 设置使用说明
 
+`0.88.0` 的 OpenCode 批注模型列表增加 Step-5-Preview 与 mimo-v2.6-flash，完整 ID 分别为 `opencode/step-5-preview-free`、`opencode/mimo-v2.6-flash-free`。官方离线文字批注使用共用 CLI 调用层，使用模型默认推理参数；联网与 CC Switch 保持已有方式。升级保留已选模型。OpenCode 会保留本机会话，见[本机 CLI 批注](cli-annotation-backends.md)。
+
 `0.87.0` 在「批注 AI」增加 Qoder CLI CN，使用本机 `qoderclicn` 并明确传入 `--model Qwen3.8-Flash`。支持路径检测、准确模型 ID、生成时间上限与来源记录，沿用 CLI 登录；操作见[本机 CLI 批注](cli-annotation-backends.md)。
 
 `0.86.0` 在「批注 AI」增加 CodeBuddy。选择 Step-5-Preview 时明确调用 `step-5-preview`，支持检测／填写本机程序路径、自定义模型 ID 和生成时间上限。沿用 CLI 登录，仅提供文字解释；已有浅层联网开关需关闭。操作与记录见[本机 CLI 批注](cli-annotation-backends.md)。

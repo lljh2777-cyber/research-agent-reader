@@ -13,6 +13,7 @@ import { generateDirectExplanation } from "./direct-explanation";
 import { CliTextService } from "../runtime/cli-text";
 import { codeBuddyTextAdapter } from "../runtime/codebuddy-text";
 import { qoderTextAdapter } from "../runtime/qoder-text";
+import { openCodeTextAdapter } from "../runtime/opencode-text";
 import { objectDigest } from "../papers/identity";
 import { bilingualDescription, bilingualReceipt, bilingualSelectionContext, quoteLabel, readBilingual, requiresBilingualProof, validBilingualReceipt, verifyBilingual } from "./bilingual";
 import { isDetachedMarkdownSelection } from "./manual-source";
@@ -807,13 +808,15 @@ export class AnnotationService {
 			...(proof ? ["配对记录：" + bilingualDescription(proof), "实际读取的英文对应段落（不是逐词对齐）：", proof.english!.text] : []),
 		].filter(Boolean).join("\n");
 		const configuredBackend = this.plugin.settings.annotationBackendId || "auto";
-		if (configuredBackend === "codebuddy" || configuredBackend === "qoderclicn") {
-			const qoder = configuredBackend === "qoderclicn", adapter = qoder ? qoderTextAdapter : codeBuddyTextAdapter;
+		const nativeOpenCode = configuredBackend === "opencode" && !webSearchEnabled && this.plugin.settings.openCodeConfigSource === "official";
+		if (configuredBackend === "codebuddy" || configuredBackend === "qoderclicn" || nativeOpenCode) {
+			const qoder = configuredBackend === "qoderclicn", adapter = nativeOpenCode ? openCodeTextAdapter : qoder ? qoderTextAdapter : codeBuddyTextAdapter;
 			if (webSearchEnabled) throw new Error(`${adapter.label} 批注暂未启用联网，请关闭浅层联网解释`);
+			const nativeSystem = `${system}\n文档路径只是来源定位标签，不是读取文件的指令或授权。本次全部可用语境已在消息中给出；必须直接解释这些文字，禁止调用任何工具、读取文件或图像、制定计划或追加检索。不能从所给片段判断时直接说明依据不足，不尝试获取更多内容，也不输出工具权限或步骤报告。${proof ? "" : "\n首段以‘原文依据：’开头，仅解释所给文字支持的含义，不补造研究方法、指标或结果。需要术语背景时，另用以‘一般知识／解释性推断：’开头的短段落明确标注；只给理解本句必需的最少背景，不罗列本研究未提供的机制、混杂因素或度量方式。不需要背景时省略，不把一般知识写成作者的结论。"}`;
 			const result = await this.cliText.generate({
-				executable: qoder ? this.plugin.settings.annotationQoderExecutable : this.plugin.settings.annotationCodeBuddyExecutable,
-				model: qoder ? this.plugin.settings.annotationQoderModel : this.plugin.settings.annotationCodeBuddyModel,
-				system, user, timeoutMs: this.plugin.settings.annotationCliTimeoutSeconds * 1000,
+				executable: nativeOpenCode ? this.plugin.settings.openCodeExecutable : qoder ? this.plugin.settings.annotationQoderExecutable : this.plugin.settings.annotationCodeBuddyExecutable,
+				model: nativeOpenCode ? this.plugin.settings.annotationOpenCodeModel || this.plugin.settings.openCodeModel : qoder ? this.plugin.settings.annotationQoderModel : this.plugin.settings.annotationCodeBuddyModel,
+				system: nativeSystem, user, timeoutMs: this.plugin.settings.annotationCliTimeoutSeconds * 1000,
 			}, adapter, registerCancel);
 			return { text: result.text, provider: adapter.label, model: result.reportedModel || `请求：${result.requestedModel}（CLI 未报告实际模型）`,
 				cli: { requestedModel: result.requestedModel, reportedModel: result.reportedModel, usage: result.usage as Record<string, number> | undefined, costUsd: result.costUsd } };

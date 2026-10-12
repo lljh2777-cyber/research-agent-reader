@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.88.0] - 2026-10-13
+
+- OpenCode 批注增加 Step-5-Preview 与 mimo-v2.6-flash，准确参数分别为 `--model opencode/step-5-preview-free` 与 `--model opencode/mimo-v2.6-flash-free`。
+- 官方配置的离线文字批注接入共用进程层，提供空 MCP 配置并关闭外部插件和共享；工具权限请求由非交互 CLI 自动拒绝，含工具调用的结果不交付。保留既有联网及 CC Switch 路径与已保存模型选择。
+- 只交付成功完成且未截断的文字事件，用量沿用 CLI 报告；没有实际模型报告时明确标为未知。OpenCode 本机会话与临时目录保留，详情见[本机 CLI 批注](docs/cli-annotation-backends.md)。
+- 修复 Windows／Bun 未用标准输入的等待问题，新增空设备输入；原文片段与一般知识分段标注，明确禁止 CLI 追加读文件。两个 OpenCode 模型的最终原生生成、保存、回读与插件重载通过，保留此前失败及回答质量缺口。
+
 ## [0.87.0] - 2026-10-12
 
 - 批注新增 Qoder CLI CN，检测本机 `qoderclicn` 并明确传入 `--model Qwen3.8-Flash`，沿用本机登录。

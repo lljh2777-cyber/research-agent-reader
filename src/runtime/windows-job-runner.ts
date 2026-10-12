@@ -135,7 +135,7 @@ export function windowsJobWrappedCommand(
 	const readPayload = payloadFile
 		? `$p=Get-Content -LiteralPath '${payloadFile.replace(/'/g, "''")}' -Raw -Encoding UTF8|ConvertFrom-Json;`
 		: `$p=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${payload}'))|ConvertFrom-Json;`;
-	const script = `$ErrorActionPreference='Stop';Add-Type -TypeDefinition @'\n${JOB_RUNNER_SOURCE}\n'@;`
+	const script = `$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';Add-Type -TypeDefinition @'\n${JOB_RUNNER_SOURCE}\n'@;`
 		+ readPayload
 		+ `$code=[ResearchReaderJobRunner]::Run([string]$p.command,[string[]]$p.args,[string]$p.cwd);exit $code`;
 	return {

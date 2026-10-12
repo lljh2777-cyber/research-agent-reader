@@ -16,9 +16,9 @@ export interface CliTextAdapter {
 	label: string;
 	npmPackage?: string;
 	binName?: string;
-	invocation(model: string, system: string, user?: string): { args: string[]; env?: NodeJS.ProcessEnv };
+	invocation(model: string, system: string, user?: string): { args: string[]; env?: NodeJS.ProcessEnv | ((cwd: string) => NodeJS.ProcessEnv) };
 	parse(stdout: string, requestedModel: string): CliTextResult;
-	input?(user: string): string;
+	input?(user: string): string | null;
 }
 
 export interface CliTextRequest {
@@ -32,6 +32,17 @@ export interface CliTextRequest {
 /** Resolve known npm shims to their declared Node entry without invoking a shell. */
 export function resolveTextCliCommand(executable: string, adapter: CliTextAdapter): { command: string; baseArgs: string[] } {
 	if (!path.isAbsolute(executable) || !fs.statSync(executable).isFile()) throw new Error(`${adapter.label} 路径必须是存在的绝对文件路径`);
+	// Scoop shims can keep their stdin pipe open while waiting for the child.
+	// Resolve only the declared executable inside this app's Scoop directory.
+	if (adapter.binName && /\.exe$/i.test(executable) && path.basename(path.dirname(executable)).toLowerCase() === "shims" && fs.existsSync(executable.replace(/\.exe$/i, ".shim"))) {
+		const metadata = fs.readFileSync(executable.replace(/\.exe$/i, ".shim"), "utf8");
+		const targetPath = /^path\s*=\s*"([^"\r\n]+)"\s*$/m.exec(metadata)?.[1];
+		if (!targetPath || !path.isAbsolute(targetPath) || /^args\s*=/m.test(metadata)) throw new Error(`${adapter.label} Scoop 启动器不受支持，请指定原生程序`);
+		const root = fs.realpathSync(path.join(path.dirname(executable), "..", "apps", adapter.binName));
+		const target = fs.realpathSync(targetPath), relative = path.relative(root, target);
+		if (relative.startsWith("..") || path.isAbsolute(relative) || path.basename(target).toLowerCase() !== `${adapter.binName}.exe`.toLowerCase() || !fs.statSync(target).isFile()) throw new Error(`${adapter.label} Scoop 入口未确认`);
+		return { command: target, baseArgs: [] };
+	}
 	if (!/\.(cmd|bat|ps1)$/i.test(executable)) return { command: executable, baseArgs: [] };
 	if (!adapter.npmPackage || !adapter.binName) throw new Error(`${adapter.label} 启动器不受支持，请指定原生程序`);
 	const shim = fs.readFileSync(executable, "utf8").replace(/\\/g, "/");
@@ -68,12 +79,22 @@ export class CliTextService {
 			const result = await this.runProcess({
 				command: command.command, baseArgs: command.baseArgs, cliArgs: invocation.args,
 				cwd, signal: controller.signal,
-				input: adapter.input ? adapter.input(request.user) : request.user, env: invocation.env,
+				input: adapter.input ? adapter.input(request.user) : request.user,
+				env: typeof invocation.env === "function" ? invocation.env(cwd) : invocation.env,
 				timeoutMs: Math.max(1000, Math.min(300000, request.timeoutMs || 120000)),
 			});
 			if (controller.signal.aborted || this.closing || result.exitCode === 130) throw new Error("批注解释已取消");
 			if (result.exitCode === 124) throw new Error("CLI 批注解释超时；已停止进程");
-			if (result.exitCode !== 0) throw new Error(`${adapter.label} 调用失败：${(result.stderr || result.stdout).trim().slice(0, 1000) || `退出码 ${result.exitCode}`}`);
+			if (result.exitCode !== 0) {
+				let detail = (result.stderr || result.stdout).trim();
+				for (const line of result.stdout.split(/\r?\n/)) {
+					try {
+						const event = JSON.parse(line) as { type?: string; error?: { name?: string; data?: { message?: string } } };
+						if (event.type === "error" && event.error) detail = [event.error.name, event.error.data?.message].filter(Boolean).join(": ") || detail;
+					} catch { /* Non-JSON diagnostics keep their original text. */ }
+				}
+				throw new Error(`${adapter.label} 调用失败：${detail.slice(0, 1000) || `退出码 ${result.exitCode}`}`);
+			}
 			const parsed = adapter.parse(result.stdout, model);
 			if (!parsed.text.trim()) throw new Error("模型返回了空解释");
 			return parsed;

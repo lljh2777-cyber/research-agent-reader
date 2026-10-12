@@ -13,7 +13,7 @@ export interface MineruProcessRequest {
 	timeoutMs: number;
 	signal: AbortSignal;
 	/** Optional UTF-8 input/environment for other bounded CLI callers. */
-	input?: string;
+	input?: string | null;
 	env?: NodeJS.ProcessEnv;
 }
 
@@ -94,6 +94,7 @@ export function runMineruProcessCommand(
 			shell: false,
 			windowsHide: true,
 			detached: platform !== "win32",
+			stdio: request.input === null ? ["ignore", "pipe", "pipe"] : "pipe",
 			env: mineruEnv,
 		});
 		let timer: ReturnType<typeof setTimeout> | null = null;
@@ -270,13 +271,13 @@ export function runMineruProcessCommand(
 		};
 		const onAbort = (): void => { void terminateTree(130, "已手动停止"); };
 		child.once("spawn", () => { spawnObserved = true; });
-		child.stdout.setEncoding("utf8");
-		child.stderr.setEncoding("utf8");
-		child.stdout.on("data", (chunk: Buffer) => {
-			if (stdout.length < MAX_HELPER_OUTPUT_CHARS) stdout += chunk.toString("utf8");
+		child.stdout!.setEncoding("utf8");
+		child.stderr!.setEncoding("utf8");
+		child.stdout!.on("data", (chunk: string) => {
+			if (stdout.length < MAX_HELPER_OUTPUT_CHARS) stdout += chunk;
 		});
-		child.stderr.on("data", (chunk: Buffer) => {
-			if (stderr.length < MAX_HELPER_OUTPUT_CHARS) stderr += chunk.toString("utf8");
+		child.stderr!.on("data", (chunk: string) => {
+			if (stderr.length < MAX_HELPER_OUTPUT_CHARS) stderr += chunk;
 		});
 		child.once("error", (error: Error) => {
 			if (!spawnObserved || !child.pid) {
@@ -321,11 +322,11 @@ export function runMineruProcessCommand(
 			}
 		});
 		request.signal.addEventListener("abort", onAbort, { once: true });
-		if (request.input !== undefined) {
-			child.stdin.on("error", (error: NodeJS.ErrnoException) => {
+		if (typeof request.input === "string") {
+			child.stdin?.on("error", (error: NodeJS.ErrnoException) => {
 				if (error.code !== "EPIPE" && !terminating) void terminateTree(124, "CLI 输入失败");
 			});
-			child.stdin.end(request.input, "utf8");
+			child.stdin?.end(request.input, "utf8");
 		}
 		timer = setTimeout(() => { void terminateTree(124, "MinerU 提取超时"); }, request.timeoutMs);
 		// The signal can be aborted between the pre-spawn check and listener
