@@ -1,5 +1,6 @@
 import { Component, MarkdownRenderer, Modal, type App } from "obsidian";
 import type { BilingualBlock, BilingualDocument, BilingualFile, BilingualLanguage } from "../reader/bilingual-document";
+import { bilingualPositionAt, bilingualScrollTarget, correspondingBilingualPosition, normalizeBilingualState, type BilingualGeometry, type BilingualReadingState } from "../reader/bilingual-position";
 
 /** Markers affect rendering only. Source offsets remain those of the unmodified files. */
 export function bilingualRenderMarkdown(file: BilingualFile): string {
@@ -12,17 +13,29 @@ export function bilingualRenderMarkdown(file: BilingualFile): string {
 	return result + file.text.slice(cursor);
 }
 export interface BilingualPane { language: BilingualLanguage; scroller: HTMLElement; article: HTMLElement; anchors: Map<string, HTMLElement>; }
-export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; ratio?: number; onRatio?(ratio: number): void; }
+export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; ratio?: number; onRatio?(ratio: number): void; state?: unknown; onState?(state: BilingualReadingState): void; }
 const STATUS: Record<string, string> = { "not-started": "尚未翻译", "in-progress": "翻译中", "needs-review": "译文待复核", reviewed: "记录标为已审阅", failed: "翻译记录失败", unknown: "译文状态未确认" };
 
 export class BilingualReader extends Component {
 	readonly panes = new Map<BilingualLanguage, BilingualPane>();
-	constructor(readonly options: BilingualReaderOptions) { super(); }
+	state: BilingualReadingState;
+	private readonly programmatic = new Set<BilingualLanguage>();
+	private frame = 0;
+	private resizeFrame = 0;
+	private linkedInput?: HTMLInputElement;
+	private message?: HTMLElement;
+	private invalidated = false;
+	constructor(readonly options: BilingualReaderOptions) { super(); this.state = normalizeBilingualState(options.state, options.document); }
 	async render(): Promise<void> {
 		const { app, host, document: doc, signal } = this.options;
 		host.classList.add("agent-bilingual-shell");
 		const toolbar = host.createDiv({ cls: "agent-bilingual-toolbar" });
 		toolbar.createEl("span", { text: "双语对照 · 结构对应，语义仍需核对" });
+		const linkedLabel = toolbar.createEl("label", { cls: "agent-bilingual-linked" });
+		this.linkedInput = linkedLabel.createEl("input", { attr: { type: "checkbox", "aria-label": "双栏联动" } });
+		linkedLabel.createSpan({ text: "双栏联动" }); this.linkedInput.checked = this.state.linked; this.linkedInput.disabled = !doc.syncAvailable;
+		this.linkedInput.addEventListener("change", () => { this.state.linked = this.linkedInput!.checked && doc.syncAvailable && !this.invalidated; if (this.state.linked) this.synchronize(this.state.active); this.publish(); }, { signal });
+		this.message = toolbar.createSpan({ cls: "agent-bilingual-sync-message", attr: { role: "status" } });
 		const status = toolbar.createEl("span", { text: STATUS[doc.status] + (doc.humanReview === "reviewed" ? " · 人工审阅记录已存在" : " · 人工审阅未确认"), cls: "agent-bilingual-status" });
 		status.setAttribute("title", doc.stale ? "译文英语来源已过期" : "结构对应不代表译文含义已经核验");
 		const ordinary = toolbar.createEl("button", { text: "返回单语图文", attr: { type: "button" } }); ordinary.addEventListener("click", this.options.ordinary, { signal });
@@ -35,6 +48,8 @@ export class BilingualReader extends Component {
 			if (signal.aborted) return;
 			const file = doc.files[language], pane = workspace.createEl("section", { cls: "agent-bilingual-pane", attr: { "aria-label": language === "en" ? "英文原文" : "中文译文", "data-bilingual-language": language } });
 			const heading = pane.createDiv({ cls: "agent-bilingual-pane-heading" }); heading.createEl("strong", { text: language === "en" ? "英文原文" : "中文译文" });
+			const sync = heading.createEl("button", { text: "以本栏同步另一栏", attr: { type: "button", "data-bilingual-sync": language } }); sync.disabled = !doc.syncAvailable;
+			sync.addEventListener("click", () => { this.activate(language); this.synchronize(language); }, { signal });
 			heading.createSpan({ text: "批注适配开发中", cls: "agent-bilingual-pending" });
 			const scroller = pane.createDiv({ cls: "agent-bilingual-scroll markdown-reading-view", attr: { tabindex: "0" } });
 			const article = scroller.createEl("article", { cls: "markdown-rendered agent-bilingual-article", attr: { "data-bilingual-document": doc.root } });
@@ -51,9 +66,16 @@ export class BilingualReader extends Component {
 				signal.addEventListener("abort", () => modal.close(), { once: true });
 			}, { signal });
 			this.panes.set(language, { language, scroller, article, anchors });
+			for (const type of ["wheel", "pointerdown", "touchstart", "keydown", "focusin"] as const) pane.addEventListener(type, () => this.activate(language), { signal, passive: type === "wheel" || type === "touchstart" });
+			scroller.addEventListener("scroll", () => {
+				if (this.programmatic.has(language) || this.options.signal.aborted) return;
+				this.capture(language);
+				if (this.frame) cancelAnimationFrame(this.frame);
+				this.frame = requestAnimationFrame(() => { this.frame = 0; this.capture(language); if (this.state.linked && this.state.active === language) this.synchronize(language); else this.publish(); });
+			}, { signal, passive: true });
 			if (language === "en") {
 				const splitter = workspace.createDiv({ cls: "agent-bilingual-splitter", attr: { role: "separator", tabindex: "0", "aria-label": "调整英文与中文栏宽", "aria-orientation": "vertical", "aria-valuemin": "30", "aria-valuemax": "70", "aria-valuenow": String(Math.round(ratio * 100)) } });
-				const change = (next: number): void => { ratio = Math.max(0.3, Math.min(0.7, next)); applyRatio(); splitter.setAttribute("aria-valuenow", String(Math.round(ratio * 100))); this.options.onRatio?.(ratio); };
+				const change = (next: number): void => { for (const l of ["en", "zh-CN"] as const) this.capture(l); ratio = Math.max(0.3, Math.min(0.7, next)); applyRatio(); splitter.setAttribute("aria-valuenow", String(Math.round(ratio * 100))); this.options.onRatio?.(ratio); };
 				let dragging = false;
 				splitter.addEventListener("pointerdown", event => { event.preventDefault(); dragging = true; splitter.setPointerCapture(event.pointerId); }, { signal });
 				splitter.addEventListener("pointermove", event => { if (!dragging) return; const rect = workspace.getBoundingClientRect(); if (rect.width) change((event.clientX - rect.left) / rect.width); }, { signal });
@@ -61,7 +83,48 @@ export class BilingualReader extends Component {
 				splitter.addEventListener("keydown", event => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); change(ratio + (event.key === "ArrowLeft" ? -0.02 : 0.02)); }, { signal });
 			}
 		}
+		for (const language of ["en", "zh-CN"] as const) this.restore(language);
+		const resize = new ResizeObserver(() => {
+			if (this.resizeFrame) cancelAnimationFrame(this.resizeFrame);
+			this.resizeFrame = requestAnimationFrame(() => { this.resizeFrame = 0; if (signal.aborted) return; for (const language of ["en", "zh-CN"] as const) this.restore(language); });
+		});
+		for (const pane of this.panes.values()) { resize.observe(pane.article); resize.observe(pane.scroller); }
+		signal.addEventListener("abort", () => { resize.disconnect(); cancelAnimationFrame(this.frame); cancelAnimationFrame(this.resizeFrame); }, { once: true });
+		const changed = (path: string): void => {
+			if (signal.aborted) return;
+			if (![doc.files.en.path, doc.files["zh-CN"].path, doc.metadataPath].includes(path)) return;
+			this.invalidated = true; this.state.linked = false; this.linkedInput!.checked = false; this.linkedInput!.disabled = true;
+			for (const button of host.querySelectorAll<HTMLButtonElement>("[data-bilingual-sync]")) button.disabled = true;
+			this.message!.setText("双语资料已变化，请重新打开核对；历史内容仍保留"); this.publish();
+		};
+		this.registerEvent(app.vault.on("modify", file => changed(file.path)));
+		this.registerEvent(app.vault.on("delete", file => changed(file.path)));
+		this.registerEvent(app.vault.on("rename", (file, old) => { changed(file.path); changed(old); }));
 	}
+	private activate(language: BilingualLanguage): void { this.state.active = language; this.programmatic.delete(language); }
+	private geometry(language: BilingualLanguage): BilingualGeometry[] {
+		const pane = this.panes.get(language); if (!pane) return [];
+		const top = pane.scroller.getBoundingClientRect().top;
+		return [...pane.anchors].map(([blockId, element]) => ({ blockId, top: pane.scroller.scrollTop + element.getBoundingClientRect().top - top }));
+	}
+	private capture(language: BilingualLanguage): void {
+		const pane = this.panes.get(language); if (!pane) return;
+		const position = bilingualPositionAt(this.geometry(language), pane.scroller.scrollTop, pane.scroller.scrollHeight); if (position) this.state.positions[language] = position;
+	}
+	private restore(language: BilingualLanguage): void {
+		const pane = this.panes.get(language); if (!pane) return;
+		const top = bilingualScrollTarget(this.geometry(language), this.state.positions[language], pane.scroller.scrollHeight, Math.max(0, pane.scroller.scrollHeight - pane.scroller.clientHeight));
+		if (top === null || Math.abs(pane.scroller.scrollTop - top) < 0.5) return;
+		this.programmatic.add(language); pane.scroller.scrollTop = top;
+	}
+	synchronize(from: BilingualLanguage): void {
+		if (this.invalidated || !this.options.document.syncAvailable || this.options.signal.aborted) return;
+		this.capture(from); const target = from === "en" ? "zh-CN" : "en", position = correspondingBilingualPosition(this.options.document, from, this.state.positions[from]);
+		if (!position || !this.panes.get(target)?.anchors.has(position.blockId)) { this.message?.setText("此处没有可定位的对应段落"); return; }
+		this.state.positions[target] = position; this.restore(target); this.capture(target); this.message?.setText(""); this.publish();
+	}
+	private publish(): void { this.options.onState?.(structuredClone(this.state)); }
+	snapshot(): BilingualReadingState { for (const language of ["en", "zh-CN"] as const) this.capture(language); return structuredClone(this.state); }
 	private bindAnchors(article: HTMLElement, file: BilingualFile): Map<string, HTMLElement> {
 		const anchors = new Map<string, HTMLElement>();
 		for (const marker of article.querySelectorAll<HTMLElement>("[data-bilingual-anchor]")) {
@@ -84,7 +147,7 @@ export class BilingualReader extends Component {
 			const href = link.getAttribute("href") || ""; if (!href.startsWith("#")) continue;
 			let target = href.slice(1); try { target = decodeURIComponent(target); } catch { /* Keep literal identifier. */ }
 			const id = ids.get(target); if (!id) continue; link.setAttribute("href", "#" + id);
-			link.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); article.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "start" }); }, { signal: this.options.signal });
+			link.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); this.activate(language); article.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "start" }); this.capture(language); if (this.state.linked) this.synchronize(language); else this.publish(); }, { signal: this.options.signal });
 		}
 	}
 	blockForElement(language: BilingualLanguage, element: Element): BilingualBlock | undefined {

@@ -265,6 +265,7 @@ export interface MineruReaderPackage {
 export interface MineruReaderViewState {
 	bilingual?: boolean;
 	bilingualRatio?: number;
+	bilingualState?: import("../reader/bilingual-position").BilingualReadingState;
 	articlePath: string;
 	mode: MineruReaderMode;
 	followPdfReading: boolean;

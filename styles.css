@@ -6925,6 +6925,8 @@ body.agent-dashboard-mineru-resizing {
 .agent-dashboard-mineru-reader-shell.agent-bilingual-shell { display: flex; flex-direction: column; }
 .agent-bilingual-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--background-modifier-border); }
 .agent-bilingual-status, .agent-bilingual-pending { color: var(--text-muted); font-size: var(--font-ui-small); }
+.agent-bilingual-linked { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.agent-bilingual-sync-message { color: var(--text-warning); font-size: var(--font-ui-small); }
 .agent-bilingual-issues { margin: 6px 12px; color: var(--text-warning); }
 .agent-bilingual-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, var(--bilingual-left, 1fr)) 6px minmax(0, var(--bilingual-right, 1fr)); overflow: hidden; }
 .agent-bilingual-splitter { cursor: col-resize; background: var(--background-modifier-border); touch-action: none; }

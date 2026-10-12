@@ -104,6 +104,7 @@ function normalizeState(
 		articlePath: String(record.articlePath || ""),
 		...(typeof record.bilingual === "boolean" ? { bilingual: record.bilingual } : {}),
 		...(typeof record.bilingualRatio === "number" ? { bilingualRatio: boundedNumber(record.bilingualRatio, 0.5, 0.3, 0.7) } : {}),
+		...(record.bilingualState && typeof record.bilingualState === "object" ? { bilingualState: record.bilingualState as MineruReaderViewState["bilingualState"] } : {}),
 		mode,
 		followPdfReading: typeof record.followPdfReading === "boolean"
 			? record.followPdfReading
@@ -188,7 +189,7 @@ export class MineruReaderView extends ItemView {
 	}
 
 	getState(): Record<string, unknown> {
-		return { ...this.readerState };
+		return { ...this.readerState, ...(this.bilingualReader ? { bilingualState: this.bilingualReader.snapshot() } : {}) };
 	}
 
 	async setState(state: unknown, _result: ViewStateResult): Promise<void> {
@@ -208,6 +209,7 @@ export class MineruReaderView extends ItemView {
 		this.readerState.articlePath = articlePath;
 		delete this.readerState.bilingual;
 		delete this.readerState.bilingualRatio;
+		delete this.readerState.bilingualState;
 		this.readerState.currentVisualId = "";
 		this.readerState.markdownAnchor = "";
 		this.readerState.markdownPage = 1;
@@ -386,7 +388,7 @@ export class MineruReaderView extends ItemView {
 				if (!adapter.getBasePath) throw new Error("双语阅读需要桌面本地文件系统");
 				const doc = await loadBilingualDocument(new FileSourceStorage(adapter.getBasePath()), readerPackage.articlePath, signal);
 				if (signal.aborted || !this.opened || this.readerPackage !== readerPackage) return;
-				this.bilingualReader = new BilingualReader({ app: this.app, host: shell, document: doc, signal, ratio: this.readerState.bilingualRatio, onRatio: ratio => { this.readerState.bilingualRatio = ratio; this.requestStateSave(); }, ordinary: () => { this.readerState.bilingual = false; this.requestStateSave(); void this.renderWorkspace(); } });
+				this.bilingualReader = new BilingualReader({ app: this.app, host: shell, document: doc, signal, ratio: this.readerState.bilingualRatio, state: this.readerState.bilingualState, onState: state => { this.readerState.bilingualState = state; this.requestStateSave(); }, onRatio: ratio => { this.readerState.bilingualRatio = ratio; this.requestStateSave(); }, ordinary: () => { this.readerState.bilingualState = this.bilingualReader?.snapshot(); this.readerState.bilingual = false; this.requestStateSave(); void this.renderWorkspace(); } });
 				this.bilingualReader.load(); await this.bilingualReader.render(); return;
 			} catch (error) {
 				if (signal.aborted) return;
