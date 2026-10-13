@@ -12,8 +12,14 @@ for (const text of ["不能理解为未经调整的比较。", "是否为未调�
 assert.doesNotThrow(() => verify("原文依据：这是未经调整的组间比较。", "The authors report an unadjusted comparison of the two groups."));
 assert.doesNotThrow(() => verify("这是未调整比较。", "No covariate adjustment was performed."));
 assert.doesNotThrow(() => verify("这是未调整比较。", "The estimates were not adjusted for covariates."));
+assert.doesNotThrow(() => verify("这是未调整比较。", "The estimates were not adjusted for covariates, and do not establish causation."));
+assert.doesNotThrow(() => verify("这是未调整比较。", "The authors report an unadjusted comparison and do not claim causation."));
+assert.doesNotThrow(() => verify("这是未调整比较。", "本比较未作协变量调整，不能证明因果。"));
+assert.throws(() => verify("是否调整未知，但这属于未经调整的组间比较。", evidence));
+assert.throws(() => verify("可能是未调整比较，但这就是未经调整的结果。", evidence));
 assert.throws(() => verify("这是未调整比较。", "The paper does not state whether the comparison was unadjusted."));
 assert.throws(() => verify("这是未调整比较。", "Unadjusted analysis was not reported in the passage."));
+assert.throws(() => verify("这是未调整比较。", "The paper does not report an unadjusted analysis."));
 (async () => {
  let calls=0;
  const cli={generate:async()=>{calls++;return {text:"此类观测风险比较属于未经调整的组间描述。",requestedModel:"step-5-preview"};}};
