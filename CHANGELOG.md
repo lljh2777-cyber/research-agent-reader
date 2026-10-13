@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.88.1] - 2026-10-13
+
+- 收紧本机 CLI 批注的证据表述：保持比较对象、分组、样本范围和数值分母，禁止将两组差异扩写为连续趋势、因果或干预效果；不从研究类别补造随访、时序、校正变量或方法。
+- 补限定真实论文选段、首次 OpenCode 冷缓存调用和正常宿主重启验收；保留原始回答、空解释失败及独立审阅缺口。见[定向收尾记录](docs/cli-annotation-closeout.md)。
+
 ## [0.88.0] - 2026-10-13
 
 - OpenCode 批注增加 Step-5-Preview 与 mimo-v2.6-flash，准确参数分别为 `--model opencode/step-5-preview-free` 与 `--model opencode/mimo-v2.6-flash-free`。

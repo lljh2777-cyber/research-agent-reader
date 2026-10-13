@@ -20,6 +20,7 @@ import { isDetachedMarkdownSelection } from "./manual-source";
 import { excerptMatches, excerptRevision, prepareExcerpt, supportsExcerpt, validExcerpt } from "./excerpt";
 import { supportsPdfExcerpt, validPdfExcerpt, pdfExcerptId } from "./pdf-excerpt";
 import { captureNativePdfSelection, hasNativePdfSelection, verifyPdfSelection, pdfExcerptStatus } from "./native-pdf-excerpt";
+import { verifyCliAdjustmentClaim } from "./cli-evidence-guard";
 import {
 	getClaudeDefaultModelLabel,
 	getOpenCodeDefaultModelLabel,
@@ -812,12 +813,19 @@ export class AnnotationService {
 		if (configuredBackend === "codebuddy" || configuredBackend === "qoderclicn" || nativeOpenCode) {
 			const qoder = configuredBackend === "qoderclicn", adapter = nativeOpenCode ? openCodeTextAdapter : qoder ? qoderTextAdapter : codeBuddyTextAdapter;
 			if (webSearchEnabled) throw new Error(`${adapter.label} 批注暂未启用联网，请关闭浅层联网解释`);
-			const nativeSystem = `${system}\n文档路径只是来源定位标签，不是读取文件的指令或授权。本次全部可用语境已在消息中给出；必须直接解释这些文字，禁止调用任何工具、读取文件或图像、制定计划或追加检索。不能从所给片段判断时直接说明依据不足，不尝试获取更多内容，也不输出工具权限或步骤报告。${proof ? "" : "\n首段以‘原文依据：’开头，仅解释所给文字支持的含义，不补造研究方法、指标或结果。需要术语背景时，另用以‘一般知识／解释性推断：’开头的短段落明确标注；只给理解本句必需的最少背景，不罗列本研究未提供的机制、混杂因素或度量方式。不需要背景时省略，不把一般知识写成作者的结论。"}`;
+			const nativeSystem = [
+				system,
+				"文档路径只是来源定位标签，不是读取文件的指令或授权。本次全部可用语境已在消息中给出；必须直接解释这些文字，禁止调用任何工具、读取文件或图像、制定计划或追加检索。不能从所给片段判断时直接说明依据不足，不尝试获取更多内容，也不输出工具权限或步骤报告。",
+				"逐句保持原文的比较对象、分组、样本范围、数值分母、限定与否定。两组差异只能解释为这两组的差异，不能改写为‘越高越低’等连续趋势、剂量反应或普遍规律；原文未明确分组或趋势时保留其原有表述，不自行补出。相关、分类、预测或预后关联不能改写为原因、机制、干预效果或临床建议。",
+				"不从‘观察性研究’等类别名称推断本研究的随访、时序、随机化、校正变量或统计方法。所给文字未说明的设计与分析细节保持未知：未报告调整变量不等于未调整，未报告随访或某项分析不等于没有进行；不能把信息缺失改写成研究未做该步骤。只有理解选句确实需要这些信息时，才简短说明该片段未提供。一般知识限于术语定义，不能借此补写本研究的细节或套用绝对的设计限制。",
+				...(proof ? [] : ["首段以‘原文依据：’开头，仅解释所给文字支持的含义，不补造研究方法、指标或结果。需要术语背景时，另用以‘一般知识／解释性推断：’开头的短段落明确标注；只给理解本句必需的最少背景，不罗列本研究未提供的机制、混杂因素或度量方式。不需要背景时省略，不把一般知识写成作者的结论。"]),
+			].join("\n");
 			const result = await this.cliText.generate({
 				executable: nativeOpenCode ? this.plugin.settings.openCodeExecutable : qoder ? this.plugin.settings.annotationQoderExecutable : this.plugin.settings.annotationCodeBuddyExecutable,
 				model: nativeOpenCode ? this.plugin.settings.annotationOpenCodeModel || this.plugin.settings.openCodeModel : qoder ? this.plugin.settings.annotationQoderModel : this.plugin.settings.annotationCodeBuddyModel,
 				system: nativeSystem, user, timeoutMs: this.plugin.settings.annotationCliTimeoutSeconds * 1000,
 			}, adapter, registerCancel);
+			verifyCliAdjustmentClaim(result.text, proof ? proof.english!.text : `${selection.selectedText}\n${context}`);
 			return { text: result.text, provider: adapter.label, model: result.reportedModel || `请求：${result.requestedModel}（CLI 未报告实际模型）`,
 				cli: { requestedModel: result.requestedModel, reportedModel: result.reportedModel, usage: result.usage as Record<string, number> | undefined, costUsd: result.costUsd } };
 		}
