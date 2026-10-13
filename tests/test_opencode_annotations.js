@@ -25,11 +25,11 @@ const { AnnotationService } = loadReading("annotations/annotation-service.ts");
 	assert.throws(()=>adapter.parse(stream("stop")+"\n"+JSON.stringify({type:"text",sessionID:"other"}),parsed.requestedModel));
 	assert.throws(()=>adapter.parse(stream("stop")+"\n"+JSON.stringify({type:"step_finish",part:{reason:"stop"}}),parsed.requestedModel));
 	let request,calls=0;
-	const cli={generate:async(r,a)=>{calls++;request=r;assert.equal(a.label,"OpenCode");return parsed;}};
+	const cli={generate:async(r,a)=>{calls++;request=r;assert.equal(a.label,"OpenCode");return {...parsed,text:JSON.stringify({claims:[{quote:"Association does not establish causation.",meaning:"相关关系不能证明因果。"}]})};}};
 	const settings={annotationBackendId:"opencode",openCodeConfigSource:"official",openCodeExecutable:"native",annotationOpenCodeModel:parsed.requestedModel,openCodeModel:"old-configured-model",annotationCliTimeoutSeconds:120};
-	const service=new AnnotationService({}, {settings},cli),selection={sourcePath:"papers/fixture/article.md",selectedText:"association",section:"Results",context:"Association does not establish causation."};
+	const service=new AnnotationService({}, {settings},cli),selection={sourcePath:"papers/fixture/article.md",selectedText:"Association",section:"Results",context:"Association does not establish causation."};
 	const answer=await service.generateExplanation(selection,()=>{}); assert.equal(request.model,parsed.requestedModel); assert.match(answer.model,/未报告实际模型/);
-	assert.match(request.system,/原文依据：/);assert.match(request.system,/一般知识／解释性推断：/);
+	assert.match(request.system,/原文依据：/);assert.match(answer.text,/对应原文：/);
 	assert.match(request.system,/禁止调用任何工具、读取文件/);
 	settings.annotationOpenCodeModel=""; settings.openCodeModel=OPENCODE_ANNOTATION_MODELS[1].id; await service.generateExplanation(selection,()=>{});assert.equal(request.model,settings.openCodeModel);
 	// Existing CC Switch/web routing stays owned by the existing action runner.

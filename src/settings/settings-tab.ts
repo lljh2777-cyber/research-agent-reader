@@ -1663,7 +1663,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		const qoder = backendId === "qoderclicn", opencode = backendId === "opencode", label = opencode ? "OpenCode" : qoder ? "Qoder CLI CN" : "CodeBuddy";
 		const pathKey = opencode ? "openCodeExecutable" : qoder ? "annotationQoderExecutable" : "annotationCodeBuddyExecutable", modelKey = opencode ? "annotationOpenCodeModel" : qoder ? "annotationQoderModel" : "annotationCodeBuddyModel";
 		const models = opencode ? OPENCODE_ANNOTATION_MODELS : [{ id: qoder ? QODER_ANNOTATION_MODEL : CODEBUDDY_ANNOTATION_MODEL, label: qoder ? QODER_ANNOTATION_MODEL : "Step-5-Preview" }];
-		this.createProviderSectionHeader(containerEl, `${label} 批注`, "沿用本机 CLI 登录。每次独立生成，解释只使用提供的文字和模型一般知识；免费权益以你的当前账号为准。");
+		this.createProviderSectionHeader(containerEl, `${label} 批注`, "沿用本机 CLI 登录。围绕划选原文给出短释义，并附对应原句；免费权益以你的当前账号为准。");
 		new Setting(containerEl).setName("CLI 程序路径").setDesc("支持原生程序或官方 npm 启动器。npm 安装需要系统 PATH 中可用的独立 Node.js。")
 			.addText(text => text.setValue(settings[pathKey]).onChange(async value => { settings[pathKey] = value.trim(); await this.plugin.saveSettings(); }))
 			.addButton(button => button.setButtonText("自动检测").onClick(async () => { const detected = detectCliExecutable(backendId); if (!detected.found) { new Notice(`未检测到 ${label}，请填写本机程序路径`); return; } settings[pathKey] = detected.executable; await this.plugin.saveSettings(); this.display(); }));
