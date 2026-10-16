@@ -52,6 +52,7 @@ This disposable Vault was generated from the standalone repository. It contains 
 10. Try an advanced AI action. It should show an actionable missing-toolkit message without breaking the reader.
 11. Right-click \`Manual/English sample.md\` → 选择阅读方式… → 英文＋中文 Markdown (one option). In the directory tree confirm the current language is 英文原文, expand Manual and select \`中文样本.md\`, then open the pair. Search must retain folder ancestry; clearing search restores the tree. Also start from the Chinese file and confirm left English / right Chinese. Confirm each pane has file name, annotation and one-shot sync controls. The pair has no translation metadata: synchronization must say reading progress, and Chinese AI contrast must stop before any provider call.
 12. Click the 交换左右位置 icon between the file names. Confirm titles and contents exchange sides, source language and reading positions stay attached to each document, and swapping again returns the original order. Toggle linked scrolling, resize the divider, save independent excerpts and reload the plugin. Confirm both selected paths, displayed order and saved state return; canceling a file replacement must retain the pair. Add a local PDF if you also want to exercise Markdown＋PDF; this generated fixture does not include one.
+13. With linking off, click each sample's [1] citation and footnote return link. Only that pane may scroll; the file bar, linkage controls and both pane headers must stay visible. Repeat after swapping the panes. The references are synthetic navigation fixtures, not scientific evidence.
 
 Do not use this generated Vault for real notes.
 `);
@@ -80,15 +81,19 @@ This fixture intentionally contains no cross-root links.
 `);
 writeUtf8("Manual/English sample.md", `# Manual reading sample
 
-A manual reading pair keeps both source files unchanged.
+A manual reading pair keeps both source files unchanged.[^1]
 
 Matching reading progress does not verify scientific conclusions or translation accuracy.
+
+[^1]: Synthetic reference for navigation QA.
 `);
 writeUtf8("Manual/中文样本.md", `# 手动阅读样本
 
-手动配对阅读保持两份来源文件不变。
+手动配对阅读保持两份来源文件不变。[^1]
 
 相同阅读进度不代表科学结论或翻译准确性已经核验。
+
+[^1]: 导航验收用合成引用。
 `);
 writeUtf8("wiki/index.md", `---
 type: moc

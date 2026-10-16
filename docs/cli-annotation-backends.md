@@ -1,6 +1,6 @@
 # 本机 CLI 批注
 
-更新：2026-10-13。当前版本 `0.88.3`，批注支持 CodeBuddy 的 Step-5-Preview、Qoder CLI CN 的 Qwen3.8-Flash，以及 OpenCode 的 Step-5-Preview 和 mimo-v2.6-flash。新批注仅给实际引句绑定的短释义，最新程度／目的边界与四次真实核对见[引句绑定记录](cli-annotation-grounded-meaning.md)；[短释义记录](cli-annotation-short-explanations.md)与 [0.88.1 完整重启收尾](cli-annotation-closeout.md)保留历史。下文各轮记录保留其当时的验收边界。
+更新：2026-10-16。批注能力基线为 `0.88.3`，当前交付版 `0.88.4` 仅修复阅读器引用导航；批注支持 CodeBuddy 的 Step-5-Preview、Qoder CLI CN 的 Qwen3.8-Flash，以及 OpenCode 的 Step-5-Preview 和 mimo-v2.6-flash。新批注仅给实际引句绑定的短释义，最新程度／目的边界与四次真实核对见[引句绑定记录](cli-annotation-grounded-meaning.md)；[短释义记录](cli-annotation-short-explanations.md)与 [0.88.1 完整重启收尾](cli-annotation-closeout.md)保留历史。下文各轮记录保留其当时的验收边界。
 
 本轮候选由用户提供：CodeBuddy 的 Step-5-Preview、Qoder CLI CN 的 Qwen3.8-Flash，以及 OpenCode 的 Step-5-Preview 和 mimo-v2.6-flash。免费权益以用户当前账号为依据，插件不据此承诺永久免费。
 

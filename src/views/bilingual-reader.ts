@@ -169,7 +169,7 @@ export class BilingualReader extends Component {
 		for (let node = walker.nextNode(); node; node = walker.nextNode()) { const next = cursor + (node.textContent?.length || 0); if (!started && at < next) { range.setStart(node, at - cursor); started = true; } if (started && at + record.selectedText.length <= next) { range.setEnd(node, at + record.selectedText.length - cursor); ended = true; break; } cursor = next; }
 		if (!ended || range.toString() !== record.selectedText) throw new Error("渲染选区与保存文字不一致");
 		window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(range);
-		matches[0].classList.add("agent-bilingual-excerpt-target"); matches[0].scrollIntoView({ block: "center" });
+		matches[0].classList.add("agent-bilingual-excerpt-target"); this.scrollToElement(proof.language, matches[0], "center");
 		const position = bilingualPositionAt(this.geometry(proof.language), pane.scroller.scrollTop, pane.scroller.scrollHeight); if (position) this.state.positions[proof.language] = position;
 		this.capture(proof.language);
 		if (this.state.linked) this.synchronize(proof.language); else this.publish();
@@ -190,15 +190,34 @@ export class BilingualReader extends Component {
 		}
 		return anchors;
 	}
+	private scrollToElement(language: BilingualLanguage, element: HTMLElement, align: "start" | "center" = "start"): void {
+		const pane = this.panes.get(language); if (!pane || !pane.article.contains(element)) return;
+		const scroller = pane.scroller, bounds = element.getBoundingClientRect();
+		const top = scroller.scrollTop + bounds.top - scroller.getBoundingClientRect().top - scroller.clientTop;
+		const offset = align === "center" ? (scroller.clientHeight - bounds.height) / 2 : 0;
+		// scrollIntoView also scrolls hidden ancestors; themes can then lose the reader's headers.
+		scroller.scrollTop = Math.max(0, Math.min(Math.max(0, scroller.scrollHeight - scroller.clientHeight), top - offset));
+	}
 	private scopeLinks(article: HTMLElement, language: BilingualLanguage): void {
-		const ids = new Map<string, string>();
-		for (const element of article.querySelectorAll<HTMLElement>("[id]")) { const old = element.id, id = "bilingual-" + language + "-" + old; ids.set(old, id); element.id = id; }
+		const ids = new Map<string, string>(), targets = new Map<string, HTMLElement>();
+		for (const element of article.querySelectorAll<HTMLElement>("[id]")) { const old = element.id, id = "bilingual-" + language + "-" + old; ids.set(old, id); targets.set(id, element); element.id = id; }
 		for (const link of article.querySelectorAll<HTMLAnchorElement>("a")) {
 			const href = link.getAttribute("href") || ""; if (!href.startsWith("#")) continue;
 			let target = href.slice(1); try { target = decodeURIComponent(target); } catch { /* Keep literal identifier. */ }
-			const id = ids.get(target); if (!id) continue; link.setAttribute("href", "#" + id);
-			link.addEventListener("click", event => { event.preventDefault(); event.stopPropagation(); this.activate(language); article.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: "start" }); this.capture(language); if (this.state.linked) this.synchronize(language); else this.publish(); }, { signal: this.options.signal });
+			const id = ids.get(target); if (id) link.setAttribute("href", "#" + id);
 		}
+		// Capture before MarkdownRenderer's footnote handlers, which may scroll/focus outer containers.
+		article.addEventListener("click", event => {
+			const link = (event.target as Element | null)?.closest?.("a[href]"); if (!link || !article.contains(link)) return;
+			const href = link.getAttribute("href") || ""; if (!href.startsWith("#")) return;
+			event.preventDefault(); event.stopImmediatePropagation();
+			if (this.invalidated || this.options.signal.aborted) return;
+			let id = href.slice(1); try { id = decodeURIComponent(id); } catch { /* Match literal malformed escapes only inside this article. */ }
+			const target = targets.get(id);
+			if (!target) { this.message?.setText("当前文档未找到该引用位置"); return; }
+			this.activate(language); this.scrollToElement(language, target); this.capture(language);
+			if (this.state.linked) this.synchronize(language); else this.publish();
+		}, { capture: true, signal: this.options.signal });
 	}
 	blockForElement(language: BilingualLanguage, element: Element): BilingualBlock | undefined {
 		const pane = this.panes.get(language); if (!pane || !pane.article.contains(element)) return undefined;
