@@ -88,5 +88,17 @@ let count = 0; const check = async (name, fn) => { await fn(); count++; console.
   assert.throws(() => prepareExcerpt({ ...s, selectedText: "x".repeat(601) }, content), /位置/);
   const huge = "[short](https://example.invalid/" + "x".repeat(2500) + ")"; assert.throws(() => prepareExcerpt({ ...s, selectedText: huge }, content), /位置/);
  });
+ await check("native CLI sees and verifies identical visible prose; hidden URLs and altered claims cannot become evidence", async () => {
+  const raw = "The classifier performed only marginally better than random guessing (Fig. [1a](https://example.invalid/hidden-strong-association)).", visible = "The classifier performed only marginally better than random guessing (Fig. 1a).", f = memory(raw);
+  const settings = { annotationBackendId: "qoderclicn", annotationQoderModel: "Qwen3.8-Flash", annotationCliTimeoutSeconds: 120 }, requests = [];
+  let quote = visible; const cli = { generate: async request => { requests.push(request); return { text: JSON.stringify({ claims: [{ quote, meaning: "作者报告该分类器的表现仅略优于随机猜测。" }] }), requestedModel: settings.annotationQoderModel }; } };
+  const service = new AnnotationService(f.app, { settings }, cli), selection = { sourcePath: "Clippings/linked.md", selectedText: raw, context: raw, section: "" };
+  const answer = await service.generateExplanation(selection, () => {}); assert.ok(answer.text.includes(visible)); assert.ok(requests[0].user.includes(visible)); assert.ok(!requests[0].user.includes("https://")); assert.equal(selection.selectedText, raw);
+  quote = visible.replace("marginally better", "much better"); await assert.rejects(service.generateExplanation(selection, () => {}), /引句不在/);
+  quote = "hidden-strong-association"; await assert.rejects(service.generateExplanation(selection, () => {}), /引句不在/);
+  const referenced = "Read [the paper][ref].", content = referenced + "\n\n[ref]: https://example.invalid/hidden\n"; f.files.get(selection.sourcePath).text = content; quote = "Read the paper.";
+  await service.generateExplanation({ ...selection, selectedText: referenced, context: referenced }, () => {}); assert.ok(requests.at(-1).user.includes(quote)); assert.ok(!requests.at(-1).user.includes("[ref]"));
+  assert.equal(requests.length, 4, "each accepted or rejected result consumes exactly one mock call");
+ });
  console.log(`LINKED_ANNOTATIONS_OK (${count} groups; memory DOM/Vault only)`);
 })().catch(e => { console.error(e); process.exitCode = 1; });

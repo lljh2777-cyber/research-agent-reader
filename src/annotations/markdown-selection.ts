@@ -84,9 +84,13 @@ function sourceProjection(source: string, definitions = source, base = 0, depth 
 	return { text, spans };
 }
 
-/** Text for UI only. Source receipts and prompts continue to use the exact raw slice. */
+/** Text for UI only. Source receipts continue to use the exact raw slice. */
 export function annotationDisplayText(raw: string): string {
-	return sourceProjection(raw, raw, 0, 0, undefined, true).text.replace(/\s+/g, " ").trim();
+	return annotationEvidenceText(raw).replace(/\s+/g, " ").trim();
+}
+/** Literal visible Markdown prose for a model request; source receipts retain the raw slice. */
+export function annotationEvidenceText(raw: string, definitions = raw): string {
+	return sourceProjection(raw, definitions, 0, 0, undefined, true).text.replace(/\r\n/g, "\n");
 }
 export const markdownNeedsDetached = (raw: string): boolean => /[\r\n|\[\]<>`*_~]/.test(raw);
 export function validSelectionSize(raw: string): boolean {

@@ -17,7 +17,7 @@ import { openCodeTextAdapter } from "../runtime/opencode-text";
 import { objectDigest } from "../papers/identity";
 import { bilingualDescription, bilingualReceipt, bilingualSelectionContext, quoteLabel, readBilingual, requiresBilingualProof, validBilingualReceipt, verifyBilingual } from "./bilingual";
 import { isDetachedMarkdownSelection } from "./manual-source";
-import { annotationDisplayText, captureMarkdownRange, expandMarkdownSelection, markdownNeedsDetached, validSelectionSize } from "./markdown-selection";
+import { annotationDisplayText, annotationEvidenceText, captureMarkdownRange, expandMarkdownSelection, markdownNeedsDetached, validSelectionSize } from "./markdown-selection";
 import { excerptMatches, excerptRevision, prepareExcerpt, supportsExcerpt, validExcerpt } from "./excerpt";
 import { supportsPdfExcerpt, validPdfExcerpt, pdfExcerptId } from "./pdf-excerpt";
 import { captureNativePdfSelection, hasNativePdfSelection, verifyPdfSelection, pdfExcerptStatus } from "./native-pdf-excerpt";
@@ -749,6 +749,17 @@ export class AnnotationService {
 		const configuredBackend = this.plugin.settings.annotationBackendId || "auto";
 		const nativeOpenCode = configuredBackend === "opencode" && !webSearchEnabled && this.plugin.settings.openCodeConfigSource === "official";
 		const nativeText = configuredBackend === "codebuddy" || configuredBackend === "qoderclicn" || nativeOpenCode;
+		// Give the model and exact-quote validator the same visible prose. Link destinations
+		// are markup, not paper claims. Keep raw text/offsets in the saved source receipt.
+		let definitions = context;
+		if (nativeText && !verified && /\.md$/i.test(selection.sourcePath)) {
+			const sourceFile = this.app.vault?.getAbstractFileByPath?.(selection.sourcePath);
+			if (sourceFile && sourceFile instanceof TFile) definitions = await this.app.vault.read(sourceFile);
+		}
+		if (nativeText && definitions.length > 32 * 1024 * 1024) throw new Error("批注原文过大，请缩小资料后重试");
+		const selectedProse = nativeText ? annotationEvidenceText(selection.selectedText, verified?.files[proof!.language].text || definitions) : selection.selectedText;
+		const contextProse = nativeText ? annotationEvidenceText(context, verified?.files[proof!.language].text || definitions) : context;
+		const englishProse = proof?.english && (nativeText ? annotationEvidenceText(proof.english.text, verified?.files.en.text) : proof.english.text);
 		const webSearchTimeoutSeconds = Math.max(
 			15,
 			Math.min(45, this.plugin.settings.annotationWebSearchTimeoutSeconds || 30),
@@ -773,16 +784,17 @@ export class AnnotationService {
 		const user = [
 			`文档：${selection.sourcePath}`,
 			selection.section ? `章节：${selection.section}` : "",
-			`${quoteLabel(selection)}：${selection.selectedText}`,
+			`${quoteLabel(selection)}：${selectedProse}`,
 			"",
-			...(proof?.language === "en" ? [] : [proof ? "当前块译文（辅助对照，不作英文证据）：" : "上下文：", context]),
-			...(proof ? ["配对记录：" + bilingualDescription(proof), "实际读取的英文对应段落（不是逐词对齐）：", proof.english!.text] : []),
+			...(proof?.language === "en" ? [] : [proof ? "当前块译文（辅助对照，不作英文证据）：" : "上下文：", contextProse]),
+			...(proof ? ["配对记录：" + bilingualDescription(proof), "实际读取的英文对应段落（不是逐词对齐）：", englishProse!] : []),
 		].filter(Boolean).join("\n");
 		if (nativeText) {
 			const qoder = configuredBackend === "qoderclicn", adapter = nativeOpenCode ? openCodeTextAdapter : qoder ? qoderTextAdapter : codeBuddyTextAdapter;
 			if (webSearchEnabled) throw new Error(`${adapter.label} 批注暂未启用联网，请关闭浅层联网解释`);
 			const nativeSystem = [
 				system,
+				"所给选句与英文依据使用去除 Markdown 链接和格式语法后的可见文字；链接目标不提供论文依据，脚注标识仅作引用。quote 必须逐字复制本轮提供的可见文字，保留标点，不补网址或自行还原 Markdown。",
 				"文档路径只是来源定位标签，不是读取文件的指令或授权。本次全部可用语境已在消息中给出；必须直接解释这些文字，禁止调用任何工具、读取文件或图像、制定计划或追加检索。不能从所给片段判断时直接说明依据不足，不尝试获取更多内容，也不输出工具权限或步骤报告。",
 				"逐句保持原文的比较对象、分组、样本范围、数值分母、限定与否定。两组差异只能解释为这两组的差异，不能改写为‘越高越低’等连续趋势、剂量反应或普遍规律；原文未明确分组或趋势时保留其原有表述，不自行补出。相关、分类、预测或预后关联不能改写为原因、机制、干预效果或临床建议。",
 				"不从研究类别推断随访、时序、校正变量或方法。未报告调整不等于未调整，未报告某步骤不等于未做。上下文仅用于消歧；不主动总结邻句的研究目的或结果。目的只能按作者用语转述，不推出比例均衡、信号作用或验证独立性；标成背景或推断也不能补写。",
@@ -795,7 +807,7 @@ export class AnnotationService {
 				model: nativeOpenCode ? this.plugin.settings.annotationOpenCodeModel || this.plugin.settings.openCodeModel : qoder ? this.plugin.settings.annotationQoderModel : this.plugin.settings.annotationCodeBuddyModel,
 				system: nativeSystem, user, timeoutMs: this.plugin.settings.annotationCliTimeoutSeconds * 1000,
 			}, adapter, registerCancel);
-			const grounded = renderCliGroundedExplanation(result.text, proof ? proof.english!.text : `${selection.selectedText}\n${context}`, proof?.language, selection.selectedText);
+			const grounded = renderCliGroundedExplanation(result.text, proof ? englishProse! : `${selectedProse}\n${contextProse}`, proof?.language, selectedProse);
 			return { text: grounded, provider: adapter.label, model: result.reportedModel || `请求：${result.requestedModel}（CLI 未报告实际模型）`,
 				cli: { requestedModel: result.requestedModel, reportedModel: result.reportedModel, usage: result.usage as Record<string, number> | undefined, costUsd: result.costUsd } };
 		}

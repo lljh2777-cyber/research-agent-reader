@@ -72,6 +72,19 @@ let count=0; async function check(name,fn){fixture=make();await fn(fixture);coun
   f.files.get(f.root+"/paper.md").text=f.en;plugin.createLLMProvider=()=>({complete:async()=>new Promise(()=>{})});let cancel;
   const pending=service.generateExplanation(s,c=>{cancel=c;});for(let i=0;i<20&&!cancel;i++)await new Promise(r=>setTimeout(r,1));assert.ok(cancel);cancel();await assert.rejects(pending,/已取消/);
  });
+ await check("native linked bilingual prose uses verified English while retaining raw translation anchors",async f=>{
+  const en="# Results\n\nWe introduce [DeepMet](https://example.invalid/model), a chemical language model (Fig. [1a](https://example.invalid/figure)).\n",zh="# 结果\n\n我们介绍[DeepMet](https://example.invalid/model)，一种化学语言模型（图 [1a](https://example.invalid/figure)）。\n";
+  const metadata=JSON.stringify({schemaVersion:1,sourceFile:"paper.md",translationFile:"paper.zh-CN.md",sourceVersion:{algorithm:"sha256",value:hash(en)},status:"needs-review",humanReview:"not-reviewed"});
+  f.files.get(f.root+"/paper.md").text=en;f.files.get(f.root+"/paper.zh-CN.md").text=zh;f.files.get(f.root+"/translation.json").text=metadata;f.doc=api.createBilingualDocument(f.root+"/paper.md",Buffer.from(en),Buffer.from(zh),Buffer.from(metadata));
+  const block=f.doc.files["zh-CN"].blocks[1],raw=zh.slice(block.start,block.end).trimEnd(),start=block.start,end=start+raw.length;
+  const s={sourcePath:f.root+"/paper.zh-CN.md",selectedText:raw,sourceStart:start,sourceEnd:end,prefix:zh.slice(Math.max(0,start-80),start),suffix:zh.slice(end,end+80),section:"结果",context:"UNVERIFIED NEIGHBOR",isTableCell:false,anchorRect:{},sourceRevision:api.excerptRevision(zh),bilingual:api.bilingualReceipt(f.doc,"zh-CN",block,start,end)};
+  const quote="We introduce DeepMet, a chemical language model (Fig. 1a).",requests=[],cli={generate:async request=>{requests.push(request);return{text:JSON.stringify({translationCheck:"本选句对应英文介绍的对象与图号。",claims:[{quote,meaning:"作者介绍 DeepMet 是一种化学语言模型。"}]}),requestedModel:"Qwen3.8-Flash"};}};
+  const service=new api.AnnotationService(f.app,{settings:{annotationBackendId:"qoderclicn",annotationQoderModel:"Qwen3.8-Flash",annotationCliTimeoutSeconds:120}},cli),answer=await service.generateExplanation(s,()=>{});
+  assert.ok(requests[0].user.includes(quote));assert.ok(!requests[0].user.includes("https://")&&!requests[0].user.includes("UNVERIFIED NEIGHBOR"));assert.ok(answer.text.startsWith("译文对照："));
+  const record=await service.createAnnotation(s,{aiText:answer.text});assert.equal(record.selectedText,raw);assert.equal(zh.slice(record.sourceAnchor.start,record.sourceAnchor.end),raw);assert.deepEqual(record.bilingual,s.bilingual);assert.equal((await service.loadAnnotation(record.annotationPath,record.id)).aiText,answer.text);
+  await service.generateExplanation(await service.getRecordExplanationContext(record),()=>{});assert.deepEqual(requests[1],requests[0],"reopened raw receipts reconstruct identical visible evidence");
+  f.files.get(f.root+"/paper.md").text+="changed";await assert.rejects(service.generateExplanation(s,()=>{}),/变化/);assert.equal(requests.length,2);
+ });
  await check("oversized translated current block stops before any model call",async f=>{
   const text=f.zh.replaceAll("重复的所选文字。","前".repeat(17000)+"重复的所选文字。");f.files.get(f.root+"/paper.zh-CN.md").text=text;f.doc=api.createBilingualDocument(f.root+"/paper.md",Buffer.from(f.en),Buffer.from(text),Buffer.from(f.metadata));
   let calls=0;const profile={id:"mock",name:"Mock",model:"mock",timeoutSeconds:1,lastTest:{ok:true}},plugin={settings:{annotationBackendId:"mock",annotationWebSearchEnabled:false,annotationMaxTokens:600},getProviderProfile:()=>profile,createLLMProvider:()=>({complete:async()=>{calls++;return {text:"must not run"};}})};
