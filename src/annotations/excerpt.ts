@@ -1,5 +1,6 @@
 import { bytesDigest, objectDigest } from "../papers/identity";
 import type { AnnotationRecord, AnnotationSelection } from "./types";
+import { validSelectionSize } from "./markdown-selection";
 
 /** A text revision, not a PDF/package verification or a scientific review. Offsets use JS UTF-16. */
 export interface ExcerptRevision { algorithm: "markdown-utf8-sha256"; digest: string; length: number; }
@@ -19,11 +20,12 @@ export function prepareExcerpt(selection: AnnotationSelection, content: string):
 	if (!supportsExcerpt(selection.sourcePath) || !selection.sourceRevision) throw new Error("请从原文 Markdown 重新选择文字后保存摘录");
 	if (content.length > 32 * 1024 * 1024 || objectDigest(selection.sourceRevision) !== objectDigest(excerptRevision(content))) throw new Error("原文版本已变化，请重新选择；本次未保存摘录");
 	const { sourceStart: start, sourceEnd: end, selectedText: text } = selection;
-	if (!text || text.length > 600 || /[\r\n]/.test(text) || text.includes("<!-- agent-dashboard:") || selection.prefix.length > 80 || selection.suffix.length > 80
+	if (!text || !validSelectionSize(text) || text.includes("<!-- agent-dashboard:") || selection.prefix.length > 80 || selection.suffix.length > 80
 		|| !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end !== start + text.length
 		|| content.slice(start, end) !== text || content.slice(Math.max(0, start - selection.prefix.length), start) !== selection.prefix
 		|| content.slice(end, end + selection.suffix.length) !== selection.suffix) throw new Error("选区与原文位置不一致，请重新选择");
-	const contextStart = Math.max(0, start - 1300), receipt: ExcerptReceipt = { version: 1, ...excerptRevision(content), contextStart, context: content.slice(contextStart, end + 1300) };
+	const margin = Math.min(1300, Math.floor((3200 - text.length) / 2));
+	const contextStart = Math.max(0, start - margin), receipt: ExcerptReceipt = { version: 1, ...excerptRevision(content), contextStart, context: content.slice(contextStart, end + margin) };
 	const id = "ann-excerpt-" + objectDigest({ path: selection.sourcePath, revision: selection.sourceRevision, start, end, ...(selection.bilingual ? { bilingual: selection.bilingual } : {}) }).slice(0, 48);
 	return { id, receipt };
 }

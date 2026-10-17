@@ -17,6 +17,7 @@ import { openCodeTextAdapter } from "../runtime/opencode-text";
 import { objectDigest } from "../papers/identity";
 import { bilingualDescription, bilingualReceipt, bilingualSelectionContext, quoteLabel, readBilingual, requiresBilingualProof, validBilingualReceipt, verifyBilingual } from "./bilingual";
 import { isDetachedMarkdownSelection } from "./manual-source";
+import { annotationDisplayText, captureMarkdownRange, expandMarkdownSelection, markdownNeedsDetached, validSelectionSize } from "./markdown-selection";
 import { excerptMatches, excerptRevision, prepareExcerpt, supportsExcerpt, validExcerpt } from "./excerpt";
 import { supportsPdfExcerpt, validPdfExcerpt, pdfExcerptId } from "./pdf-excerpt";
 import { captureNativePdfSelection, hasNativePdfSelection, verifyPdfSelection, pdfExcerptStatus } from "./native-pdf-excerpt";
@@ -366,14 +367,7 @@ export class AnnotationService {
 			throw new Error("请先在笔记或阅读视图中选择需要批注的文字");
 		}
 		const range = selection.getRangeAt(0);
-		const selectedText = selection.toString().trim();
-		if (!selectedText) throw new Error("选区中没有可批注的文字");
-		if (selectedText.length > MAX_SELECTION_LENGTH) {
-			throw new Error(`第一版单次最多批注 ${MAX_SELECTION_LENGTH} 个字符`);
-		}
-		if (/[\r\n|\[\]]/.test(selectedText) || selectedText.includes("-->")) {
-			throw new Error("第一版只支持同一段落内、不含链接控制字符的纯文本选区");
-		}
+		if (!selection.toString().trim()) throw new Error("选区中没有可批注的文字");
 		const element = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
 			? range.commonAncestorContainer as HTMLElement
 			: range.commonAncestorContainer.parentElement;
@@ -381,9 +375,11 @@ export class AnnotationService {
 			throw new Error("第一版只支持 Markdown 阅读视图中的文字选区");
 		}
 		const block = element.closest<HTMLElement>("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6");
+		const endpointBlock = (node: Node): Element | null => (node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement)?.closest("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6") || null;
 		if (!block || !block.contains(range.startContainer) || !block.contains(range.endContainer)) {
 			throw new Error("第一版只支持同一段落或标题内的选区");
 		}
+		if (endpointBlock(range.startContainer) !== endpointBlock(range.endContainer)) throw new Error("请在同一段落或标题内划选，暂不支持跨段批注");
 		const sectionElement = element.closest<HTMLElement>("[data-agent-annotation-source]");
 		const bilingual = bilingualSelectionContext(element);
 		const sourcePath = bilingual ? bilingual.document.files[bilingual.language].path : String(sectionElement?.dataset.agentAnnotationSource || "");
@@ -405,46 +401,17 @@ export class AnnotationService {
 		const segmentEnd = bilingual ? bilingual.block.end : Number.isFinite(lineEnd)
 			? lineOffset(content, lineEnd + 1)
 			: content.length;
-		const segment = content.slice(segmentStart, segmentEnd);
-		let offsets = countOccurrences(segment, selectedText).map((offset) => offset + segmentStart);
-		if (!offsets.length && !bilingual) offsets = countOccurrences(content, selectedText);
-		if (!offsets.length) {
-			throw new Error("选中文字包含 Markdown 渲染差异，第一版无法安全写回原文");
-		}
-
-		const blockRange = document.createRange();
-		blockRange.selectNodeContents(block);
-		blockRange.setEnd(range.startContainer, range.startOffset);
-		const visiblePrefix = blockRange.toString().replace(/\s+/g, " ").slice(-80);
-		blockRange.selectNodeContents(block);
-		blockRange.setStart(range.endContainer, range.endOffset);
-		const visibleSuffix = blockRange.toString().replace(/\s+/g, " ").slice(0, 80);
-		const ranked = offsets
-			.map((offset) => ({
-				offset,
-				score: commonSuffixLength(
-					content.slice(Math.max(0, offset - 80), offset).replace(/\s+/g, " "),
-					visiblePrefix,
-				) + commonPrefixLength(
-					content.slice(offset + selectedText.length, offset + selectedText.length + 80).replace(/\s+/g, " "),
-					visibleSuffix,
-				),
-			}))
-			.sort((left, right) => right.score - left.score);
-		if (ranked.length > 1 && ranked[0].score === ranked[1].score) {
-			throw new Error("原文中存在多个相同选区，暂时无法唯一定位，请扩大选区后重试");
-		}
-		const sourceStart = ranked[0].offset;
-		const sourceEnd = sourceStart + selectedText.length;
-		if (isInsideProtectedMarkdown(content, sourceStart, sourceEnd)) {
-			throw new Error("选区位于已有链接或行内代码中，第一版不会改写这类 Markdown");
-		}
+		const mapped = captureMarkdownRange(block, range, content, segmentStart, segmentEnd);
+		const sourceStart = mapped.start, sourceEnd = mapped.end, selectedText = content.slice(sourceStart, sourceEnd);
+		if (!validSelectionSize(selectedText)) throw new Error(`单次最多批注 ${MAX_SELECTION_LENGTH} 个可见字符，含链接源码最多 2400 个字符`);
+		if (selectedText.includes("<!-- agent-dashboard:")) throw new Error("选区包含批注控制标记，请重新划选");
 		const contextStart = Math.max(0, sourceStart - Math.floor(CONTEXT_LIMIT / 2));
 		const contextEnd = Math.min(content.length, sourceEnd + Math.floor(CONTEXT_LIMIT / 2));
 		return {
 			sourcePath,
 			...(await this.selectionProvenance(sourcePath, content, sourceStart, sourceEnd, bilingual)),
-			...(isDetachedMarkdownSelection(element) ? { detached: true } : {}),
+			...(isDetachedMarkdownSelection(element) || markdownNeedsDetached(selectedText) ? { detached: true } : {}),
+			...(mapped.expanded ? { linkSelectionExpanded: true } : {}),
 			...(supportsExcerpt(sourcePath) ? { sourceRevision: excerptRevision(content) } : {}),
 			selectedText,
 			section: currentHeading(content, sourceStart),
@@ -473,14 +440,9 @@ export class AnnotationService {
 		const ranges = editor.listSelections();
 		if (!ranges.length) throw new Error("请先在笔记中选择需要批注的文字");
 		const raw = String(editor.getSelection() || "");
-		const selectedText = raw.trim();
+		let selectedText = raw.trim();
 		if (!selectedText) throw new Error("选区中没有可批注的文字");
-		if (selectedText.length > MAX_SELECTION_LENGTH) {
-			throw new Error(`第一版单次最多批注 ${MAX_SELECTION_LENGTH} 个字符`);
-		}
-		if (/[\r\n|]/.test(raw) || raw.includes("-->")) {
-			throw new Error("第一版只支持同一段落内、不含链接控制字符的纯文本选区");
-		}
+		if (/[\r\n]/.test(raw)) throw new Error("请在同一段落的单行源码内划选；跨源码行请使用阅读视图");
 		const content = await this.app.vault.read(view.file);
 		const offsetHead = editor.posToOffset(ranges[0].head);
 		const offsetAnchor = editor.posToOffset(ranges[0].anchor);
@@ -495,9 +457,10 @@ export class AnnotationService {
 		}
 		sourceStart += raw.length - raw.trimStart().length;
 		sourceEnd -= raw.length - raw.trimEnd().length;
-		if (isInsideProtectedMarkdown(content, sourceStart, sourceEnd)) {
-			throw new Error("选区位于已有链接或行内代码中，第一版不会改写这类 Markdown");
-		}
+		const expanded = expandMarkdownSelection(content, sourceStart, sourceEnd), linkSelectionExpanded = expanded.start !== sourceStart || expanded.end !== sourceEnd;
+		sourceStart = expanded.start; sourceEnd = expanded.end; selectedText = content.slice(sourceStart, sourceEnd);
+		if (!validSelectionSize(selectedText)) throw new Error(`单次最多批注 ${MAX_SELECTION_LENGTH} 个可见字符，含链接源码最多 2400 个字符`);
+		if (selectedText.includes("<!-- agent-dashboard:")) throw new Error("选区包含批注控制标记，请重新划选");
 		const contextStart = Math.max(0, sourceStart - Math.floor(CONTEXT_LIMIT / 2));
 		const contextEnd = Math.min(content.length, sourceEnd + Math.floor(CONTEXT_LIMIT / 2));
 		const lineStart = content.lastIndexOf("\n", Math.max(0, sourceStart - 1)) + 1;
@@ -532,6 +495,8 @@ export class AnnotationService {
 			: new DOMRect(0, 0, 1, 1);
 		return {
 			sourcePath: view.file.path,
+			...(markdownNeedsDetached(selectedText) ? { detached: true } : {}),
+			...(linkSelectionExpanded ? { linkSelectionExpanded: true } : {}),
 			...(await this.selectionProvenance(view.file.path, content, sourceStart, sourceEnd)),
 			...(supportsExcerpt(view.file.path) ? { sourceRevision: excerptRevision(content) } : {}),
 			selectedText,
@@ -604,7 +569,7 @@ export class AnnotationService {
 		await this.verifySelection(selection);
 		const sourceFile = this.app.vault.getAbstractFileByPath(selection.sourcePath);
 		if (!(sourceFile instanceof TFile)) throw new Error("原始 Markdown 文件不存在");
-		const detached = usesDetachedAnnotations(sourceFile.path) || !!selection.bilingual || selection.detached === true;
+		const detached = usesDetachedAnnotations(sourceFile.path) || !!selection.bilingual || selection.detached === true || markdownNeedsDetached(selection.selectedText);
 		const content = await this.app.vault.read(sourceFile);
 		if (selection.bilingual) prepareExcerpt(selection, content);
 		const location = this.relocateSelection(content, selection);
@@ -1039,7 +1004,7 @@ export class AnnotationService {
 		}
 		const start = ranked[0].offset;
 		const end = start + selection.selectedText.length;
-		if (isInsideProtectedMarkdown(content, start, end)) {
+		if (!markdownNeedsDetached(selection.selectedText) && isInsideProtectedMarkdown(content, start, end)) {
 			throw new Error("选区已位于链接或代码中，未重复写入批注链接");
 		}
 		return { start, end };
@@ -1065,7 +1030,8 @@ export class AnnotationService {
 			archiveRunId: record.archiveRunId,
 			archiveError: record.archiveError,
 		};
-		const title = record.pdfExcerpt ? `PDF 第 ${record.pdfExcerpt.page} 页摘录` : record.selectedText.replace(/\s+/g, " ").slice(0, 90).replace(/[#\r\n]/g, "");
+		const displayText = record.pdfExcerpt ? record.selectedText : annotationDisplayText(record.selectedText);
+		const title = record.pdfExcerpt ? `PDF 第 ${record.pdfExcerpt.page} 页摘录` : displayText.slice(0, 90).replace(/[#\r\n\[\]<>]/g, "");
 		const targets = record.archiveTargets.length
 			? record.archiveTargets.map((target) => `[[${normalizeArchiveTarget(target)}]]`).join("、")
 			: "无";
@@ -1085,7 +1051,7 @@ export class AnnotationService {
 			`## ${title || "批注"}`,
 			`${META_PREFIX}${serializedMeta} -->`,
 			"",
-			record.pdfExcerpt ? `原文：\n\n<pre>${escaped(record.selectedText)}</pre>\n` : `- ${quoteLabel(record)}：${record.selectedText}`,
+			record.pdfExcerpt ? `原文：\n\n<pre>${escaped(record.selectedText)}</pre>\n` : markdownNeedsDetached(record.selectedText) ? `${quoteLabel(record)}：\n\n<pre>${escaped(displayText)}</pre>\n` : `- ${quoteLabel(record)}：${record.selectedText}`,
 			`- 来源：${sourceReference(record.sourcePath)}`,
 			record.section ? `- 章节：${record.section}` : "",
 			`- 创建：${record.createdAt}`,

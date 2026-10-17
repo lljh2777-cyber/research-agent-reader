@@ -26,6 +26,8 @@ export interface AnnotationSelection {
 	bilingual?: BilingualReceipt;
 	/** A live manually paired Markdown pane saves annotations without editing the source. */
 	detached?: boolean;
+	/** UI-only notice when a partial rendered link/format span was expanded. */
+	linkSelectionExpanded?: boolean;
 }
 
 export interface AnnotationRecord {

@@ -8,6 +8,7 @@ import {
 
 import type { AnnotationService } from "./annotation-service";
 import { supportsExcerpt } from "./excerpt";
+import { annotationDisplayText } from "./markdown-selection";
 import { bilingualDescription, isTranslationPath, quoteLabel } from "./bilingual";
 import type {
 	AnnotationDraft,
@@ -177,7 +178,7 @@ export class AnnotationPopover extends Component {
 
 	private renderExcerpt(): void {
 		const element = this.reset(); this.renderHeader(element, this.selection?.selectedText || "", "保存摘录");
-		element.createEl("blockquote", { text: this.selection?.selectedText || "", attr: { style: "overflow-wrap:anywhere;max-height:150px;overflow:auto;flex-shrink:0" } });
+		element.createEl("blockquote", { text: this.selection?.pdfExcerpt ? this.selection.selectedText : annotationDisplayText(this.selection?.selectedText || ""), attr: { style: "overflow-wrap:anywhere;max-height:150px;overflow:auto;flex-shrink:0" } });
 		element.createEl("p", { text: this.selection?.pdfExcerpt ? `保存 PDF 第 ${this.selection.pdfExcerpt.page} 页（文件页码）的文字、上下文与文件版本。相同位置会复用，已有备注保持不变。` : "保存到批注文档，保留当前 Markdown 文本版本。相同版本、相同位置的摘录会复用，已有备注保持不变。" });
 		const label = element.createEl("label", { cls: "agent-annotation-field" }); label.createSpan({ text: "个人备注（可留空）" });
 		const input = label.createEl("textarea", { attr: { rows: "4", maxlength: "10000" } });
@@ -320,7 +321,7 @@ export class AnnotationPopover extends Component {
 		const element = this.reset();
 		this.renderHeader(element, this.record.selectedText, sectionLabel(this.record.section));
 		if (this.record.excerpt || this.record.pdfExcerpt) {
-			element.createEl("blockquote", { text: this.record.selectedText, attr: { style: "overflow-wrap:anywhere;max-height:150px;overflow:auto;flex-shrink:0" } });
+			element.createEl("blockquote", { text: this.record.pdfExcerpt ? this.record.selectedText : annotationDisplayText(this.record.selectedText), attr: { style: "overflow-wrap:anywhere;max-height:150px;overflow:auto;flex-shrink:0" } });
 			const record = this.record, status = element.createEl("p", { text: "正在核对摘录来源…", attr: { role: "status" } });
 			void this.service.getExcerptStatus(record).then(text => { if (!this.closed && this.record === record && status.isConnected) status.setText(text); }, () => { if (status.isConnected) status.setText("暂时无法核对原文，保留历史摘录"); });
 			this.renderTextSection(element, "个人备注", record.manualText, "没有填写个人备注");
@@ -520,6 +521,8 @@ export class AnnotationPopover extends Component {
 
 	private renderHeader(parent: HTMLElement, selectedText: string, subtitle: string): void {
 		const source = this.record || this.selection;
+		if (!source?.pdfExcerpt) selectedText = annotationDisplayText(selectedText);
+		if (this.selection?.linkSelectionExpanded) parent.createEl("p", { text: "选区涉及链接或格式文字，已扩展为完整文字；批注独立保存，原文不改写。", cls: "setting-item-description" });
 		if (source) { parent.createEl("p", { text: quoteLabel(source), cls: "agent-annotation-source-role" }); if (source.bilingual) { const details = parent.createEl("details"); details.createEl("summary", { text: "双语来源与审阅状态" }); details.createEl("p", { text: bilingualDescription(source.bilingual) }); if (source.bilingual.english) details.createEl("pre", { text: source.bilingual.english.text, attr: { style: "white-space:pre-wrap;max-height:140px;overflow:auto" } }); } }
 		const header = parent.createDiv({
 			cls: "agent-annotation-header",

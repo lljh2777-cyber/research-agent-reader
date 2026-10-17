@@ -1,6 +1,7 @@
 import { Component, MarkdownRenderer, Modal, type App } from "obsidian";
 import { bindBilingualSelection } from "../annotations/bilingual";
 import type { AnnotationRecord } from "../annotations/types";
+import { annotationDisplayText, revealMarkdownRange } from "../annotations/markdown-selection";
 import type { BilingualBlock, BilingualDocument, BilingualFile, BilingualLanguage } from "../reader/bilingual-document";
 import { bilingualPositionAt, bilingualScrollTarget, correspondingBilingualPosition, normalizeBilingualState, type BilingualGeometry, type BilingualReadingState } from "../reader/bilingual-position";
 import { applySplitLayout, sourceSplitRatio } from "./split-layout";
@@ -161,19 +162,17 @@ export class BilingualReader extends Component {
 		this.activate(proof.language); this.state.positions[proof.language] = { blockId: block.id, progress: 0 }; this.restore(proof.language);
 		// Search only inside this raw block's rendered paragraph, never elsewhere in the article.
 		const elements = [...pane.article.querySelectorAll<HTMLElement>("p, li, blockquote, td, th, h1, h2, h3, h4, h5, h6")].filter(el => this.blockForElement(proof.language, el)?.id === block.id);
-		const matches = elements.filter(el => el.textContent?.includes(record.selectedText) && ![...el.children].some(child => child.textContent?.includes(record.selectedText)));
+		const file = this.options.document.files[proof.language], anchor = record.sourceAnchor;
+		if (!anchor) throw new Error("保存的原文位置缺失");
+		const matches = elements.map(el => ({ el, range: revealMarkdownRange(el, file.text, block.start, block.end, anchor.start, anchor.end) })).filter(item => item.range && !elements.some(other => other !== item.el && item.el.contains(other) && revealMarkdownRange(other, file.text, block.start, block.end, anchor.start, anchor.end)));
 		if (matches.length !== 1) throw new Error("对应段落已打开，渲染选区无法唯一确认；请核对保存的文字");
-		const text = matches[0].textContent || "", at = text.indexOf(record.selectedText);
-		if (text.indexOf(record.selectedText, at + record.selectedText.length) >= 0) throw new Error("对应段落已打开，重复文字未自动定位；请核对保存的文字");
-		const walker = document.createTreeWalker(matches[0], NodeFilter.SHOW_TEXT), range = document.createRange(); let cursor = 0, started = false, ended = false;
-		for (let node = walker.nextNode(); node; node = walker.nextNode()) { const next = cursor + (node.textContent?.length || 0); if (!started && at < next) { range.setStart(node, at - cursor); started = true; } if (started && at + record.selectedText.length <= next) { range.setEnd(node, at + record.selectedText.length - cursor); ended = true; break; } cursor = next; }
-		if (!ended || range.toString() !== record.selectedText) throw new Error("渲染选区与保存文字不一致");
-		window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(range);
-		matches[0].classList.add("agent-bilingual-excerpt-target"); this.scrollToElement(proof.language, matches[0], "center");
+		const { el, range } = matches[0];
+		window.getSelection()?.removeAllRanges(); window.getSelection()?.addRange(range!);
+		el.classList.add("agent-bilingual-excerpt-target"); this.scrollToElement(proof.language, el, "center");
 		const position = bilingualPositionAt(this.geometry(proof.language), pane.scroller.scrollTop, pane.scroller.scrollHeight); if (position) this.state.positions[proof.language] = position;
 		this.capture(proof.language);
 		if (this.state.linked) this.synchronize(proof.language); else this.publish();
-		this.message?.setText(quoteLanguage(proof.language) + "已定位保存时的选句所在段落：" + record.selectedText.slice(0, 80));
+		this.message?.setText(quoteLanguage(proof.language) + "已定位保存时的选句所在段落：" + annotationDisplayText(record.selectedText).slice(0, 80));
 	}
 	private bindAnchors(article: HTMLElement, file: BilingualFile): Map<string, HTMLElement> {
 		const anchors = new Map<string, HTMLElement>();

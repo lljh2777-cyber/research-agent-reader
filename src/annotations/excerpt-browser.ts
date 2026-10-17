@@ -3,6 +3,7 @@ import { canOrganizeExcerpt, excerptOrganizationLabel, ExcerptLibraryService, ty
 import type { ExcerptHistoryHost } from "./excerpt-history";
 import { bilingualDescription, quoteLabel } from "./bilingual";
 import type { AnnotationRecord } from "./types";
+import { annotationDisplayText } from "./markdown-selection";
 
 /** Local, model-free excerpt browser. Drafts stay visible until explicitly saved or discarded. */
 export class ExcerptBrowser extends Modal {
@@ -103,7 +104,7 @@ export class ExcerptBrowser extends Modal {
 				});
 			});
 			row.addClass("rar-excerpt-row"); row.dataset.excerptId = entry.record.id; row.setAttribute("aria-pressed", String(this.selected?.record.id === entry.record.id));
-			row.createSpan({ text: entry.record.selectedText }); row.createEl("small", { text: entry.record.sourcePath });
+			row.createSpan({ text: entry.record.pdfExcerpt ? entry.record.selectedText : annotationDisplayText(entry.record.selectedText) }); row.createEl("small", { text: entry.record.sourcePath });
 			row.createEl("small", { text: quoteLabel(entry.record) + " · " + excerptOrganizationLabel(entry.record) });
 		}
 		if (matches.length > this.limit) this.button(this.listEl, "显示更多摘录", () => { this.limit += 50; this.renderList(); });
@@ -114,7 +115,7 @@ export class ExcerptBrowser extends Modal {
 		if (!snapshot) { this.detailEl.createEl("p", { text: "选择摘录，查看原句、历史上下文和个人备注。" }); return; }
 		const record = snapshot.record;
 		this.detailEl.createEl("h3", { text: quoteLabel(record) });
-		this.detailEl.createEl("blockquote", { text: record.selectedText });
+		this.detailEl.createEl("blockquote", { text: record.pdfExcerpt ? record.selectedText : annotationDisplayText(record.selectedText) });
 		this.detailEl.createEl("p", { text: record.sourcePath });
 		if (record.bilingual) { this.detailEl.createEl("p", { text: bilingualDescription(record.bilingual) }); if (record.bilingual.english) { this.detailEl.createEl("h3", { text: "英文对应段落（结构对应，语义待核对）" }); this.detailEl.createEl("pre", { text: record.bilingual.english.text }); } }
 		if (record.pdfExcerpt) this.detailEl.createEl("p", { text: `PDF 第 ${record.pdfExcerpt.page} / ${record.pdfExcerpt.pageCount} 页（文件页码）` });
