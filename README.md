@@ -4,6 +4,8 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 `0.89.0` 在「批注 AI」加入[三个 CLI 的模型目录手动刷新](docs/cli-model-discovery.md)，并显示 Qoder CN 返回的账号剩余额度，取不到时显示未知。刷新不发送 AI 任务或 Vault 正文，不自动更换已选模型；目录条目不代表免费或实时可调用。
 
+同版[真实 AI 与完整宿主重启补验](docs/cli-model-refresh-ai-validation.md)已通过：三个 CLI 从刷新结果选模后完成生成／保存／定位，新宿主读回 40 份记录一致；Qoder 额度显示、未知回退及恢复通过。模型回答的上下文扩展与独立审阅缺口仍保留。
+
 `0.86.0` 新增[CodeBuddy 批注](docs/cli-annotation-backends.md)：选择 Step-5-Preview，调用明确使用 `step-5-preview`；插件直接启动本机 CLI，生成后由用户保存。保留英文依据、模型一般知识、实际模型与用量记录，主题学习继续预览。
 
 `0.87.0` 在[本机 CLI 批注](docs/cli-annotation-backends.md)中新增 Qoder CLI CN 的 Qwen3.8-Flash，按所选后端的准确模型参数执行独立文字解释。
