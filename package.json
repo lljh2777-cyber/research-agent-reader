@@ -1,6 +1,6 @@
 {
 	"name": "research-agent-reader",
-	"version": "0.88.6",
+	"version": "0.89.0",
 	"private": true,
 	"description": "Desktop research reader and optional local-agent dashboard for Obsidian",
 	"author": "Liao Li",
@@ -46,6 +46,7 @@
 		"test:ingest": "node tests/test_agent_ingest_evidence.js && node tests/test_ingest_pdf_draft.js && node tests/test_ingest_requests.js && node tests/test_ingest_registration.js && node tests/test_ingest_task_lifecycle.js",
 		"test:fulltext": "node tests/test_fulltext_acquisition.js && node tests/test_fulltext_storage.js && node tests/test_fulltext_transport.js && node tests/test_fulltext_pmc.js && node tests/test_fulltext_oa.js && node tests/test_fulltext_intake_safety.js",
 		"test:annotations": "node tests/test_annotation_web_search.js && node tests/test_annotation_source_integrity.js && node tests/test_linked_annotations.js && node tests/test_dashboard_annotations.js",
+		"test:cli-models": "node tests/test_annotation_cli_discovery.js",
 		"test:bilingual": "node tests/test_reader_preferences.js && node tests/test_bilingual_document.js && node tests/test_bilingual_rendering.js && node tests/test_bilingual_navigation.js && node tests/test_bilingual_position.js && node tests/test_bilingual_annotations.js",
 		"test:split-reading": "node tests/test_split_swap.js && node tests/test_reading_file_tree.js && node tests/test_manual_split_reading.js && node tests/test_pdf_excerpts.js",
 		"test:sources": "node tests/test_source_intake.js && node tests/test_source_storage.js && node tests/test_source_agent.js",

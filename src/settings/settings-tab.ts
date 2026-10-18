@@ -37,6 +37,7 @@ import type { ProviderModel } from "../providers/shared";
 import { CODEBUDDY_ANNOTATION_MODEL } from "../runtime/codebuddy-text";
 import { QODER_ANNOTATION_MODEL } from "../runtime/qoder-text";
 import { OPENCODE_ANNOTATION_MODELS } from "../runtime/opencode-text";
+import type { AnnotationCliBackend, AnnotationCliDiscovery } from "../runtime/annotation-cli-discovery";
 import {
 	CONFIGURABLE_ACTION_IDS,
 	DEFAULT_ACTION_EXECUTION_DEFAULTS,
@@ -64,6 +65,8 @@ import type {
 } from "../types/contracts";
 
 interface SettingsPluginHost extends PluginHost {
+	getAnnotationCliDiscovery(backend: AnnotationCliBackend): AnnotationCliDiscovery | null;
+	refreshAnnotationCliDiscovery(backend: AnnotationCliBackend): Promise<AnnotationCliDiscovery>;
 	resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution;
 	getKnowledgeService(): KnowledgeRetrievalService;
 	openKnowledgeMaintenance(): void;
@@ -1661,21 +1664,63 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 	private renderNativeAnnotationCliSettings(containerEl: HTMLElement, backendId: "codebuddy" | "qoderclicn" | "opencode"): void {
 		const settings = this.plugin.settings;
 		const qoder = backendId === "qoderclicn", opencode = backendId === "opencode", label = opencode ? "OpenCode" : qoder ? "Qoder CLI CN" : "CodeBuddy";
-		const pathKey = opencode ? "openCodeExecutable" : qoder ? "annotationQoderExecutable" : "annotationCodeBuddyExecutable", modelKey = opencode ? "annotationOpenCodeModel" : qoder ? "annotationQoderModel" : "annotationCodeBuddyModel";
-		const models = opencode ? OPENCODE_ANNOTATION_MODELS : [{ id: qoder ? QODER_ANNOTATION_MODEL : CODEBUDDY_ANNOTATION_MODEL, label: qoder ? QODER_ANNOTATION_MODEL : "Step-5-Preview" }];
+		const pathKey = opencode ? "openCodeExecutable" : qoder ? "annotationQoderExecutable" : "annotationCodeBuddyExecutable";
+		let catalogEl: HTMLElement | undefined;
+		const renderCatalog = () => { if (catalogEl) { catalogEl.empty(); this.renderNativeAnnotationCliCatalog(catalogEl, backendId); } };
 		this.createProviderSectionHeader(containerEl, `${label} 批注`, "沿用本机 CLI 登录。围绕划选原文给出短释义，并附对应原句；免费权益以你的当前账号为准。");
 		new Setting(containerEl).setName("CLI 程序路径").setDesc("支持原生程序或官方 npm 启动器。npm 安装需要系统 PATH 中可用的独立 Node.js。")
-			.addText(text => text.setValue(settings[pathKey]).onChange(async value => { settings[pathKey] = value.trim(); await this.plugin.saveSettings(); }))
+			.addText(text => text.setValue(settings[pathKey]).onChange(async value => { settings[pathKey] = value.trim(); renderCatalog(); await this.plugin.saveSettings(); }))
 			.addButton(button => button.setButtonText("自动检测").onClick(async () => { const detected = detectCliExecutable(backendId); if (!detected.found) { new Notice(`未检测到 ${label}，请填写本机程序路径`); return; } settings[pathKey] = detected.executable; await this.plugin.saveSettings(); this.display(); }));
-		new Setting(containerEl).setName("模型").setDesc(opencode ? "每次明确传入完整 provider/model ID，使用模型默认推理参数。留空沿用 OpenCode 页保存的模型，不自动换模型。" : qoder ? "明确使用 --model Qwen3.8-Flash；不沿用 Auto 或同名 BYOK 记录。" : "Step-5-Preview 的调用 ID 为 step-5-preview，每次明确指定模型。")
-			.addDropdown(dropdown => { if (opencode) dropdown.addOption("", `沿用已配置模型 · ${settings.openCodeModel || "未指定"}`); models.forEach(model => dropdown.addOption(model.id, model.label)); if (settings[modelKey] && !models.some(model => model.id === settings[modelKey])) dropdown.addOption(settings[modelKey], settings[modelKey]); dropdown.setValue(settings[modelKey]).onChange(async value => { settings[modelKey] = value; await this.plugin.saveSettings(); this.display(); }); });
-		new Setting(containerEl).setName("自定义模型 ID").setDesc("需要其他模型时填写其准确 ID；修改只影响批注。")
-			.addText(text => text.setValue(settings[modelKey]).onChange(async value => { settings[modelKey] = value.trim().slice(0, 200); await this.plugin.saveSettings(); }));
+		catalogEl = containerEl.createDiv(); renderCatalog();
 		new Setting(containerEl).setName("生成时间上限").setDesc("单次解释的总时间；超时后停止本次进程。")
 			.addSlider(slider => slider.setLimits(30, 300, 30).setDynamicTooltip().setValue(settings.annotationCliTimeoutSeconds).onChange(async value => { settings.annotationCliTimeoutSeconds = value; await this.plugin.saveSettings(); }));
 		if (opencode) new Setting(containerEl).setName("会话记录").setDesc("OpenCode 会保留本机会话及所提供的上下文；插件不会自动清理。沿用本机登录并关闭共享；非交互模式自动拒绝工具权限请求，批注只保留纯文字结果。");
 		new Setting(containerEl).setName("浅层联网解释").setDesc(opencode ? "开启后沿用现有 OpenCode 浅层查证方式；关闭时只解释所提供的文字。" : "此后端当前提供文字解释；已有联网设置开启时需关闭后再生成。")
 			.addToggle(toggle => toggle.setValue(settings.annotationWebSearchEnabled).setDisabled(!opencode && !settings.annotationWebSearchEnabled).onChange(async value => { settings.annotationWebSearchEnabled = value; await this.plugin.saveSettings(); this.display(); }));
+	}
+
+	private renderNativeAnnotationCliCatalog(containerEl: HTMLElement, backendId: AnnotationCliBackend): void {
+		const settings = this.plugin.settings, qoder = backendId === "qoderclicn", opencode = backendId === "opencode";
+		const modelKey = opencode ? "annotationOpenCodeModel" : qoder ? "annotationQoderModel" : "annotationCodeBuddyModel";
+		const discovery = this.plugin.getAnnotationCliDiscovery(backendId);
+		const presets = opencode ? OPENCODE_ANNOTATION_MODELS : [{ id: qoder ? QODER_ANNOTATION_MODEL : CODEBUDDY_ANNOTATION_MODEL, label: qoder ? QODER_ANNOTATION_MODEL : "Step-5-Preview" }];
+		const models = discovery?.status === "ready" ? discovery.models : presets;
+		let modelSelect: HTMLSelectElement | undefined;
+		const checked = discovery?.checkedAt ? ` · ${new Date(discovery.checkedAt).toLocaleString()}` : "";
+		new Setting(containerEl).setName("模型列表").setDesc(discovery
+			? `${discovery.message} · ${discovery.source}${checked}${discovery.status === "error" ? "；下方仅保留预设与已选 ID。" : ""}`
+			: "尚未查询。点击刷新读取本机 CLI 的模型目录，不发送 AI 任务或 Vault 正文。列表不保证模型免费或当前可调用。")
+			.addButton(button => button.setButtonText(discovery?.status === "loading" ? "查询中…" : qoder ? "刷新模型与额度" : "刷新模型列表").setDisabled(discovery?.status === "loading").onClick(async () => {
+				const pending = this.plugin.refreshAnnotationCliDiscovery(backendId);
+				containerEl.empty(); this.renderNativeAnnotationCliCatalog(containerEl, backendId);
+				try { await pending; } catch { new Notice("CLI 查询已停止"); }
+				if (containerEl.isConnected && settings.annotationBackendId === backendId) { containerEl.empty(); this.renderNativeAnnotationCliCatalog(containerEl, backendId); }
+			}));
+		if (qoder) {
+			const quota = discovery?.quota;
+			new Setting(containerEl).setName("账号剩余额度").setDesc(quota?.status === "known"
+				? `${quota.buckets.map(bucket => `${bucket.label}：${bucket.remaining} ${bucket.unit}`).join("；")}。${quota.message}${checked}`
+				: `未知${quota?.message ? ` · ${quota.message}` : " · 尚未查询"}。获取不到时不以 0 或本次 Token 用量代替。`);
+		}
+		new Setting(containerEl).setName("模型").setDesc(opencode
+			? "每次明确传入完整 provider/model ID，使用模型默认推理参数。留空沿用 OpenCode 页保存的模型，不自动换模型。"
+			: qoder ? "每次明确传入所选名称；自定义条目使用括号中的 modelID。Auto 自动路由不作为固定模型候选。" : "每次明确传入所选模型 ID，例如 step-5-preview。刷新不会更改已选模型。")
+			.addDropdown(dropdown => {
+				modelSelect = dropdown.selectEl;
+				if (opencode) dropdown.addOption("", `沿用已配置模型 · ${settings.openCodeModel || "未指定"}`);
+				models.forEach(model => dropdown.addOption(model.id, model.label));
+				if (settings[modelKey] && !models.some(model => model.id === settings[modelKey])) dropdown.addOption(settings[modelKey], `${settings[modelKey]} · 已选，未在最近列表中`);
+				dropdown.setValue(settings[modelKey]).onChange(async value => { settings[modelKey] = value; await this.plugin.saveSettings(); this.display(); });
+			});
+		new Setting(containerEl).setName("自定义模型 ID").setDesc("需要其他模型时填写其准确 ID；修改只影响批注。未查到的已选 ID 会保留，需要你确认当前可用性。")
+			.addText(text => text.setValue(settings[modelKey]).onChange(async value => {
+				settings[modelKey] = value.trim().slice(0, 200);
+				if (modelSelect) {
+					if (![...modelSelect.options].some(option => option.value === settings[modelKey])) modelSelect.add(new Option(settings[modelKey] || "未指定模型", settings[modelKey]));
+					modelSelect.value = settings[modelKey];
+				}
+				await this.plugin.saveSettings();
+			}));
 	}
 
 	private renderAnnotationWebSearchSettings(

@@ -182,6 +182,7 @@ import { readPendingCenter, pendingDestination, type PendingItem } from "./servi
 import { readLocalPdfHistory } from "./papers/local-pdf-intake";
 import type { SavedCurationPending } from "./services/dashboard-curation";
 import { AnnotationService } from "./annotations/annotation-service";
+import { AnnotationCliDiscoveryService, type AnnotationCliBackend, type AnnotationCliDiscovery } from "./runtime/annotation-cli-discovery";
 import type { AnnotationRecord, AnnotationSelection } from "./annotations/types";
 import {
 	CODE_PRACTICE_VIEW_TYPE,
@@ -363,6 +364,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	});
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;
+	private readonly annotationCliDiscovery = new AnnotationCliDiscoveryService();
 	private readingWorkspace?: ReadingWorkspaceService;
 	private readingAssistant?: ReadingAssistantService;
 	private assistantModal?: ReadingAssistantModal;
@@ -619,6 +621,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		await this.annotationCliDiscovery.dispose();
 		this.answerExcerptBrowser?.dispose();
 		this.topicLearning?.dispose();
 		await this.topicStudy?.dispose();
@@ -1687,6 +1690,16 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	getCliModelDiscovery(backendId: CliBackendId): CliModelDiscoveryResult | null {
 		return this.cliModelDiscoveryCache.get(backendId)?.result || null;
+	}
+
+	getAnnotationCliDiscovery(backend: AnnotationCliBackend): AnnotationCliDiscovery | null {
+		return this.annotationCliDiscovery.get(backend, this.annotationCliExecutable(backend));
+	}
+	refreshAnnotationCliDiscovery(backend: AnnotationCliBackend): Promise<AnnotationCliDiscovery> {
+		return this.annotationCliDiscovery.refresh(backend, this.annotationCliExecutable(backend));
+	}
+	private annotationCliExecutable(backend: AnnotationCliBackend): string {
+		return backend === "codebuddy" ? this.settings.annotationCodeBuddyExecutable : backend === "qoderclicn" ? this.settings.annotationQoderExecutable : this.settings.openCodeExecutable;
 	}
 
 	async discoverCliModels(

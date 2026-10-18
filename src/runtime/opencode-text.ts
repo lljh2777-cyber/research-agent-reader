@@ -10,6 +10,17 @@ function isolatedConfigDirectory(): string {
 	return directory;
 }
 
+/** Shared by text generation and model-only discovery; discovery supplies no model. */
+export function openCodeIsolatedEnvironment(extra: Record<string, unknown> = {}): NodeJS.ProcessEnv {
+	return {
+		XDG_CONFIG_HOME: isolatedConfigDirectory(), OPENCODE_CONFIG: "", OPENCODE_CONFIG_DIR: "", OPENCODE_DISABLE_PROJECT_CONFIG: "true",
+		OPENCODE_CONFIG_CONTENT: JSON.stringify({ autoupdate: false, share: "disabled", permission: { "*": "ask" }, mcp: {}, plugin: [], instructions: [], ...extra }),
+		OPENCODE_PERMISSION: '{"*":"ask"}', OPENCODE_DISABLE_AUTOUPDATE: "true", OPENCODE_DISABLE_PRUNE: "true",
+		OPENCODE_DISABLE_DEFAULT_PLUGINS: "true", OPENCODE_DISABLE_CLAUDE_CODE: "true", OPENCODE_DISABLE_LSP_DOWNLOAD: "true",
+		OPENCODE_AUTO_SHARE: "false",
+	};
+}
+
 export const OPENCODE_ANNOTATION_MODELS = [
 	{ id: "opencode/step-5-preview-free", label: "Step-5-Preview" },
 	{ id: "opencode/mimo-v2.6-flash-free", label: "mimo-v2.6-flash" },
@@ -51,18 +62,12 @@ export const openCodeTextAdapter: CliTextAdapter = {
 		if (!/^[^/\s]+\/[^\s]+$/.test(model)) throw new Error("OpenCode 模型必须填写 provider/model 的准确 ID");
 		return {
 			args: ["run", "--pure", "--format", "json", "--model", model, "--agent", "research-annotation", "--title", "Research Reader annotation", "--", user || ""],
-			env: () => ({
+			env: () => openCodeIsolatedEnvironment({
 				// Keep the CLI's SDK bootstrap cache through requests/reloads.
 				// The process working directory and conversation remain fresh.
-				XDG_CONFIG_HOME: isolatedConfigDirectory(), OPENCODE_CONFIG: "", OPENCODE_CONFIG_DIR: "", OPENCODE_DISABLE_PROJECT_CONFIG: "true",
 				// Zen's free tier rejects requests when core tools are removed.
 				// run without --auto rejects every permission request itself.
-				OPENCODE_CONFIG_CONTENT: JSON.stringify({ model, autoupdate: false, share: "disabled", permission: { "*": "ask" },
-					mcp: {}, plugin: [], instructions: [],
-					agent: { "research-annotation": { mode: "primary", description: "Explain supplied text", prompt: system, model, permission: { "*": "ask" }, steps: 2 } } }),
-				OPENCODE_PERMISSION: '{"*":"ask"}', OPENCODE_DISABLE_AUTOUPDATE: "true", OPENCODE_DISABLE_PRUNE: "true",
-				OPENCODE_DISABLE_DEFAULT_PLUGINS: "true", OPENCODE_DISABLE_CLAUDE_CODE: "true", OPENCODE_DISABLE_LSP_DOWNLOAD: "true",
-				OPENCODE_AUTO_SHARE: "false",
+				model, agent: { "research-annotation": { mode: "primary", description: "Explain supplied text", prompt: system, model, permission: { "*": "ask" }, steps: 2 } },
 			}),
 		};
 	},

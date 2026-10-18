@@ -1,5 +1,7 @@
 # 设置使用说明
 
+`0.89.0` 在「批注 AI」选择 CodeBuddy、Qoder CLI CN 或官方离线文字批注的 OpenCode 后，可点击「刷新模型列表」（Qoder 为「刷新模型与额度」）。候选使用 CLI 返回的准确 ID；Qoder 自定义条目使用 modelID。刷新不自动换模型，已选但未查到的 ID 单独标出。Qoder 账号剩余额度分别显示套餐、附加及可用组织额度，获取失败显示未知。结果仅保存在当前插件内存，重载后需重新手动刷新；程序路径变化不沿用旧结果。详见[操作与验收](cli-model-discovery.md)。
+
 `0.88.3` 的三个本机文字批注后端使用[原文引句与短释义](cli-annotation-grounded-meaning.md)，返回前核对实际引句与限定断言，不额外生成背景讲解。选择模型的方式和准确调用 ID 保持；已有一般知识对话、联网及 CC Switch 路径沿用原方式。
 
 `0.88.0` 的 OpenCode 批注模型列表增加 Step-5-Preview 与 mimo-v2.6-flash，完整 ID 分别为 `opencode/step-5-preview-free`、`opencode/mimo-v2.6-flash-free`。官方离线文字批注使用共用 CLI 调用层，使用模型默认推理参数；联网与 CC Switch 保持已有方式。升级保留已选模型。OpenCode 会保留本机会话，见[本机 CLI 批注](cli-annotation-backends.md)。

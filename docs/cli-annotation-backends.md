@@ -1,6 +1,6 @@
 # 本机 CLI 批注
 
-更新：2026-10-17。当前交付版 `0.88.6` 修复含链接选区的可见引句误拦，真实 AI 与完整宿主重启结果见[补验记录](linked-annotation-ai-validation.md)。CodeBuddy Step、Qoder 与 OpenCode mimo 通过本轮工程验证；OpenCode Step 免费 ID 本次返回上游不可用，不能认定生成通过。下文模型列表保留用户所选候选，不作当前可用性承诺。批注支持 CodeBuddy 的 Step-5-Preview、Qoder CLI CN 的 Qwen3.8-Flash，以及 OpenCode 的 Step-5-Preview 和 mimo-v2.6-flash。新批注仅给实际引句绑定的短释义，最新程度／目的边界与四次真实核对见[引句绑定记录](cli-annotation-grounded-meaning.md)；[短释义记录](cli-annotation-short-explanations.md)与 [0.88.1 完整重启收尾](cli-annotation-closeout.md)保留历史。下文各轮记录保留其当时的验收边界。
+更新：2026-10-18。当前交付版 `0.89.0` 新增[三个 CLI 的模型目录手动刷新与 Qoder CN 剩余额度](cli-model-discovery.md)，模型列表与账号快照只保留在内存，不自动更换模型，额度缺失显示未知。此前 `0.88.6` 修复含链接选区的可见引句误拦，真实 AI 与完整宿主重启结果见[补验记录](linked-annotation-ai-validation.md)。CodeBuddy Step、Qoder 与 OpenCode mimo 通过本轮工程验证；OpenCode Step 免费 ID 本次返回上游不可用，不能认定生成通过。下文模型列表保留用户所选候选，不作当前可用性承诺。批注支持 CodeBuddy 的 Step-5-Preview、Qoder CLI CN 的 Qwen3.8-Flash，以及 OpenCode 的 Step-5-Preview 和 mimo-v2.6-flash。新批注仅给实际引句绑定的短释义，最新程度／目的边界与四次真实核对见[引句绑定记录](cli-annotation-grounded-meaning.md)；[短释义记录](cli-annotation-short-explanations.md)与 [0.88.1 完整重启收尾](cli-annotation-closeout.md)保留历史。下文各轮记录保留其当时的验收边界。
 
 本轮候选由用户提供：CodeBuddy 的 Step-5-Preview、Qoder CLI CN 的 Qwen3.8-Flash，以及 OpenCode 的 Step-5-Preview 和 mimo-v2.6-flash。免费权益以用户当前账号为依据，插件不据此承诺永久免费。
 
