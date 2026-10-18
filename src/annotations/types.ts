@@ -3,11 +3,16 @@ import type { PdfExcerptReceipt } from "./pdf-excerpt";
 import type { BilingualReceipt } from "./bilingual";
 export type AnnotationArchiveStatus = "none" | "pending" | "completed" | "failed";
 
-export interface AnnotationCliReceipt {
+export interface AnnotationCliCallReceipt {
 	requestedModel: string;
 	reportedModel?: string;
 	usage?: Record<string, number>;
 	costUsd?: number;
+}
+
+export interface AnnotationCliReceipt extends AnnotationCliCallReceipt {
+	/** A separate, intentional candidate-selection call, never an automatic retry. */
+	evidenceSelection?: AnnotationCliCallReceipt;
 }
 
 export interface AnnotationSelection {

@@ -1667,12 +1667,12 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		const pathKey = opencode ? "openCodeExecutable" : qoder ? "annotationQoderExecutable" : "annotationCodeBuddyExecutable";
 		let catalogEl: HTMLElement | undefined;
 		const renderCatalog = () => { if (catalogEl) { catalogEl.empty(); this.renderNativeAnnotationCliCatalog(catalogEl, backendId); } };
-		this.createProviderSectionHeader(containerEl, `${label} 批注`, "沿用本机 CLI 登录。围绕划选原文给出短释义，并附对应原句；免费权益以你的当前账号为准。");
+		this.createProviderSectionHeader(containerEl, `${label} 批注`, "沿用本机 CLI 登录。围绕划选原句给出短释义，并附对应原句。中文双语先定位候选英文句，再独立生成释义，共两次调用，可能增加时间与用量；候选定位仍须人工核对。免费权益以你的当前账号为准。");
 		new Setting(containerEl).setName("CLI 程序路径").setDesc("支持原生程序或官方 npm 启动器。npm 安装需要系统 PATH 中可用的独立 Node.js。")
 			.addText(text => text.setValue(settings[pathKey]).onChange(async value => { settings[pathKey] = value.trim(); renderCatalog(); await this.plugin.saveSettings(); }))
 			.addButton(button => button.setButtonText("自动检测").onClick(async () => { const detected = detectCliExecutable(backendId); if (!detected.found) { new Notice(`未检测到 ${label}，请填写本机程序路径`); return; } settings[pathKey] = detected.executable; await this.plugin.saveSettings(); this.display(); }));
 		catalogEl = containerEl.createDiv(); renderCatalog();
-		new Setting(containerEl).setName("生成时间上限").setDesc("单次解释的总时间；超时后停止本次进程。")
+		new Setting(containerEl).setName("生成时间上限").setDesc("本次解释的总时间，包含中文双语的候选定位与释义两步；超时后停止，不继续下一步。")
 			.addSlider(slider => slider.setLimits(30, 300, 30).setDynamicTooltip().setValue(settings.annotationCliTimeoutSeconds).onChange(async value => { settings.annotationCliTimeoutSeconds = value; await this.plugin.saveSettings(); }));
 		if (opencode) new Setting(containerEl).setName("会话记录").setDesc("OpenCode 会保留本机会话及所提供的上下文；插件不会自动清理。沿用本机登录并关闭共享；非交互模式自动拒绝工具权限请求，批注只保留纯文字结果。");
 		new Setting(containerEl).setName("浅层联网解释").setDesc(opencode ? "开启后沿用现有 OpenCode 浅层查证方式；关闭时只解释所提供的文字。" : "此后端当前提供文字解释；已有联网设置开启时需关闭后再生成。")

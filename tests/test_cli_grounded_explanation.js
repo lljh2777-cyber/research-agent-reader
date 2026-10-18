@@ -21,12 +21,12 @@ assert.doesNotThrow(()=>render(pair(ratio,"作者报告上皮与间质细胞的�
 assert.throws(()=>render(pair(purpose,"作者报告已减少干扰。",{background:"可推演门槛的作用"}),purpose),/额外背景字段/);
 assert.throws(()=>render(pair("We purified the tumour cells.","作者纯化细胞。"),purpose),/引句不在/);
 assert.throws(()=>render(pair(association,"两组存在差异。"),association+"\n"+purpose,undefined,"epithelial content"),/未覆盖/);
-assert.throws(()=>render(pair("两组存在差异。","两组存在差异。",{translationCheck:"译文一致。"}),association,"zh-CN","两组存在差异。"),/引句不在/);
+assert.throws(()=>render(pair("两组存在差异。","两组存在差异。"),association,"zh-CN","两组存在差异。"),/引句不在/);
 assert.throws(()=>render(pair(purpose,"一般知识／解释性推断：提高门槛减少干扰。"),purpose),/背景推演/);
 assert.throws(()=>render(JSON.stringify({claims:[]}),purpose));
 const multiline="RNA-seq\r\nresolved four classes.";
 assert.match(render(pair(multiline.replace(/\r/g,""),"作者报告四个类别。"),multiline),/> RNA-seq\n> resolved/);
-assert.match(render(pair(association,"作者报告两组分布差异。",{translationCheck:"所选译文与本引句一致。"}),association,"zh-CN"),/^译文对照：.*\n\n英文依据：/);
+assert.match(render(pair(association,"作者报告两组分布差异。"),association,"zh-CN"),/^译文对照：.*仍待人工核对。\n\n英文依据：/);
 assert.throws(()=>render(pair(association,"两组存在差异。",{translationCheck:"译文一致"}),association));
 (async()=>{
  let calls=0;

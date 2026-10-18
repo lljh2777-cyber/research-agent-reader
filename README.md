@@ -2,9 +2,13 @@
 
 Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据为基础的科研文献阅读与知识沉淀：保存可靠来源、逐步理解论文、核对依据，并将有价值的阅读内容整理为可复用笔记。
 
-`0.89.0` 在「批注 AI」加入[三个 CLI 的模型目录手动刷新](docs/cli-model-discovery.md)，并显示 Qoder CN 返回的账号剩余额度，取不到时显示未知。刷新不发送 AI 任务或 Vault 正文，不自动更换已选模型；目录条目不代表免费或实时可调用。
+`0.89.1` 收紧[本机 CLI 批注的证据范围](docs/cli-evidence-boundary.md)：英文只提供选区所在句，中文先定位候选英文句，再用独立调用生成释义；不提供邻句背景，不从图号推断图示内容，也不把句子定位写成翻译审阅通过。
 
-同版[真实 AI 与完整宿主重启补验](docs/cli-model-refresh-ai-validation.md)已通过：三个 CLI 从刷新结果选模后完成生成／保存／定位，新宿主读回 40 份记录一致；Qoder 额度显示、未知回退及恢复通过。模型回答的上下文扩展与独立审阅缺口仍保留。
+三个后端的真实生成／保存／定位已通过，中文两步回执可读回；正常完整宿主重启后 43 份新旧记录一致，模型与布局恢复。限定拦截不能替代语义核对与独立审阅。
+
+此前 `0.89.0` 在「批注 AI」加入[三个 CLI 的模型目录手动刷新](docs/cli-model-discovery.md)，并显示 Qoder CN 返回的账号剩余额度，取不到时显示未知。刷新不发送 AI 任务或 Vault 正文，不自动更换已选模型；目录条目不代表免费或实时可调用。
+
+`0.89.0` 同版[真实 AI 与完整宿主重启补验](docs/cli-model-refresh-ai-validation.md)已通过：三个 CLI 从刷新结果选模后完成生成／保存／定位，新宿主读回 40 份记录一致；Qoder 额度显示、未知回退及恢复通过。当次模型回答的上下文扩展与独立审阅缺口留档。
 
 `0.86.0` 新增[CodeBuddy 批注](docs/cli-annotation-backends.md)：选择 Step-5-Preview，调用明确使用 `step-5-preview`；插件直接启动本机 CLI，生成后由用户保存。保留英文依据、模型一般知识、实际模型与用量记录，主题学习继续预览。
 
@@ -52,9 +56,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
-> 受限试用版本：`0.89.0`。安装文件见
-> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.89.0)，
-> 更新范围与验收边界见[发布说明](docs/releases/0.89.0.md)。
+> 受限试用版本：`0.89.1`。安装文件见
+> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.89.1)，
+> 更新范围与验收边界见[发布说明](docs/releases/0.89.1.md)。
 > 尚未上架 Obsidian 社区插件目录。
 
 `0.76.0` 新增 [R3.8 学习摘录补充](docs/answer-excerpt-curation-r38.md)：从学习回答摘录分别选择 AI 片段、人工修订与备注，预览后补充到已有概念、方法或综合笔记；保留内容角色，复用修订恢复与撤销。学习文本块排除本插件的正式证据检索，不据此补写论文来源笔记。

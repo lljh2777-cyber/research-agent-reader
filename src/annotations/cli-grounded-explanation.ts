@@ -52,15 +52,39 @@ function paragraph(value: unknown, limit: number): string {
 	return value.trim();
 }
 
-export function renderCliGroundedExplanation(text: string, evidence: string, language?: "en" | "zh-CN", selectedText = ""): string {
+/** Reproduced extensions only; this does not claim general semantic verification. */
+function verifyScope(meaning: string, quote: string): void {
+	for (const [claim, source] of [
+		[/药物(?:发现|开发|研发)|合成化学空间/, /drug\s+(?:discovery|development)|synthetic\s+chemical\s+space|药物(?:发现|开发|研发)|合成化学空间/i],
+		[/随机森林/, /random\s+forests?|随机森林/i],
+	] as [RegExp, RegExp][]) {
+		if (!source.test(quote)) for (const clause of meaning.split(boundaries)) {
+			const match = claim.exec(clause);
+			if (match && !denial.test(clause.slice(0, match.index))) throw new Error("释义补入引句之外的背景或方法身份；未保留，不自动重试");
+		}
+	}
+	if (/(?:译文|翻译).{0,40}(?:准确|一致|正确|无误|无歧义)|无歧义或错误/.test(meaning)) throw new Error("释义包含自由撰写的翻译审阅结论；未保留");
+	const sourceDescribesFigure = sourceAffirms(quote, /\bfig(?:ure)?s?\.?\s*\d+[a-z]?(?:\s*[–-]\s*[a-z])?\s+(?:shows?|illustrates?|depicts?|demonstrates?|presents?)\b|(?:shown|illustrated|depicted)\s+in\s+(?:fig(?:ure)?\.?|图)|图\s*\d+[a-z]?(?:中)?(?:显示|展示|说明|呈现)/gi);
+	for (const clause of meaning.split(boundaries)) {
+		const claim = /(?:图\s*(?:\d[\da-zA-Z\s–—.,-]*|中|上)|如图|从图)[^。！？;；]{0,35}?(?:显示|展示|表明|证明|揭示|说明|呈现|反映|描绘|可见|所示)/g;
+		for (const match of clause.matchAll(claim)) {
+			const prefix = clause.slice(0, match.index! + match[0].length);
+			if (/不能|无法|没有|并非|未(?:核对|查看|显示|展示|说明)/.test(prefix)) continue;
+			if (!sourceDescribesFigure) throw new Error("释义推断了未核对的图示内容；图号仅是引用，未保留");
+		}
+	}
+}
+
+export function renderCliGroundedExplanation(text: string, evidence: string, language?: "en" | "zh-CN", selectedText = "", translationStatus?: "possible-match" | "difference"): string {
 	let parsed: unknown;
 	try { parsed = JSON.parse(text.trim().replace(/^```json\s*\n([\s\S]*)\n```$/, "$1")); }
 	catch { throw new Error("CLI 未返回有效的原文引句与释义；未保留，不自动重试或更换模型"); }
 	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("CLI 原文释义结构无效；未保留");
 	const result = parsed as Record<string, unknown>, keys = Object.keys(result);
-	if (keys.some(key => !["claims", "translationCheck"].includes(key)) || !Array.isArray(result.claims) || result.claims.length < 1 || result.claims.length > 2) throw new Error("CLI 原文释义结构无效或含额外背景字段；未保留");
-	const comparison = language === "zh-CN" ? paragraph(result.translationCheck, 600) : undefined;
-	if (language !== "zh-CN" && result.translationCheck !== undefined) throw new Error("CLI 返回了不适用的译文核对；未保留");
+	if (keys.some(key => key !== "claims") || !Array.isArray(result.claims) || result.claims.length < 1 || result.claims.length > 2) throw new Error("CLI 原文释义结构无效或含额外背景字段；未保留");
+	const comparison = language === "zh-CN" ? translationStatus === "difference"
+		? "模型提示选区可能存在差异；下文仅按候选英文引句释义，译文与对应关系仍待人工核对。"
+		: "下文仅按候选英文引句释义；句子定位不代表译文准确或无歧义，译文与对应关系仍待人工核对。" : undefined;
 	const quotes: string[] = [], meanings: string[] = [];
 	for (const claim of result.claims) {
 		if (!claim || typeof claim !== "object" || Array.isArray(claim) || Object.keys(claim).some(key => !["quote", "meaning"].includes(key))) throw new Error("CLI 释义条目无效；未保留");
@@ -68,7 +92,7 @@ export function renderCliGroundedExplanation(text: string, evidence: string, lan
 		if (typeof row.quote !== "string" || !row.quote.trim() || row.quote.length > 1200) throw new Error("CLI 原文引句无效或超限；未保留");
 		const quote = row.quote.trim().replace(/\r\n/g, "\n");
 		if (!evidence.replace(/\r\n/g, "\n").includes(quote)) throw new Error("CLI 引句不在本次实际提供的原文中；未保留");
-		verifyCliAdjustmentClaim(meaning, quote); verifyStrength(meaning, quote); verifyPurpose(meaning, quote);
+		verifyCliAdjustmentClaim(meaning, quote); verifyStrength(meaning, quote); verifyPurpose(meaning, quote); verifyScope(meaning, quote);
 		quotes.push(quote); meanings.push(meaning);
 	}
 	if (quotes.join("").length > 1800) throw new Error("CLI 原文引句总长度超限；未保留");
