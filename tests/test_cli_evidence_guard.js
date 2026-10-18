@@ -22,7 +22,8 @@ assert.throws(() => verify("这是未调整比较。", "Unadjusted analysis was 
 assert.throws(() => verify("这是未调整比较。", "The paper does not report an unadjusted analysis."));
 (async () => {
  let calls=0;
- const cli={generate:async()=>{calls++;return {text:JSON.stringify({claims:[{quote:evidence,meaning:"此类观测风险比较属于未经调整的组间描述。"}]}),requestedModel:"step-5-preview"};}};
+ const quote=evidence.slice(0,evidence.indexOf(". ")+1);
+ const cli={generate:async request=>{calls++;assert.equal(JSON.parse(request.user).evidence,quote,"adjustment assertion is checked against the actual sentence window");return {text:JSON.stringify({claims:[{quote,meaning:"此类观测风险比较属于未经调整的组间描述。"}]}),requestedModel:"step-5-preview"};}};
  const service=new AnnotationService({}, {settings:{annotationBackendId:"codebuddy",annotationCodeBuddyModel:"step-5-preview",annotationCliTimeoutSeconds:120}},cli);
  await assert.rejects(service.generateExplanation({sourcePath:"papers/fixture.md",selectedText:"lower observed risk",context:evidence},()=>{}),/未提供的调整信息/);
  assert.equal(calls,1,"reject unsupported result without a retry or model substitution");
