@@ -53,7 +53,7 @@ export function filterLibrary(papers: readonly LibraryPaper[], query: string, fi
 		if (filter === "sources" && !paper.objects.some(item => item.source)) return false;
 		if (filter === "sessions" && !paper.objects.some(item => item.reading)) return false;
 		if (filter === "issues" && paper.association === "identified" && !paper.diagnosticIds.length) return false;
-		const haystack = [paper.title, paper.citekey, ...Object.values(paper.identifiers), ...paper.objects.flatMap(item => [item.title, item.id, item.source?.path, item.manualBibliography?.reference, ...(item.manualBibliography?.authors || []), item.manualBibliography?.year])].join("\n").toLocaleLowerCase();
+		const haystack = [paper.title, paper.citekey, ...Object.values(paper.identifiers), ...paper.objects.flatMap(item => [item.title, item.id, item.source?.path, item.annotationProvenance?.sourcePath, item.manualBibliography?.reference, ...(item.manualBibliography?.authors || []), item.manualBibliography?.year])].join("\n").toLocaleLowerCase();
 		return terms.every(term => haystack.includes(term));
 	});
 }

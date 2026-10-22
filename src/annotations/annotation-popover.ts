@@ -3,6 +3,7 @@ import {
 	Component,
 	MarkdownRenderer,
 	Notice,
+	Scope,
 	setIcon,
 } from "obsidian";
 
@@ -52,6 +53,7 @@ export class AnnotationPopover extends Component {
 	private excerptSave?: AbortController;
 	private outsideListener: ((event: PointerEvent) => void) | null = null;
 	private keyListener: ((event: KeyboardEvent) => void) | null = null;
+	private saveScope: Scope | null = null;
 	private resizeListener: (() => void) | null = null;
 	private dragMoveListener: ((event: PointerEvent) => void) | null = null;
 	private dragEndListener: ((event: PointerEvent) => void) | null = null;
@@ -102,6 +104,7 @@ export class AnnotationPopover extends Component {
 	}
 
 	close(): void {
+		this.clearSaveScope();
 		this.excerptSave?.abort();
 		this.generationVersion += 1;
 		if (this.cancelGeneration) {
@@ -236,6 +239,7 @@ export class AnnotationPopover extends Component {
 				void submit();
 			}
 		});
+		this.bindSaveScope(submit);
 		this.position();
 		window.setTimeout(() => textarea.focus(), 0);
 	}
@@ -421,29 +425,40 @@ export class AnnotationPopover extends Component {
 		});
 		cancel.addEventListener("click", () => this.renderExisting());
 		const submit = async () => {
+			if (save.disabled || this.closed) return;
 			save.disabled = true;
+			cancel.disabled = manual.disabled = ai.disabled = regenerate.disabled = true;
 			try {
-				this.record = await this.service.updateAnnotation(this.record!, {
+				const record = await this.service.updateAnnotation(this.record!, {
 					manualText: manual.value,
 					aiText: ai.value,
 					aiProvider: this.record?.aiProvider,
 					aiModel: this.record?.aiModel,
 					aiCli: this.record?.aiCli,
 				});
+				if (this.closed) return;
+				this.record = record;
 				new Notice("批注已保存");
 				this.renderExisting();
 			} catch (error) {
+				if (this.closed) return;
 				new Notice(`保存失败：${displayError(error)}`);
 				save.disabled = false;
+				cancel.disabled = manual.disabled = ai.disabled = regenerate.disabled = false;
 			}
 		};
 		save.addEventListener("click", () => void submit());
-		element.addEventListener("keydown", (event) => {
+		const saveShortcut = (event: KeyboardEvent) => {
 			if (event.ctrlKey && event.key === "Enter") {
 				event.preventDefault();
 				void submit();
 			}
-		});
+		};
+		// Inputs are replaced when leaving this editor. A listener on the reused
+		// popover would retain cancelled drafts and submit them on later edits.
+		manual.addEventListener("keydown", saveShortcut);
+		ai.addEventListener("keydown", saveShortcut);
+		this.bindSaveScope(submit);
 		this.position();
 		window.setTimeout(() => manual.focus(), 0);
 	}
@@ -485,7 +500,7 @@ export class AnnotationPopover extends Component {
 		button: HTMLButtonElement,
 		closeAfterSave = true,
 	): Promise<AnnotationRecord | null> {
-		if (!this.selection) return null;
+		if (!this.selection || this.closed || button.disabled) return null;
 		button.disabled = true;
 		try {
 			const record = await this.service.createAnnotation(this.selection, draft);
@@ -576,7 +591,23 @@ export class AnnotationPopover extends Component {
 		return parent.createDiv({ cls: "agent-annotation-footer" });
 	}
 
+	private bindSaveScope(submit: () => Promise<unknown>): void {
+		this.clearSaveScope();
+		const scope = this.saveScope = new Scope(this.app.scope);
+		scope.register(["Mod"], "Enter", () => {
+			if (!this.closed) void submit();
+			return false;
+		});
+		this.app.keymap.pushScope(scope);
+	}
+
+	private clearSaveScope(): void {
+		if (this.saveScope) this.app.keymap.popScope(this.saveScope);
+		this.saveScope = null;
+	}
+
 	private reset(): HTMLDivElement {
+		this.clearSaveScope();
 		if (!this.element) throw new Error("批注小窗尚未打开");
 		this.element.empty();
 		return this.element;

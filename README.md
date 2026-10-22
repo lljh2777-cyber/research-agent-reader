@@ -2,7 +2,9 @@
 
 Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据为基础的科研文献阅读与知识沉淀：保存可靠来源、逐步理解论文、核对依据，并将有价值的阅读内容整理为可复用笔记。
 
-`0.89.2` 完成[三篇论文、八个选区的批注抽查](docs/cli-annotation-quality-samples.md)：修复中英合句误拦、中文误充英文引句，以及“明显差异”被写成“显著差异”的问题。三个问题选区复验通过；同版[完整宿主重启补验](docs/cli-annotation-restart-validation.md)确认三个后端的模型选择、52 份新旧记录与回执恢复，八处最终来源定位正常。此前偶发读取停顿本轮未复现，原因仍未定位。限定抽查不替代独立审阅。
+`0.89.3` 完成[批注日常使用闭环核对](docs/annotation-daily-workflow.md)：修复连续编辑后的快捷键重复提交，并补全文献库对批注来源路径的搜索。个人批注与摘录的保存、取消、查找和来源定位通过；三个后端已有 AI 解释及回执保持，原有 52 份记录一致，新增两份测试记录。本轮无新模型生成，偶发停顿与独立审阅边界保持。
+
+此前 `0.89.2` 完成[三篇论文、八个选区的批注抽查](docs/cli-annotation-quality-samples.md)：修复中英合句误拦、中文误充英文引句，以及“明显差异”被写成“显著差异”的问题。三个问题选区复验通过；同版[完整宿主重启补验](docs/cli-annotation-restart-validation.md)确认三个后端的模型选择、52 份新旧记录与回执恢复，八处最终来源定位正常。此前偶发读取停顿本轮未复现，原因仍未定位。限定抽查不替代独立审阅。
 
 此前 `0.89.1` 收紧[本机 CLI 批注的证据范围](docs/cli-evidence-boundary.md)：英文只提供选区所在句，中文先定位候选英文句，再用独立调用生成释义；不提供邻句背景，不从图号推断图示内容，也不把句子定位写成翻译审阅通过。
 
@@ -58,9 +60,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
-> 受限试用版本：`0.89.2`。安装文件见
-> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.89.2)，
-> 更新范围与验收边界见[发布说明](docs/releases/0.89.2.md)。
+> 受限试用版本：`0.89.3`。安装文件见
+> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.89.3)，
+> 更新范围与验收边界见[发布说明](docs/releases/0.89.3.md)。
 > 尚未上架 Obsidian 社区插件目录。
 
 `0.76.0` 新增 [R3.8 学习摘录补充](docs/answer-excerpt-curation-r38.md)：从学习回答摘录分别选择 AI 片段、人工修订与备注，预览后补充到已有概念、方法或综合笔记；保留内容角色，复用修订恢复与撤销。学习文本块排除本插件的正式证据检索，不据此补写论文来源笔记。

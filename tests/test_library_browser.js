@@ -35,6 +35,9 @@ const deferred = () => { let resolve, reject; const promise = new Promise((a, b)
 	const noteData = project([note]); assert.deepEqual(libraryNavigation(noteData.papers[0].objects[0], noteData), { kind: "note", path: note.id });
 	const annotation = { kind: "annotation", id: "wiki/annotations/a#file.md#opaque#id", annotationPath: "wiki/annotations/a#file.md", title: "A", identifiers: {} };
 	const annotationData = project([annotation]); assert.deepEqual(libraryNavigation(annotationData.papers[0].objects[0], annotationData), { kind: "note", path: annotation.annotationPath });
+	const detached = project([{ ...annotation, provenance: { format: "dashboard-blocks", sourcePath: "Clippings/paper-A/translation.md" }, binding: { state: "unresolved", reason: "identity not confirmed" } }]);
+	assert.equal(filterLibrary(detached.papers, "Clippings/paper-A/translation.md", "all").length, 1, "unassociated annotations remain discoverable by their actual source path");
+	assert.equal(filterLibrary(detached.papers, "Clippings/paper-B/translation.md", "all").length, 0);
 	const sessionItem = { kind: "session", id: "r-00000001-0000-0000-0000-000000000000", title: "History", identifiers: {}, reading: { sessionId: "r-00000001-0000-0000-0000-000000000000", source: { kind: "pdf", path: "missing.pdf", fingerprint: hash } }, binding: { state: "unresolved", reason: "missing" } };
 	const history = { ...empty(), papers: [{ objects: [sessionItem] }] };
 	assert.equal(libraryNavigation(sessionItem, history, true).sessionId, sessionItem.id, "missing source can still open exact history");
