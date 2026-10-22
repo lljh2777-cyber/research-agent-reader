@@ -17,6 +17,12 @@ function meaningAffirms(meaning: string, pattern: RegExp): boolean {
 }
 
 function verifyStrength(meaning: string, quote: string): void {
+	// Ordinary degree wording is not a reported significance test. Keep this
+	// guard narrow: explicit significance language remains eligible for paraphrase.
+	if (/\bmarkedly\s+different\b/i.test(quote) && !/\bsignifican(?:t|ce|tly)\b|统计显著/i.test(quote)
+		&& meaningAffirms(meaning, /显著(?:性|地)?(?:差异|不同)|(?:差异|不同)(?:在统计上)?(?:具有)?显著(?:性)?|统计(?:上)?显著/g)) {
+		throw new Error("释义将明显差异写为显著差异，原文引句未明确统计显著性；请使用中性程度表述，未保留");
+	}
 	const assertions = /(?:较|很|非常|更)?(?:强|弱)(?:烈)?(?:的)?(?:关联|相关性?|效应)|(?:高度|密切|紧密)(?:关联|相关)|(?:关联|相关性?|效应)(?:强度|程度)?(?:较|很|非常)?(?:强|弱)(?!度|强|弱)|(?:较|很|非常)?(?:大|小)(?:的)?效应/g;
 	for (const clause of meaning.split(boundaries)) {
 		for (const match of clause.matchAll(assertions)) {
