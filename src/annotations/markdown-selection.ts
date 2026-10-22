@@ -34,10 +34,10 @@ function entity(value: string): string {
 	return ({ "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'", "&nbsp;": "\u00a0" } as Record<string, string>)[value] || value;
 }
 
-function sourceProjection(source: string, definitions = source, base = 0, depth = 0, references?: Set<string>, display = false): Projection<Span> {
+function sourceProjection(source: string, definitions = source, base = 0, depth = 0, references?: Set<string>, display = false, preserveScripts = false): Projection<Span> {
 	let text = ""; const spans: Span[] = [];
 	const add = (value: string, start: number, end: number): void => { text += value; for (let n = 0; n < value.length; n++) spans.push({ start: base + start, end: base + end }); };
-	const label = (value: string, start: number, end: number): void => add(depth < 8 ? sourceProjection(value, definitions, 0, depth + 1, refs, display).text : value, start, end);
+	const label = (value: string, start: number, end: number): void => add(depth < 8 ? sourceProjection(value, definitions, 0, depth + 1, refs, display, preserveScripts).text : value, start, end);
 	const refs = references || new Set([...definitions.matchAll(/^ {0,3}\[([^\]^][^\]]*)\]:[^\S\n]*\S[^\n]*$/gm)].map(m => m[1].trim().replace(/\s+/g, " ").toLowerCase()));
 	const pairs = delimiters(source);
 	for (let i = 0; i < source.length;) {
@@ -70,6 +70,14 @@ function sourceProjection(source: string, definitions = source, base = 0, depth 
 		if (auto) { add(auto[1], i, i + auto[0].length); i += auto[0].length; continue; }
 		const htmlLink = /^<a\b[^>]*>([\s\S]*?)<\/a\s*>/i.exec(tail);
 		if (htmlLink) { label(htmlLink[1], i, i + htmlLink[0].length); i += htmlLink[0].length; continue; }
+		// Preserve position, without guessing whether a number is a citation or an
+		// exponent. DOM alignment still uses plain text; model evidence keeps only
+		// these attribute-free tags so Xenium<sup>5</sup> cannot become Xenium5.
+		const script = preserveScripts && /^<(sup|sub)\b[^>]*>([\s\S]*?)<\/\1\s*>/i.exec(tail);
+		if (script && depth < 8) {
+			const tag = script[1].toLowerCase(), body = sourceProjection(script[2], definitions, 0, depth + 1, refs, display, true).text;
+			add(`<${tag}>${body}</${tag}>`, i, i + script[0].length); i += script[0].length; continue;
+		}
 		const tag = /^<\/?[a-z][^>]*>/i.exec(tail);
 		if (tag) { i += tag[0].length; continue; }
 		const code = /^(`+)([^`]+)\1(?!`)/.exec(tail);
@@ -86,11 +94,11 @@ function sourceProjection(source: string, definitions = source, base = 0, depth 
 
 /** Text for UI only. Source receipts continue to use the exact raw slice. */
 export function annotationDisplayText(raw: string): string {
-	return annotationEvidenceText(raw).replace(/\s+/g, " ").trim();
+	return sourceProjection(raw, raw, 0, 0, undefined, true).text.replace(/\s+/g, " ").trim();
 }
-/** Literal visible Markdown prose for a model request; source receipts retain the raw slice. */
+/** Model prose retains superscript/subscript position; source receipts retain the raw slice. */
 export function annotationEvidenceText(raw: string, definitions = raw): string {
-	return sourceProjection(raw, definitions, 0, 0, undefined, true).text.replace(/\r\n/g, "\n");
+	return sourceProjection(raw, definitions, 0, 0, undefined, true, true).text.replace(/\r\n/g, "\n");
 }
 export const markdownNeedsDetached = (raw: string): boolean => /[\r\n|\[\]<>`*_~]/.test(raw);
 export function validSelectionSize(raw: string): boolean {

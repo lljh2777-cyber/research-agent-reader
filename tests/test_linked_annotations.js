@@ -4,7 +4,7 @@ const assert = require("node:assert/strict"), path = require("node:path"), { loa
 class TFile { constructor(p) { this.path = p; this.extension = "md"; this.basename = path.posix.basename(p, ".md"); } }
 const mocks = { obsidian: { TFile, MarkdownView: class {}, Notice: class {}, normalizePath: p => p } };
 const { AnnotationService, readAnnotationRecords } = loadReading("annotations/annotation-service.ts", mocks);
-const { captureMarkdownRange, revealMarkdownRange, annotationDisplayText } = loadReading("annotations/markdown-selection.ts");
+const { captureMarkdownRange, revealMarkdownRange, annotationDisplayText, annotationEvidenceText } = loadReading("annotations/markdown-selection.ts");
 const { excerptRevision, prepareExcerpt, validExcerpt } = loadReading("annotations/excerpt.ts");
 globalThis.Node = { ELEMENT_NODE: 1 }; globalThis.NodeFilter = { SHOW_TEXT: 4 }; globalThis.DOMRect = class {};
 function dom(parts, sourcePath = "Clippings/linked.md") {
@@ -99,6 +99,26 @@ let count = 0; const check = async (name, fn) => { await fn(); count++; console.
   const referenced = "Read [the paper][ref].", content = referenced + "\n\n[ref]: https://example.invalid/hidden\n"; f.files.get(selection.sourcePath).text = content; quote = "Read the paper.";
   await service.generateExplanation({ ...selection, selectedText: referenced, context: referenced }, () => {}); assert.ok(requests.at(-1).user.includes(quote)); assert.ok(!requests.at(-1).user.includes("[ref]"));
   assert.equal(requests.length, 4, "each accepted or rejected result consumes exactly one mock call");
+ });
+ await check("superscripts and subscripts survive CLI evidence without changing DOM anchors or old receipts", async () => {
+  const raw = "Xenium<sup>5</sup>, inference<sup>17</sup>, 10<sup>2</sup> and H<sub>2</sub>O.", visible = "Xenium5, inference17, 102 and H2O.", d = dom([visible]), f = memory(raw);
+  assert.equal(annotationDisplayText(raw), visible); assert.equal(annotationEvidenceText(raw), raw);
+  assert.equal(annotationEvidenceText('[X<sup class="ref">5</sup>](https://example.invalid)'), 'X<sup>5</sup>');
+  assert.equal(annotationEvidenceText('A<SUP title="note">1,2</SUP> B<sub>i</sub>'), 'A<sup>1,2</sup> B<sub>i</sub>');
+  const captured = captureMarkdownRange(d.block, d.range(), raw, 0, raw.length);
+  assert.equal(raw.slice(captured.start, captured.end), raw);
+  assert.equal(revealMarkdownRange(d.block, raw, 0, raw.length, captured.start, captured.end).toString(), visible);
+  live(d.range()); const selection = await f.service.captureSelection();
+  const record = await f.service.createAnnotation(selection, { aiText: 'Historical Xenium5 quote.', aiProvider: 'original' });
+  const settings = { annotationBackendId: 'qoderclicn', annotationQoderModel: 'Qwen3.8-Flash', annotationCliTimeoutSeconds: 120 }, requests = [];
+  let quote = raw;
+  const cli = { generate: async request => { requests.push(request); return { text: JSON.stringify({ claims: [{ quote, meaning: '保留原文上下标。' }] }), requestedModel: settings.annotationQoderModel }; } };
+  const service = new AnnotationService(f.app, { settings }, cli);
+  const answer = await service.generateExplanation(selection, () => {});
+  assert.equal(JSON.parse(requests[0].user).evidence, raw); assert.ok(answer.text.includes(raw));
+  quote = visible; await assert.rejects(service.generateExplanation(selection, () => {}), /引句不在/);
+  assert.deepEqual(await service.loadAnnotation(record.annotationPath, record.id), JSON.parse(JSON.stringify(record)));
+  assert.equal(f.files.get(selection.sourcePath).text, raw);
  });
  console.log(`LINKED_ANNOTATIONS_OK (${count} groups; memory DOM/Vault only)`);
 })().catch(e => { console.error(e); process.exitCode = 1; });
