@@ -1,10 +1,12 @@
 import type { BilingualDocument, BilingualLanguage } from "../reader/bilingual-document";
-import { matchReadingSentences, readingSentences, type ExplicitSentencePair, type ReadingSentence } from "../reader/bilingual-sentences";
+import { matchReadingSentences, readingSentences, type ExplicitSentencePair, type ReadingSentence, type SentenceMark } from "../reader/bilingual-sentences";
 import type { BilingualPane } from "./bilingual-reader";
 
 const NAME = "agent-bilingual-sentence-hover";
 const EXCLUDED = ".agent-bilingual-marker, .footnotes, [data-footnote-id], figure, figcaption, table, blockquote, li, pre, .callout, .markdown-embed";
 const CAPTION = /^(?:(?:(?:extended data|supplementary)\s+)?(?:fig(?:ure)?\.?|table)\s+|(?:(?:扩展数据|补充)\s*)?[图表]\s*)s?\d/iu;
+const PANEL_CAPTION = /^\(?[a-z](?:\s*[-–]\s*[a-z])?\)?\s*[,，:：]/u;
+const CAPTION_SECTION = /^(?:extended data(?: figures(?: and tables)?)?|扩展数据(?:图(?:和表|与表)?)?)$/iu;
 type Pane = Pick<BilingualPane, "article" | "anchors" | "scroller">;
 interface Part { node: Text; start: number; end: number; }
 interface Paragraph { parts: Part[]; sentences: ReadingSentence[]; }
@@ -13,14 +15,35 @@ interface HoverPair { en: TextBounds; "zh-CN": TextBounds; }
 interface Hit { start: number; end: number; own: TextBounds; pair: HoverPair; }
 interface TextOwner { start: number; hits: Hit[]; }
 
+function marker(node: Text): { owner: Element; key?: string } | undefined {
+	const parent = node.parentElement, link = parent?.closest<HTMLAnchorElement>("a[href]");
+	const ref = link?.dataset.footref;
+	if (ref && ref.length <= 80) return { owner: link!, key: "ref:" + ref };
+	const href = link?.getAttribute("href") ?? "", label = link?.textContent?.replace(/\s+/g, "").toLowerCase();
+	if (link && href.length <= 600 && /^https?:\/\/[^#]+#(?:fig(?:ure)?|tab(?:le)?)[-_]?\d+[a-z]?$/i.test(href)
+		&& label && /^s?\d+[a-z0-9,–—-]*$/i.test(label)) return { owner: link, key: "fig:" + href + "|" + label };
+	const script = parent?.closest("sup, sub");
+	return script ? { owner: script, key: "script:" + script.localName + ":" + script.textContent?.replace(/\s+/g, "") } : undefined;
+}
+
 function paragraphs(file: BilingualDocument["files"][BilingualLanguage], pane: Pane): Map<string, Paragraph> {
-	const blocks = new Map(file.blocks.map((block, i) => [block.id, { block, afterImage: file.blocks[i - 1]?.kind === "image" }]));
+	const eligible = new Set<string>(); let captionLevel = 0;
+	for (const [i, block] of file.blocks.entries()) {
+		if (block.kind === "heading") {
+			const heading = /^\s*(#{1,6})\s+(.+?)(?:\s+#+)?\s*$/u.exec(file.text.slice(block.start, block.end));
+			if (heading) {
+				if (heading[1].length <= captionLevel) captionLevel = 0;
+				if (!captionLevel && (CAPTION_SECTION.test(heading[2]) || CAPTION.test(heading[2]))) captionLevel = heading[1].length;
+			}
+		}
+		if (!captionLevel && block.kind === "paragraph" && file.blocks[i - 1]?.kind !== "image") eligible.add(block.id);
+	}
 	const unique = new Map<string, HTMLElement | null>();
 	let id: string | undefined;
 	for (const element of pane.article.querySelectorAll<HTMLElement>("[data-bilingual-anchor], p")) {
 		const anchor = element.dataset.bilingualAnchor;
 		if (anchor && pane.anchors.get(anchor) === element) {
-			id = blocks.get(anchor)?.block.kind === "paragraph" && !blocks.get(anchor)?.afterImage ? anchor : undefined;
+			id = eligible.has(anchor) ? anchor : undefined;
 			continue;
 		}
 		if (!id || element.tagName !== "P" || element.closest(EXCLUDED)) continue;
@@ -30,14 +53,20 @@ function paragraphs(file: BilingualDocument["files"][BilingualLanguage], pane: P
 	for (const [id, element] of unique) {
 		if (!element || element.querySelector("img, math, mjx-container, .math, .katex, [hidden], [aria-hidden=true]")) continue;
 		const text = element.textContent ?? "";
-		if (!text.trim() || text.length > 8000 || CAPTION.test(text.trimStart())) continue;
+		if (!text.trim() || text.length > 8000 || CAPTION.test(text.trimStart()) || PANEL_CAPTION.test(text.trimStart())) continue;
 		const walker = element.ownerDocument.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-		const parts: Part[] = []; let offset = 0;
+		const parts: Part[] = [], marks: SentenceMark[] = []; let offset = 0, lastOwner: Element | undefined;
 		for (let node = walker.nextNode() as Text | null; node; node = walker.nextNode() as Text | null) {
-			if (node.length) parts.push({ node, start: offset, end: offset + node.length });
+			if (!node.length) continue;
+			const end = offset + node.length;
+			parts.push({ node, start: offset, end });
+			const inline = marker(node);
+			if (inline && lastOwner === inline.owner) marks[marks.length - 1].end = end;
+			else if (inline) marks.push({ start: offset, end, key: inline.key });
+			lastOwner = inline?.owner;
 			offset += node.length;
 		}
-		if (offset === text.length) result.set(id, { parts, sentences: readingSentences(text) });
+		if (offset === text.length) result.set(id, { parts, sentences: readingSentences(text, marks) });
 	}
 	return result;
 }
