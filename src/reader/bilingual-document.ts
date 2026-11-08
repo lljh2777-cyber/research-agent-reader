@@ -2,6 +2,7 @@ import { bytesDigest, objectDigest } from "../papers/identity";
 import { excerptRevision, type ExcerptRevision } from "../annotations/excerpt";
 import type { SourceStorage } from "../sources/storage";
 import { markdownImagePattern } from "./markdown-images";
+import { readSentenceAlignment, type ExplicitSentencePair } from "./bilingual-sentences";
 
 export type BilingualLanguage = "en" | "zh-CN";
 export type BilingualBlockKind = "heading" | "paragraph" | "image" | "table" | "list" | "quote" | "code" | "math" | "footnote" | "reference" | "rule";
@@ -17,6 +18,7 @@ export interface BilingualDocument {
 	root: string; metadataPath: string; metadataDigest: string; title: string; status: string; humanReview: string;
 	sourceVersion: string | null; stale: boolean; syncAvailable: boolean; issues: string[];
 	files: Record<BilingualLanguage, BilingualFile>; pairs: BilingualPair[];
+	sentenceAlignment?: ExplicitSentencePair[];
 	selectedFiles?: SelectedBilingualFiles;
 }
 export interface SelectedBilingualFiles { en: string; zh: string; metadata?: string; }
@@ -119,7 +121,8 @@ export function createBilingualDocument(entry: string, enBytes: Uint8Array, zhBy
 	const status = ["not-started", "in-progress", "needs-review", "reviewed", "failed"].includes(String(meta.status)) ? String(meta.status) : "unknown";
 	return { root: paths.root, metadataPath: paths.metadata, metadataDigest: bytesDigest(metadataBytes), title: typeof meta.title === "string" ? meta.title.slice(0, 1000) : "双语文献",
 		status, humanReview: meta.humanReview === "reviewed" ? "reviewed" : meta.humanReview === "not-reviewed" ? "not-reviewed" : "unknown",
-		sourceVersion, stale, syncAvailable: pairs.length > 0, issues, files: { en, "zh-CN": zh }, pairs };
+		sourceVersion, stale, syncAvailable: pairs.length > 0, issues, files: { en, "zh-CN": zh }, pairs,
+		...(pairs.length ? { sentenceAlignment: readSentenceAlignment(meta.sentenceAlignment, en.digest, zh.digest) } : {}) };
 }
 function imagePath(root: string, relative: string): string {
 	let decoded: string; try { decoded = decodeURIComponent(relative); } catch { throw new Error("图片路径编码无效"); }
@@ -137,7 +140,7 @@ export async function loadBilingualDocument(io: Pick<SourceStorage, "read">, ent
 	for (const asset of assets) { signal?.throwIfAborted(); if (!await io.read(imagePath(p.root, asset), 12 * 1024 * 1024)) doc.issues.push("本地图片缺失：" + asset); }
 	// Re-read only the three inputs; do not trust a pair assembled across edits.
 	for (let i = 0; i < inputs.length; i++) { signal?.throwIfAborted(); const after = await io.read(inputs[i], limits[i]); if (!after || !Buffer.from(after).equals(Buffer.from(bytes[i]))) throw new Error("双语资料在加载期间变化，请重新打开"); }
-	signal?.throwIfAborted(); if (doc.issues.length) { doc.syncAvailable = false; doc.pairs = []; } return doc;
+	signal?.throwIfAborted(); if (doc.issues.length) { doc.syncAvailable = false; doc.pairs = []; delete doc.sentenceAlignment; } return doc;
 }
 
 /** The user chooses both files. A scroll position never supplies an English evidence block. */
@@ -167,5 +170,6 @@ export async function loadSelectedBilingualDocument(io: Pick<SourceStorage, "rea
 	signal?.throwIfAborted();
 	return { root: selected.en.slice(0, Math.max(0, selected.en.lastIndexOf("/"))), metadataPath: meta ? metadataPath : "", metadataDigest: meta ? bytesDigest(metadataBytes!) : objectDigest(files), title: en.path.split("/").pop() || "双栏阅读",
 		status: ["not-started", "in-progress", "needs-review", "reviewed", "failed"].includes(String(meta?.status)) ? String(meta!.status) : "unknown",
-		humanReview: meta?.humanReview === "reviewed" ? "reviewed" : meta?.humanReview === "not-reviewed" ? "not-reviewed" : "unknown", sourceVersion, stale, syncAvailable, issues, files: { en, "zh-CN": zh }, pairs, selectedFiles: files };
+		humanReview: meta?.humanReview === "reviewed" ? "reviewed" : meta?.humanReview === "not-reviewed" ? "not-reviewed" : "unknown", sourceVersion, stale, syncAvailable, issues, files: { en, "zh-CN": zh }, pairs, selectedFiles: files,
+		...(syncAvailable ? { sentenceAlignment: readSentenceAlignment(meta?.sentenceAlignment, en.digest, zh.digest) } : {}) };
 }

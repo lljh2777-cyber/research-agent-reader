@@ -5,6 +5,7 @@ import { annotationDisplayText, revealMarkdownRange } from "../annotations/markd
 import type { BilingualBlock, BilingualDocument, BilingualFile, BilingualLanguage } from "../reader/bilingual-document";
 import { bilingualPositionAt, bilingualScrollTarget, correspondingBilingualPosition, normalizeBilingualState, type BilingualGeometry, type BilingualReadingState } from "../reader/bilingual-position";
 import { applySplitLayout, sourceSplitRatio } from "./split-layout";
+import { BilingualSentenceHover, supportsBilingualHover } from "./bilingual-sentence-hover";
 
 /** Markers affect rendering only. Source offsets remain those of the unmodified files. */
 export function bilingualRenderMarkdown(file: BilingualFile): string {
@@ -29,12 +30,13 @@ export class BilingualReader extends Component {
 	private readyFrame = 0;
 	private restoring = true;
 	private linkedInput?: HTMLInputElement;
+	private sentenceHover?: BilingualSentenceHover;
 	private message?: HTMLElement;
 	private invalidated = false;
 	private reversed: boolean;
 	private applyLayout?: () => void;
 	constructor(readonly options: BilingualReaderOptions) { super(); this.state = normalizeBilingualState(options.state, options.document, options.defaultLinked); this.reversed = options.reversed === true; }
-	setReversed(reversed: boolean): void { if (this.options.signal.aborted) return; this.snapshot(); this.reversed = reversed; this.applyLayout?.(); }
+	setReversed(reversed: boolean): void { if (this.options.signal.aborted) return; this.sentenceHover?.clear(); this.snapshot(); this.reversed = reversed; this.applyLayout?.(); }
 	async render(): Promise<void> {
 		const { app, host, document: doc, signal } = this.options;
 		host.classList.add("agent-bilingual-shell");
@@ -46,6 +48,11 @@ export class BilingualReader extends Component {
 		this.linkedInput = linkedLabel.createEl("input", { attr: { type: "checkbox", "aria-label": "双栏联动" } });
 		linkedLabel.createSpan({ text: "双栏联动" }); this.linkedInput.checked = this.state.linked; this.linkedInput.disabled = !canSync;
 		this.linkedInput.addEventListener("change", () => { this.state.linked = this.linkedInput!.checked && canSync && !this.invalidated; if (this.state.linked) this.synchronize(this.state.active); this.publish(); }, { signal });
+		const hoverLabel = toolbar.createEl("label", { cls: "agent-bilingual-linked", attr: { title: "仅高亮可对应的正文句，不滚动另一栏" } });
+		const hoverInput = hoverLabel.createEl("input", { attr: { type: "checkbox", "aria-label": "悬停句对照" } });
+		hoverInput.disabled = true;
+		hoverLabel.createSpan({ text: "悬停句对照" });
+		const hoverHint = toolbar.createSpan({ cls: "agent-bilingual-status", attr: { role: "status", hidden: "" } });
 		this.message = toolbar.createSpan({ cls: "agent-bilingual-sync-message", attr: { role: "status" } });
 		const status = toolbar.createEl("span", { text: STATUS[doc.status] + (doc.humanReview === "reviewed" ? " · 人工审阅记录已存在" : " · 人工审阅未确认"), cls: "agent-bilingual-status" });
 		status.setAttribute("title", doc.stale ? "译文英语来源已过期" : "结构对应不代表译文含义已经核验");
@@ -100,9 +107,27 @@ export class BilingualReader extends Component {
 				splitter.addEventListener("keydown", event => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); change(ratio + (event.key === "ArrowLeft" ? -0.02 : 0.02) * (this.reversed ? -1 : 1)); }, { signal });
 			}
 		}
+		if (doc.syncAvailable && !doc.stale && supportsBilingualHover(host.ownerDocument)) {
+			const hover = this.sentenceHover = new BilingualSentenceHover(doc, this.panes.get("en")!, this.panes.get("zh-CN")!, signal);
+			hoverInput.disabled = false;
+			hoverInput.checked = this.state.sentenceHover === true;
+			const applyHover = (): void => {
+				const count = hover.setEnabled(hoverInput.checked);
+				hoverHint.hidden = !hoverInput.checked;
+				hoverHint.setText(count ? `${count} 对可对照` : "本篇暂无可对应的句子");
+			};
+			applyHover();
+			hoverInput.addEventListener("change", () => {
+				if (this.invalidated) return;
+				if (hoverInput.checked) this.state.sentenceHover = true; else delete this.state.sentenceHover;
+				applyHover(); this.publish();
+			}, { signal });
+			this.registerEvent(app.workspace.on("active-leaf-change", hover.clear));
+		} else hoverLabel.title = doc.syncAvailable && !doc.stale ? "当前桌面环境不支持句子高亮" : "需要有效的双语段落配对";
 		applyRatio();
 		for (const language of ["en", "zh-CN"] as const) this.restore(language);
 		const resize = new ResizeObserver(() => {
+			this.sentenceHover?.clear();
 			if (this.resizeFrame) cancelAnimationFrame(this.resizeFrame);
 			this.resizeFrame = requestAnimationFrame(() => { this.resizeFrame = 0; if (signal.aborted) return; for (const language of ["en", "zh-CN"] as const) this.restore(language); });
 		});
@@ -116,6 +141,8 @@ export class BilingualReader extends Component {
 			if (signal.aborted) return;
 			if (![doc.files.en.path, doc.files["zh-CN"].path, doc.metadataPath].includes(path)) return;
 			this.invalidated = true; this.state.linked = false; this.linkedInput!.checked = false; this.linkedInput!.disabled = true;
+			this.sentenceHover?.setEnabled(false); hoverInput.checked = false; hoverInput.disabled = true; hoverHint.hidden = true;
+			delete this.state.sentenceHover;
 			for (const button of host.querySelectorAll<HTMLButtonElement>("[data-bilingual-sync]")) button.disabled = true;
 			this.message!.setText("双语资料已变化，请重新打开核对；历史内容仍保留"); this.publish();
 		};

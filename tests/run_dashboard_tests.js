@@ -23,6 +23,7 @@ const commands = [
 	[process.execPath, ["tests/test_bilingual_rendering.js"]],
 	[process.execPath, ["tests/test_bilingual_navigation.js"]],
 	[process.execPath, ["tests/test_bilingual_position.js"]],
+	[process.execPath, ["tests/test_bilingual_sentences.js"]],
 	[process.execPath, ["tests/test_bilingual_annotations.js"]],
 	[process.execPath, ["tests/test_release_metadata.js"]],
 	[process.execPath, ["tests/test_dashboard_providers.js"]],

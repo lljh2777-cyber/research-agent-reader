@@ -3,6 +3,7 @@ import type { BilingualDocument, BilingualLanguage } from "./bilingual-document"
 export interface BilingualPosition { blockId: string; progress: number; }
 export interface BilingualReadingState {
 	linked: boolean; active: BilingualLanguage;
+	sentenceHover?: true;
 	digests: Record<BilingualLanguage, string>; positions: Record<BilingualLanguage, BilingualPosition>;
 }
 export interface BilingualGeometry { blockId: string; top: number; }
@@ -16,6 +17,7 @@ export function normalizeBilingualState(value: unknown, doc: BilingualDocument, 
 			? { blockId: String(saved.blockId), progress: bounded(saved.progress) } : { blockId: doc.files[language].blocks[0]?.id || "", progress: 0 };
 	};
 	return { linked: (doc.syncAvailable || !!doc.selectedFiles) && (typeof input.linked === "boolean" ? input.linked : defaultLinked), active: input.active === "zh-CN" ? "zh-CN" : "en",
+		...(input.sentenceHover === true && doc.syncAvailable ? { sentenceHover: true } : {}),
 		digests: { en: doc.files.en.digest, "zh-CN": doc.files["zh-CN"].digest }, positions: { en: position("en"), "zh-CN": position("zh-CN") } };
 }
 function ordered(geometry: BilingualGeometry[]): BilingualGeometry[] { return geometry.filter(b => Number.isFinite(b.top)).sort((a, b) => a.top - b.top); }
