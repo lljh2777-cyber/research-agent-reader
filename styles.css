@@ -6943,7 +6943,13 @@ body.agent-dashboard-mineru-resizing {
 .agent-bilingual-pane-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--background-modifier-border); }
 .agent-bilingual-pane-heading button { white-space: normal; height: auto; min-height: 28px; max-width: 100%; }
 .agent-bilingual-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 0 16px 24px; }
-.agent-bilingual-article { font-size: var(--font-text-size, inherit); max-width: none; overflow-wrap: anywhere; }
+.agent-bilingual-article {
+	font-size: var(--font-text-size, inherit);
+	/* Resolve line spacing with the reading font, not the inherited UI line height. */
+	line-height: var(--line-height-normal, 1.5);
+	max-width: none;
+	overflow-wrap: anywhere;
+}
 .agent-bilingual-article img { max-width: 100%; height: auto; cursor: zoom-in; }
 .agent-bilingual-article .agent-bilingual-marker { height: 0; margin: 0; padding: 0; line-height: 0; }
 .agent-bilingual-excerpt-target { outline: 2px solid var(--interactive-accent); outline-offset: 3px; }
