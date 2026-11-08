@@ -2,7 +2,7 @@
 
 Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据为基础的科研文献阅读与知识沉淀：保存可靠来源、逐步理解论文、核对依据，并将有价值的阅读内容整理为可复用笔记。
 
-`0.90.1` 提高[双语悬停句对照](docs/bilingual-sentence-hover.md)的覆盖率：复用已有段落配对，在本机识别多句正文中的可靠一对一对应。DeepMet 从 8 对增至 159 对，Novae 摘段从 0 对增至 2 对。悬停不滚动或改变鼠标选区。
+`0.90.2` 将双语悬停改为[段落对照](docs/bilingual-paragraph-hover.md)，复用已有结构配对高亮整段，暂不做逐句匹配。现有 DeepMet 和 Novae 样本中，纳入范围的正文段落分别命中 216／216 和 3／3。悬停不滚动或改变鼠标选区。
 
 `0.89.6` 修复[双栏正文放大后相邻行重叠](docs/releases/0.89.6.md)。正文沿用 `0.89.5` 的字号设置支持，并按正文实际字号计算行高。
 
@@ -66,9 +66,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
-> 受限试用版本：`0.90.1`。安装文件见
-> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.90.1)，
-> 更新范围与验收边界见[发布说明](docs/releases/0.90.1.md)。
+> 受限试用版本：`0.90.2`。安装文件见
+> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.90.2)，
+> 更新范围与验收边界见[发布说明](docs/releases/0.90.2.md)。
 > 尚未上架 Obsidian 社区插件目录。
 
 `0.76.0` 新增 [R3.8 学习摘录补充](docs/answer-excerpt-curation-r38.md)：从学习回答摘录分别选择 AI 片段、人工修订与备注，预览后补充到已有概念、方法或综合笔记；保留内容角色，复用修订恢复与撤销。学习文本块排除本插件的正式证据检索，不据此补写论文来源笔记。

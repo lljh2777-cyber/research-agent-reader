@@ -2,7 +2,6 @@
 const assert = require("node:assert/strict");
 const { loadReading } = require("./reading-test-helpers");
 const { readingSentences, matchReadingSentences, readSentenceAlignment } = loadReading("reader/bilingual-sentences.ts");
-const { normalizeBilingualState } = loadReading("reader/bilingual-position.ts");
 
 const text = "  Fig. 2 shows 3.5 mg.\nThe result persisted.  ";
 const sentences = readingSentences(text);
@@ -52,8 +51,4 @@ const citedZh = referenceHints("一项测量 [71] [83] 得到一致结果。随�
 assert.equal(matchReadingSentences(citedEn, citedZh).length, 1);
 assert.equal(matchReadingSentences(citedEn, referenceHints("一项测量 [71] [82] 得到一致结果。随后有另一项结果。", ["71", "82"])).length, 0);
 
-const doc = { syncAvailable: true, files: { en: { digest: digestEn, blocks: [] }, "zh-CN": { digest: digestZh, blocks: [] } } };
-assert.equal(normalizeBilingualState({}, doc).sentenceHover, undefined);
-assert.equal(normalizeBilingualState({ sentenceHover: true, linked: false }, doc).sentenceHover, true);
-assert.equal(normalizeBilingualState({ sentenceHover: true }, { ...doc, syncAvailable: false }).sentenceHover, undefined);
-console.log("BILINGUAL_SENTENCES_OK: scientific punctuation, explicit records, local anchors, conflicts, gaps and opt-in state");
+console.log("BILINGUAL_SENTENCES_OK: scientific punctuation, explicit records, local anchors, conflicts and gaps");
