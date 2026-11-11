@@ -20,6 +20,7 @@ const headingSelector = "h1, h2, h3, h4, h5, h6";
 const sources = new WeakMap<WorkspaceLeaf, SplitOutlineSource>();
 const outlineModes = [["follow", "跟随"], ["zh-CN", "中文"], ["en", "English"]] as const;
 type OutlineMode = typeof outlineModes[number][0];
+let nextOutlineViewId = 0;
 
 export function splitOutlineHeadings(article: HTMLElement, headingAnchors?: ReadonlyMap<HTMLElement, string>): OutlineHeading[] {
 	const headings: OutlineHeading[] = [];
@@ -79,6 +80,8 @@ export function createSplitOutlineButton(toolbar: HTMLElement, reader: Workspace
 
 export class SplitOutlineView extends ItemView {
 	private readonly preferred = new WeakMap<SplitOutlineSource, BilingualLanguage>();
+	private readonly expanded = new WeakMap<SplitOutlineSource, Partial<Record<OutlineLanguage, Set<string>>>>();
+	private readonly branchIdPrefix = "agent-split-outline-" + ++nextOutlineViewId + "-";
 	private source?: SplitOutlineSource;
 	private language?: OutlineLanguage;
 	private modeGroup?: HTMLElement;
@@ -144,20 +147,46 @@ export class SplitOutlineView extends ItemView {
 			return;
 		}
 		const root = this.list.createDiv({ attr: { role: "list", "aria-label": "章节标题" } });
-		const parents: { level: number; item: HTMLElement; branch?: HTMLElement }[] = [];
-		for (const heading of headings) {
+		const expansion = this.expanded.get(source) ?? {};
+		this.expanded.set(source, expansion);
+		const expanded = expansion[language] ??= new Set<string>();
+		const parents: { level: number; branch: HTMLElement }[] = [];
+		for (const [index, heading] of headings.entries()) {
 			while (parents.length && parents[parents.length - 1].level >= heading.level) parents.pop();
-			const parent = parents[parents.length - 1];
-			const list = parent ? parent.branch ??= parent.item.createDiv({ cls: "agent-split-outline-branch", attr: { role: "list" } }) : root;
+			const list = parents[parents.length - 1]?.branch ?? root;
 			const item = list.createDiv({ attr: { role: "listitem" } });
-			const button = item.createEl("button", {
+			const line = item.createDiv({ cls: "agent-split-outline-line" });
+			const next = headings[index + 1];
+			if (next && next.level > heading.level) {
+				const branchId = this.branchIdPrefix + heading.id;
+				const toggle = line.createEl("button", {
+					cls: "agent-split-outline-toggle",
+					attr: { type: "button", "aria-controls": branchId },
+				});
+				setIcon(toggle, "chevron-right");
+				const branch = item.createDiv({ cls: "agent-split-outline-branch", attr: { id: branchId, role: "list" } });
+				const showBranch = (open: boolean): void => {
+					branch.hidden = !open;
+					toggle.setAttribute("aria-expanded", String(open));
+					const action = open ? "折叠子标题" : "展开子标题";
+					toggle.setAttribute("aria-label", action + "：" + heading.title);
+					toggle.title = action;
+				};
+				showBranch(expanded.has(heading.id));
+				toggle.addEventListener("click", () => {
+					if (branch.hidden) expanded.add(heading.id);
+					else expanded.delete(heading.id);
+					showBranch(expanded.has(heading.id));
+				});
+				parents.push({ level: heading.level, branch });
+			}
+			const button = line.createEl("button", {
 				cls: "agent-split-outline-row", text: heading.title,
 				attr: { type: "button", title: heading.title, "data-outline-heading": heading.id },
 			});
 			button.addEventListener("click", () => {
 				if (reader === this.app.workspace.getMostRecentLeaf() && sources.get(reader) === source) source.jump(language, heading.id);
 			});
-			parents.push({ level: heading.level, item });
 		}
 	}
 }

@@ -7008,7 +7008,7 @@ body.agent-dashboard-mineru-resizing {
 	border-radius: 8px;
 	background: var(--background-secondary);
 }
-.agent-split-outline :is(.agent-split-outline-mode, .agent-split-outline-row) {
+.agent-split-outline :is(.agent-split-outline-mode, .agent-split-outline-row, .agent-split-outline-toggle) {
 	all: unset;
 	display: block;
 	box-sizing: border-box;
@@ -7043,9 +7043,27 @@ body.agent-dashboard-mineru-resizing {
 	padding-inline-start: 6px;
 	border-inline-start: 1px solid var(--background-modifier-border);
 }
+.agent-split-outline-line {
+	display: grid;
+	grid-template-columns: 20px minmax(0, 1fr);
+	align-items: start;
+}
+.agent-split-outline .agent-split-outline-toggle {
+	grid-column: 1;
+	display: grid;
+	place-items: center;
+	width: 20px;
+	height: 24px;
+	margin-block-start: 2px;
+	color: var(--text-muted);
+}
+.agent-split-outline .agent-split-outline-toggle svg { width: 14px; height: 14px; }
+.agent-split-outline .agent-split-outline-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+.agent-split-outline .agent-split-outline-toggle:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
 .agent-split-outline .agent-split-outline-row {
+	grid-column: 2;
 	width: 100%;
-	padding: 5px 7px;
+	padding: 5px 7px 5px 4px;
 	color: var(--text-normal);
 	font-weight: 550;
 	overflow-wrap: anywhere;
@@ -7056,7 +7074,7 @@ body.agent-dashboard-mineru-resizing {
 	background: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
 	box-shadow: inset 2px 0 var(--interactive-accent);
 }
-.agent-split-outline :is(.agent-split-outline-mode, .agent-split-outline-row):focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
+.agent-split-outline :is(.agent-split-outline-mode, .agent-split-outline-row, .agent-split-outline-toggle):focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: -2px; }
 .agent-split-outline-empty { padding: 8px; color: var(--text-muted); }
 .agent-split-swap svg { width: 18px; height: 18px; }
 .agent-split-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
