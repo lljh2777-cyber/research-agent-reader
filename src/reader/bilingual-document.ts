@@ -96,8 +96,9 @@ export function parseBilingualMarkdown(text: string): { bodyStart: number; block
 		const start = Math.max(bodyStart, lines[first].start), end = lines[cursor - 1].end, raw = text.slice(start, end).trim();
 		const images = imagesOf(raw);
 		if (kind === "paragraph" && images.length === 1 && markdownImagePattern().exec(raw)?.[0] === raw) kind = "image";
-		// Citation identifiers and common image paths give additional structural checks, not semantic verification.
-		const signature = JSON.stringify([kind, key, images, footnotesOf(raw)]);
+		// Translated word order can move citations within a block. Compare their
+		// IDs and multiplicities here without changing the source, block or image order.
+		const signature = JSON.stringify([kind, key, images, footnotesOf(raw).sort()]);
 		blocks.push({ id: "b-" + blocks.length, kind, start, end, lineStart: lines[first].index, lineEnd: lines[cursor - 1].index, chapter, signature });
 	}
 	return { bodyStart, blocks };

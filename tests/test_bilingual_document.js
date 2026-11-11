@@ -2,7 +2,7 @@
 const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const { loadReading } = require("./reading-test-helpers");
-const { createBilingualDocument, parseBilingualMarkdown, bilingualPaths, loadBilingualDocument } = loadReading("reader/bilingual-document.ts");
+const { createBilingualDocument, parseBilingualMarkdown, bilingualPaths, loadBilingualDocument, loadSelectedBilingualDocument } = loadReading("reader/bilingual-document.ts");
 const hash = value => createHash("sha256").update(value).digest("hex");
 const bytes = value => Buffer.from(value, "utf8");
 const entry = "Clippings/example/paper.md";
@@ -35,6 +35,23 @@ async function check(name, fn) { await fn(); passed++; console.log("OK " + name)
  await check("missing, reordered image, heading and citation structures stop mapping", () => {
   for (const changed of [zh.replace("## 正文", "### 正文"), zh.replace("图注。", "图注。\n\n多出的段落。"), zh.replace("figure.webp", "different.webp"), zh.replace("文字 [^1]", "文字 [^2]")]) assert.equal(make(en, changed).syncAvailable, false);
   assert.equal(make(en, "").syncAvailable, false);
+ });
+ await check("citation order within a block can change in translation, while IDs, counts and ownership stay checked", async () => {
+  const source = "## Main\n\nFirst [^30] and [^28] [^30].\n\nSecond [^40].\n", translated = "## 正文\n\n先 [^28]，再 [^30] [^30]。\n\n另一段 [^40]。\n";
+  const canonical = make(source, translated);
+  assert.equal(canonical.syncAvailable, true);
+  assert.equal(canonical.pairs.length, 3);
+  assert.equal(canonical.files["zh-CN"].text.slice(canonical.pairs[1]["zh-CN"].start, canonical.pairs[1]["zh-CN"].end).trim(), "先 [^28]，再 [^30] [^30]。");
+  assert.equal(make(source, translated.replace("[^30] [^30]", "[^30]")).syncAvailable, false);
+  assert.equal(make(source, translated.replace("[^28]", "[^29]")).syncAvailable, false);
+  assert.equal(make(source, translated.replace("[^28]", "[^40]").replace("另一段 [^40]", "另一段 [^28]")).syncAvailable, false);
+  const prefix = "bilingual-test/", selected = { en: prefix + "paper.md", zh: prefix + "paper.zh-CN.md" };
+  const contents = new Map([[selected.en, bytes(source)], [selected.zh, bytes(translated)], [prefix + "translation.json", bytes(metadata(source))]]);
+  const manual = await loadSelectedBilingualDocument({ read: async path => contents.get(path) ?? null }, selected);
+  assert.equal(manual.syncAvailable, true);
+  assert.equal(manual.pairs.length, canonical.pairs.length);
+  assert.equal(manual.files.en.digest, hash(source));
+  assert.equal(manual.files["zh-CN"].digest, hash(translated));
  });
  await check("paragraph identity is occurrence-based and makes no semantic claim", () => {
   const source = "## A\n\nRepeat.\n\nRepeat.\n", translation = "## 甲\n\n重复。\n\n重复。\n", doc = make(source, translation);
