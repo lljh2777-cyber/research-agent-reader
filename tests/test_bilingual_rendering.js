@@ -2,7 +2,7 @@
 const assert = require("node:assert/strict");
 const {loadReading} = require("./reading-test-helpers");
 const {parseBilingualMarkdown} = loadReading("reader/bilingual-document.ts");
-const {bilingualRenderMarkdown, BilingualReader} = loadReading("views/bilingual-reader.ts", {obsidian: {Component: class {}}});
+const {bilingualRenderMarkdown, BilingualReader} = loadReading("views/bilingual-reader.ts", {obsidian: {Component: class {}, ItemView: class {}}});
 const text = '---\ntitle: "Title"\n---\n## Main\n\nText [^1].\n\n![Fig. 1](<images/one.webp>)\n\nCaption.\n\n$$\nx=2\n$$\n\n```js\nconst x=2;\n```\n\n[^1]: Reference.\n\n[reference]: https://example.test\n';
 const file = {text, ...parseBilingualMarkdown(text)};
 const rendered = bilingualRenderMarkdown(file);

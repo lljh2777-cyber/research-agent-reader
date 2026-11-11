@@ -407,7 +407,7 @@ export class MineruReaderView extends ItemView {
 				if (!adapter.getBasePath) throw new Error("双语阅读需要桌面本地文件系统");
 				const doc = await loadBilingualDocument(new FileSourceStorage(adapter.getBasePath()), readerPackage.articlePath, signal);
 				if (signal.aborted || !this.opened || this.readerPackage !== readerPackage) return;
-				this.bilingualReader = new BilingualReader({ app: this.app, host: shell, document: doc, signal, annotate: () => this.plugin.openSelectionAnnotation(), ratio: this.readerState.bilingualRatio, defaultLinked: this.plugin.settings.mineruReaderBilingualLinked, state: this.readerState.bilingualState, onState: state => { this.readerState.bilingualState = state; this.requestStateSave(); }, onRatio: ratio => { this.readerState.bilingualRatio = ratio; this.requestStateSave(); }, ordinary: () => this.switchReaderLayout(false) });
+				this.bilingualReader = new BilingualReader({ app: this.app, host: shell, document: doc, signal, outlineLeaf: this.leaf, annotate: () => this.plugin.openSelectionAnnotation(), ratio: this.readerState.bilingualRatio, defaultLinked: this.plugin.settings.mineruReaderBilingualLinked, state: this.readerState.bilingualState, onState: state => { this.readerState.bilingualState = state; this.requestStateSave(); }, onRatio: ratio => { this.readerState.bilingualRatio = ratio; this.requestStateSave(); }, ordinary: () => this.switchReaderLayout(false) });
 				this.bilingualReader.load(); await this.bilingualReader.render(); return;
 			} catch (error) {
 				if (signal.aborted) return;

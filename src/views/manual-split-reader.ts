@@ -12,6 +12,7 @@ import { SplitPdfPane } from "./split-pdf-pane";
 import { chooseReadingFile } from "./reading-mode-picker";
 import { applySplitLayout, sourceSplitRatio } from "./split-layout";
 import { renderReadingNoteProperties } from "./reading-note-properties";
+import { bindSplitOutline, createSplitOutlineButton, scrollWithinReadingPane, splitOutlineHeadings, type SplitOutlineSource } from "./split-outline";
 
 export const MANUAL_SPLIT_VIEW_TYPE = "research-agent-reader-split";
 interface SplitHost {
@@ -98,7 +99,7 @@ export class ManualSplitReaderView extends ItemView {
 			if (state.mode === "bilingual") {
 				const adapter = this.app.vault.adapter as { getBasePath?: () => string }; if (!adapter.getBasePath) throw new Error("双栏阅读需要桌面本地知识库");
 				const doc = await loadSelectedBilingualDocument(new FileSourceStorage(adapter.getBasePath()), { en: state.left, zh: state.right }, signal); signal.throwIfAborted();
-				this.bilingual = new BilingualReader({ app: this.app, host: workspace, document: doc, signal, ordinary: () => void this.host.openSplitSource(state.entry, this.leaf), hideOrdinary: true, annotate: () => this.host.openSelectionAnnotation(), ratio: state.ratio, reversed: state.reversed, defaultLinked: state.linked, defaultPropertiesLanguage: state.entry === state.right ? "zh-CN" : "en", state: state.bilingualState, onRatio: ratio => { state.ratio = ratio; this.save(); }, onState: snapshot => { state.bilingualState = snapshot; state.linked = snapshot.linked; this.save(); } });
+				this.bilingual = new BilingualReader({ app: this.app, host: workspace, document: doc, signal, outlineLeaf: this.leaf, ordinary: () => void this.host.openSplitSource(state.entry, this.leaf), hideOrdinary: true, annotate: () => this.host.openSelectionAnnotation(), ratio: state.ratio, reversed: state.reversed, defaultLinked: state.linked, defaultPropertiesLanguage: state.entry === state.right ? "zh-CN" : "en", state: state.bilingualState, onRatio: ratio => { state.ratio = ratio; this.save(); }, onState: snapshot => { state.bilingualState = snapshot; state.linked = snapshot.linked; this.save(); } });
 				this.bilingual.load(); await this.bilingual.render();
 			} else await this.renderMarkdownPdf(workspace, message, state, signal);
 			if (signal.aborted) return;
@@ -127,7 +128,9 @@ export class ManualSplitReaderView extends ItemView {
 			beforeChange: () => this.capture(),
 			onChange: properties => { if (properties) state.noteProperties = properties; else delete state.noteProperties; this.save(); },
 		});
-		const linkedLabel = workspace.createEl("label", { cls: "agent-bilingual-linked" });
+		const toolbar = workspace.createDiv({ cls: "agent-bilingual-toolbar" });
+		const outlineButton = createSplitOutlineButton(toolbar, this.leaf, signal);
+		const linkedLabel = toolbar.createEl("label", { cls: "agent-bilingual-linked" });
 		const linked = linkedLabel.createEl("input", { attr: { type: "checkbox", "aria-label": "双栏联动" } }); linked.checked = state.linked;
 		linkedLabel.createSpan({ text: "双栏联动 · 按阅读进度，内容对应需核对" });
 		linked.addEventListener("change", () => { state.linked = linked.checked; if (state.linked) void synchronize(this.active); this.save(); }, { signal });
@@ -140,7 +143,9 @@ export class ManualSplitReaderView extends ItemView {
 			try { if (from === "left") await this.pdf.showDocumentProgress(splitProgress(this.markdown!.scrollTop / Math.max(1, this.markdown!.scrollHeight - this.markdown!.clientHeight))); else this.markdown!.scrollTop = this.pdf.documentProgress * Math.max(0, this.markdown!.scrollHeight - this.markdown!.clientHeight); this.capture(); this.save(); }
 			finally { this.frame = requestAnimationFrame(() => { this.syncing = false; }); }
 		};
-		let pdfHeading: HTMLElement | undefined;
+		let pdfHeading: HTMLElement | undefined, outline: SplitOutlineSource | undefined;
+		let detachOutline: (() => void) | undefined;
+		let outlineScroll = false;
 		for (const side of ["left", "right"] as const) {
 			const pane = panes.createEl("section", { cls: "agent-bilingual-pane", attr: { "aria-label": side === "left" ? "Markdown 正文" : "PDF 原文件", "data-split-side": side } });
 			const heading = pane.createDiv({ cls: "agent-bilingual-pane-heading" });
@@ -149,11 +154,27 @@ export class ManualSplitReaderView extends ItemView {
 			const annotate = heading.createEl("button", { text: "批注", attr: { type: "button", "data-split-annotate": side } }); annotate.addEventListener("mousedown", e => e.preventDefault(), { signal });
 			annotate.addEventListener("click", () => { const selection = document.defaultView?.getSelection(); if (!selection?.anchorNode || !scroller.contains(selection.anchorNode) || !selection.focusNode || !scroller.contains(selection.focusNode)) { message.setText("请先在本栏选择文字"); return; } void this.host.openSelectionAnnotation(); }, { signal });
 			const scroller = pane.createDiv({ cls: side === "left" ? "agent-bilingual-scroll markdown-reading-view" : "agent-bilingual-scroll agent-split-pdf-scroll", attr: { tabindex: "0" } });
-			for (const type of ["pointerdown", "wheel", "touchstart", "focusin", "keydown"] as const) scroller.addEventListener(type, () => { this.active = side; }, { signal, passive: true });
-			scroller.addEventListener("scroll", () => { if (this.restoring || this.syncing) return; this.capture(); if (state.linked && this.active === side) void synchronize(side); else this.save(); }, { signal, passive: true });
+			for (const type of ["pointerdown", "wheel", "touchstart", "focusin", "keydown"] as const) scroller.addEventListener(type, () => {
+				this.active = side;
+				if (side === "left") outlineScroll = false;
+			}, { signal, passive: true });
+			scroller.addEventListener("scroll", () => { if (this.restoring || this.syncing || side === "left" && outlineScroll) return; this.capture(); if (state.linked && this.active === side) void synchronize(side); else this.save(); }, { signal, passive: true });
 			if (side === "left") {
 				this.markdown = scroller; const article = scroller.createEl("article", { cls: "markdown-rendered agent-bilingual-article" });
 				const renderer = this.renderer = new Component(); renderer.load(); await MarkdownRenderer.render(this.app, text, article, state.left, renderer); signal.throwIfAborted(); article.dataset.agentAnnotationSource = state.left; bindDetachedMarkdownSource(article);
+				const headings = splitOutlineHeadings(article);
+				outline = {
+					active: "markdown", headings: { markdown: headings },
+					jump: (language, id) => {
+						if (language !== "markdown" || this.invalidated || this.restoring || signal.aborted) return;
+						const target = headings.find(heading => heading.id === id)?.element;
+						if (!target || !article.contains(target)) return;
+						this.active = "left";
+						outlineScroll = true;
+						scrollWithinReadingPane(scroller, target);
+						this.capture(); this.save();
+					},
+				};
 				const splitter = panes.createDiv({ cls: "agent-bilingual-splitter", attr: { role: "separator", tabindex: "0", "aria-label": "调整双栏宽度", "aria-orientation": "vertical", "aria-valuemin": "30", "aria-valuemax": "70", "aria-valuenow": String(Math.round(state.ratio * 100)) } });
 				let dragging = false; const change = (ratio: number): void => { state.ratio = Math.max(0.3, Math.min(0.7, ratio)); apply(); this.save(); };
 				splitter.addEventListener("pointerdown", e => { e.preventDefault(); dragging = true; splitter.setPointerCapture(e.pointerId); }, { signal });
@@ -165,8 +186,20 @@ export class ManualSplitReaderView extends ItemView {
 		apply();
 		this.pdf = new SplitPdfPane(this.app, pdfFile, pdfHeading!, rightScroller!, signal, () => { this.capture(); if (state.linked) void synchronize("right"); else this.save(); }); this.pdf.load(); await this.pdf.render(state.pdfPage, state.pdfProgress, state.pdfZoom); signal.throwIfAborted();
 		if (await this.app.vault.read(markdownFile) !== text || bytesDigest(await readPdfBytes(this.app, state.right, signal)) !== digests.right) throw new Error("文件在打开期间变化，请重新选择或重开");
-		const changed = (path: string): void => { if (![state.left, state.right].includes(path) || signal.aborted) return; this.invalidated = true; state.linked = false; linked.checked = false; linked.disabled = true; message.setText("文件已变化，请重开核对；保存的历史批注仍保留"); for (const button of workspace.querySelectorAll<HTMLButtonElement>("[data-split-sync]")) button.disabled = true; this.save(); };
+		const changed = (path: string): void => { if (![state.left, state.right].includes(path) || signal.aborted) return; this.invalidated = true; state.linked = false; linked.checked = false; linked.disabled = true; outlineButton.disabled = true; detachOutline?.(); message.setText("文件已变化，请重开核对；保存的历史批注仍保留"); for (const button of workspace.querySelectorAll<HTMLButtonElement>("[data-split-sync]")) button.disabled = true; this.save(); };
 		const renderer = this.renderer!; renderer.registerEvent(this.app.vault.on("modify", f => changed(f.path))); renderer.registerEvent(this.app.vault.on("delete", f => changed(f.path))); renderer.registerEvent(this.app.vault.on("rename", (f, old) => { changed(f.path); changed(old); }));
-		this.frame = requestAnimationFrame(() => { if (signal.aborted) return; this.markdown!.scrollTop = state.markdownProgress * Math.max(0, this.markdown!.scrollHeight - this.markdown!.clientHeight); this.frame = requestAnimationFrame(() => { if (!signal.aborted) { this.restoring = false; this.save(); } }); });
+		this.frame = requestAnimationFrame(() => {
+			if (signal.aborted) return;
+			this.markdown!.scrollTop = state.markdownProgress * Math.max(0, this.markdown!.scrollHeight - this.markdown!.clientHeight);
+			this.frame = requestAnimationFrame(() => {
+				if (signal.aborted) return;
+				this.restoring = false;
+				if (outline && !this.invalidated) {
+					detachOutline = bindSplitOutline(this.leaf, outline, signal);
+					outlineButton.disabled = false;
+				}
+				this.save();
+			});
+		});
 	}
 }

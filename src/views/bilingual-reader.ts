@@ -1,4 +1,4 @@
-import { Component, MarkdownRenderer, Modal, type App } from "obsidian";
+import { Component, MarkdownRenderer, Modal, type App, type WorkspaceLeaf } from "obsidian";
 import { bindBilingualSelection } from "../annotations/bilingual";
 import type { AnnotationRecord } from "../annotations/types";
 import { annotationDisplayText, revealMarkdownRange } from "../annotations/markdown-selection";
@@ -7,6 +7,7 @@ import { bilingualPositionAt, bilingualScrollTarget, correspondingBilingualPosit
 import { applySplitLayout, sourceSplitRatio } from "./split-layout";
 import { BilingualParagraphHover } from "./bilingual-paragraph-hover";
 import { renderReadingNoteProperties } from "./reading-note-properties";
+import { bindSplitOutline, createSplitOutlineButton, refreshSplitOutline, scrollWithinReadingPane, splitOutlineHeadings, type OutlineHeading } from "./split-outline";
 
 /** Markers affect rendering only. Source offsets remain those of the unmodified files. */
 export function bilingualRenderMarkdown(file: BilingualFile): string {
@@ -19,7 +20,7 @@ export function bilingualRenderMarkdown(file: BilingualFile): string {
 	return result + file.text.slice(cursor);
 }
 export interface BilingualPane { language: BilingualLanguage; scroller: HTMLElement; article: HTMLElement; anchors: Map<string, HTMLElement>; }
-export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; hideOrdinary?: boolean; annotate?(): Promise<void>; ratio?: number; reversed?: boolean; onRatio?(ratio: number): void; defaultLinked?: boolean; defaultPropertiesLanguage?: BilingualLanguage; state?: unknown; onState?(state: BilingualReadingState): void; }
+export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; hideOrdinary?: boolean; annotate?(): Promise<void>; ratio?: number; reversed?: boolean; onRatio?(ratio: number): void; defaultLinked?: boolean; defaultPropertiesLanguage?: BilingualLanguage; state?: unknown; onState?(state: BilingualReadingState): void; outlineLeaf?: WorkspaceLeaf; }
 const STATUS: Record<string, string> = { "not-started": "尚未翻译", "in-progress": "翻译中", "needs-review": "译文待复核", reviewed: "记录标为已审阅", failed: "翻译记录失败", unknown: "译文状态未确认" };
 
 export class BilingualReader extends Component {
@@ -40,6 +41,7 @@ export class BilingualReader extends Component {
 	setReversed(reversed: boolean): void { if (this.options.signal.aborted) return; this.paragraphHover?.clear(); this.snapshot(); this.reversed = reversed; this.applyLayout?.(); }
 	async render(): Promise<void> {
 		const { app, host, document: doc, signal } = this.options;
+		const outlineLeaf = this.options.outlineLeaf;
 		host.classList.add("agent-bilingual-shell");
 		renderReadingNoteProperties(host, {
 			sources: doc.files, defaultLanguage: this.options.defaultPropertiesLanguage ?? "zh-CN", signal, state: this.state.noteProperties,
@@ -47,6 +49,9 @@ export class BilingualReader extends Component {
 			onChange: state => { if (state) this.state.noteProperties = state; else delete this.state.noteProperties; this.publish(); },
 		});
 		const toolbar = host.createDiv({ cls: "agent-bilingual-toolbar" });
+		const outlineButton = outlineLeaf && createSplitOutlineButton(toolbar, outlineLeaf, signal);
+		const headings: Record<BilingualLanguage, OutlineHeading[]> = { en: [], "zh-CN": [] };
+		let detachOutline: (() => void) | undefined;
 		const progressSync = !!doc.selectedFiles && !doc.syncAvailable;
 		const canSync = doc.syncAvailable || progressSync;
 		toolbar.createEl("span", { text: progressSync ? "双语阅读 · 按阅读进度同步，段落对应未确认" : "双语对照 · 结构对应，语义仍需核对" });
@@ -88,6 +93,14 @@ export class BilingualReader extends Component {
 			article.dataset.agentAnnotationSource = file.path;
 			bindBilingualSelection(article, element => { if (this.invalidated || signal.aborted) throw new Error("双语资料已变化或关闭，请重新打开划选"); const block = this.blockForElement(language, element); if (!block) throw new Error("无法确定本栏选区段落"); return { document: doc, language, block }; });
 			const anchors = this.bindAnchors(article, file); this.scopeLinks(article, language);
+			if (outlineLeaf) {
+				const headingAnchors = new Map<HTMLElement, string>();
+				for (const block of file.blocks) {
+					const anchor = anchors.get(block.id);
+					if (block.kind === "heading" && anchor) headingAnchors.set(anchor, block.id);
+				}
+				headings[language] = splitOutlineHeadings(article, headingAnchors);
+			}
 			article.addEventListener("click", event => {
 				const target = event.target instanceof Element ? event.target.closest("img") as HTMLImageElement | null : null;
 				if (!target || !target.src) return;
@@ -140,13 +153,36 @@ export class BilingualReader extends Component {
 		for (const pane of this.panes.values()) { resize.observe(pane.article); resize.observe(pane.scroller); }
 		// Obsidian requests view state while rendering/visibility is still settling.
 		// Keep saved anchors until the mounted layout can actually restore them.
-		const ready = (): void => { if (signal.aborted) return; if ([...this.panes.values()].some(p => !p.article.isConnected || p.scroller.clientHeight <= 0 || p.article.getBoundingClientRect().height <= 0)) { this.readyFrame = requestAnimationFrame(ready); return; } for (const language of ["en", "zh-CN"] as const) this.restore(language); this.readyFrame = requestAnimationFrame(() => { if (signal.aborted) return; this.restoring = false; this.publish(); }); };
+		const ready = (): void => {
+			if (signal.aborted) return;
+			if ([...this.panes.values()].some(p => !p.article.isConnected || p.scroller.clientHeight <= 0 || p.article.getBoundingClientRect().height <= 0)) {
+				this.readyFrame = requestAnimationFrame(ready);
+				return;
+			}
+			for (const language of ["en", "zh-CN"] as const) this.restore(language);
+			this.readyFrame = requestAnimationFrame(() => {
+				if (signal.aborted) return;
+				this.restoring = false;
+				if (outlineLeaf && outlineButton && !this.invalidated) {
+					const reader = this;
+					detachOutline = bindSplitOutline(outlineLeaf, {
+						get active() { return reader.state.active; },
+						headings,
+						jump: (language, id) => { if (language !== "markdown") this.jumpToHeading(language, id, headings); },
+					}, signal);
+					outlineButton.disabled = false;
+				}
+				this.publish();
+			});
+		};
 		this.readyFrame = requestAnimationFrame(ready);
 		signal.addEventListener("abort", () => { resize.disconnect(); cancelAnimationFrame(this.frame); cancelAnimationFrame(this.resizeFrame); cancelAnimationFrame(this.readyFrame); }, { once: true });
 		const changed = (path: string): void => {
 			if (signal.aborted) return;
 			if (![doc.files.en.path, doc.files["zh-CN"].path, doc.metadataPath].includes(path)) return;
 			this.invalidated = true; this.state.linked = false; this.linkedInput!.checked = false; this.linkedInput!.disabled = true;
+			detachOutline?.();
+			if (outlineButton) outlineButton.disabled = true;
 			this.paragraphHover?.setEnabled(false); hoverInput.checked = false; hoverInput.disabled = true; hoverHint.hidden = true;
 			delete this.state.paragraphHover;
 			for (const button of host.querySelectorAll<HTMLButtonElement>("[data-bilingual-sync]")) button.disabled = true;
@@ -156,7 +192,35 @@ export class BilingualReader extends Component {
 		this.registerEvent(app.vault.on("delete", file => changed(file.path)));
 		this.registerEvent(app.vault.on("rename", (file, old) => { changed(file.path); changed(old); }));
 	}
-	private activate(language: BilingualLanguage): void { this.state.active = language; this.programmatic.delete(language); }
+	private activate(language: BilingualLanguage): void {
+		const changed = this.state.active !== language;
+		this.state.active = language;
+		this.programmatic.delete(language);
+		if (changed && this.options.outlineLeaf) refreshSplitOutline(this.options.outlineLeaf);
+	}
+	private jumpToHeading(language: BilingualLanguage, id: string, headings: Record<BilingualLanguage, OutlineHeading[]>): void {
+		if (this.invalidated || this.restoring || this.options.signal.aborted) return;
+		const heading = headings[language].find(item => item.id === id);
+		const pane = this.panes.get(language);
+		if (!heading || !pane?.article.contains(heading.element)) return;
+		cancelAnimationFrame(this.frame);
+		this.frame = 0;
+		this.activate(language);
+		this.programmatic.add(language);
+		this.scrollToElement(language, heading.element);
+		this.capture(language);
+		if (this.state.linked && heading.blockId) {
+			const other = language === "en" ? "zh-CN" : "en";
+			const position = correspondingBilingualPosition(this.options.document, language, { blockId: heading.blockId, progress: 0 });
+			const target = position && headings[other].find(item => item.blockId === position.blockId);
+			if (target && this.panes.get(other)?.article.contains(target.element)) {
+				this.programmatic.add(other);
+				this.scrollToElement(other, target.element);
+				this.capture(other);
+			}
+		}
+		this.publish();
+	}
 	private geometry(language: BilingualLanguage): BilingualGeometry[] {
 		const pane = this.panes.get(language); if (!pane) return [];
 		const top = pane.scroller.getBoundingClientRect().top;
@@ -224,11 +288,7 @@ export class BilingualReader extends Component {
 	}
 	private scrollToElement(language: BilingualLanguage, element: HTMLElement, align: "start" | "center" = "start"): void {
 		const pane = this.panes.get(language); if (!pane || !pane.article.contains(element)) return;
-		const scroller = pane.scroller, bounds = element.getBoundingClientRect();
-		const top = scroller.scrollTop + bounds.top - scroller.getBoundingClientRect().top - scroller.clientTop;
-		const offset = align === "center" ? (scroller.clientHeight - bounds.height) / 2 : 0;
-		// scrollIntoView also scrolls hidden ancestors; themes can then lose the reader's headers.
-		scroller.scrollTop = Math.max(0, Math.min(Math.max(0, scroller.scrollHeight - scroller.clientHeight), top - offset));
+		scrollWithinReadingPane(pane.scroller, element, align);
 	}
 	private scopeLinks(article: HTMLElement, language: BilingualLanguage): void {
 		const ids = new Map<string, string>(), targets = new Map<string, HTMLElement>();

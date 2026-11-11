@@ -21,6 +21,7 @@ import { libraryNavigation } from "./library/browser";
 import type { LibraryObjectSummary } from "./library/types";
 import { PaperLibraryView, PAPER_LIBRARY_VIEW_TYPE } from "./views/paper-library";
 import { ManualSplitReaderView, MANUAL_SPLIT_VIEW_TYPE } from "./views/manual-split-reader";
+import { SplitOutlineView, SPLIT_OUTLINE_VIEW_TYPE } from "./views/split-outline";
 import { ReadingModePicker, chooseReadingFile, chooseBilingualReadingFile, type ReadingChoice } from "./views/reading-mode-picker";
 import { bilingualFileOrder } from "./reader/reading-file-tree";
 import { normalizeManualSplit, type ManualSplitState } from "./reader/manual-split";
@@ -531,6 +532,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.registerEvent(this.app.vault.on("rename", (file, oldPath) => { this.curationService?.noteChange(oldPath); this.curationService?.noteChange(file.path); }));
 		this.registerView(MINERU_READER_VIEW_TYPE, (leaf) => new MineruReaderView(leaf, this));
 		this.registerView(MANUAL_SPLIT_VIEW_TYPE, leaf => new ManualSplitReaderView(leaf, this));
+		this.registerView(SPLIT_OUTLINE_VIEW_TYPE, leaf => new SplitOutlineView(leaf));
 		this.app.workspace.onLayoutReady(() => {
 			this.consolidateMineruReaderLeaves();
 			void this.reconcileMissingPublishedPackages();
