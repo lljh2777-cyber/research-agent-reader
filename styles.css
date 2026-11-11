@@ -6930,6 +6930,20 @@ body.agent-dashboard-mineru-resizing {
 .rar-knowledge-page button { white-space: normal; height: auto; min-height: 30px; }
 /* Existing bilingual Markdown: original image/caption positions remain inline. */
 .agent-dashboard-mineru-reader-shell.agent-bilingual-shell { display: flex; flex-direction: column; }
+.agent-reading-note-properties { flex: 0 0 auto; min-width: 0; padding: 8px 12px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m, 8px); background: var(--background-secondary); }
+.agent-reading-note-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.agent-reading-note-bar .agent-reading-note-title { flex: 1 1 18em; min-width: 0; margin: 0; padding: 0; border: 0; font: 600 var(--font-ui-medium)/1.35 var(--font-interface); color: var(--text-normal); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; user-select: text; }
+.agent-reading-note-controls, .agent-reading-note-language { display: inline-flex; align-items: center; gap: 4px; }
+.agent-reading-note-controls { flex-wrap: wrap; }
+.agent-reading-note-language button[aria-pressed=true] { color: var(--text-on-accent); background: var(--interactive-accent); }
+.agent-reading-note-details { margin-top: 8px; padding-top: 4px; border-top: 1px solid var(--background-modifier-border); max-block-size: min(210px, 26vh); overflow: auto; overscroll-behavior: contain; font-size: var(--font-ui-small); line-height: 1.5; user-select: text; }
+.agent-reading-note-list { margin: 0; }
+.agent-reading-note-field { display: grid; grid-template-columns: minmax(80px, 17%) minmax(0, 1fr); gap: 8px; padding: 3px 0; }
+.agent-reading-note-field dt { color: var(--text-muted); overflow-wrap: anywhere; }
+.agent-reading-note-field dd { min-width: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-reading-note-values { display: flex; flex-wrap: wrap; gap: 2px 6px; }
+.agent-reading-note-value { max-width: 100%; padding: 0 5px; border-radius: var(--radius-s, 4px); background: var(--background-modifier-hover); }
+.agent-reading-note-empty { color: var(--text-muted); padding: 3px 0; }
 .agent-bilingual-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--background-modifier-border); }
 .agent-bilingual-status, .agent-bilingual-pending { color: var(--text-muted); font-size: var(--font-ui-small); }
 .agent-bilingual-linked { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }

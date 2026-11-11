@@ -11,6 +11,7 @@ import { BilingualReader } from "./bilingual-reader";
 import { SplitPdfPane } from "./split-pdf-pane";
 import { chooseReadingFile } from "./reading-mode-picker";
 import { applySplitLayout, sourceSplitRatio } from "./split-layout";
+import { renderReadingNoteProperties } from "./reading-note-properties";
 
 export const MANUAL_SPLIT_VIEW_TYPE = "research-agent-reader-split";
 interface SplitHost {
@@ -97,7 +98,7 @@ export class ManualSplitReaderView extends ItemView {
 			if (state.mode === "bilingual") {
 				const adapter = this.app.vault.adapter as { getBasePath?: () => string }; if (!adapter.getBasePath) throw new Error("双栏阅读需要桌面本地知识库");
 				const doc = await loadSelectedBilingualDocument(new FileSourceStorage(adapter.getBasePath()), { en: state.left, zh: state.right }, signal); signal.throwIfAborted();
-				this.bilingual = new BilingualReader({ app: this.app, host: workspace, document: doc, signal, ordinary: () => void this.host.openSplitSource(state.entry, this.leaf), hideOrdinary: true, annotate: () => this.host.openSelectionAnnotation(), ratio: state.ratio, reversed: state.reversed, defaultLinked: state.linked, state: state.bilingualState, onRatio: ratio => { state.ratio = ratio; this.save(); }, onState: snapshot => { state.bilingualState = snapshot; state.linked = snapshot.linked; this.save(); } });
+				this.bilingual = new BilingualReader({ app: this.app, host: workspace, document: doc, signal, ordinary: () => void this.host.openSplitSource(state.entry, this.leaf), hideOrdinary: true, annotate: () => this.host.openSelectionAnnotation(), ratio: state.ratio, reversed: state.reversed, defaultLinked: state.linked, defaultPropertiesLanguage: state.entry === state.right ? "zh-CN" : "en", state: state.bilingualState, onRatio: ratio => { state.ratio = ratio; this.save(); }, onState: snapshot => { state.bilingualState = snapshot; state.linked = snapshot.linked; this.save(); } });
 				this.bilingual.load(); await this.bilingual.render();
 			} else await this.renderMarkdownPdf(workspace, message, state, signal);
 			if (signal.aborted) return;
@@ -121,6 +122,11 @@ export class ManualSplitReaderView extends ItemView {
 		const digests = { left: bytesDigest(new TextEncoder().encode(text)), right: bytesDigest(bytes) };
 		if (!state.digests || state.digests.left !== digests.left || state.digests.right !== digests.right) { state.markdownProgress = 0; state.pdfPage = 1; state.pdfProgress = 0; }
 		state.digests = digests;
+		renderReadingNoteProperties(workspace, {
+			source: { path: state.left, text }, signal, state: state.noteProperties,
+			beforeChange: () => this.capture(),
+			onChange: properties => { if (properties) state.noteProperties = properties; else delete state.noteProperties; this.save(); },
+		});
 		const linkedLabel = workspace.createEl("label", { cls: "agent-bilingual-linked" });
 		const linked = linkedLabel.createEl("input", { attr: { type: "checkbox", "aria-label": "双栏联动" } }); linked.checked = state.linked;
 		linkedLabel.createSpan({ text: "双栏联动 · 按阅读进度，内容对应需核对" });

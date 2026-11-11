@@ -1,9 +1,11 @@
 import type { BilingualDocument, BilingualLanguage } from "./bilingual-document";
+import { normalizeNoteProperties, type NotePropertiesState } from "./note-properties";
 
 export interface BilingualPosition { blockId: string; progress: number; }
 export interface BilingualReadingState {
 	linked: boolean; active: BilingualLanguage;
 	paragraphHover?: true;
+	noteProperties?: NotePropertiesState;
 	digests: Record<BilingualLanguage, string>; positions: Record<BilingualLanguage, BilingualPosition>;
 }
 export interface BilingualGeometry { blockId: string; top: number; }
@@ -11,6 +13,7 @@ const bounded = (n: unknown): number => typeof n === "number" && Number.isFinite
 const object = (v: unknown): Record<string, unknown> => v && typeof v === "object" && !Array.isArray(v) ? v as Record<string, unknown> : {};
 export function normalizeBilingualState(value: unknown, doc: BilingualDocument, defaultLinked = true): BilingualReadingState {
 	const input = object(value), digests = object(input.digests), positions = object(input.positions);
+	const noteProperties = normalizeNoteProperties(input.noteProperties, true);
 	const position = (language: BilingualLanguage): BilingualPosition => {
 		const saved = object(positions[language]);
 		return digests[language] === doc.files[language].digest && doc.files[language].blocks.some(b => b.id === saved.blockId)
@@ -19,6 +22,7 @@ export function normalizeBilingualState(value: unknown, doc: BilingualDocument, 
 	return { linked: (doc.syncAvailable || !!doc.selectedFiles) && (typeof input.linked === "boolean" ? input.linked : defaultLinked), active: input.active === "zh-CN" ? "zh-CN" : "en",
 		...(doc.syncAvailable && !doc.stale && (input.paragraphHover === true || input.paragraphHover === undefined && input.sentenceHover === true)
 			? { paragraphHover: true } : {}),
+		...(noteProperties ? { noteProperties } : {}),
 		digests: { en: doc.files.en.digest, "zh-CN": doc.files["zh-CN"].digest }, positions: { en: position("en"), "zh-CN": position("zh-CN") } };
 }
 function ordered(geometry: BilingualGeometry[]): BilingualGeometry[] { return geometry.filter(b => Number.isFinite(b.top)).sort((a, b) => a.top - b.top); }
