@@ -1,4 +1,4 @@
-import { ItemView, type WorkspaceLeaf } from "obsidian";
+import { ItemView, setIcon, type WorkspaceLeaf } from "obsidian";
 import type { BilingualLanguage } from "../reader/bilingual-document";
 
 export const SPLIT_OUTLINE_VIEW_TYPE = "research-agent-reader-split-outline";
@@ -18,6 +18,8 @@ export interface SplitOutlineSource {
 
 const headingSelector = "h1, h2, h3, h4, h5, h6";
 const sources = new WeakMap<WorkspaceLeaf, SplitOutlineSource>();
+const outlineModes = [["follow", "跟随"], ["zh-CN", "中文"], ["en", "English"]] as const;
+type OutlineMode = typeof outlineModes[number][0];
 
 export function splitOutlineHeadings(article: HTMLElement, headingAnchors?: ReadonlyMap<HTMLElement, string>): OutlineHeading[] {
 	const headings: OutlineHeading[] = [];
@@ -79,7 +81,9 @@ export class SplitOutlineView extends ItemView {
 	private readonly preferred = new WeakMap<SplitOutlineSource, BilingualLanguage>();
 	private source?: SplitOutlineSource;
 	private language?: OutlineLanguage;
-	private picker?: HTMLSelectElement;
+	private modeGroup?: HTMLElement;
+	private followLanguage?: HTMLElement;
+	private readonly modeButtons = new Map<OutlineMode, HTMLButtonElement>();
 	private list?: HTMLElement;
 
 	getViewType(): string { return SPLIT_OUTLINE_VIEW_TYPE; }
@@ -89,35 +93,47 @@ export class SplitOutlineView extends ItemView {
 	async onOpen(): Promise<void> {
 		this.contentEl.empty();
 		this.contentEl.addClass("agent-split-outline");
-		this.picker = this.contentEl.createEl("select", { attr: { "aria-label": "大纲语言" } });
-		for (const [value, label] of [["follow", "跟随正文栏"], ["zh-CN", "中文"], ["en", "English"]]) {
-			this.picker.createEl("option", { value, text: label });
+		const header = this.contentEl.createDiv({ cls: "agent-split-outline-header" });
+		const heading = header.createDiv({ cls: "agent-split-outline-heading" });
+		const icon = heading.createSpan({ cls: "agent-split-outline-icon", attr: { "aria-hidden": "true" } });
+		setIcon(icon, "list-tree");
+		heading.createSpan({ text: "双栏大纲" });
+		this.followLanguage = heading.createSpan({ cls: "agent-split-outline-language", attr: { hidden: "" } });
+		this.modeGroup = header.createDiv({ cls: "agent-split-outline-modes", attr: { role: "group", "aria-label": "大纲语言", hidden: "" } });
+		this.modeButtons.clear();
+		for (const [mode, label] of outlineModes) {
+			const button = this.modeGroup.createEl("button", {
+				cls: "agent-split-outline-mode", text: label,
+				attr: { type: "button", "aria-pressed": "false", "data-outline-mode": mode, ...(mode === "follow" ? { "aria-label": "跟随最近操作的正文栏" } : {}) },
+			});
+			this.modeButtons.set(mode, button);
+			this.registerDomEvent(button, "click", () => {
+				if (!this.source) return;
+				if (mode === "follow") this.preferred.delete(this.source);
+				else this.preferred.set(this.source, mode);
+				this.refresh();
+			});
 		}
-		this.registerDomEvent(this.picker, "change", () => {
-			if (!this.source) return;
-			const value = this.picker!.value;
-			if (value === "en" || value === "zh-CN") this.preferred.set(this.source, value);
-			else this.preferred.delete(this.source);
-			this.refresh();
-		});
 		this.list = this.contentEl.createDiv({ cls: "agent-split-outline-list" });
 		this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refresh()));
 		this.refresh();
 	}
 
 	refresh(): void {
-		if (!this.list || !this.picker) return;
+		if (!this.list || !this.modeGroup || !this.followLanguage) return;
 		const reader = this.app.workspace.getMostRecentLeaf();
 		const source = reader ? sources.get(reader) : undefined;
 		const preferred = source && this.preferred.get(source);
 		const language = preferred ?? source?.active;
-		this.picker.hidden = !language || language === "markdown";
-		this.picker.value = preferred ?? "follow";
-		this.picker.options[0].textContent = preferred || !language || language === "markdown"
-			? "跟随正文栏" : "跟随正文栏 · " + (language === "en" ? "English" : "中文");
+		const bilingual = language === "en" || language === "zh-CN";
+		this.modeGroup.hidden = !bilingual;
+		this.followLanguage.hidden = !bilingual || !!preferred;
+		this.followLanguage.setText(this.followLanguage.hidden ? "" : language === "en" ? "English" : "中文");
+		for (const [mode, button] of this.modeButtons) button.setAttribute("aria-pressed", String(mode === (preferred ?? "follow")));
 		if (source === this.source && language === this.language && this.list.childElementCount) return;
 		this.source = source; this.language = language;
 		this.list.empty();
+		this.list.scrollTop = 0;
 		if (!reader || !source || !language) {
 			this.list.createDiv({ cls: "agent-split-outline-empty", text: "打开双栏阅读后查看大纲" });
 			return;
@@ -127,15 +143,21 @@ export class SplitOutlineView extends ItemView {
 			this.list.createDiv({ cls: "agent-split-outline-empty", text: "本栏没有标题" });
 			return;
 		}
-		const list = this.list.createEl("ul");
-		const base = headings.reduce((level, heading) => Math.min(level, heading.level), 6);
+		const root = this.list.createDiv({ attr: { role: "list", "aria-label": "章节标题" } });
+		const parents: { level: number; item: HTMLElement; branch?: HTMLElement }[] = [];
 		for (const heading of headings) {
-			const item = list.createEl("li");
-			item.style.setProperty("--agent-outline-depth", String(heading.level - base));
-			const button = item.createEl("button", { text: heading.title, attr: { type: "button", title: heading.title, "data-outline-heading": heading.id } });
+			while (parents.length && parents[parents.length - 1].level >= heading.level) parents.pop();
+			const parent = parents[parents.length - 1];
+			const list = parent ? parent.branch ??= parent.item.createDiv({ cls: "agent-split-outline-branch", attr: { role: "list" } }) : root;
+			const item = list.createDiv({ attr: { role: "listitem" } });
+			const button = item.createEl("button", {
+				cls: "agent-split-outline-row", text: heading.title,
+				attr: { type: "button", title: heading.title, "data-outline-heading": heading.id },
+			});
 			button.addEventListener("click", () => {
 				if (reader === this.app.workspace.getMostRecentLeaf() && sources.get(reader) === source) source.jump(language, heading.id);
 			});
+			parents.push({ level: heading.level, item });
 		}
 	}
 }
