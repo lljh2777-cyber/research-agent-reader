@@ -1,3 +1,4 @@
+import { AnnotationHighlights } from "./annotations/annotation-highlights";
 import {
 	FileSystemAdapter,
 	MarkdownView,
@@ -365,6 +366,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	});
 	private readonly lightAgentResults = new Map<string, AgentLoopRunOutcome>();
 	private annotationService?: AnnotationService;
+	private annotationHighlights?: AnnotationHighlights;
 	private readonly annotationCliDiscovery = new AnnotationCliDiscoveryService();
 	private readingWorkspace?: ReadingWorkspaceService;
 	private readingAssistant?: ReadingAssistantService;
@@ -501,6 +503,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	async onload(): Promise<void> {
 		this.getPersistence();
 		this.annotationService = new AnnotationService(this.app, this);
+		this.annotationHighlights = this.addChild(new AnnotationHighlights(this.app));
 		this.lastContextFile = this.app.workspace.getActiveFile();
 		await this.loadSettings();
 		this.recoverInterruptedPracticeRuns();
@@ -554,6 +557,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		}));
 		this.registerMarkdownPostProcessor((element, context) => {
 			this.annotationService?.decorateMarkdownSection(element, context);
+			this.annotationHighlights?.observe(element.ownerDocument);
 		});
 		this.registerDomEvent(document, "click", (event) => {
 			void this.handleAnnotationLinkClick(event);

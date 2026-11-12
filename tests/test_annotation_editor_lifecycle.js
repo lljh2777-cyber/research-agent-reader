@@ -9,6 +9,7 @@ class Element extends EventTarget {
 	createSpan(options) { return this.createEl("span", options); }
 	empty() { for (const child of this.children) child.parent = undefined; this.children = []; }
 	focus() {}
+	setAttribute(name, value) { (this.attributes ||= {})[name] = value; }
 	setText(text) { this.text = text; }
 	all() { return this.children.flatMap(child => [child, ...child.all()]); }
 	fire(type, properties = {}) { const event = new Event(type, { cancelable: true }); Object.assign(event, properties); let current = this; while (current) { current.dispatchEvent(event); current = current.parent; } }
@@ -43,7 +44,7 @@ function fixture() {
 	controls = f.editor(); controls.manual.value = "next saved draft"; controls.ai.fire("keydown", { key: "Enter", ctrlKey: true });
 	assert.equal(f.calls.length, 2, "reopening an editor must not accumulate save listeners");
 	assert.equal(f.calls[1].manualText, "next saved draft");
-	assert.equal(f.calls[1].aiText, "existing AI");
+	assert.equal(f.calls[1].aiText, undefined);
 	await f.finish();
 	const busy = fixture(); controls = busy.editor(); controls.manual.value = "one write";
 	controls.save.fire("click"); controls.manual.fire("keydown", { key: "Enter", ctrlKey: true }); controls.ai.fire("keydown", { key: "Enter", ctrlKey: true });
@@ -69,5 +70,12 @@ function fixture() {
 	const save = new Element("button"), first = fresh.popover.saveNew({ manualText: "one note" }, save, false);
 	assert.equal(await fresh.popover.saveNew({ manualText: "repeat" }, save, false), null);
 	assert.equal(creates, 1); release(); await first;
+	const colored = fixture(); controls = colored.editor();
+	colored.element.all().find(e => e.text === "蓝色").fire("click"); controls.save.fire("click");
+	assert.equal(colored.calls[0].color, "blue"); assert.equal(colored.calls[0].aiText, undefined); await colored.finish();
+	controls = colored.editor(); colored.element.all().find(e => e.text === "红色").fire("click"); controls.cancel.fire("click");
+	controls = colored.editor(); controls.save.fire("click"); assert.equal(colored.calls[1].color, "blue", "cancelled color must not leak into the next editor"); await colored.finish();
+	controls = colored.editor(); colored.element.all().find(e => e.text === "无颜色").fire("click"); controls.save.fire("click");
+	assert.equal(colored.calls[2].color, "none"); await colored.finish();
 	console.log("ANNOTATION_EDITOR_LIFECYCLE_TEST_OK");
 })().catch(error => { console.error(error); process.exitCode = 1; });

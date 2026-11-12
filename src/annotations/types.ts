@@ -1,6 +1,7 @@
 import type { ExcerptReceipt, ExcerptRevision } from "./excerpt";
 import type { PdfExcerptReceipt } from "./pdf-excerpt";
 import type { BilingualReceipt } from "./bilingual";
+import type { AnnotationColor, AnnotationColorChoice } from "./colors";
 export type AnnotationArchiveStatus = "none" | "pending" | "completed" | "failed";
 
 export interface AnnotationCliCallReceipt {
@@ -36,6 +37,7 @@ export interface AnnotationSelection {
 }
 
 export interface AnnotationRecord {
+	color?: AnnotationColor;
 	id: string;
 	annotationPath: string;
 	sourcePath: string;
@@ -67,6 +69,7 @@ export interface AnnotationExplanation {
 }
 
 export interface AnnotationDraft {
+	color?: AnnotationColorChoice;
 	manualText?: string;
 	aiText?: string;
 	aiProvider?: string;

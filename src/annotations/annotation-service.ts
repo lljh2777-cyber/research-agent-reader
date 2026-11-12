@@ -27,6 +27,7 @@ import {
 	getClaudeDefaultModelLabel,
 	getOpenCodeDefaultModelLabel,
 } from "../runtime/settings";
+import { ANNOTATION_COLORS, annotationColor, isAnnotationColor } from "./colors";
 import type {
 	AnnotationDraft,
 	AnnotationExplanation,
@@ -63,6 +64,7 @@ function normalizeCliReceipt(value: unknown, allowSelection = true): AnnotationR
 }
 
 interface AnnotationMeta {
+	color?: AnnotationRecord["color"];
 	aiCli?: AnnotationRecord["aiCli"];
 	id: string;
 	sourcePath: string;
@@ -144,7 +146,7 @@ function countOccurrences(content: string, value: string): number[] {
 	return offsets;
 }
 
-function findSourceAnchorOffset(content: string, text: string, anchor: NonNullable<AnnotationRecord["sourceAnchor"]>): number | null {
+export function findSourceAnchorOffset(content: string, text: string, anchor: NonNullable<AnnotationRecord["sourceAnchor"]>): number | null {
 	const matches = (offset: number): boolean => content.slice(offset, offset + text.length) === text
 		&& content.slice(Math.max(0, offset - anchor.prefix.length), offset) === anchor.prefix
 		&& content.slice(offset + text.length, offset + text.length + anchor.suffix.length) === anchor.suffix;
@@ -222,6 +224,7 @@ function parseMeta(raw: string): AnnotationMeta | null {
 	try {
 		const value = JSON.parse(match[1]) as Partial<AnnotationMeta>;
 		const sourceAnchor = parseSourceAnchor(value.sourceAnchor);
+		if (value.color !== undefined && !isAnnotationColor(value.color)) return null;
 		if (value.bilingual !== undefined && (value.pdfExcerpt || !validBilingualReceipt(value.bilingual, String(value.sourcePath || ""), sourceAnchor, String(value.selectedText || "")))) return null;
 		if (value.pdfExcerpt !== undefined && (value.excerpt !== undefined || !supportsPdfExcerpt(String(value.sourcePath || ""))
 			|| !validPdfExcerpt(value.pdfExcerpt, sourceAnchor, String(value.selectedText || ""))
@@ -230,6 +233,7 @@ function parseMeta(raw: string): AnnotationMeta | null {
 		const status = String(value.archiveStatus || "none");
 		return {
 			id: String(value.id || ""),
+			...(value.color ? { color: value.color } : {}),
 			sourcePath: String(value.sourcePath || ""),
 			selectedText: String(value.selectedText || ""),
 			section: String(value.section || ""),
@@ -571,7 +575,8 @@ export class AnnotationService {
 		await this.verifySelection(selection);
 		const sourceFile = this.app.vault.getAbstractFileByPath(selection.sourcePath);
 		if (!(sourceFile instanceof TFile)) throw new Error("原始 Markdown 文件不存在");
-		const detached = usesDetachedAnnotations(sourceFile.path) || !!selection.bilingual || selection.detached === true || markdownNeedsDetached(selection.selectedText);
+		const color = annotationColor(draft.color);
+		const detached = !!color || usesDetachedAnnotations(sourceFile.path) || !!selection.bilingual || selection.detached === true || markdownNeedsDetached(selection.selectedText);
 		const content = await this.app.vault.read(sourceFile);
 		if (selection.bilingual) prepareExcerpt(selection, content);
 		const location = this.relocateSelection(content, selection);
@@ -580,6 +585,7 @@ export class AnnotationService {
 		const now = new Date().toISOString();
 		const record: AnnotationRecord = {
 			id: this.createAnnotationId(),
+			...(color ? { color } : {}),
 			annotationPath,
 			sourcePath: selection.sourcePath,
 			selectedText: selection.selectedText,
@@ -624,7 +630,6 @@ export class AnnotationService {
 
 	/** Re-selecting a source passage opens its detached annotation after restart. */
 	async findAnnotationForSelection(selection: AnnotationSelection): Promise<AnnotationRecord | null> {
-		if (!usesDetachedAnnotations(selection.sourcePath) && !selection.bilingual && !selection.detached && !selection.sourceRevision && !selection.pdfExcerpt) return null;
 		if (!selection.pdfExcerpt) await this.verifySelection(selection);
 		const sourceFile = this.app.vault.getAbstractFileByPath(selection.sourcePath);
 		if (!(sourceFile instanceof TFile)) return null;
@@ -674,6 +679,7 @@ export class AnnotationService {
 		if (draft.aiText !== undefined) await verifyBilingual(this.app, latest);
 		const updated: AnnotationRecord = {
 			...latest,
+			...(draft.color !== undefined ? { color: annotationColor(draft.color) } : {}),
 			manualText: draft.manualText === undefined
 				? latest.manualText
 				: sanitizeEmbeddedText(draft.manualText),
@@ -1048,6 +1054,7 @@ export class AnnotationService {
 	private renderRecord(record: AnnotationRecord): string {
 		const meta: AnnotationMeta = {
 			id: record.id,
+			...(record.color ? { color: record.color } : {}),
 			sourcePath: record.sourcePath,
 			selectedText: record.selectedText,
 			section: record.section,
@@ -1089,6 +1096,7 @@ export class AnnotationService {
 			record.pdfExcerpt ? `原文：\n\n<pre>${escaped(record.selectedText)}</pre>\n` : markdownNeedsDetached(record.selectedText) ? `${quoteLabel(record)}：\n\n<pre>${escaped(displayText)}</pre>\n` : `- ${quoteLabel(record)}：${record.selectedText}`,
 			`- 来源：${sourceReference(record.sourcePath)}`,
 			record.section ? `- 章节：${record.section}` : "",
+			...(record.color ? [`- 颜色标注：${ANNOTATION_COLORS[record.color]}（个人阅读标记）`] : []),
 			`- 创建：${record.createdAt}`,
 			`- 更新：${record.updatedAt}`,
 			...(record.bilingual ? ["", "### 双语来源记录", bilingualDescription(record.bilingual), ...(record.bilingual.english ? ["英文对应段落（结构对应，语义待核对）：", `<pre>${escaped(record.bilingual.english.text)}</pre>`] : ["英文对应段落未确认。"])] : []),

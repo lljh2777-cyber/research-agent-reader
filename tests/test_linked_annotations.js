@@ -35,6 +35,41 @@ function memory(content, sourcePath = "Clippings/linked.md") {
 function live(range) { globalThis.window = { getSelection: () => ({ isCollapsed: false, rangeCount: 1, getRangeAt: () => range, toString: () => range.toString() }) }; }
 let count = 0; const check = async (name, fn) => { await fn(); count++; console.log("OK linked annotations: " + name); };
 (async () => {
+ await check("color-only records round-trip, update without losing text or receipts, and leave ordinary sources unchanged", async () => {
+  const content = "# Notes\n\nRepeated words and a [linked label](https://example.invalid) with X<sup>2</sup>.", sourcePath = "notes/ordinary.md";
+  const f = memory(content, sourcePath), selectedText = "Repeated words", start = content.indexOf(selectedText);
+  const selection = { sourcePath, selectedText, sourceStart: start, sourceEnd: start + selectedText.length, prefix: content.slice(0,start), suffix: content.slice(start+selectedText.length,start+selectedText.length+80), section: "Notes", context: content, anchorRect: {} };
+  const r = await f.service.createAnnotation(selection, { color: "yellow" });
+  assert.equal(f.files.get(sourcePath).text, content); assert.equal(r.manualText, ""); assert.ok(r.sourceAnchor);
+  assert.equal((await new AnnotationService(f.app, {}).findAnnotationForSelection(selection)).color, "yellow");
+  const receipt = { requestedModel: "test/model", usage: { input_tokens: 12 } };
+  const noted = await f.service.updateAnnotation(r, { manualText: "Personal", aiText: "Saved explanation", aiProvider: "test", aiModel: "test/model", aiCli: receipt });
+  for (const color of ["green", "blue", "purple", "red"]) {
+   const changed = await f.service.updateAnnotation(noted, { color });
+   const read = readAnnotationRecords(f.files.get(r.annotationPath).text, r.annotationPath).records[0];
+   assert.equal(read.color, color); assert.equal(read.manualText, "Personal"); assert.equal(read.aiText, "Saved explanation"); assert.deepEqual(read.aiCli, receipt); assert.deepEqual(read.sourceAnchor, r.sourceAnchor);
+  }
+  const cleared = await f.service.updateAnnotation(noted, { color: "none" });
+  assert.equal(cleared.color, undefined); assert.equal((await f.service.loadAnnotation(r.annotationPath,r.id)).color,undefined);
+  assert.equal(f.files.get(sourcePath).text, content);
+  const before = f.writes.length;
+  await assert.rejects(f.service.updateAnnotation(cleared, { color: "url(evil)" }), /颜色/);
+  await assert.rejects(f.service.createAnnotation(selection, { color: "constructor" }), /颜色/);
+  assert.equal(f.writes.length, before);
+  const malformed = f.files.get(r.annotationPath).text.replace('"id":', '"color":"url(evil)","id":');
+  assert.equal(readAnnotationRecords(malformed,r.annotationPath).records.length,0);
+ });
+ await check("colored rendered ranges retain links and superscripts and reject changed or ambiguous anchors", async () => {
+  const { annotationHighlightRanges } = loadReading("annotations/annotation-highlights.ts", { obsidian: { ...mocks.obsidian, Component: class {} } });
+  const raw = "Read [the paper](https://example.invalid) and X<sup>2</sup>.", d = dom(["Read ", "the paper", " and X2."]);
+  d.block.matches = () => true; d.block.querySelector = () => null; d.block.querySelectorAll = () => []; d.block.parentElement = null;
+  const r = { color: "green", sourcePath: "Clippings/linked.md", selectedText: raw, sourceAnchor: { start: 0, end: raw.length, prefix: "", suffix: "" } };
+  const ranges = annotationHighlightRanges([d.block],raw,r);
+  assert.equal(ranges.length,1); assert.equal(ranges[0].toString(),"Read the paper and X2.");
+  assert.equal(annotationHighlightRanges([d.block],raw.replace("paper", "other"),r).length,0);
+  assert.equal(annotationHighlightRanges([d.block], "prefix " + raw + "\n" + raw,r).length,0);
+  assert.equal(annotationHighlightRanges([d.block],raw,{...r, sourcePath:"x", color: undefined}).length,0);
+ });
  await check("paragraph across links, footnotes, Unicode and soft line breaks keeps exact source and round trips", async () => {
   const raw = "😀 Before [linked **words**](https://example.invalid/a_(b)) and [[wiki/methods/item|方法]]\nwith evidence[^author-key].";
   const content = "# Article\n\n" + raw + "\n\n[^author-key]: Reference\n", d = dom(["😀 Before ", "linked ", "words", " and ", "方法", "\nwith evidence", { foot: "[7]" }, "."]), f = memory(content);

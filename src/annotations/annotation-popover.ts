@@ -7,6 +7,7 @@ import {
 	setIcon,
 } from "obsidian";
 
+import { ANNOTATION_COLORS, type AnnotationColorChoice } from "./colors";
 import type { AnnotationService } from "./annotation-service";
 import { supportsExcerpt } from "./excerpt";
 import { annotationDisplayText } from "./markdown-selection";
@@ -79,7 +80,7 @@ export class AnnotationPopover extends Component {
 			cls: "agent-annotation-popover",
 			attr: {
 				role: "dialog",
-				"aria-label": "文字批注",
+				"aria-label": "批注",
 				tabindex: "-1",
 			},
 		});
@@ -136,7 +137,7 @@ export class AnnotationPopover extends Component {
 
 	private requestClose(): void {
 		if (
-			this.element?.querySelector("textarea[data-dirty='true']")
+			this.element?.querySelector("[data-dirty='true']")
 			&& !window.confirm("存在尚未保存的批注，确定取消吗？")
 		) {
 			return;
@@ -155,6 +156,12 @@ export class AnnotationPopover extends Component {
 			excerpt.addEventListener("click", () => this.renderExcerpt());
 		}
 		if (this.selection?.pdfExcerpt) { this.position(); return; }
+		const highlight = actions.createEl("button", { cls: "agent-annotation-choice", attr: { type: "button" } });
+		setIcon(highlight.createSpan({ cls: "agent-annotation-choice-icon" }), "highlighter");
+		const highlightText = highlight.createDiv();
+		highlightText.createEl("strong", { text: "颜色标注" });
+		highlightText.createSpan({ text: "用颜色标记所选文字，可附加个人批注" });
+		highlight.addEventListener("click", () => this.renderManual(true));
 		const manual = actions.createEl("button", {
 			cls: "agent-annotation-choice",
 			attr: { type: "button" },
@@ -202,14 +209,32 @@ export class AnnotationPopover extends Component {
 		this.position();
 	}
 
-	private renderManual(): void {
+	private renderColorPicker(parent: HTMLElement, initial: AnnotationColorChoice) {
+		const group = parent.createDiv({ cls: "agent-annotation-colors", attr: { role: "group", "aria-label": "标注颜色" } });
+		let selected = initial;
+		const buttons: HTMLButtonElement[] = [];
+		for (const [value, label] of Object.entries({ none: "无颜色", ...ANNOTATION_COLORS })) {
+			const button = group.createEl("button", { text: label, attr: { type: "button", "data-color": value, "aria-pressed": String(value === selected) } });
+			buttons.push(button);
+			button.addEventListener("click", () => {
+				if (button.disabled) return;
+				selected = value as AnnotationColorChoice;
+				group.dataset.dirty = String(selected !== initial);
+				buttons.forEach(item => item.setAttribute("aria-pressed", String(item === button)));
+			});
+		}
+		return { value: () => selected, disable: (disabled: boolean) => buttons.forEach(button => { button.disabled = disabled; }) };
+	}
+
+	private renderManual(colorOnly = false): void {
 		const element = this.reset();
-		this.renderHeader(element, this.selection?.selectedText || "", "手动批注");
+		this.renderHeader(element, this.selection?.selectedText || "", colorOnly ? "颜色标注" : "手动批注");
+		const color = this.renderColorPicker(element, colorOnly ? "yellow" : "none");
 		const textarea = element.createEl("textarea", {
 			cls: "agent-annotation-editor",
 			attr: {
 				rows: "7",
-				placeholder: "输入你的批注……",
+				placeholder: "输入你的批注；选择颜色后可留空……",
 			},
 		});
 		textarea.addEventListener("input", () => {
@@ -225,12 +250,13 @@ export class AnnotationPopover extends Component {
 		cancel.addEventListener("click", () => this.renderChooser());
 		const submit = async () => {
 			const manualText = textarea.value.trim();
-			if (!manualText) {
+			if (!manualText && color.value() === "none") {
 				new Notice("请输入批注内容");
 				textarea.focus();
 				return;
 			}
-			await this.saveNew({ manualText }, save);
+			color.disable(true);
+			try { await this.saveNew({ manualText, color: color.value() }, save); } finally { color.disable(false); }
 		};
 		save.addEventListener("click", () => void submit());
 		textarea.addEventListener("keydown", (event) => {
@@ -286,6 +312,7 @@ export class AnnotationPopover extends Component {
 			element.createDiv({ cls: "agent-annotation-ai-result markdown-rendered" }),
 			explanation.text,
 		);
+		const color = this.renderColorPicker(element, "none");
 		const model = element.createDiv({ cls: "agent-annotation-model" });
 		model.createSpan({ text: explanation.provider });
 		model.createSpan({ text: explanation.model });
@@ -309,9 +336,9 @@ export class AnnotationPopover extends Component {
 			aiCli: explanation.cli,
 		};
 		if (this.selection?.bilingual || isTranslationPath(this.selection?.sourcePath || "")) { archive.disabled = true; archive.setText("双语内容请经摘录预览整理"); }
-		save.addEventListener("click", () => void this.saveNew(draft, save));
+		save.addEventListener("click", () => void this.saveNew({ ...draft, color: color.value() }, save));
 		archive.addEventListener("click", async () => {
-			const record = await this.saveNew(draft, archive, false);
+			const record = await this.saveNew({ ...draft, color: color.value() }, archive, false);
 			if (!record) return;
 			this.close();
 			void this.onArchive(record);
@@ -340,6 +367,7 @@ export class AnnotationPopover extends Component {
 			open.onclick = () => { this.close(); void this.service.openAnnotationDocument(record).catch(error => new Notice(displayError(error))); };
 			this.position(); return;
 		}
+		if (this.record.color) element.createEl("p", { cls: "agent-annotation-color-label", text: "颜色标注：" + ANNOTATION_COLORS[this.record.color], attr: { "data-color": this.record.color } });
 		this.renderTextSection(element, "手动批注", this.record.manualText, "暂无手动批注");
 		this.renderTextSection(element, "AI 解释", this.record.aiText, "暂无 AI 解释");
 		if (this.record.archiveStatus !== "none" || this.record.archiveTargets.length) {
@@ -397,6 +425,7 @@ export class AnnotationPopover extends Component {
 		if (!this.record) return;
 		const element = this.reset();
 		this.renderHeader(element, this.record.selectedText, "修改批注");
+		const color = this.renderColorPicker(element, this.record.color || "none");
 		const manualLabel = element.createEl("label", { cls: "agent-annotation-field" });
 		manualLabel.createSpan({ text: "手动批注" });
 		const manual = manualLabel.createEl("textarea", { attr: { rows: "5" } });
@@ -428,10 +457,12 @@ export class AnnotationPopover extends Component {
 			if (save.disabled || this.closed) return;
 			save.disabled = true;
 			cancel.disabled = manual.disabled = ai.disabled = regenerate.disabled = true;
+			color.disable(true);
 			try {
 				const record = await this.service.updateAnnotation(this.record!, {
+					color: color.value(),
 					manualText: manual.value,
-					aiText: ai.value,
+					...(ai.value !== this.record!.aiText ? { aiText: ai.value } : {}),
 					aiProvider: this.record?.aiProvider,
 					aiModel: this.record?.aiModel,
 					aiCli: this.record?.aiCli,
@@ -445,6 +476,7 @@ export class AnnotationPopover extends Component {
 				new Notice(`保存失败：${displayError(error)}`);
 				save.disabled = false;
 				cancel.disabled = manual.disabled = ai.disabled = regenerate.disabled = false;
+				color.disable(false);
 			}
 		};
 		save.addEventListener("click", () => void submit());
