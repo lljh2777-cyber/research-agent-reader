@@ -9,7 +9,7 @@ import {
 
 import { ANNOTATION_COLORS, type AnnotationColorChoice } from "./colors";
 import type { AnnotationService } from "./annotation-service";
-import { supportsExcerpt } from "./excerpt";
+import { listedExcerpt } from "./excerpt";
 import { annotationDisplayText } from "./markdown-selection";
 import { bilingualDescription, isTranslationPath, quoteLabel } from "./bilingual";
 import type {
@@ -25,6 +25,7 @@ interface AnnotationPopoverOptions {
 	anchorRect: DOMRect;
 	selection?: AnnotationSelection;
 	record?: AnnotationRecord;
+	historical?: AnnotationRecord[];
 	onArchive: (record: AnnotationRecord) => Promise<void>;
 	onOpenExcerpt?: (record: AnnotationRecord) => void;
 	onClose?: () => void;
@@ -34,16 +35,13 @@ function displayError(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
-function sectionLabel(value: string): string {
-	return value.trim() || "当前段落";
-}
-
 export class AnnotationPopover extends Component {
 	private readonly app: App;
 	private readonly service: AnnotationService;
 	private readonly anchorRect: DOMRect;
 	private readonly selection?: AnnotationSelection;
 	private record?: AnnotationRecord;
+	private readonly historical: AnnotationRecord[];
 	private readonly onArchive: (record: AnnotationRecord) => Promise<void>;
 	private readonly onOpenExcerpt?: (record: AnnotationRecord) => void;
 	private readonly onClose?: () => void;
@@ -51,7 +49,7 @@ export class AnnotationPopover extends Component {
 	private cancelGeneration: (() => void) | null = null;
 	private generationVersion = 0;
 	private closed = true;
-	private excerptSave?: AbortController;
+	private saving = false;
 	private outsideListener: ((event: PointerEvent) => void) | null = null;
 	private keyListener: ((event: KeyboardEvent) => void) | null = null;
 	private saveScope: Scope | null = null;
@@ -67,6 +65,7 @@ export class AnnotationPopover extends Component {
 		this.anchorRect = options.anchorRect;
 		this.selection = options.selection;
 		this.record = options.record;
+		this.historical = [...(options.record ? [options.record] : []), ...(options.historical || [])];
 		this.onArchive = options.onArchive;
 		this.onOpenExcerpt = options.onOpenExcerpt;
 		this.onClose = options.onClose;
@@ -100,13 +99,11 @@ export class AnnotationPopover extends Component {
 			document.addEventListener("pointerdown", this.outsideListener!, true);
 			document.addEventListener("keydown", this.keyListener!, true);
 		}, 0);
-		if (this.record) this.renderExisting();
-		else this.renderChooser();
+		this.renderForm();
 	}
 
 	close(): void {
 		this.clearSaveScope();
-		this.excerptSave?.abort();
 		this.generationVersion += 1;
 		if (this.cancelGeneration) {
 			this.cancelGeneration();
@@ -135,492 +132,214 @@ export class AnnotationPopover extends Component {
 		}
 	}
 
-	private requestClose(): void {
+	requestClose(): boolean {
+		if (this.saving) return false;
 		if (
-			this.element?.querySelector("[data-dirty='true']")
+			this.element?.dataset.dirty === "true"
 			&& !window.confirm("存在尚未保存的批注，确定取消吗？")
 		) {
-			return;
+			return false;
 		}
 		this.close();
+		return true;
 	}
 
-	private renderChooser(): void {
+	private renderForm(): void {
 		const element = this.reset();
-		this.renderHeader(element, this.selection?.selectedText || "", "选择批注方式");
-		const actions = element.createDiv({ cls: "agent-annotation-choice-list" });
-		if (this.selection?.pdfExcerpt || (this.selection?.sourceRevision && supportsExcerpt(this.selection.sourcePath))) {
-			const excerpt = actions.createEl("button", { cls: "agent-annotation-choice", attr: { type: "button" } });
-			const icon = excerpt.createSpan({ cls: "agent-annotation-choice-icon" }); setIcon(icon, "bookmark-plus");
-			const label = excerpt.createDiv(); label.createEl("strong", { text: "保存摘录" }); label.createSpan({ text: "保留所选文字、上下文和个人备注，无需模型" });
-			excerpt.addEventListener("click", () => this.renderExcerpt());
-		}
-		if (this.selection?.pdfExcerpt) { this.position(); return; }
-		const highlight = actions.createEl("button", { cls: "agent-annotation-choice", attr: { type: "button" } });
-		setIcon(highlight.createSpan({ cls: "agent-annotation-choice-icon" }), "highlighter");
-		const highlightText = highlight.createDiv();
-		highlightText.createEl("strong", { text: "颜色标注" });
-		highlightText.createSpan({ text: "用颜色标记所选文字，可附加个人批注" });
-		highlight.addEventListener("click", () => this.renderManual(true));
-		const manual = actions.createEl("button", {
-			cls: "agent-annotation-choice",
-			attr: { type: "button" },
-		});
-		const manualIcon = manual.createSpan({ cls: "agent-annotation-choice-icon" });
-		setIcon(manualIcon, "square-pen");
-		const manualText = manual.createDiv();
-		manualText.createEl("strong", { text: "手动批注" });
-		manualText.createSpan({ text: "记录自己的理解、疑问或提醒" });
-		const ai = actions.createEl("button", {
-			cls: "agent-annotation-choice",
-			attr: { type: "button" },
-		});
-		const aiIcon = ai.createSpan({ cls: "agent-annotation-choice-icon" });
-		setIcon(aiIcon, "sparkles");
-		const aiText = ai.createDiv();
-		aiText.createEl("strong", { text: "AI 解释" });
-		aiText.createSpan({ text: "结合当前段落和文章语境生成初步解释" });
-		manual.addEventListener("click", () => this.renderManual());
-		ai.addEventListener("click", () => void this.renderExplanation());
-		this.position();
-		window.setTimeout(() => this.element?.focus({ preventScroll: true }), 0);
-	}
-
-	private renderExcerpt(): void {
-		const element = this.reset(); this.renderHeader(element, this.selection?.selectedText || "", "保存摘录");
-		element.createEl("blockquote", { text: this.selection?.pdfExcerpt ? this.selection.selectedText : annotationDisplayText(this.selection?.selectedText || ""), attr: { style: "overflow-wrap:anywhere;max-height:150px;overflow:auto;flex-shrink:0" } });
-		element.createEl("p", { text: this.selection?.pdfExcerpt ? `保存 PDF 第 ${this.selection.pdfExcerpt.page} 页（文件页码）的文字、上下文与文件版本。相同位置会复用，已有备注保持不变。` : "保存到批注文档，保留当前 Markdown 文本版本。相同版本、相同位置的摘录会复用，已有备注保持不变。" });
-		const label = element.createEl("label", { cls: "agent-annotation-field" }); label.createSpan({ text: "个人备注（可留空）" });
-		const input = label.createEl("textarea", { attr: { rows: "4", maxlength: "10000" } });
-		input.addEventListener("input", () => { input.dataset.dirty = input.value ? "true" : "false"; });
-		const status = element.createEl("p", { attr: { role: "status" } }), footer = this.renderFooter(element);
-		const back = footer.createEl("button", { text: "返回", attr: { type: "button" } }); back.onclick = () => this.renderChooser();
-		const save = footer.createEl("button", { text: "确认保存摘录", cls: "mod-cta", attr: { type: "button" } });
-		save.onclick = async () => {
-			if (this.excerptSave || !this.selection || this.closed) return;
-			const controller = new AbortController(); this.excerptSave = controller; save.disabled = true; back.disabled = true; input.disabled = true; status.setText("正在核对原文并保存…");
-			try {
-				const record = await this.service.createExcerpt(this.selection, input.value, controller.signal);
-				if (this.closed || controller.signal.aborted) return;
-				this.record = record; this.renderExisting(); new Notice("摘录已保存或复用，已有备注保持不变");
-			} catch (error) { if (!this.closed && !controller.signal.aborted) status.setText("未确认保存成功：" + displayError(error)); }
-			finally { if (this.excerptSave === controller) this.excerptSave = undefined; save.disabled = false; back.disabled = false; input.disabled = false; }
-		};
-		this.position();
-	}
-
-	private renderColorPicker(parent: HTMLElement, initial: AnnotationColorChoice) {
-		const group = parent.createDiv({ cls: "agent-annotation-colors", attr: { role: "group", "aria-label": "标注颜色" } });
-		let selected = initial;
-		const buttons: HTMLButtonElement[] = [];
-		for (const [value, label] of Object.entries({ none: "无颜色", ...ANNOTATION_COLORS })) {
-			const button = group.createEl("button", { text: label, attr: { type: "button", "data-color": value, "aria-pressed": String(value === selected) } });
-			buttons.push(button);
-			button.addEventListener("click", () => {
-				if (button.disabled) return;
-				selected = value as AnnotationColorChoice;
-				group.dataset.dirty = String(selected !== initial);
-				buttons.forEach(item => item.setAttribute("aria-pressed", String(item === button)));
-			});
-		}
-		return { value: () => selected, disable: (disabled: boolean) => buttons.forEach(button => { button.disabled = disabled; }) };
-	}
-
-	private renderManual(colorOnly = false): void {
-		const element = this.reset();
-		this.renderHeader(element, this.selection?.selectedText || "", colorOnly ? "颜色标注" : "手动批注");
-		const color = this.renderColorPicker(element, colorOnly ? "yellow" : "none");
-		const textarea = element.createEl("textarea", {
-			cls: "agent-annotation-editor",
-			attr: {
-				rows: "7",
-				placeholder: "输入你的批注；选择颜色后可留空……",
-			},
-		});
-		textarea.addEventListener("input", () => {
-			textarea.dataset.dirty = textarea.value.trim() ? "true" : "false";
-		});
-		const footer = this.renderFooter(element);
-		const cancel = footer.createEl("button", { text: "取消", attr: { type: "button" } });
-		const save = footer.createEl("button", {
-			cls: "mod-cta",
-			text: "保留",
-			attr: { type: "button" },
-		});
-		cancel.addEventListener("click", () => this.renderChooser());
-		const submit = async () => {
-			const manualText = textarea.value.trim();
-			if (!manualText && color.value() === "none") {
-				new Notice("请输入批注内容");
-				textarea.focus();
-				return;
-			}
-			color.disable(true);
-			try { await this.saveNew({ manualText, color: color.value() }, save); } finally { color.disable(false); }
-		};
-		save.addEventListener("click", () => void submit());
-		textarea.addEventListener("keydown", (event) => {
-			if (event.ctrlKey && event.key === "Enter") {
-				event.preventDefault();
-				void submit();
-			}
-		});
-		this.bindSaveScope(submit);
-		this.position();
-		window.setTimeout(() => textarea.focus(), 0);
-	}
-
-	private async renderExplanation(): Promise<void> {
-		if (!this.selection) return;
-		const generationVersion = ++this.generationVersion;
-		const element = this.reset();
-		this.renderHeader(element, this.selection.selectedText, "AI 解释");
-		const status = element.createDiv({ cls: "agent-annotation-loading" });
-		const spinner = status.createSpan({ cls: "agent-annotation-spinner" });
-		spinner.setAttribute("aria-hidden", "true");
-		status.createSpan({ text: "正在结合当前段落生成解释……" });
-		const footer = this.renderFooter(element);
-		const cancel = footer.createEl("button", { text: "取消", attr: { type: "button" } });
-		cancel.addEventListener("click", () => {
-			this.cancelGeneration?.();
-			this.cancelGeneration = null;
-			this.generationVersion += 1;
-			this.renderChooser();
-		});
-		this.position();
-		try {
-			const explanation = await this.service.generateExplanation(
-				this.selection,
-				(cancelRequest) => {
-					this.cancelGeneration = cancelRequest;
-				},
-			);
-			this.cancelGeneration = null;
-			if (this.closed || generationVersion !== this.generationVersion) return;
-			this.renderExplanationResult(explanation);
-		} catch (error) {
-			this.cancelGeneration = null;
-			if (this.closed || generationVersion !== this.generationVersion) return;
-			this.renderFailure("AI 解释失败", displayError(error), () => void this.renderExplanation());
-		}
-	}
-
-	private renderExplanationResult(explanation: AnnotationExplanation): void {
-		const element = this.reset();
-		this.renderHeader(element, this.selection?.selectedText || "", "AI 解释");
-		this.renderMarkdown(
-			element.createDiv({ cls: "agent-annotation-ai-result markdown-rendered" }),
-			explanation.text,
-		);
-		const color = this.renderColorPicker(element, "none");
-		const model = element.createDiv({ cls: "agent-annotation-model" });
-		model.createSpan({ text: explanation.provider });
-		model.createSpan({ text: explanation.model });
-		const footer = this.renderFooter(element);
-		const cancel = footer.createEl("button", { text: "取消", attr: { type: "button" } });
-		const save = footer.createEl("button", {
-			cls: "mod-cta",
-			text: "保留",
-			attr: { type: "button" },
-		});
-		const archive = footer.createEl("button", {
-			cls: "agent-annotation-archive-button",
-			text: "保留并存档",
-			attr: { type: "button" },
-		});
-		cancel.addEventListener("click", () => this.renderChooser());
-		const draft: AnnotationDraft = {
-			aiText: explanation.text,
-			aiProvider: explanation.provider,
-			aiModel: explanation.model,
-			aiCli: explanation.cli,
-		};
-		if (this.selection?.bilingual || isTranslationPath(this.selection?.sourcePath || "")) { archive.disabled = true; archive.setText("双语内容请经摘录预览整理"); }
-		save.addEventListener("click", () => void this.saveNew({ ...draft, color: color.value() }, save));
-		archive.addEventListener("click", async () => {
-			const record = await this.saveNew({ ...draft, color: color.value() }, archive, false);
-			if (!record) return;
-			this.close();
-			void this.onArchive(record);
-		});
-		this.position();
-		window.setTimeout(() => save.focus(), 0);
-	}
-
-	private renderExisting(): void {
-		if (!this.record) return;
-		const element = this.reset();
-		this.renderHeader(element, this.record.selectedText, sectionLabel(this.record.section));
-		if (this.record.excerpt || this.record.pdfExcerpt) {
-			element.createEl("blockquote", { text: this.record.pdfExcerpt ? this.record.selectedText : annotationDisplayText(this.record.selectedText), attr: { style: "overflow-wrap:anywhere;max-height:150px;overflow:auto;flex-shrink:0" } });
-			const record = this.record, status = element.createEl("p", { text: "正在核对摘录来源…", attr: { role: "status" } });
-			void this.service.getExcerptStatus(record).then(text => { if (!this.closed && this.record === record && status.isConnected) status.setText(text); }, () => { if (status.isConnected) status.setText("暂时无法核对原文，保留历史摘录"); });
-			this.renderTextSection(element, "个人备注", record.manualText, "没有填写个人备注");
-			const context = element.createEl("details"); context.createEl("summary", { text: (record.bilingual?.language === "zh-CN" || isTranslationPath(record.sourcePath)) ? "保存时的译文上下文" : "保存时的原文上下文" }); context.createEl("pre", { text: (record.pdfExcerpt || record.excerpt)!.context, attr: { style: "white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto" } });
-			element.createEl("p", { text: "打开摘录列表，可回到原文或编辑个人备注。" });
-			const footer = this.renderFooter(element);
-			if (this.onOpenExcerpt) {
-				const browse = footer.createEl("button", { text: "查看摘录与编辑备注", attr: { type: "button" } });
-				browse.onclick = () => { this.close(); this.onOpenExcerpt?.(record); };
-			}
-			const open = footer.createEl("button", { text: "打开摘录文档", attr: { type: "button" } });
-			open.onclick = () => { this.close(); void this.service.openAnnotationDocument(record).catch(error => new Notice(displayError(error))); };
-			this.position(); return;
-		}
-		if (this.record.color) element.createEl("p", { cls: "agent-annotation-color-label", text: "颜色标注：" + ANNOTATION_COLORS[this.record.color], attr: { "data-color": this.record.color } });
-		this.renderTextSection(element, "手动批注", this.record.manualText, "暂无手动批注");
-		this.renderTextSection(element, "AI 解释", this.record.aiText, "暂无 AI 解释");
-		if (this.record.archiveStatus !== "none" || this.record.archiveTargets.length) {
-			const archive = element.createDiv({ cls: "agent-annotation-archive-state" });
-			archive.createEl("strong", {
-				text: {
-					pending: "正在归档",
-					completed: "已关联知识节点",
-					failed: "归档失败",
-					none: "未归档",
-				}[this.record.archiveStatus],
-			});
-			if (this.record.archiveTargets.length) {
-				const links = archive.createDiv({ cls: "agent-annotation-targets" });
-				this.record.archiveTargets.forEach((target) => {
-					const button = links.createEl("button", {
-						text: target.split("/").pop() || target,
-						attr: { type: "button" },
-					});
-					button.addEventListener("click", () => {
-						void this.service.openArchiveTarget(this.record!, target);
-					});
-				});
-			}
-			if (this.record.archiveError) archive.createSpan({ text: this.record.archiveError });
-		}
-		const footer = this.renderFooter(element);
-		if (
-			this.record.aiText
-			&& !this.record.bilingual && !isTranslationPath(this.record.sourcePath)
-			&& this.record.archiveStatus !== "pending"
-			&& this.record.archiveStatus !== "completed"
-		) {
-			const archiveButton = footer.createEl("button", {
-				cls: "agent-annotation-archive-button",
-				text: this.record.archiveStatus === "failed" ? "重新归档" : "归档",
-				attr: { type: "button" },
-			});
-			archiveButton.addEventListener("click", () => {
-				const record = this.record!;
-				this.close();
-				void this.onArchive(record);
-			});
-		}
-		const edit = footer.createEl("button", {
-			cls: "mod-cta",
-			text: "修改",
-			attr: { type: "button" },
-		});
-		edit.addEventListener("click", () => this.renderEditor());
-		this.position();
-	}
-
-	private renderEditor(): void {
-		if (!this.record) return;
-		const element = this.reset();
-		this.renderHeader(element, this.record.selectedText, "修改批注");
-		const color = this.renderColorPicker(element, this.record.color || "none");
-		const manualLabel = element.createEl("label", { cls: "agent-annotation-field" });
-		manualLabel.createSpan({ text: "手动批注" });
-		const manual = manualLabel.createEl("textarea", { attr: { rows: "5" } });
-		manual.value = this.record.manualText;
-		const aiLabel = element.createEl("label", { cls: "agent-annotation-field" });
-		const aiHeader = aiLabel.createDiv({ cls: "agent-annotation-field-header" });
-		aiHeader.createSpan({ text: "AI 解释" });
-		const regenerate = aiHeader.createEl("button", {
-			text: "重新解释",
-			attr: { type: "button" },
-		});
-		const ai = aiLabel.createEl("textarea", { attr: { rows: "8" } });
-		ai.value = this.record.aiText;
-		const markDirty = (textarea: HTMLTextAreaElement) => {
-			textarea.dataset.dirty = "true";
-		};
-		manual.addEventListener("input", () => markDirty(manual));
-		ai.addEventListener("input", () => markDirty(ai));
-		regenerate.addEventListener("click", () => void this.regenerateExisting(ai, regenerate));
-		const footer = this.renderFooter(element);
-		const cancel = footer.createEl("button", { text: "取消", attr: { type: "button" } });
-		const save = footer.createEl("button", {
-			cls: "mod-cta",
-			text: "保存",
-			attr: { type: "button" },
-		});
-		cancel.addEventListener("click", () => this.renderExisting());
-		const submit = async () => {
-			if (save.disabled || this.closed) return;
-			save.disabled = true;
-			cancel.disabled = manual.disabled = ai.disabled = regenerate.disabled = true;
-			color.disable(true);
-			try {
-				const record = await this.service.updateAnnotation(this.record!, {
-					color: color.value(),
-					manualText: manual.value,
-					...(ai.value !== this.record!.aiText ? { aiText: ai.value } : {}),
-					aiProvider: this.record?.aiProvider,
-					aiModel: this.record?.aiModel,
-					aiCli: this.record?.aiCli,
-				});
-				if (this.closed) return;
-				this.record = record;
-				new Notice("批注已保存");
-				this.renderExisting();
-			} catch (error) {
-				if (this.closed) return;
-				new Notice(`保存失败：${displayError(error)}`);
-				save.disabled = false;
-				cancel.disabled = manual.disabled = ai.disabled = regenerate.disabled = false;
-				color.disable(false);
-			}
-		};
-		save.addEventListener("click", () => void submit());
-		const saveShortcut = (event: KeyboardEvent) => {
-			if (event.ctrlKey && event.key === "Enter") {
-				event.preventDefault();
-				void submit();
-			}
-		};
-		// Inputs are replaced when leaving this editor. A listener on the reused
-		// popover would retain cancelled drafts and submit them on later edits.
-		manual.addEventListener("keydown", saveShortcut);
-		ai.addEventListener("keydown", saveShortcut);
-		this.bindSaveScope(submit);
-		this.position();
-		window.setTimeout(() => manual.focus(), 0);
-	}
-
-	private async regenerateExisting(
-		target: HTMLTextAreaElement,
-		button: HTMLButtonElement,
-	): Promise<void> {
-		if (!this.record) return;
-		if (target.value.trim() && !window.confirm("重新解释会替换当前 AI 解释，是否继续？")) return;
-		button.disabled = true;
-		button.setText("生成中");
-		try {
-			const context = await this.service.getRecordExplanationContext(this.record);
-			const explanation = await this.service.generateExplanation(context, (cancel) => {
-				this.cancelGeneration = cancel;
-			});
-			this.cancelGeneration = null;
-			target.value = explanation.text;
-			target.dataset.dirty = "true";
-			this.record = {
-				...this.record,
-				aiProvider: explanation.provider,
-				aiModel: explanation.model,
-				aiCli: explanation.cli,
-			};
-			button.setText("已生成");
-		} catch (error) {
-			this.cancelGeneration = null;
-			new Notice(`重新解释失败：${displayError(error)}`);
-			button.setText("重新解释");
-		} finally {
-			button.disabled = false;
-		}
-	}
-
-	private async saveNew(
-		draft: AnnotationDraft,
-		button: HTMLButtonElement,
-		closeAfterSave = true,
-	): Promise<AnnotationRecord | null> {
-		if (!this.selection || this.closed || button.disabled) return null;
-		button.disabled = true;
-		try {
-			const record = await this.service.createAnnotation(this.selection, draft);
-			this.record = record;
-			new Notice(record.sourceAnchor ? "批注已保留，重新划选同一文字可查看" : "批注已保留");
-			if (closeAfterSave) this.close();
-			return record;
-		} catch (error) {
-			new Notice(`保存批注失败：${displayError(error)}`);
-			button.disabled = false;
-			return null;
-		}
-	}
-
-	private renderFailure(title: string, message: string, retry: () => void): void {
-		const element = this.reset();
-		this.renderHeader(element, this.selection?.selectedText || this.record?.selectedText || "", title);
-		element.createDiv({ cls: "agent-annotation-error", text: message });
-		const footer = this.renderFooter(element);
-		const cancel = footer.createEl("button", { text: "取消", attr: { type: "button" } });
-		const retryButton = footer.createEl("button", {
-			cls: "mod-cta",
-			text: "重试",
-			attr: { type: "button" },
-		});
-		cancel.addEventListener("click", () => {
-			if (this.record) this.renderExisting();
-			else this.renderChooser();
-		});
-		retryButton.addEventListener("click", retry);
-		this.position();
-	}
-
-	private renderHeader(parent: HTMLElement, selectedText: string, subtitle: string): void {
-		const source = this.record || this.selection;
-		if (!source?.pdfExcerpt) selectedText = annotationDisplayText(selectedText);
-		if (this.selection?.linkSelectionExpanded) parent.createEl("p", { text: "选区涉及链接或格式文字，已扩展为完整文字；批注独立保存，原文不改写。", cls: "setting-item-description" });
-		if (source) { parent.createEl("p", { text: quoteLabel(source), cls: "agent-annotation-source-role" }); if (source.bilingual) { const details = parent.createEl("details"); details.createEl("summary", { text: "双语来源与审阅状态" }); details.createEl("p", { text: bilingualDescription(source.bilingual) }); if (source.bilingual.english) details.createEl("pre", { text: source.bilingual.english.text, attr: { style: "white-space:pre-wrap;max-height:140px;overflow:auto" } }); } }
-		const header = parent.createDiv({
-			cls: "agent-annotation-header",
-			attr: { "data-agent-drag-handle": "true" },
-		});
+		const baseline = this.record, source = baseline || this.selection;
+		if (!source) return;
+		const pdf = Boolean(source.pdfExcerpt);
+		const pending = baseline?.archiveStatus === "pending";
+		const header = element.createDiv({ cls: "agent-annotation-header", attr: { "data-agent-drag-handle": "true" } });
 		const title = header.createDiv();
-		title.createEl("strong", { text: selectedText.slice(0, 120) });
-		title.createSpan({ text: subtitle });
-		const close = header.createEl("button", {
-			cls: "clickable-icon",
-			attr: {
-				type: "button",
-				"aria-label": "关闭",
-			},
-		});
+		const quote = pdf ? source.selectedText : annotationDisplayText(source.selectedText);
+		title.createEl("strong", { text: quote, attr: { title: quote } });
+		title.createSpan({ text: pdf ? `PDF · 第 ${source.pdfExcerpt!.page} 页` : quoteLabel(source) });
+		const close = header.createEl("button", { cls: "clickable-icon", attr: { type: "button", "aria-label": "关闭" } });
 		setIcon(close, "x");
 		close.addEventListener("click", () => this.requestClose());
-		header.addEventListener("pointerdown", (event) => this.startDragging(event));
-	}
+		header.addEventListener("pointerdown", event => this.startDragging(event));
+		if (this.selection?.linkSelectionExpanded) element.createDiv({ cls: "agent-annotation-caption", text: "已选取完整的链接或格式文字" });
 
-	private renderTextSection(
-		parent: HTMLElement,
-		title: string,
-		content: string,
-		emptyText: string,
-	): void {
-		const section = parent.createDiv({ cls: "agent-annotation-section" });
-		section.createEl("h4", { text: title });
-		if (!content) {
-			section.createDiv({ cls: "agent-annotation-empty", text: emptyText });
-			return;
+		const records = [baseline, ...this.historical].filter((r): r is AnnotationRecord => Boolean(r));
+		const distinct = records.filter((r, i) => records.findIndex(other => other.id === r.id && other.annotationPath === r.annotationPath) === i);
+		if (distinct.length > 1) {
+			const label = element.createEl("label", { cls: "agent-annotation-history" });
+			label.createSpan({ text: "已有多条记录" });
+			const picker = label.createEl("select");
+			distinct.forEach((record, i) => {
+				const content = [listedExcerpt(record) ? "摘录" : "", record.color ? ANNOTATION_COLORS[record.color] : "", record.manualText ? "备注" : "", record.aiText ? "AI" : ""].filter(Boolean).join(" · ");
+				picker.createEl("option", { text: `${i + 1}. ${content || "批注"}`, attr: { value: String(i) } });
+			});
+			picker.value = "0";
+			picker.addEventListener("change", () => {
+				if (this.saving || (element.dataset.dirty === "true" && !window.confirm("放弃当前未保存的修改？"))) { picker.value = "0"; return; }
+				this.stopGeneration();
+				this.record = distinct[Number(picker.value)];
+				this.renderForm();
+			});
 		}
-		this.renderMarkdown(
-			section.createDiv({ cls: "agent-annotation-section-content markdown-rendered" }),
-			content,
-		);
+
+		const note = element.createEl("textarea", { cls: "agent-annotation-editor", attr: { rows: "2", placeholder: "写下个人备注…", "aria-label": "个人备注", maxlength: "10000" } });
+		note.value = baseline?.manualText || "";
+		const actions = element.createDiv({ cls: "agent-annotation-actions" });
+		let excerpt = baseline ? listedExcerpt(baseline) : pdf;
+		const canList = !pdf && (Boolean(baseline?.excerpt) || Boolean(this.selection?.sourceRevision && (!baseline || baseline.sourceAnchor)));
+		const list = canList ? actions.createEl("button", { attr: { type: "button" } }) : undefined;
+		const browse = excerpt && baseline && this.onOpenExcerpt ? actions.createEl("button", { text: "查看摘录", attr: { type: "button" } }) : undefined;
+		const detail = !pdf ? actions.createEl("button", { text: baseline?.aiText ? "AI 解释 ▾" : "AI 解释", attr: { type: "button", "aria-expanded": "false" } }) : undefined;
+		const explanationPanel = element.createDiv({ cls: "agent-annotation-explanation" });
+		explanationPanel.hidden = true;
+		let ai: HTMLTextAreaElement | undefined, generate: HTMLButtonElement | undefined;
+		let preview: HTMLDivElement | undefined, editAI: HTMLButtonElement | undefined;
+		let editingAI = false, renderedAI = "";
+		if (!pdf) {
+			ai = explanationPanel.createEl("textarea", { cls: "agent-annotation-editor", attr: { rows: "4", maxlength: "24000", "aria-label": "AI 解释", placeholder: "生成后可在此修改解释" } });
+			ai.value = baseline?.aiText || "";
+			ai.hidden = true;
+			preview = explanationPanel.createDiv({ cls: "agent-annotation-ai-preview markdown-rendered" });
+			const aiActions = explanationPanel.createDiv({ cls: "agent-annotation-actions" });
+			editAI = aiActions.createEl("button", { text: "编辑解释", attr: { type: "button" } });
+			generate = aiActions.createEl("button", { text: ai.value ? "重新生成" : "生成解释", attr: { type: "button" } });
+		}
+		const info = element.createDiv({ cls: "agent-annotation-caption", attr: { role: "status" } });
+		info.hidden = true;
+		const showMessage = (message: string) => { info.hidden = !message; info.setText(message); this.position(); };
+		if (baseline || source.bilingual) {
+			const details = element.createEl("details", { cls: "agent-annotation-details" });
+			details.createEl("summary", { text: source.bilingual ? "来源与原文" : "更多" });
+			if (source.bilingual) {
+				details.createEl("p", { text: bilingualDescription(source.bilingual) });
+				if (source.bilingual.english) details.createEl("pre", { text: source.bilingual.english.text });
+			}
+			if (baseline) {
+				if (baseline.aiProvider) details.createEl("p", { text: `生成记录 · ${baseline.aiProvider} ${baseline.aiModel}${baseline.aiEdited ? " · 已人工修改" : ""}` });
+				const open = details.createEl("button", { text: "打开批注文档", attr: { type: "button" } });
+				open.addEventListener("click", () => { if (this.requestClose()) void this.service.openAnnotationDocument(baseline).catch(error => new Notice(displayError(error))); });
+				for (const target of baseline.archiveTargets) {
+					const link = details.createEl("button", { text: target.split("/").pop(), attr: { type: "button" } });
+					link.addEventListener("click", () => void this.service.openArchiveTarget(baseline, target).catch(error => new Notice(displayError(error))));
+				}
+				if (baseline.archiveError) details.createEl("p", { text: baseline.archiveError });
+				if (baseline.aiText && !baseline.bilingual && !isTranslationPath(baseline.sourcePath) && !excerpt && !pending && baseline.archiveStatus !== "completed") {
+					const archive = details.createEl("button", { text: baseline.archiveStatus === "failed" ? "重新归档" : "归档", attr: { type: "button" } });
+					archive.addEventListener("click", () => { if (this.requestClose()) void this.onArchive(baseline); });
+				}
+			}
+		}
+
+		let color: AnnotationColorChoice = baseline?.color || "none", generated: AnnotationExplanation | undefined;
+		let generating = false;
+		const footer = element.createDiv({ cls: "agent-annotation-footer" });
+		const palette = footer.createDiv({ cls: "agent-annotation-colors", attr: { role: "group", "aria-label": "标注颜色" } });
+		const buttons = new Map<AnnotationColorChoice, HTMLButtonElement>();
+		if (!pdf) {
+			for (const [value, title] of Object.entries({ none: "无颜色", ...ANNOTATION_COLORS })) {
+				const key = value as AnnotationColorChoice;
+				const button = palette.createEl("button", { attr: { type: "button", title, "aria-label": title, "data-color": key } });
+				buttons.set(key, button);
+				button.addEventListener("click", () => { color = key; refresh(); });
+			}
+		}
+		const save = footer.createEl("button", { cls: "mod-cta", text: "保存", attr: { type: "button" } });
+		const refreshExplanation = () => {
+			if (!ai || !preview || !editAI) return;
+			ai.hidden = !editingAI;
+			preview.hidden = editingAI || !ai.value;
+			editAI.hidden = !ai.value && !editingAI;
+			editAI.disabled = this.saving || generating || pending === true;
+			editAI.setText(editingAI ? "预览解释" : "编辑解释");
+			if (!explanationPanel.hidden && !preview.hidden && renderedAI !== ai.value) {
+				renderedAI = ai.value;
+				preview.empty();
+				void MarkdownRenderer.render(this.app, ai.value, preview, source.sourcePath, this);
+			}
+		};
+		const refresh = () => {
+			const hasChanges = note.value !== (baseline?.manualText || "") || (ai?.value || "") !== (baseline?.aiText || "")
+				|| generated !== undefined || color !== (baseline?.color || "none") || excerpt !== (baseline ? listedExcerpt(baseline) : false);
+			element.dataset.dirty = String(hasChanges && (Boolean(baseline) || !pdf || Boolean(note.value)));
+			const locked = this.saving || pending;
+			note.disabled = Boolean(locked);
+			if (ai) ai.disabled = Boolean(locked || generating || (!generated && !baseline?.aiText));
+			if (generate) { generate.disabled = Boolean(locked || (!generating && !this.selection && !baseline)); generate.setText(generating ? "停止生成" : ai?.value ? "重新生成" : "生成解释"); }
+			if (list) {
+				list.disabled = Boolean(locked);
+				list.setText(excerpt ? "已收录" : "收录摘录");
+				list.setAttribute("aria-pressed", String(excerpt));
+			}
+			for (const [key, button] of buttons) { button.disabled = Boolean(locked); button.setAttribute("aria-pressed", String(key === color)); }
+			save.disabled = Boolean(locked || generating || (!hasChanges && !(pdf && !baseline)));
+			refreshExplanation();
+		};
+		note.addEventListener("input", refresh);
+		ai?.addEventListener("input", refresh);
+		list?.addEventListener("click", () => { excerpt = !excerpt; refresh(); });
+		browse?.addEventListener("click", () => { if (this.requestClose()) this.onOpenExcerpt?.(baseline!); });
+		editAI?.addEventListener("click", () => { editingAI = !editingAI; refreshExplanation(); if (editingAI) ai?.focus(); this.position(); });
+		detail?.addEventListener("click", () => {
+			explanationPanel.hidden = !explanationPanel.hidden;
+			detail.setAttribute("aria-expanded", String(!explanationPanel.hidden));
+			refreshExplanation();
+			this.position();
+		});
+		generate?.addEventListener("click", async () => {
+			if (!ai) return;
+			if (generating) { this.stopGeneration(); generating = false; showMessage("已停止生成"); refresh(); return; }
+			if (ai.value.trim() && !window.confirm("重新生成会替换面板中的解释，确定继续？")) return;
+			const version = ++this.generationVersion;
+			generating = true; showMessage("正在生成解释…"); refresh();
+			const isCurrent = () => !this.closed && version === this.generationVersion;
+			try {
+				const context = baseline && (baseline.bilingual || !this.selection?.bilingual) ? await this.service.getRecordExplanationContext(baseline) : this.selection!;
+				if (!isCurrent()) return;
+				const explanation = await this.service.generateExplanation(context, cancel => { if (isCurrent()) this.cancelGeneration = cancel; else cancel(); });
+				if (!isCurrent()) return;
+				generated = explanation;
+				ai.value = explanation.text;
+				showMessage("解释已生成，可修改后保存");
+			} catch (error) {
+				if (isCurrent()) showMessage(displayError(error));
+			} finally {
+				if (isCurrent()) { generating = false; this.cancelGeneration = null; refresh(); }
+			}
+		});
+		const submit = async () => {
+			if (this.closed || this.saving || save.disabled) return;
+			this.saving = true; refresh();
+			const draft: AnnotationDraft = { manualText: note.value };
+			if (!pdf) {
+				draft.color = color;
+				if (canList && (!baseline || excerpt !== listedExcerpt(baseline))) draft.excerptListed = excerpt;
+				if (generated || (ai?.value || "") !== (baseline?.aiText || "")) draft.aiText = ai?.value || "";
+				if (generated) Object.assign(draft, { aiProvider: generated.provider, aiModel: generated.model, aiCli: generated.cli, aiEdited: draft.aiText !== generated.text });
+			}
+			try {
+				const record = baseline ? await this.service.updateAnnotation(baseline, draft, this.selection) : await this.service.saveSelectionAnnotation(this.selection!, draft);
+				if (this.closed) return;
+				this.record = record;
+				const historyIndex = this.historical.findIndex(item => item.id === record.id && item.annotationPath === record.annotationPath);
+				if (historyIndex >= 0) this.historical[historyIndex] = record;
+				this.saving = false;
+				this.renderForm();
+				new Notice("批注已保存");
+			} catch (error) {
+				if (!this.closed) showMessage(displayError(error));
+			} finally {
+				this.saving = false;
+				if (element.contains(save)) refresh();
+			}
+		};
+		save.addEventListener("click", () => void submit());
+		this.bindSaveScope(submit);
+		refresh();
+		this.position();
 	}
 
-	private renderMarkdown(parent: HTMLElement, markdown: string): void {
-		const sourcePath = this.record?.sourcePath || this.selection?.sourcePath || "";
-		void MarkdownRenderer.render(
-			this.app,
-			markdown,
-			parent,
-			sourcePath,
-			this,
-		);
-	}
-
-	private renderFooter(parent: HTMLElement): HTMLDivElement {
-		return parent.createDiv({ cls: "agent-annotation-footer" });
+	private stopGeneration(): void {
+		this.generationVersion++;
+		this.cancelGeneration?.();
+		this.cancelGeneration = null;
 	}
 
 	private bindSaveScope(submit: () => Promise<unknown>): void {
@@ -642,6 +361,7 @@ export class AnnotationPopover extends Component {
 		this.clearSaveScope();
 		if (!this.element) throw new Error("批注小窗尚未打开");
 		this.element.empty();
+		this.element.dataset.dirty = "false";
 		return this.element;
 	}
 
@@ -713,8 +433,8 @@ export class AnnotationPopover extends Component {
 			if (!this.element) return;
 			const margin = 12;
 			const gap = 10;
-			const width = Math.min(520, window.innerWidth - margin * 2);
-			this.element.style.width = `${Math.max(300, width)}px`;
+			const width = Math.min(352, window.innerWidth - margin * 2);
+			this.element.style.width = `${Math.max(0, width)}px`;
 			const box = this.element.getBoundingClientRect();
 			if (this.manualPosition) {
 				const next = this.clampPosition(

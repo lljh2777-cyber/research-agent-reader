@@ -43,9 +43,9 @@ let count = 0; const check = async (name, fn) => { await fn(); count++; console.
   assert.equal(f.files.get(sourcePath).text, content); assert.equal(r.manualText, ""); assert.ok(r.sourceAnchor);
   assert.equal((await new AnnotationService(f.app, {}).findAnnotationForSelection(selection)).color, "yellow");
   const receipt = { requestedModel: "test/model", usage: { input_tokens: 12 } };
-  const noted = await f.service.updateAnnotation(r, { manualText: "Personal", aiText: "Saved explanation", aiProvider: "test", aiModel: "test/model", aiCli: receipt });
+  let noted = await f.service.updateAnnotation(r, { manualText: "Personal", aiText: "Saved explanation", aiProvider: "test", aiModel: "test/model", aiCli: receipt });
   for (const color of ["green", "blue", "purple", "red"]) {
-   const changed = await f.service.updateAnnotation(noted, { color });
+   const changed = noted = await f.service.updateAnnotation(noted, { color });
    const read = readAnnotationRecords(f.files.get(r.annotationPath).text, r.annotationPath).records[0];
    assert.equal(read.color, color); assert.equal(read.manualText, "Personal"); assert.equal(read.aiText, "Saved explanation"); assert.deepEqual(read.aiCli, receipt); assert.deepEqual(read.sourceAnchor, r.sourceAnchor);
   }

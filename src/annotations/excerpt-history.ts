@@ -4,6 +4,7 @@ import { validatedReview } from "../curation/service";
 import { validateCurationRevision } from "../curation/writer";
 import type { CurationReview, CurationRevision } from "../curation/types";
 import type { ExcerptRef } from "./excerpt-library";
+import { validExcerptRef } from "./excerpt";
 
 export interface ExcerptHistoryEntry {
 	id: string; kind: "review" | "revision"; revision: string; path: string; updated: string;
@@ -20,7 +21,7 @@ const matches = (review: CurationReview, ref: ExcerptRef): boolean => review.con
 /** Inspect immutable saved payloads only; no stores, services or recovery are initialized. */
 export async function readExcerptHistory(io: Pick<SourceStorage, "read" | "list">, ref: ExcerptRef, signal?: AbortSignal): Promise<ExcerptHistory> {
 	ref = { ...ref };
-	if (!/^ann-excerpt-[a-f0-9]{48}$/.test(ref.id) || ref.annotationPath !== `wiki/annotations/${ref.id}.md`) throw new Error("摘录历史标识无效");
+	if (!validExcerptRef(ref)) throw new Error("摘录历史标识无效");
 	const result: ExcerptHistory = { entries: [], issues: [] };
 	const reviews = new Map<string, CurationReview>(), revisions = new Map<string, CurationRevision>(), hashes = new Map<string, string>();
 	let files = 0, bytes = 0;

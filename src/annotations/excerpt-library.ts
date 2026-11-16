@@ -1,7 +1,7 @@
 import { App, MarkdownView, TFile, type WorkspaceLeaf } from "obsidian";
 import { renderedAnnotationRanges } from "./rendered-source-range";
 import { readAnnotationRecords } from "./annotation-service";
-import { excerptMatches, excerptRevision, prepareExcerpt } from "./excerpt";
+import { excerptMatches, excerptRevision, listedExcerpt, prepareExcerpt, validExcerptRef } from "./excerpt";
 import { openPdfExcerpt, pdfExcerptStatus } from "./native-pdf-excerpt";
 import type { AnnotationRecord } from "./types";
 import { verifyBilingual } from "./bilingual";
@@ -12,24 +12,33 @@ export interface ExcerptList { entries: ExcerptSnapshot[]; issues: string[]; }
 const ROOT = "wiki/annotations/", MAX_FILE = 128 * 1024;
 const MANUAL_START = "<!-- agent-dashboard:manual-start -->", MANUAL_END = "<!-- agent-dashboard:manual-end -->";
 const META = /<!-- agent-dashboard:annotation-meta (\{[^\r\n]*\}) -->/g;
-const validPath = (path: string): boolean => /^wiki\/annotations\/ann-excerpt-[a-f0-9]{48}\.md$/.test(path);
 const digest = (text: string): string => excerptRevision(text).digest;
 export const excerptOrganizationLabel = (record: AnnotationRecord): string => ({ none: "待整理", completed: "整理完成", pending: "归档处理中", failed: "归档失败" })[record.archiveStatus];
 export const canOrganizeExcerpt = (record: AnnotationRecord): boolean => ["none", "completed"].includes(record.archiveStatus) && !record.archiveRunId && !record.archiveTargets.length && !record.archiveError;
 
-/** A strict, single-record snapshot. Unknown body text is retained, never regenerated. */
+function excerptBlock(content: string, ref: ExcerptRef): { start: number; end: number; text: string } {
+	const opening = `<!-- agent-dashboard:annotation-start ${ref.id} -->`;
+	const closing = `<!-- agent-dashboard:annotation-end ${ref.id} -->`;
+	const start = content.indexOf(opening), close = content.indexOf(closing, start + opening.length);
+	if (start < 0 || close < 0 || content.indexOf(opening, start + opening.length) >= 0 || content.indexOf(closing, close + closing.length) >= 0) throw new Error("摘录分区标记损坏或重复，请打开文档检查");
+	const end = close + closing.length;
+	return { start, end, text: content.slice(start, end) };
+}
+
+/** Validate the target block and keep a whole-file revision for concurrent edits. */
 export function readExcerptSnapshot(content: string, ref: ExcerptRef): ExcerptSnapshot {
-	if (!validPath(ref.annotationPath) || ref.annotationPath !== ROOT + ref.id + ".md" || content.length > MAX_FILE) throw new Error("摘录路径或文件大小不符合读取范围");
-	const parsed = readAnnotationRecords(content, ref.annotationPath), record = parsed.records[0];
-	if (parsed.errors.length || parsed.records.length !== 1 || record.id !== ref.id || !(record.excerpt || record.pdfExcerpt) || !record.sourceAnchor) throw new Error("摘录凭据损坏或存在重复记录，请打开文档检查");
+	if (!validExcerptRef(ref) || content.length > MAX_FILE) throw new Error("摘录路径或文件大小不符合读取范围");
+	const parsed = readAnnotationRecords(content, ref.annotationPath), record = parsed.records.find(r => r.id === ref.id);
+	if (!record || (ref.id.startsWith("ann-excerpt-") && (parsed.errors.length || parsed.records.length !== 1)) || !(record.excerpt || record.pdfExcerpt) || !record.sourceAnchor) throw new Error("摘录凭据损坏或存在重复记录，请打开文档检查");
+	const block = ref.id.startsWith("ann-excerpt-") ? content : excerptBlock(content, ref).text;
 	const markers = ["annotation-start " + record.id + " -->", "annotation-meta ", "manual-start -->", "manual-end -->", "ai-start -->", "ai-end -->", "annotation-end " + record.id + " -->"];
 	let previous = -1;
 	for (const marker of markers) {
-		const value = "<!-- agent-dashboard:" + marker, at = content.indexOf(value);
-		if (at <= previous || content.indexOf(value, at + value.length) !== -1) throw new Error("摘录分区标记损坏或重复，请打开文档检查");
+		const value = "<!-- agent-dashboard:" + marker, at = block.indexOf(value);
+		if (at <= previous || block.indexOf(value, at + value.length) !== -1) throw new Error("摘录分区标记损坏或重复，请打开文档检查");
 		previous = at;
 	}
-	if ([...content.matchAll(META)].length !== 1) throw new Error("摘录元数据无法唯一识别");
+	if ([...block.matchAll(META)].length !== 1) throw new Error("摘录元数据无法唯一识别");
 	return { record, digest: digest(content) };
 }
 
@@ -40,12 +49,14 @@ export function patchExcerptNote(content: string, expected: ExcerptSnapshot, man
 	if (latest.digest !== expected.digest) throw new Error("摘录已被其他窗口或同步修改；草稿已保留，请重新读取并核对最新备注后保存");
 	const note = manualText.trim();
 	if (note === latest.record.manualText) return content;
-	const start = content.indexOf(MANUAL_START) + MANUAL_START.length, end = content.indexOf(MANUAL_END);
-	const eol = content.includes("\r\n") ? "\r\n" : "\n";
-	let next = content.slice(0, start) + eol + note + eol + content.slice(end);
+	const target = excerptBlock(content, latest.record);
+	const text = target.text, start = text.indexOf(MANUAL_START) + MANUAL_START.length, end = text.indexOf(MANUAL_END);
+	const eol = text.includes("\r\n") ? "\r\n" : "\n";
+	let next = text.slice(0, start) + eol + note + eol + text.slice(end);
 	const reopen = latest.record.archiveStatus === "completed" && canOrganizeExcerpt(latest.record);
 	next = updateMetadata(next, latest.record, reopen ? { archiveStatus: "none" } : {}, now);
-	return reopen ? updateOrganizationLabel(next, false) : next;
+	if (reopen) next = updateOrganizationLabel(next, false);
+	return replaceExcerptBlock(content, target, next, now);
 }
 
 function updateMetadata(content: string, record: AnnotationRecord, patch: Record<string, unknown>, now: string): string {
@@ -53,14 +64,18 @@ function updateMetadata(content: string, record: AnnotationRecord, patch: Record
 		const meta = { ...JSON.parse(json), ...patch, updatedAt: now };
 		return "<!-- agent-dashboard:annotation-meta " + JSON.stringify(meta).replace(/</g, "\\u003c").replace(/>/g, "\\u003e") + " -->";
 	});
-	// Update only existing generated timestamps. Preserve extra prose and unknown metadata fields.
-	next = next.replace(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/, (_all, start: string, body: string, end: string) => start + body.replace(/^updated: [^\r\n]*/m, `updated: ${JSON.stringify(now)}`) + end);
+	// Update only the generated timestamp within the target block.
 	const old = "- 更新：" + record.updatedAt;
 	const blockStart = next.indexOf("<!-- agent-dashboard:annotation-start ");
 	const contextStart = next.slice(blockStart).search(/### 保存时的(?:原文|译文)上下文/) + blockStart;
 	const at = next.indexOf(old, blockStart);
 	if (at >= 0 && at < contextStart) next = next.slice(0, at) + "- 更新：" + now + next.slice(at + old.length);
 	return next;
+}
+
+function replaceExcerptBlock(content: string, target: { start: number; end: number }, text: string, now: string): string {
+	return (content.slice(0, target.start) + text + content.slice(target.end))
+		.replace(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/, (_all, start: string, body: string, end: string) => start + body.replace(/^updated: [^\r\n]*/m, `updated: ${JSON.stringify(now)}`) + end);
 }
 
 /** A manual work marker, never a scientific review or a completed archive job. */
@@ -70,7 +85,8 @@ export function patchExcerptOrganization(content: string, expected: ExcerptSnaps
 	if (!canOrganizeExcerpt(latest.record)) throw new Error("此摘录包含归档任务记录，请在原归档功能处理，未更改状态");
 	const archiveStatus = completed ? "completed" : "none";
 	if (latest.record.archiveStatus === archiveStatus) return content;
-	return updateOrganizationLabel(updateMetadata(content, latest.record, { archiveStatus }, now), completed);
+	const target = excerptBlock(content, latest.record);
+	return replaceExcerptBlock(content, target, updateOrganizationLabel(updateMetadata(target.text, latest.record, { archiveStatus }, now), completed), now);
 }
 
 function updateOrganizationLabel(next: string, completed: boolean): string {
@@ -87,7 +103,7 @@ export class ExcerptLibraryService {
 	async load(ref: ExcerptRef, signal?: AbortSignal): Promise<ExcerptSnapshot> {
 		const stable = { annotationPath: ref.annotationPath, id: ref.id };
 		signal?.throwIfAborted();
-		if (!validPath(stable.annotationPath)) throw new Error("摘录路径不符合读取范围");
+		if (!validExcerptRef(stable)) throw new Error("摘录路径不符合读取范围");
 		const file = this.app.vault.getAbstractFileByPath(stable.annotationPath);
 		if (!(file instanceof TFile)) throw new Error("摘录文档已缺失，请刷新列表");
 		if (file.stat?.size > MAX_FILE) throw new Error("摘录文档超过读取上限，请直接打开检查");
@@ -97,12 +113,24 @@ export class ExcerptLibraryService {
 	}
 	async list(signal?: AbortSignal): Promise<ExcerptList> {
 		const entries: ExcerptSnapshot[] = [], issues: string[] = [];
-		const files = this.app.vault.getMarkdownFiles().filter(file => file.path.startsWith(ROOT + "ann-excerpt-")).sort((a, b) => a.path.localeCompare(b.path));
-		if (files.length > 2000) issues.push("摘录超过 2000 份，本次仅读取前 2000 份；其余文档仍保留在批注目录。");
+		const files = this.app.vault.getMarkdownFiles().filter(file => file.path.startsWith(ROOT)).sort((a, b) => a.path.localeCompare(b.path));
+		if (files.length > 2000) issues.push("批注文档超过 2000 份，本次仅读取前 2000 份。");
 		for (const file of files.slice(0, 2000)) {
 			signal?.throwIfAborted();
-			try { entries.push(await this.load({ annotationPath: file.path, id: file.basename }, signal)); }
-			catch (error) { signal?.throwIfAborted(); issues.push(file.path + "：" + (error instanceof Error ? error.message : String(error))); }
+			const dedicated = file.path.startsWith(ROOT + "ann-excerpt-");
+			try {
+				if (dedicated) {
+					const snapshot = await this.load({ annotationPath: file.path, id: file.basename }, signal);
+					if (listedExcerpt(snapshot.record)) entries.push(snapshot);
+					continue;
+				}
+				if (file.stat?.size > MAX_FILE) continue;
+				const text = await this.app.vault.read(file); signal?.throwIfAborted();
+				if (!/"excerptListed"\s*:\s*true/.test(text)) continue;
+				for (const record of readAnnotationRecords(text, file.path).records) {
+					if (listedExcerpt(record)) entries.push(readExcerptSnapshot(text, record));
+				}
+			} catch (error) { signal?.throwIfAborted(); issues.push(file.path + "：" + (error instanceof Error ? error.message : String(error))); }
 		}
 		entries.sort((a, b) => b.record.createdAt.localeCompare(a.record.createdAt) || a.record.id.localeCompare(b.record.id));
 		return { entries, issues };
@@ -165,8 +193,9 @@ export class ExcerptLibraryService {
 		const anchor = record.sourceAnchor!;
 		// Confirm that the canonical ID still describes this exact occurrence.
 		const { algorithm, digest, length } = record.excerpt!;
-		const prepared = prepareExcerpt({ sourcePath: record.sourcePath, selectedText: record.selectedText, sourceStart: anchor.start, sourceEnd: anchor.end, prefix: anchor.prefix, suffix: anchor.suffix, sourceRevision: { algorithm, digest, length }, bilingual: record.bilingual, section: "", context: "", isTableCell: false, anchorRect: {} as DOMRect }, content);
-		if (prepared.id !== record.id) throw new Error("摘录位置与记录 ID 不一致，请复查文档");
+		const selection = { sourcePath: record.sourcePath, selectedText: record.selectedText, sourceStart: anchor.start, sourceEnd: anchor.end, prefix: anchor.prefix, suffix: anchor.suffix, sourceRevision: { algorithm, digest, length }, section: "", context: "", isTableCell: false, anchorRect: {} as DOMRect };
+		const prepared = prepareExcerpt(selection, content);
+		if (record.id.startsWith("ann-excerpt-") && prepared.id !== record.id && (!record.bilingual || prepareExcerpt({ ...selection, bilingual: record.bilingual }, content).id !== record.id)) throw new Error("摘录位置与记录 ID 不一致，请复查文档");
 		signal?.throwIfAborted();
 		if (record.bilingual && this.openBilingual) { await this.openBilingual(record, signal); if ((await this.load(record, signal)).digest !== snapshot.digest) throw new Error("摘录在打开期间变化，请重新读取"); return; }
 		// Opening CRLF files in Obsidian's editor can write normalized line endings back to disk.

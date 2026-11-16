@@ -18,7 +18,7 @@ import { objectDigest } from "../papers/identity";
 import { bilingualDescription, bilingualReceipt, bilingualSelectionContext, isTranslationPath, quoteLabel, readStandaloneBilingual, requiresBilingualProof, validBilingualReceipt, verifyBilingual } from "./bilingual";
 import { isDetachedMarkdownSelection } from "./manual-source";
 import { annotationDisplayText, annotationEvidenceText, captureMarkdownRange, expandMarkdownSelection, markdownNeedsDetached, validSelectionSize } from "./markdown-selection";
-import { excerptMatches, excerptRevision, prepareExcerpt, supportsExcerpt, validExcerpt } from "./excerpt";
+import { excerptMatches, excerptRevision, listedExcerpt, prepareExcerpt, supportsExcerpt, validExcerpt } from "./excerpt";
 import { supportsPdfExcerpt, validPdfExcerpt, pdfExcerptId } from "./pdf-excerpt";
 import { captureNativePdfSelection, hasNativePdfSelection, verifyPdfSelection, pdfExcerptStatus } from "./native-pdf-excerpt";
 import { renderCliGroundedExplanation } from "./cli-grounded-explanation";
@@ -72,6 +72,8 @@ interface AnnotationMeta {
 	section: string;
 	sourceAnchor?: AnnotationRecord["sourceAnchor"];
 	excerpt?: AnnotationRecord["excerpt"];
+	excerptListed?: boolean;
+	aiEdited?: boolean;
 	pdfExcerpt?: AnnotationRecord["pdfExcerpt"];
 	bilingual?: AnnotationRecord["bilingual"];
 	aiProvider: string;
@@ -239,6 +241,8 @@ function parseMeta(raw: string): AnnotationMeta | null {
 			section: String(value.section || ""),
 			sourceAnchor,
 			...(value.excerpt ? { excerpt: value.excerpt } : {}),
+			...(typeof value.excerptListed === "boolean" ? { excerptListed: value.excerptListed } : {}),
+			...(value.aiEdited === true ? { aiEdited: true } : {}),
 			...(value.pdfExcerpt ? { pdfExcerpt: value.pdfExcerpt } : {}),
 			...(value.bilingual ? { bilingual: value.bilingual } : {}),
 			aiProvider: String(value.aiProvider || ""),
@@ -641,74 +645,125 @@ export class AnnotationService {
 		return record;
 	}
 
-	/** Re-selecting a source passage opens its detached annotation after restart. */
+	/** New selections have one note for this exact occurrence and source revision. */
+	async saveSelectionAnnotation(selection: AnnotationSelection, draft: AnnotationDraft): Promise<AnnotationRecord> {
+		selection = structuredClone({ ...selection, anchorRect: {} }) as AnnotationSelection;
+		if (selection.pdfExcerpt) return this.createExcerpt(selection, draft.manualText);
+		if (draft.aiText?.trim()) this.requireExplanationProof(selection);
+		if (!draft.manualText?.trim() && !draft.aiText?.trim() && !annotationColor(draft.color) && !draft.excerptListed) throw new Error("请填写备注、选择颜色或收录摘录");
+		if ((await this.findAnnotationsForSelection(selection)).length) throw new Error("此选区已有批注，请重新打开后继续修改");
+		const source = this.app.vault.getAbstractFileByPath(selection.sourcePath);
+		if (!(source instanceof TFile)) throw new Error("批注来源不存在");
+		const content = await this.app.vault.read(source);
+		const { id, receipt } = prepareExcerpt({ ...selection, bilingual: undefined }, content);
+		const annotationPath = `${ANNOTATION_FOLDER}/${id}.md`;
+		const now = new Date().toISOString();
+		const record = this.applyDraft({
+			id, annotationPath, sourcePath: selection.sourcePath, selectedText: selection.selectedText, section: selection.section,
+			sourceAnchor: { start: selection.sourceStart, end: selection.sourceEnd, prefix: selection.prefix, suffix: selection.suffix },
+			excerpt: receipt, excerptListed: false, ...(selection.bilingual ? { bilingual: selection.bilingual } : {}),
+			manualText: "", aiText: "", aiProvider: "", aiModel: "", createdAt: now, updatedAt: now,
+			archiveStatus: "none", archiveTargets: [], archiveRunId: "", archiveError: "",
+		}, draft, now);
+		await this.ensureFolder(ANNOTATION_FOLDER);
+		await this.verifySelection(selection);
+		if (this.app.vault.getAbstractFileByPath(selection.sourcePath) !== source || await this.app.vault.read(source) !== content) throw new Error("批注来源在保存前已变化，请重新选择");
+		try { await this.app.vault.create(annotationPath, this.renderNewDocument(record)); }
+		catch (error) {
+			const saved = await this.loadAnnotation(annotationPath, id);
+			if (saved && objectDigest(saved) === objectDigest(record)) return saved;
+			if (this.app.vault.getAbstractFileByPath(annotationPath)) throw new Error("此选区已有批注，请重新打开后继续修改");
+			throw error;
+		}
+		return record;
+	}
+
 	async findAnnotationForSelection(selection: AnnotationSelection): Promise<AnnotationRecord | null> {
+		const records = await this.findAnnotationsForSelection(selection);
+		return records.length === 1 ? records[0] : null;
+	}
+
+	async findAnnotationsForSelection(selection: AnnotationSelection): Promise<AnnotationRecord[]> {
 		if (!selection.pdfExcerpt) await this.verifySelection(selection);
 		const sourceFile = this.app.vault.getAbstractFileByPath(selection.sourcePath);
-		if (!(sourceFile instanceof TFile)) return null;
+		if (!(sourceFile instanceof TFile)) return [];
 		if (selection.pdfExcerpt) {
 			const prepared = await verifyPdfSelection(this.app, selection);
 			const excerpt = await this.loadAnnotation(`${ANNOTATION_FOLDER}/${prepared.id}.md`, prepared.id);
-			return excerpt?.pdfExcerpt && excerpt.sourcePath === selection.sourcePath && objectDigest(excerpt.pdfExcerpt) === objectDigest(prepared.receipt) ? excerpt : null;
+			return excerpt?.pdfExcerpt && excerpt.sourcePath === selection.sourcePath && objectDigest(excerpt.pdfExcerpt) === objectDigest(prepared.receipt) ? [excerpt] : [];
 		}
+		const source = await this.app.vault.read(sourceFile), matches: AnnotationRecord[] = [];
 		if (selection.sourceRevision) {
-			const prepared = prepareExcerpt(selection, await this.app.vault.read(sourceFile));
-			const excerpt = await this.loadAnnotation(`${ANNOTATION_FOLDER}/${prepared.id}.md`, prepared.id);
-			if (excerpt?.excerpt && excerpt.sourcePath === selection.sourcePath && objectDigest(excerpt.excerpt) === objectDigest(prepared.receipt)) return excerpt;
+			const canonical = prepareExcerpt({ ...selection, bilingual: undefined }, source);
+			const ids = new Set([canonical.id, prepareExcerpt(selection, source).id]);
+			for (const id of ids) {
+				const excerpt = await this.loadAnnotation(`${ANNOTATION_FOLDER}/${id}.md`, id);
+				if (excerpt?.excerpt && excerpt.sourcePath === selection.sourcePath && excerpt.selectedText === selection.selectedText
+					&& excerpt.sourceAnchor?.start === selection.sourceStart && excerpt.sourceAnchor.end === selection.sourceEnd
+					&& objectDigest(excerpt.excerpt) === objectDigest(canonical.receipt)) matches.push(excerpt);
+			}
 		}
 		const annotationPath = await this.resolveAnnotationPath(sourceFile);
 		const annotationFile = this.app.vault.getAbstractFileByPath(annotationPath);
-		if (!(annotationFile instanceof TFile)) return null;
-		const source = await this.app.vault.read(sourceFile);
+		if (!(annotationFile instanceof TFile)) return matches;
 		const current = this.relocateSelection(source, selection);
-		const content = await this.app.vault.read(annotationFile);
-		const matches: AnnotationRecord[] = [];
-		for (const part of content.split(BLOCK_START).slice(1)) {
-			const raw = BLOCK_START + part;
-			const meta = parseMeta(raw);
-			if (!meta?.id || meta.sourcePath !== sourceFile.path || meta.selectedText !== selection.selectedText || objectDigest(meta.bilingual || null) !== objectDigest(selection.bilingual || null)) continue;
-			if (meta.sourceAnchor) {
-				if (findSourceAnchorOffset(source, meta.selectedText, meta.sourceAnchor) !== current.start) continue;
-			} else if (countOccurrences(source, meta.selectedText).length !== 1 || meta.section !== selection.section) {
-				continue;
-			}
-			const block = this.findRecordBlock(raw, meta.id);
-			if (!block) continue;
-			matches.push({ ...meta, annotationPath,
-				manualText: readMarkedSection(block, MANUAL_START, MANUAL_END),
-				aiText: readMarkedSection(block, AI_START, AI_END),
-			});
+		const parsed = readAnnotationRecords(await this.app.vault.read(annotationFile), annotationPath);
+		for (const record of parsed.records) {
+			if (record.sourcePath !== sourceFile.path || record.selectedText !== selection.selectedText) continue;
+			if (record.excerpt && !excerptMatches(record, source)) continue;
+			if (record.sourceAnchor) {
+				if (findSourceAnchorOffset(source, record.selectedText, record.sourceAnchor) !== current.start) continue;
+			} else if (record.bilingual || countOccurrences(source, record.selectedText).length !== 1 || record.section !== selection.section) continue;
+			matches.push(record);
 		}
-		return matches.length === 1 ? matches[0] : null;
+		return matches;
 	}
 
-	async updateAnnotation(
-		record: AnnotationRecord,
-		draft: AnnotationDraft,
-	): Promise<AnnotationRecord> {
-		if (record.excerpt || record.pdfExcerpt) throw new Error("请从摘录列表编辑个人备注，原文凭据保持不变");
+	async updateAnnotation(record: AnnotationRecord, draft: AnnotationDraft, selection?: AnnotationSelection): Promise<AnnotationRecord> {
 		const latest = await this.loadAnnotation(record.annotationPath, record.id);
-		if (!latest) throw new Error("批注记录不存在或已被修改");
-		if (draft.aiText !== undefined) {
-			if (draft.aiText.trim()) this.requireExplanationProof(latest);
-			await verifyBilingual(this.app, latest);
+		if (!latest || objectDigest(latest) !== objectDigest(record)) throw new Error("批注已被修改，请重新打开后核对");
+		if (latest.pdfExcerpt && (draft.aiText !== undefined || draft.color !== undefined || draft.excerptListed !== undefined)) throw new Error("PDF 摘录可修改个人备注");
+		let base = latest;
+		const takeProof = Boolean(draft.aiProvider && draft.aiText?.trim() && !latest.bilingual && selection?.bilingual);
+		if (takeProof || (draft.excerptListed && !latest.excerpt && !latest.pdfExcerpt)) {
+			if (!selection || selection.sourcePath !== latest.sourcePath || selection.selectedText !== latest.selectedText || !latest.sourceAnchor) throw new Error("请重新划选原文后收录摘录");
+			const source = this.app.vault.getAbstractFileByPath(latest.sourcePath);
+			if (!(source instanceof TFile)) throw new Error("摘录来源不存在");
+			const content = await this.app.vault.read(source);
+			if (findSourceAnchorOffset(content, latest.selectedText, latest.sourceAnchor) !== selection.sourceStart) throw new Error("原文选区已变化，请重新划选");
+			await this.verifySelection(selection);
+			const { receipt } = prepareExcerpt(selection, content);
+			const sourceAnchor = { start: selection.sourceStart, end: selection.sourceEnd, prefix: selection.prefix, suffix: selection.suffix };
+			if (latest.bilingual && (sourceAnchor.start !== latest.sourceAnchor.start || sourceAnchor.end !== latest.sourceAnchor.end)) throw new Error("双语批注来源已变化，请保留原记录");
+			if (latest.bilingual) await verifyBilingual(this.app, latest);
+			if (this.app.vault.getAbstractFileByPath(latest.sourcePath) !== source || await this.app.vault.read(source) !== content) throw new Error("摘录来源在保存前已变化，请重新选择");
+			base = { ...latest, sourceAnchor, excerpt: receipt, ...(takeProof ? { bilingual: selection.bilingual, excerptListed: latest.excerptListed ?? listedExcerpt(latest) } : {}) };
 		}
-		const updated: AnnotationRecord = {
-			...latest,
-			...(draft.color !== undefined ? { color: annotationColor(draft.color) } : {}),
-			manualText: draft.manualText === undefined
-				? latest.manualText
-				: sanitizeEmbeddedText(draft.manualText),
-			aiText: draft.aiText === undefined
-				? latest.aiText
-				: sanitizeEmbeddedText(draft.aiText),
-			aiProvider: draft.aiProvider === undefined ? latest.aiProvider : String(draft.aiProvider || ""),
-			aiModel: draft.aiModel === undefined ? latest.aiModel : String(draft.aiModel || ""),
-			aiCli: draft.aiProvider === undefined ? latest.aiCli : normalizeCliReceipt(draft.aiCli),
-			updatedAt: new Date().toISOString(),
-		};
-		await this.writeRecord(updated);
+		if (draft.aiProvider && draft.aiText?.trim()) {
+			this.requireExplanationProof(base);
+			await verifyBilingual(this.app, base);
+		}
+		const updated = this.applyDraft(base, draft, new Date().toISOString());
+		if (objectDigest({ ...updated, updatedAt: latest.updatedAt }) === objectDigest(latest)) return latest;
+		await this.patchAnnotation(latest, updated);
 		return updated;
+	}
+
+	private applyDraft(record: AnnotationRecord, draft: AnnotationDraft, now: string): AnnotationRecord {
+		const manualText = draft.manualText === undefined ? record.manualText : sanitizeEmbeddedText(draft.manualText);
+		const aiText = draft.aiText === undefined ? record.aiText : sanitizeEmbeddedText(draft.aiText);
+		if (manualText.length > 10000 || aiText.length > 24000) throw new Error("批注文字过长，请缩短后保存");
+		const changedContent = manualText !== record.manualText || aiText !== record.aiText;
+		const reopen = changedContent && listedExcerpt(record) && record.archiveStatus === "completed" && !record.archiveRunId && !record.archiveTargets.length && !record.archiveError;
+		return {
+			...record, manualText, aiText,
+			...(draft.color !== undefined ? { color: annotationColor(draft.color) } : {}),
+			...(draft.excerptListed !== undefined && record.excerpt ? { excerptListed: draft.excerptListed } : {}),
+			...(draft.aiText !== undefined ? { aiEdited: aiText && (draft.aiEdited ?? !draft.aiProvider) ? true : undefined } : {}),
+			...(draft.aiProvider !== undefined ? { aiProvider: draft.aiProvider, aiModel: draft.aiModel || "", aiCli: normalizeCliReceipt(draft.aiCli) } : {}),
+			...(reopen ? { archiveStatus: "none" } : {}),
+			updatedAt: now,
+		};
 	}
 
 	async updateArchiveState(
@@ -1078,6 +1133,8 @@ export class AnnotationService {
 			section: record.section,
 			sourceAnchor: record.sourceAnchor,
 			...(record.excerpt ? { excerpt: record.excerpt } : {}),
+			...(record.excerptListed !== undefined ? { excerptListed: record.excerptListed } : {}),
+			...(record.aiEdited ? { aiEdited: true } : {}),
 			...(record.pdfExcerpt ? { pdfExcerpt: record.pdfExcerpt } : {}),
 			...(record.bilingual ? { bilingual: record.bilingual } : {}),
 			aiProvider: record.aiProvider,
@@ -1126,7 +1183,7 @@ export class AnnotationService {
 			record.manualText || "",
 			MANUAL_END,
 			"",
-			"### AI 解释",
+			record.aiEdited ? "### AI 解释（已人工修改）" : "### AI 解释",
 			AI_START,
 			record.aiText || "",
 			AI_END,
@@ -1175,6 +1232,61 @@ export class AnnotationService {
 		const endIndex = content.indexOf(end, startIndex + start.length);
 		if (endIndex === -1) return "";
 		return content.slice(startIndex, endIndex + end.length);
+	}
+
+	private async patchAnnotation(previous: AnnotationRecord, updated: AnnotationRecord): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(previous.annotationPath);
+		if (!(file instanceof TFile)) throw new Error("批注记录不存在");
+		let intended: string | undefined;
+		try {
+			await this.app.vault.process(file, content => {
+				const latest = readAnnotationRecords(content, previous.annotationPath).records.find(r => r.id === previous.id);
+				if (file.path !== previous.annotationPath || this.app.vault.getAbstractFileByPath(file.path) !== file
+					|| !latest || objectDigest(latest) !== objectDigest(previous)) throw new Error("批注保存前已被修改，请重新打开后核对");
+				const oldBlock = this.findRecordBlock(content, previous.id);
+				const eol = oldBlock.includes("\r\n") ? "\r\n" : "\n";
+				const generated = this.renderRecord(updated).replace(/\n/g, eol);
+				const metadata = (block: string): Record<string, unknown> => JSON.parse(block.slice(block.indexOf(META_PREFIX) + META_PREFIX.length).split(eol)[0].replace(/ -->$/, ""));
+				let block = oldBlock.replace(/<!-- agent-dashboard:annotation-meta [^\r\n]+ -->/, () => {
+					const meta = { ...metadata(oldBlock), ...metadata(generated) };
+					if (!updated.color) delete meta.color;
+					if (!updated.aiCli) delete meta.aiCli;
+					if (!updated.aiEdited) delete meta.aiEdited;
+					return META_PREFIX + JSON.stringify(meta).replace(/</g, "\\u003c").replace(/>/g, "\\u003e") + " -->";
+				});
+				const replaceSection = (from: string, to: string, text: string) => {
+					const start = block.indexOf(from) + from.length, end = block.indexOf(to, start);
+					if (start < from.length || end < start || block.indexOf(from, start) >= 0 || block.indexOf(to, end + to.length) >= 0) throw new Error("批注分区已损坏，未写入");
+					block = block.slice(0, start) + eol + text.replace(/\r?\n/g, eol) + eol + block.slice(end);
+				};
+				if (updated.manualText !== previous.manualText) replaceSection(MANUAL_START, MANUAL_END, updated.manualText);
+				if (updated.aiText !== previous.aiText) replaceSection(AI_START, AI_END, updated.aiText);
+				block = block.replace(/^### AI 解释(?:（已人工修改）)?(?=\r?$)/m, updated.aiEdited ? "### AI 解释（已人工修改）" : "### AI 解释");
+				if (updated.color !== previous.color) {
+					block = block.replace(/^- 颜色标注：[^\r\n]*（个人阅读标记）\r?\n/m, "");
+					if (updated.color) block = block.replace(/^- 创建：/m, `- 颜色标注：${ANNOTATION_COLORS[updated.color]}（个人阅读标记）${eol}- 创建：`);
+				}
+				if (!previous.bilingual && updated.bilingual) {
+					const start = generated.indexOf("### 双语来源记录");
+					const end = generated.search(/^### 保存时的(?:原文|译文)上下文/m);
+					const proof = generated.slice(start, end);
+					block = block.replace(/^### (?:保存时的(?:原文|译文)上下文|手动批注)/m, match => proof + match);
+				}
+				if (!previous.excerpt && updated.excerpt) {
+					const context = generated.slice(generated.search(/^### 保存时的(?:原文|译文)上下文/m), generated.indexOf("### 手动批注"));
+					block = block.replace(/^### 手动批注/m, () => context + "### 手动批注");
+				}
+				if (previous.archiveStatus !== updated.archiveStatus) block = block.replace(/^(### 归档\r?\n)- 状态：[^\r\n]*/m, "$1- 状态：待整理");
+				block = block.replace(/^- 更新：[^\r\n]*/m, "- 更新：" + updated.updatedAt);
+				const start = content.indexOf(oldBlock);
+				intended = content.slice(0, start) + block + content.slice(start + oldBlock.length);
+				intended = intended.replace(/^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/, (_match, header: string, body: string, footer: string) => header + body.replace(/^updated: [^\r\n]*/m, "updated: " + yamlString(updated.updatedAt)) + footer);
+				return intended;
+			});
+		} catch (error) {
+			if (intended !== undefined && file.path === previous.annotationPath && this.app.vault.getAbstractFileByPath(file.path) === file && await this.app.vault.read(file) === intended) return;
+			throw error;
+		}
 	}
 
 	private async writeRecord(record: AnnotationRecord): Promise<void> {

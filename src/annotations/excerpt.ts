@@ -7,6 +7,14 @@ export interface ExcerptRevision { algorithm: "markdown-utf8-sha256"; digest: st
 export interface ExcerptReceipt extends ExcerptRevision { version: 1; context: string; contextStart: number; }
 export const excerptRevision = (content: string): ExcerptRevision => ({ algorithm: "markdown-utf8-sha256", digest: bytesDigest(new TextEncoder().encode(content)), length: content.length });
 export const supportsExcerpt = (path: string): boolean => path.length <= 600 && /\.md$/i.test(path) && !path.split("/").some(p => !p || p === "." || p === ".." || /[. ]$/.test(p)) && !/[\\<>:"|?*\x00-\x1f]/.test(path);
+export function validExcerptRef(ref: { annotationPath: string; id: string }): boolean {
+	return /^ann-[a-z0-9-]{1,100}$/.test(ref.id) && supportsExcerpt(ref.annotationPath)
+		&& /^wiki\/annotations\/[^/]+\.md$/.test(ref.annotationPath)
+		&& (!ref.id.startsWith("ann-excerpt-") || (/^ann-excerpt-[a-f0-9]{48}$/.test(ref.id) && ref.annotationPath === `wiki/annotations/${ref.id}.md`));
+}
+export function listedExcerpt(record: Pick<AnnotationRecord, "excerpt" | "pdfExcerpt" | "excerptListed">): boolean {
+	return Boolean(record.excerpt || record.pdfExcerpt) && record.excerptListed !== false;
+}
 export function validExcerpt(value: unknown, anchor: AnnotationRecord["sourceAnchor"], selected: string): value is ExcerptReceipt {
 	const r = value as ExcerptReceipt | undefined;
 	return Boolean(r && r.version === 1 && r.algorithm === "markdown-utf8-sha256" && typeof r.digest === "string" && /^[a-f0-9]{64}$/.test(r.digest)

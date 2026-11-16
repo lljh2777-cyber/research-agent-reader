@@ -93,6 +93,17 @@ let count=0; async function check(name,fn){fixture=make();await fn(fixture);coun
   metadata.text = "{invalid";
   assert.equal((await f.service.captureSelection()).bilingual, undefined);
  });
+ await check("same range shares its identity across ordinary and paired views",async f=>{
+  const paired=selection(f),plain={...paired,bilingual:undefined};
+  const record=await f.service.saveSelectionAnnotation(plain,{color:"green",excerptListed:true});
+  assert.equal((await f.service.findAnnotationForSelection(paired)).id,record.id);
+  const updated=await f.service.updateAnnotation(record,{aiText:"fixture explanation",aiProvider:"fixture"},paired);
+  assert.equal(updated.id,record.id);assert.deepEqual(updated.bilingual,paired.bilingual);
+  assert.equal((await f.service.findAnnotationForSelection(plain)).id,record.id);
+  const paragraph=api.curationParagraphs(f.files.get("wiki/concepts/target.md").text).at(-1);
+  const context=await api.prepareExcerptCuration(f.app,updated,"wiki/concepts/target.md",paragraph.id,false);
+  assert.match(api.excerptAddition(context),/英文对应段落/);
+ });
  await check("curation preview and draft preserve language; formal retrieval masks all mixed material",async f=>{
   const r=await f.service.createExcerpt(selection(f),"own note"),paragraph=api.curationParagraphs(f.files.get("wiki/concepts/target.md").text).at(-1);
   const context=await api.prepareExcerptCuration(f.app,r,"wiki/concepts/target.md",paragraph.id,true);const text=api.excerptAddition(context);assert.match(text,/中文译文摘录/);assert.match(text,/英文对应段落/);assert.match(text,/个人备注/);assert.ok(!api.maskLearningBlocks(text).includes(r.selectedText));assert.ok(!api.maskLearningBlocks(text).includes(r.bilingual.english.text.trim()));

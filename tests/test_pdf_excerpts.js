@@ -78,7 +78,11 @@ let count=0;async function test(name,run){await run();count++;console.log("PASS 
   const f=fixture(),r=await f.creator.createExcerpt(f.selection(),"initial"),first=await f.service.load(r);assert.equal((await f.service.list()).entries.length,1);assert.match(await f.service.status(first),/第 2 页选区一致/);
   const saved=await f.service.saveNote(first,"updated"),complete=await f.service.setCompleted(saved,true);assert.equal(complete.record.archiveStatus,"completed");assert.deepEqual(complete.record.pdfExcerpt,r.pdfExcerpt);
   await assert.rejects(f.service.saveNote(first,"stale"),/其他窗口/);f.bytes=Buffer.from("changed");const history=await f.service.saveNote(complete,"historical memo");assert.equal(history.record.manualText,"historical memo");assert.equal(history.record.archiveStatus,"none");assert.deepEqual(history.record.pdfExcerpt,r.pdfExcerpt);
-  await assert.rejects(f.creator.updateAnnotation(r,{manualText:"legacy route"}),/摘录列表/);await assert.rejects(f.creator.createAnnotation(f.selection(),{}),/保存摘录/);
+  await assert.rejects(f.creator.updateAnnotation(r,{manualText:"stale panel"}),/已被修改/);
+  const edited=await f.creator.updateAnnotation(history.record,{manualText:"edited in panel"});
+  assert.equal(edited.id,r.id);assert.deepEqual(edited.pdfExcerpt,r.pdfExcerpt);
+  assert.equal((await f.service.load(r)).record.manualText,"edited in panel");
+  await assert.rejects(f.creator.updateAnnotation(edited,{color:"blue"}),/可修改个人备注/);await assert.rejects(f.creator.createAnnotation(f.selection(),{}),/保存摘录/);
  });
  await test("projection binds PDF receipts only to a verified PDF with the same path and bytes",async()=>{
   const f=fixture(),r=await f.creator.createExcerpt(f.selection()),parsed=readLibraryAnnotations(f.files.get(r.annotationPath).text,r.annotationPath,()=>({})).records[0];

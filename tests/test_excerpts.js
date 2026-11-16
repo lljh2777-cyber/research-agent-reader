@@ -9,7 +9,7 @@ const {readPaperLibrary}=loadReading("library/reader.ts",mocks);
 function fixture(){
  const source="Clippings/excerpt.md",body="# Results\n\nFirst repeated sentence.\n\nSecond repeated sentence.\n<!-- agent-dashboard:annotation-start quoted -->\n```sample```\n";
  const files=new Map([[source,{file:new TFile(source),text:body}]]),writes=[];
- const app={vault:{getAbstractFileByPath:p=>files.get(p)?.file||null,read:async f=>files.get(f.path).text,
+ const app={vault:{getAbstractFileByPath:p=>files.get(p)?.file||null,getMarkdownFiles:()=>[...files.values()].map(x=>x.file).filter(f=>f instanceof TFile),read:async f=>files.get(f.path).text,
   createFolder:async p=>{if(files.has(p))throw Error("exists");files.set(p,{file:{path:p}});},
   create:async(p,text)=>{if(files.has(p))throw Error("exists");const file=new TFile(p);files.set(p,{file,text});writes.push(p);return file;},
   process:async(f,fn)=>{files.get(f.path).text=fn(files.get(f.path).text);writes.push(f.path);}}};
@@ -63,6 +63,43 @@ let n=0;const test=async(name,fn)=>{await fn();console.log("PASS excerpts: "+nam
   globalThis.window={getSelection:()=>null};globalThis.DOMRect=class{};
   f.app.workspace={getActiveViewOfType:()=>({file:f.files.get(f.source).file,editor:{getSelection:()=>raw,listSelections:()=>[{anchor:{ch:start},head:{ch:start+raw.length}}],posToOffset:p=>p.ch}})};
   try{const selection=await f.service.captureSelection();assert.equal(selection.selectedText,raw.trim());assert.equal(selection.sourceStart,start+1);assert.equal(f.body.slice(selection.sourceStart,selection.sourceEnd),selection.selectedText);assert.ok((await f.service.createExcerpt(selection)).excerpt);}finally{globalThis.window=priorWindow;globalThis.DOMRect=priorRect;}
+ });
+ await test("one saved occurrence combines color, editable text, AI and excerpt; another occurrence stays separate",async()=>{
+  const f=fixture(),s=f.selection(),r=await f.service.saveSelectionAnnotation(s,{color:"blue"});
+  const library=new (loadReading("annotations/excerpt-library.ts",mocks).ExcerptLibraryService)(f.app);
+  assert.equal((await library.list()).entries.length,0);
+  const edited=await f.service.updateAnnotation(r,{manualText:"personal",aiText:"draft explanation",aiProvider:"fixture",aiModel:"fixture/model",excerptListed:true},s);
+  assert.equal(edited.id,r.id);assert.equal(edited.annotationPath,r.annotationPath);
+  const [listed]=(await library.list()).entries;assert.equal(listed.record.id,r.id);assert.equal(listed.record.color,"blue");
+  const modified=await f.service.updateAnnotation(edited,{aiText:"adjusted explanation",color:"none",excerptListed:false});
+  assert.equal(modified.aiEdited,true);assert.equal(modified.aiModel,"fixture/model");assert.equal(modified.manualText,"personal");
+  assert.deepEqual(modified.sourceAnchor,r.sourceAnchor);assert.equal((await library.list()).entries.length,0);
+  await assert.rejects(f.service.updateAnnotation(edited,{manualText:"stale editor"}),/已被修改/);
+  await assert.rejects(f.service.saveSelectionAnnotation(s,{manualText:"duplicate"}),/已有批注/);
+  const second=f.selection("repeated sentence",f.body.lastIndexOf("repeated sentence"));
+  const outcomes=await Promise.allSettled([f.service.saveSelectionAnnotation(second,{color:"red"}),f.service.saveSelectionAnnotation(second,{manualText:"concurrent"})]);
+  assert.equal(outcomes.filter(o=>o.status==="fulfilled").length,1);
+  assert.notEqual((await f.service.findAnnotationForSelection(second)).id,r.id);
+  assert.equal((await f.service.findAnnotationForSelection(s)).aiText,"adjusted explanation");
+  assert.equal(f.files.get(f.source).text,f.body);
+ });
+ await test("old detached annotations can be listed and edited in place beside existing records",async()=>{
+  const f=fixture(),s=f.selection(),second=f.selection("repeated sentence",f.body.lastIndexOf("repeated sentence"));
+  const older=await f.service.createAnnotation(s,{manualText:"legacy"});
+  const other=await f.service.createAnnotation(second,{manualText:"other"});
+  const file=f.files.get(older.annotationPath);
+  file.text=file.text.replace('"createdAt":','"customField":"preserve","createdAt":')+"\nPersonal prose.\n";
+  const edited=await f.service.updateAnnotation(older,{excerptListed:true,color:"purple"},s);
+  assert.equal(edited.id,older.id);assert.equal(edited.annotationPath,other.annotationPath);
+  const library=new (loadReading("annotations/excerpt-library.ts",mocks).ExcerptLibraryService)(f.app);
+  const [listed]=(await library.list()).entries;assert.equal(listed.record.id,older.id);
+  await library.saveNote(listed,"edited via excerpt list");
+  assert.equal((await f.service.findAnnotationForSelection(s)).manualText,"edited via excerpt list");
+  assert.equal((await f.service.findAnnotationForSelection(second)).manualText,"other");
+  assert.ok(file.text.includes('"customField":"preserve"'));assert.ok(file.text.endsWith("Personal prose.\n"));
+  const legacyExcerpt=await f.service.createExcerpt(s);
+  assert.deepEqual((await f.service.findAnnotationsForSelection(s)).map(r=>r.id),[legacyExcerpt.id,older.id]);
+  await assert.rejects(f.service.saveSelectionAnnotation(s,{manualText:"third record"}),/已有批注/);
  });
  await test("library joins a verified text excerpt by its source and marks it changed without rewriting after edits",async()=>{
   const f=fixture(),r=await f.service.createExcerpt(f.selection(),"memo"),empty={read:async()=>null,list:async()=>[]};

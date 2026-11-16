@@ -666,10 +666,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!this.annotationService) return;
 		try {
 			const selection = await this.annotationService.captureSelection();
-			const record = await this.annotationService.findAnnotationForSelection(selection);
+			const [record, ...historical] = await this.annotationService.findAnnotationsForSelection(selection);
 			this.openAnnotationPopover({
 				anchorRect: selection.anchorRect,
-				...(record ? { record } : { selection }),
+				selection, record, historical,
 			});
 		} catch (error) {
 			new Notice(error instanceof Error ? error.message : String(error));
@@ -846,9 +846,9 @@ export default class AgentDashboardPlugin extends Plugin {
 		anchorRect: DOMRect;
 		selection?: AnnotationSelection;
 		record?: AnnotationRecord;
+		historical?: AnnotationRecord[];
 	}): void {
-		if (!this.annotationService) return;
-		this.annotationPopover?.close();
+		if (!this.annotationService || (this.annotationPopover && !this.annotationPopover.requestClose())) return;
 		const popover = new AnnotationPopover({
 			app: this.app,
 			service: this.annotationService,

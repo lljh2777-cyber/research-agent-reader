@@ -46,10 +46,13 @@ export interface AnnotationRecord {
 	/** Detached annotations retain their source position without editing the source. */
 	sourceAnchor?: { start: number; end: number; prefix: string; suffix: string };
 	excerpt?: ExcerptReceipt;
+	/** Legacy excerpts without this flag remain listed. */
+	excerptListed?: boolean;
 	pdfExcerpt?: PdfExcerptReceipt;
 	bilingual?: BilingualReceipt;
 	manualText: string;
 	aiText: string;
+	aiEdited?: boolean;
 	aiProvider: string;
 	aiModel: string;
 	aiCli?: AnnotationCliReceipt;
@@ -69,6 +72,8 @@ export interface AnnotationExplanation {
 }
 
 export interface AnnotationDraft {
+	excerptListed?: boolean;
+	aiEdited?: boolean;
 	color?: AnnotationColorChoice;
 	manualText?: string;
 	aiText?: string;

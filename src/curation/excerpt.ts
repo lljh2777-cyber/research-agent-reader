@@ -1,6 +1,6 @@
 import { parseYaml, type App } from "obsidian";
 import { ExcerptLibraryService, type ExcerptRef } from "../annotations/excerpt-library";
-import { excerptMatches, prepareExcerpt, supportsExcerpt } from "../annotations/excerpt";
+import { excerptMatches, prepareExcerpt, supportsExcerpt, validExcerptRef } from "../annotations/excerpt";
 import { contentHash } from "../retrieval/chunks";
 import { objectDigest } from "../papers/identity";
 import { noteIdentifiers } from "../papers/note-identity";
@@ -51,7 +51,7 @@ export function validateExcerptContext(context: CurationContext): void {
 	if (!input || context.answerExcerpt || input.version !== 1 || !r || !r.sourceAnchor || (!pdf && (!r.excerpt || r.pdfExcerpt || input.pdfSource || !supportsExcerpt(r.sourcePath)))
 		|| !["markdown", "article", "structured", "pdf"].includes(input.sourceMode) || typeof input.includeManual !== "boolean"
 		|| typeof r.manualText !== "string" || r.manualText.length > 10000 || input.includeManual && !r.manualText.trim()
-		|| !/^ann-excerpt-[a-f0-9]{48}$/.test(r.id) || r.annotationPath !== `wiki/annotations/${r.id}.md` || !/^[a-f0-9]{64}$/.test(input.snapshot.digest)
+		|| !validExcerptRef(r) || !/^[a-f0-9]{64}$/.test(input.snapshot.digest)
 		|| context.ruleVersion !== rule(context) || context.sessionId !== "" || context.nodeIds.length !== 0 || context.learningHash !== input.snapshot.digest
 		|| context.backendId !== "none" || context.model !== "" || context.prompt !== "" || context.evidence.length !== 0 || !context.sourceCompatible
 		|| context.source.path !== r.sourcePath || context.source.kind !== (input.sourceMode === "markdown" ? "article" : input.sourceMode)
@@ -128,8 +128,9 @@ export async function verifyExcerptCuration(app: App, context: CurationContext, 
 		const original = await source(app, r.sourcePath, signal); sourceText = original.text;
 		if (original.mode !== input.sourceMode || objectDigest(original.source) !== objectDigest(context.source) || !excerptMatches(r, original.text)) throw new Error("原文版本已变化，请重新核对摘录");
 		const anchor = r.sourceAnchor!, receipt = r.excerpt!;
-		const prepared = prepareExcerpt({ sourcePath: r.sourcePath, selectedText: r.selectedText, sourceStart: anchor.start, sourceEnd: anchor.end, prefix: anchor.prefix, suffix: anchor.suffix, sourceRevision: { algorithm: receipt.algorithm, digest: receipt.digest, length: receipt.length }, bilingual: r.bilingual, section: "", context: "", isTableCell: false, anchorRect: {} as DOMRect }, original.text);
-		if (prepared.id !== r.id) throw new Error("摘录 ID 与准确位置不一致");
+		const selection = { sourcePath: r.sourcePath, selectedText: r.selectedText, sourceStart: anchor.start, sourceEnd: anchor.end, prefix: anchor.prefix, suffix: anchor.suffix, sourceRevision: { algorithm: receipt.algorithm, digest: receipt.digest, length: receipt.length }, bilingual: r.bilingual, section: "", context: "", isTableCell: false, anchorRect: {} as DOMRect };
+		const prepared = prepareExcerpt(selection, original.text);
+		if (r.id.startsWith("ann-excerpt-") && prepared.id !== r.id && prepareExcerpt({ ...selection, bilingual: undefined }, original.text).id !== r.id) throw new Error("摘录 ID 与准确位置不一致");
 	}
 	const target = await read(app, context.target.path, 1000000);
 	if (contentHash(target) !== targetHash) throw new Error("目标笔记已变化，请重新预览");

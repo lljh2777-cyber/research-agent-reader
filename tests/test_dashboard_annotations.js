@@ -97,11 +97,11 @@ assert.match(runtimeSettingsSource, /annotationWebSearchTimeoutSeconds:\s*30/);
 assert.match(runtimeSettingsSource, /claudeConfigSource:\s*"official"/);
 assert.match(runtimeSettingsSource, /codexConfigSource:\s*"official"/);
 assert.match(pluginSource, /archiveStatus:\s*"pending"/);
-assert.match(popoverSource, /保留并存档/);
-assert.match(popoverSource, /手动批注/);
+assert.match(popoverSource, /归档/);
+assert.match(popoverSource, /个人备注/);
 assert.match(popoverSource, /AI 解释/);
 assert.match(popoverSource, /MarkdownRenderer\.render/);
-assert.match(popoverSource, /cancel\.addEventListener\("click", \(\) => this\.renderChooser\(\)\)/);
+
 assert.match(popoverSource, /data-agent-drag-handle/);
 assert.match(popoverSource, /header\.addEventListener\("pointerdown"/);
 assert.match(popoverSource, /document\.addEventListener\("pointermove"/);
