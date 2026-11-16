@@ -49,7 +49,49 @@ let count=0; async function check(name,fn){fixture=make();await fn(fixture);coun
  });
  await check("forged language/ranges/snapshots fail; legacy translated record stays unconfirmed",async f=>{
   const s=selection(f);for(const modify of [r=>r.language="en",r=>r.selection.start++,r=>r.english.text="invented text",r=>r.root="Clippings/other"]){const bad=structuredClone(s);modify(bad.bilingual);await assert.rejects(f.service.createExcerpt(bad),/凭据|变化/);}
-  const legacy={...s};delete legacy.bilingual;await assert.rejects(f.service.createExcerpt(legacy),/未确认/);assert.equal(api.quoteLabel(legacy),"译文摘录（配对未确认）");
+  const legacy={...s};delete legacy.bilingual;await assert.rejects(f.service.generateExplanation(legacy,()=>{}),/未确认/);assert.equal(api.quoteLabel(legacy),"译文摘录（配对未确认）");
+ });
+ await check("standalone translated Markdown outside Clippings uses valid evidence or saves locally without it", async f => {
+  const root = "translations/pair", move = name => {
+   const old = f.files.get(f.root + "/" + name), p = root + "/" + name;
+   f.files.set(p, { file: new TFile(p), text: old.text });
+   return f.files.get(p);
+  };
+  const en = move("paper.md"), zh = move("paper.zh-CN.md"), metadata = move("translation.json");
+  const selected = "所选文字", start = zh.text.lastIndexOf(selected), end = start + selected.length;
+  globalThis.window = { getSelection: () => null };
+  globalThis.DOMRect = class {};
+  f.app.workspace = { getActiveViewOfType: () => ({ file: zh.file, editor: {
+   getSelection: () => selected, listSelections: () => [{ anchor: { ch: start }, head: { ch: end } }], posToOffset: p => p.ch,
+  } }) };
+  const paired = await f.service.captureSelection();
+  assert.equal(paired.bilingual.english.text, "Repeated selected words.\n");
+  assert.equal(paired.bilingual.files.zh, zh.file.path);
+  assert.ok(await api.verifyBilingual(f.app, { ...paired, sourceAnchor: { start, end } }));
+
+  en.text += "\nEnglish version changed.";
+  const unpaired = await f.service.captureSelection();
+  assert.equal(unpaired.bilingual, undefined);
+  await assert.rejects(f.service.generateExplanation(unpaired, () => assert.fail("AI started")), /对应英文段落未确认/);
+  await assert.rejects(f.service.createAnnotation(unpaired, { aiText: "no proof" }), /对应英文段落未确认/);
+  const manual = await f.service.createAnnotation(unpaired, { manualText: "personal" });
+  assert.deepEqual([manual.sourceAnchor.start, manual.sourceAnchor.end], [start, end]);
+  const colored = await f.service.updateAnnotation(manual, { color: "purple" });
+  const reopened = await f.service.findAnnotationForSelection(await f.service.captureSelection());
+  assert.equal(reopened.id, colored.id);
+  assert.equal(reopened.color, "purple");
+  assert.equal(reopened.manualText, "personal");
+  const excerpt = await f.service.createExcerpt(unpaired, "local excerpt");
+  assert.equal(api.quoteLabel(excerpt), "译文摘录（配对未确认）");
+  assert.equal(excerpt.bilingual, undefined);
+  const paragraph = api.curationParagraphs(f.files.get("wiki/concepts/target.md").text).at(-1);
+  const preview = api.excerptAddition(await api.prepareExcerptCuration(f.app, excerpt, "wiki/concepts/target.md", paragraph.id, true));
+  assert.match(preview, /译文摘录（配对未确认）/);
+  assert.ok(!api.maskLearningBlocks(preview).includes(selected));
+  assert.equal(zh.text, f.zh);
+  assert.ok(f.writes.every(p => p.startsWith("wiki/annotations/")));
+  metadata.text = "{invalid";
+  assert.equal((await f.service.captureSelection()).bilingual, undefined);
  });
  await check("curation preview and draft preserve language; formal retrieval masks all mixed material",async f=>{
   const r=await f.service.createExcerpt(selection(f),"own note"),paragraph=api.curationParagraphs(f.files.get("wiki/concepts/target.md").text).at(-1);

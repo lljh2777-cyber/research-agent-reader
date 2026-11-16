@@ -10,7 +10,7 @@ import { readingPathCode } from "../reading/export";
 import { curationParagraphs, curationTarget, protectedPrefix } from "./policy";
 import type { CurationContext, CurationSuggestion } from "./types";
 import { PDF_EXCERPT_RULE, readPdfExcerptSource, validatePdfExcerptContext, pdfExcerptTargetCompatible } from "./pdf-excerpt";
-import { bilingualDescription, quoteLabel, validBilingualReceipt, verifyBilingual } from "../annotations/bilingual";
+import { bilingualDescription, isTranslationPath, quoteLabel, validBilingualReceipt, verifyBilingual } from "../annotations/bilingual";
 import { literalLearningBlock } from "../learning/curated-block";
 
 const RULE = "excerpt-curation-v1";
@@ -21,10 +21,10 @@ const literal = (text: string): string => text.replace(/\\/g, "\\\\").replace(/(
 export function excerptAddition(context: CurationContext): string {
 	const input = context.excerpt!, r = input.snapshot.record;
 	const quote = (value: string) => value.split(/\r?\n/).map(line => "> " + literal(line)).join("\n");
-	if (r.bilingual) return literalLearningBlock(quoteLabel(r) + "（双语阅读材料，待核对，不作正式论文证据）：\n\n" + r.selectedText
+	if (r.bilingual || isTranslationPath(r.sourcePath)) return literalLearningBlock(quoteLabel(r) + "（双语阅读材料，待核对，不作正式论文证据）：\n\n" + r.selectedText
 		+ "\n\n来源：" + readingPathCode(r.sourcePath) + `；字符 ${r.sourceAnchor!.start}–${r.sourceAnchor!.end}；摘录 ` + readingPathCode(r.annotationPath)
-		+ "\n\n" + bilingualDescription(r.bilingual)
-		+ (r.bilingual.english ? "\n\n英文对应段落（结构对应，语义待核对）：\n\n" + r.bilingual.english.text : "\n\n英文对应段落未确认。")
+		+ (r.bilingual ? "\n\n" + bilingualDescription(r.bilingual) : "")
+		+ (r.bilingual?.english ? "\n\n英文对应段落（结构对应，语义待核对）：\n\n" + r.bilingual.english.text : "\n\n英文对应段落未确认。")
 		+ (input.includeManual ? "\n\n个人备注（用户记录，未作论文证据核验）：\n\n" + r.manualText : ""));
 	if (r.pdfExcerpt) {
 		const receipt = r.pdfExcerpt, proof = input.pdfSource!;
@@ -93,6 +93,7 @@ function compatible(context: CurationContext, sourceText: string, targetText: st
 	const metadata = meta(targetText);
 	if ([metadata.depth, metadata.reading_depth, metadata.status].includes("metadata-only")) throw new Error("目标仅有元数据，请先准备有依据的来源笔记");
 	if (context.source.kind === "pdf") { pdfExcerptTargetCompatible(context, metadata); return; }
+	if (isTranslationPath(context.source.path) && !context.excerpt?.snapshot.record.bilingual) throw new Error("配对未确认的译文摘录可整理到概念、方法或综合笔记");
 	if (context.source.path.startsWith("Clippings/")) throw new Error("剪藏摘录可整理到概念、方法或综合笔记；不能据此补写论文来源笔记");
 	if (context.source.kind === "structured") { if (!structuredTargetCompatible(context.source, context.target.path, metadata)) throw new Error("JATS 原文与目标论文或版本不一致"); return; }
 	const sourceIds = noteIdentifiers(meta(sourceText)), targetIds = noteIdentifiers(metadata);

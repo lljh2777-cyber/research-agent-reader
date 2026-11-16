@@ -24,7 +24,7 @@ export class ExcerptBrowser extends Modal {
 	private searchEl!: HTMLInputElement;
 	private refreshEl!: HTMLButtonElement;
 	private get dirty(): boolean { return Boolean(this.selected && this.draft !== this.selected.record.manualText); }
-	constructor(app: App, private readonly initial?: ExcerptRef, private readonly didClose?: () => void, openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>, private readonly curate?: (ref: ExcerptRef) => void, private readonly history?: ExcerptHistoryHost, private readonly answers?: () => void, private readonly knowledgeDraft?: (ref: ExcerptRef) => void, openBilingual?: (record: AnnotationRecord, signal?: AbortSignal) => Promise<void>) { super(app); this.service = new ExcerptLibraryService(app, openMarkdown, openBilingual); }
+	constructor(app: App, private readonly initial?: ExcerptRef, private readonly didClose?: () => void, openMarkdown?: (file: TFile, mode: "source" | "preview") => Promise<WorkspaceLeaf>, private readonly curate?: (ref: ExcerptRef) => void, private readonly history?: ExcerptHistoryHost, private readonly answers?: () => void, private readonly knowledgeDraft?: (ref: ExcerptRef) => void, openBilingual?: (record: AnnotationRecord, signal?: AbortSignal) => Promise<void>) { super(app); this.service = new ExcerptLibraryService(app, openMarkdown, openBilingual); }
 	onOpen(): void {
 		this.closed = false; this.setTitle("摘录"); this.modalEl.addClass("rar-excerpt-modal");
 		this.contentEl.createEl("p", { text: "查找保存的原句与个人备注。选择一条摘录后核对来源；备注可以独立修改。", cls: "rar-library-muted" });
@@ -164,7 +164,10 @@ export class ExcerptBrowser extends Modal {
 		});
 		this.button(navigation, "回到原文", () => {
 			if (this.dirty) { this.message("请先保存或放弃备注草稿后再回到原文。"); return; }
-			void this.run(async signal => { await this.service.openSource(record, signal); signal.throwIfAborted(); this.dispose(); });
+			void this.run(async signal => {
+				await this.service.openSource(record, signal, () => this.dispose());
+				if (!this.closed) { signal.throwIfAborted(); this.dispose(); }
+			});
 		});
 		this.button(navigation, "打开摘录文档", () => {
 			if (this.dirty) { this.message("请先保存或放弃备注草稿后再打开文档。"); return; }

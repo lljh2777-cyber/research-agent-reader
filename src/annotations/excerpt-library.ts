@@ -1,4 +1,5 @@
 import { App, MarkdownView, TFile, type WorkspaceLeaf } from "obsidian";
+import { renderedAnnotationRanges } from "./rendered-source-range";
 import { readAnnotationRecords } from "./annotation-service";
 import { excerptMatches, excerptRevision, prepareExcerpt } from "./excerpt";
 import { openPdfExcerpt, pdfExcerptStatus } from "./native-pdf-excerpt";
@@ -82,7 +83,7 @@ function updateOrganizationLabel(next: string, completed: boolean): string {
 }
 
 export class ExcerptLibraryService {
-	constructor(private readonly app: App, private readonly openMarkdown?: (file: TFile) => Promise<WorkspaceLeaf>, private readonly openBilingual?: (record: AnnotationRecord, signal?: AbortSignal) => Promise<void>) {}
+	constructor(private readonly app: App, private readonly openMarkdown?: (file: TFile, mode: "source" | "preview") => Promise<WorkspaceLeaf>, private readonly openBilingual?: (record: AnnotationRecord, signal?: AbortSignal) => Promise<void>) {}
 	async load(ref: ExcerptRef, signal?: AbortSignal): Promise<ExcerptSnapshot> {
 		const stable = { annotationPath: ref.annotationPath, id: ref.id };
 		signal?.throwIfAborted();
@@ -147,7 +148,7 @@ export class ExcerptLibraryService {
 		if (saved !== intended || file.path !== expected.record.annotationPath || this.app.vault.getAbstractFileByPath(file.path) !== file) throw new Error("写入后摘录再次发生变化；草稿已保留，请重新读取核对");
 		return readExcerptSnapshot(saved, expected.record);
 	}
-	async openSource(ref: ExcerptRef, signal?: AbortSignal): Promise<void> {
+	async openSource(ref: ExcerptRef, signal?: AbortSignal, beforePreviewSelection?: () => void): Promise<void> {
 		const snapshot = await this.load(ref, signal), record = snapshot.record;
 		if (!record.pdfExcerpt) await verifyBilingual(this.app, record, signal);
 		if (record.pdfExcerpt) {
@@ -168,13 +169,43 @@ export class ExcerptLibraryService {
 		if (prepared.id !== record.id) throw new Error("摘录位置与记录 ID 不一致，请复查文档");
 		signal?.throwIfAborted();
 		if (record.bilingual && this.openBilingual) { await this.openBilingual(record, signal); if ((await this.load(record, signal)).digest !== snapshot.digest) throw new Error("摘录在打开期间变化，请重新读取"); return; }
-		const leaf = this.openMarkdown ? await this.openMarkdown(file) : this.app.workspace.getLeaf("tab");
-		if (!this.openMarkdown) await leaf.openFile(file, { active: true, state: { mode: "source" } });
+		// Opening CRLF files in Obsidian's editor can write normalized line endings back to disk.
+		const mode = content.includes("\r\n") ? "preview" : "source";
+		const leaf = this.openMarkdown ? await this.openMarkdown(file, mode) : this.app.workspace.getLeaf("tab");
+		if (!this.openMarkdown) await leaf.openFile(file, { active: true, state: { mode } });
 		signal?.throwIfAborted();
 		const view = leaf.view;
-		if (!(view instanceof MarkdownView) || view.file?.path !== record.sourcePath || view.editor.getValue() !== content) throw new Error("原文已打开，但编辑器文本不一致，未定位选区");
+		if (!(view instanceof MarkdownView) || view.file?.path !== record.sourcePath) throw new Error("原文已打开，但编辑器文本不一致，未定位选区");
+		if (mode === "source" && view.editor.getValue() !== content) throw new Error("原文已打开，但编辑器文本不一致，未定位选区");
 		if ((await this.load(record, signal)).digest !== snapshot.digest || await this.app.vault.read(file) !== content) throw new Error("打开期间来源或摘录已变化，未定位选区");
 		signal?.throwIfAborted();
+		if (mode === "preview") {
+			const line = content.slice(0, anchor.start).split("\n").length - 1;
+			view.previewMode.applyScroll(line);
+			let range: Range | undefined;
+			for (let attempt = 0; attempt < 40; attempt++) {
+				signal?.throwIfAborted();
+				if (leaf.view !== view || view.file?.path !== record.sourcePath || view.getMode() !== "preview") throw new Error("阅读视图已切换，未定位选区");
+				const roots = [...view.previewMode.containerEl.querySelectorAll<HTMLElement>("[data-agent-annotation-source]")]
+					.filter(el => el.dataset.agentAnnotationSource === record.sourcePath);
+				const ranges = renderedAnnotationRanges(roots, content, record);
+				if (ranges.length === 1) { range = ranges[0]; break; }
+				if (ranges.length > 1) break;
+				await new Promise(resolve => setTimeout(resolve, 50));
+			}
+			if (!range) throw new Error("原文已打开，阅读视图未找到唯一对应的选区");
+			if ((await this.load(record, signal)).digest !== snapshot.digest || await this.app.vault.read(file) !== content) throw new Error("打开期间来源或摘录已变化，未定位选区");
+			signal?.throwIfAborted();
+			if (leaf.view !== view || view.file?.path !== record.sourcePath || !view.previewMode.containerEl.contains(range.commonAncestorContainer)) throw new Error("阅读视图已切换，未定位选区");
+			// Close the excerpt modal first so its focus restoration cannot clear the selection.
+			beforePreviewSelection?.();
+			const selection = view.previewMode.containerEl.ownerDocument.getSelection();
+			selection?.removeAllRanges();
+			selection?.addRange(range);
+			const element = range.startContainer.nodeType === 1 ? range.startContainer as Element : range.startContainer.parentElement;
+			element?.scrollIntoView({ block: "center" });
+			return;
+		}
 		if (view.file?.path !== record.sourcePath || view.editor.getValue() !== content) throw new Error("编辑器内容已变化，未定位选区");
 		const from = view.editor.offsetToPos(anchor.start), to = view.editor.offsetToPos(anchor.end);
 		view.editor.setSelection(from, to); view.editor.scrollIntoView({ from, to }, true); view.editor.focus();

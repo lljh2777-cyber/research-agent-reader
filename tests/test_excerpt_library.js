@@ -64,7 +64,34 @@ let count=0;const test=async(name,run)=>{await run();count++;console.log("PASS e
   const c=new AbortController();c.abort();await assert.rejects(f.service.list(c.signal),/abort/i);
  });
  await test("exact second occurrence opens in Markdown and selects Unicode-aware raw offsets for each source root",async()=>{
-  for(const source of ["Clippings/repeated.md","papers/mineru/article.md","papers/jats/article.md"]){const f=await fixture("\r\n",source);await f.service.openSource(f.record);assert.deepEqual(f.opened,[source]);assert.equal(f.selections.length,1);assert.equal(f.selections[0].a.line,4);assert.equal(f.selections[0].a.ch,4);assert.equal(f.selections[0].b.ch,21);assert.equal(f.writes.length,1);}
+  for(const source of ["Clippings/repeated.md","papers/mineru/article.md","papers/jats/article.md"]){const f=await fixture("\n",source);await f.service.openSource(f.record);assert.deepEqual(f.opened,[source]);assert.equal(f.selections.length,1);assert.equal(f.selections[0].a.line,4);assert.equal(f.selections[0].a.ch,4);assert.equal(f.selections[0].b.ch,21);assert.equal(f.writes.length,1);}
+ });
+ await test("capture in an LF editor uses the second occurrence in the CRLF source",async()=>{
+  const f=await fixture("\r\n","translations/loose.zh-CN.md"),text=f.body.replace(/\r\n/g,"\n");
+  const leaf=f.app.workspace.getLeaf(),open=leaf.openFile;
+  leaf.openFile=async file=>{
+   await open.call(leaf,file);
+   Object.assign(leaf.view.editor,{
+    getValue:()=>text,
+    offsetToPos:i=>({line:text.slice(0,i).split("\n").length-1,ch:i-(text.lastIndexOf("\n",i-1)+1)}),
+   });
+  };
+  f.app.workspace.getLeaf=()=>leaf;
+  await leaf.openFile(f.files.get(f.source).file);
+  const a={line:4,ch:4},b={line:4,ch:21};
+  Object.assign(leaf.view.editor,{
+   getSelection:()=>f.record.selectedText,
+   listSelections:()=>[{anchor:a,head:b}],
+   posToOffset:p=>text.split("\n").slice(0,p.line).join("\n").length+1+p.ch,
+  });
+  f.app.workspace.getActiveViewOfType=()=>leaf.view;
+  const previousWindow=globalThis.window,previousRect=globalThis.DOMRect;
+  globalThis.window={getSelection:()=>null};globalThis.DOMRect=class{};
+  try {
+   const captured=await new AnnotationService(f.app,{}).captureSelection();
+   assert.equal(captured.sourceStart,f.start);
+   assert.equal(captured.sourceEnd,f.record.sourceAnchor.end);
+  } finally {globalThis.window=previousWindow;globalThis.DOMRect=previousRect;}
  });
  await test("stale/missing sources, changed editor content and cancellation never select another paragraph",async()=>{
   const f=await fixture();f.files.get(f.source).text+=" change";await assert.rejects(f.service.openSource(f.record),/版本已变化/);assert.equal(f.opened.length,0);

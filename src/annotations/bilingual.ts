@@ -48,9 +48,24 @@ export async function readBilingual(app: App, path: string, signal?: AbortSignal
 	const io = new FileSourceStorage(adapter.getBasePath());
 	return selected ? loadSelectedBilingualDocument(io, selected, signal) : loadBilingualDocument(io, path, signal);
 }
+/** Optional evidence for a single Markdown tab. A missing pair never invalidates the local selection. */
+export async function readStandaloneBilingual(app: App, path: string): Promise<BilingualDocument | undefined> {
+	if (!requiresBilingualProof(app, path)) return;
+	try {
+		if (isBilingualEntry(path)) return await readBilingual(app, path);
+		if (path.split("/").pop() !== "paper.zh-CN.md") return;
+		const folder = path.slice(0, path.lastIndexOf("/") + 1);
+		if (!app.vault.getAbstractFileByPath(folder + "translation.json")) return;
+		const doc = await readBilingual(app, path, undefined, { en: folder + "paper.md", zh: path });
+		if (doc.syncAvailable) return doc;
+	} catch {
+		// Broken, missing or changing companion files cannot provide English evidence.
+	}
+}
+
 export async function verifyBilingual(app: App, record: Pick<AnnotationRecord, "sourcePath" | "selectedText" | "sourceAnchor" | "bilingual">, signal?: AbortSignal): Promise<BilingualDocument | undefined> {
 	const r = record.bilingual;
-	if (!r) { if (requiresBilingualProof(app, record.sourcePath)) throw new Error("双语配对凭据未确认，请重新划选；历史记录仍保留"); return; }
+	if (!r) return;
 	if (!validBilingualReceipt(r, record.sourcePath, record.sourceAnchor, record.selectedText)) throw new Error("双语批注来源凭据无效");
 	const doc = await readBilingual(app, record.sourcePath, signal, r.files), file = doc.files[r.language], block = file.blocks.find(b => b.id === r.block.id);
 	if (!block || file.text.slice(r.selection.start, r.selection.end) !== record.selectedText || objectDigest(bilingualReceipt(doc, r.language, block, r.selection.start, r.selection.end)) !== objectDigest(r)) throw new Error("双语资料版本已变化；保留历史批注，请重新打开核对");

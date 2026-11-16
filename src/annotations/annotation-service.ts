@@ -15,7 +15,7 @@ import { codeBuddyTextAdapter } from "../runtime/codebuddy-text";
 import { qoderTextAdapter } from "../runtime/qoder-text";
 import { openCodeTextAdapter } from "../runtime/opencode-text";
 import { objectDigest } from "../papers/identity";
-import { bilingualDescription, bilingualReceipt, bilingualSelectionContext, quoteLabel, readBilingual, requiresBilingualProof, validBilingualReceipt, verifyBilingual } from "./bilingual";
+import { bilingualDescription, bilingualReceipt, bilingualSelectionContext, isTranslationPath, quoteLabel, readStandaloneBilingual, requiresBilingualProof, validBilingualReceipt, verifyBilingual } from "./bilingual";
 import { isDetachedMarkdownSelection } from "./manual-source";
 import { annotationDisplayText, annotationEvidenceText, captureMarkdownRange, expandMarkdownSelection, markdownNeedsDetached, validSelectionSize } from "./markdown-selection";
 import { excerptMatches, excerptRevision, prepareExcerpt, supportsExcerpt, validExcerpt } from "./excerpt";
@@ -105,7 +105,7 @@ function yamlString(value: string): string {
 }
 
 export function usesDetachedAnnotations(sourcePath: string): boolean {
-	return /^(papers|Clippings)\//i.test(normalizePath(sourcePath));
+	return isTranslationPath(sourcePath) || /^(papers|Clippings)\//i.test(normalizePath(sourcePath));
 }
 
 function sourceReference(sourcePath: string): string {
@@ -302,14 +302,22 @@ export class AnnotationService {
 	async dispose(): Promise<void> { await this.cliText.dispose(); }
 
 	private async selectionProvenance(path: string, content: string, start: number, end: number, captured?: ReturnType<typeof bilingualSelectionContext>): Promise<Pick<AnnotationSelection, "bilingual">> {
-		if (!captured && !requiresBilingualProof(this.app, path)) return {};
-		const doc = captured?.document || await readBilingual(this.app, path), language = captured?.language || (path === doc.files.en.path ? "en" : "zh-CN");
+		const doc = captured?.document || await readStandaloneBilingual(this.app, path);
+		if (!doc) return {};
+		const language = captured?.language || (path === doc.files.en.path ? "en" : "zh-CN");
 		const file = doc.files[language], block = captured?.block || file.blocks.find(b => start >= b.start && end <= b.end);
-		if (file.path !== path || file.text !== content || !block || start < block.start || end > block.end) throw new Error("选区与双语资料版本或段落不一致，请重新打开划选");
-		const bilingual = bilingualReceipt(doc, language, block, start, end);
-		await verifyBilingual(this.app, { sourcePath: path, selectedText: content.slice(start, end), sourceAnchor: { start, end, prefix: "", suffix: "" }, bilingual });
-		return { bilingual };
+		if (file.path !== path || file.text !== content || !block || start < block.start || end > block.end) {
+			if (!captured) return {};
+			throw new Error("选区与双语资料版本或段落不一致，请重新打开划选");
+		}
+		return { bilingual: bilingualReceipt(doc, language, block, start, end) };
 	}
+	private requireExplanationProof(source: Pick<AnnotationSelection, "sourcePath" | "bilingual">): void {
+		if (!source.bilingual && requiresBilingualProof(this.app, source.sourcePath)) {
+			throw new Error("对应英文段落未确认。可保存手动批注、颜色和摘录；请核对双语配对后重新划选以使用 AI 对照解释");
+		}
+	}
+
 	private async verifySelection(selection: AnnotationSelection, signal?: AbortSignal): Promise<void> {
 		await verifyBilingual(this.app, { ...selection, sourceAnchor: { start: selection.sourceStart, end: selection.sourceEnd, prefix: selection.prefix, suffix: selection.suffix } }, signal);
 	}
@@ -452,8 +460,12 @@ export class AnnotationService {
 		const content = await this.app.vault.read(view.file);
 		const offsetHead = editor.posToOffset(ranges[0].head);
 		const offsetAnchor = editor.posToOffset(ranges[0].anchor);
-		let sourceStart = Math.min(offsetHead, offsetAnchor);
-		let sourceEnd = Math.max(offsetHead, offsetAnchor);
+		// The editor may use LF offsets for a file whose source uses CRLF.
+		const usesCRLF = content.includes("\r\n");
+		const sourceHead = usesCRLF ? lineOffset(content, ranges[0].head.line) + ranges[0].head.ch : offsetHead;
+		const sourceAnchor = usesCRLF ? lineOffset(content, ranges[0].anchor.line) + ranges[0].anchor.ch : offsetAnchor;
+		let sourceStart = Math.min(sourceHead, sourceAnchor);
+		let sourceEnd = Math.max(sourceHead, sourceAnchor);
 		if (
 			!Number.isFinite(sourceStart)
 			|| !Number.isFinite(sourceEnd)
@@ -572,13 +584,14 @@ export class AnnotationService {
 	): Promise<AnnotationRecord> {
 		if (selection.pdfExcerpt) throw new Error("PDF 选区请使用保存摘录");
 		selection = { ...selection, bilingual: selection.bilingual && structuredClone(selection.bilingual) };
+		if (draft.aiText?.trim()) this.requireExplanationProof(selection);
 		await this.verifySelection(selection);
 		const sourceFile = this.app.vault.getAbstractFileByPath(selection.sourcePath);
 		if (!(sourceFile instanceof TFile)) throw new Error("原始 Markdown 文件不存在");
 		const color = annotationColor(draft.color);
 		const detached = !!color || usesDetachedAnnotations(sourceFile.path) || !!selection.bilingual || selection.detached === true || markdownNeedsDetached(selection.selectedText);
 		const content = await this.app.vault.read(sourceFile);
-		if (selection.bilingual) prepareExcerpt(selection, content);
+		if (selection.bilingual || isTranslationPath(selection.sourcePath)) prepareExcerpt(selection, content);
 		const location = this.relocateSelection(content, selection);
 		await this.ensureFolder(ANNOTATION_FOLDER);
 		const annotationPath = await this.resolveAnnotationPath(sourceFile);
@@ -676,7 +689,10 @@ export class AnnotationService {
 		if (record.excerpt || record.pdfExcerpt) throw new Error("请从摘录列表编辑个人备注，原文凭据保持不变");
 		const latest = await this.loadAnnotation(record.annotationPath, record.id);
 		if (!latest) throw new Error("批注记录不存在或已被修改");
-		if (draft.aiText !== undefined) await verifyBilingual(this.app, latest);
+		if (draft.aiText !== undefined) {
+			if (draft.aiText.trim()) this.requireExplanationProof(latest);
+			await verifyBilingual(this.app, latest);
+		}
 		const updated: AnnotationRecord = {
 			...latest,
 			...(draft.color !== undefined ? { color: annotationColor(draft.color) } : {}),
@@ -744,6 +760,7 @@ export class AnnotationService {
 		selection: Pick<AnnotationSelection, "selectedText" | "section" | "context" | "sourcePath" | "bilingual">,
 		registerCancel: (cancel: () => void) => void,
 	): Promise<AnnotationExplanation> {
+		this.requireExplanationProof(selection);
 		const proof = selection.bilingual;
 		const verified = await verifyBilingual(this.app, { ...selection, sourceAnchor: proof ? { ...proof.selection, prefix: "", suffix: "" } : undefined });
 		if (proof && !proof.english) throw new Error(proof.files ? "手动配对尚未确认对应英文段落；可保存个人批注与摘录，AI 对照解释需先核对配对记录" : "对应英文段落未确认或超过请求上限；请核对配对后重试");
@@ -929,6 +946,7 @@ export class AnnotationService {
 	async getRecordExplanationContext(
 		record: AnnotationRecord,
 	): Promise<Pick<AnnotationSelection, "selectedText" | "section" | "context" | "sourcePath" | "bilingual">> {
+		this.requireExplanationProof(record);
 		await verifyBilingual(this.app, record);
 		const file = this.app.vault.getAbstractFileByPath(record.sourcePath);
 		let context = record.selectedText;
@@ -1100,7 +1118,7 @@ export class AnnotationService {
 			`- 创建：${record.createdAt}`,
 			`- 更新：${record.updatedAt}`,
 			...(record.bilingual ? ["", "### 双语来源记录", bilingualDescription(record.bilingual), ...(record.bilingual.english ? ["英文对应段落（结构对应，语义待核对）：", `<pre>${escaped(record.bilingual.english.text)}</pre>`] : ["英文对应段落未确认。"])] : []),
-			...(record.excerpt ? ["", record.bilingual?.language === "zh-CN" ? "### 保存时的译文上下文" : "### 保存时的原文上下文", "仅记录当前 Markdown 文本版本，原文包与科学证据需另行核验。", `文本版本：\`${record.excerpt.digest}\``, "", `<pre>${contextHtml}</pre>`] : []),
+			...(record.excerpt ? ["", (record.bilingual?.language === "zh-CN" || isTranslationPath(record.sourcePath)) ? "### 保存时的译文上下文" : "### 保存时的原文上下文", "仅记录当前 Markdown 文本版本，原文包与科学证据需另行核验。", `文本版本：\`${record.excerpt.digest}\``, "", `<pre>${contextHtml}</pre>`] : []),
 			...(record.pdfExcerpt ? ["", "### 保存时的原文上下文", "记录 PDF 文件版本与页内文字层；保留换行，科学结论需另行审阅。", `PDF 第 ${record.pdfExcerpt.page} / ${record.pdfExcerpt.pageCount} 页（文件页码）`, `文件版本：\`${record.pdfExcerpt.digest}\``, "", `<pre>${contextHtml}</pre>`] : []),
 			"",
 			"### 手动批注",

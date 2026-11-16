@@ -792,7 +792,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	openExcerptBrowser(ref?: ExcerptRef): void {
 		if (this.excerptBrowser) { new Notice("摘录窗口已打开，请先完成当前操作"); return; }
-		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, file => this.openSourceMarkdownFile(file, true), ref => this.showCurationModal(new ExcerptCurationModal(this.app, this, ref)), {
+		const modal = new ExcerptBrowser(this.app, ref, () => { if (this.excerptBrowser === modal) this.excerptBrowser = undefined; }, (file, mode) => this.openSourceMarkdownFile(file, mode), ref => this.showCurationModal(new ExcerptCurationModal(this.app, this, ref)), {
 			read: (ref, signal) => this.readExcerptHistory(ref, signal), open: (ref, entry, signal) => this.openExcerptHistoryTarget(ref, entry, signal),
 		}, () => this.openAnswerExcerptBrowser(), ref => { void this.openDraftFromExcerpt({ kind: "excerpt", ref, includeNote: false }); }, async (record, signal) => {
 			signal?.throwIfAborted();
@@ -4087,12 +4087,12 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.openSourceMarkdownFile(file);
 	}
 
-	private async openSourceMarkdownFile(file: TFile, sourceMode = false): Promise<WorkspaceLeaf> {
+	private async openSourceMarkdownFile(file: TFile, mode: boolean | "source" | "preview" = false): Promise<WorkspaceLeaf> {
 		const normalizedPath = normalizePath(file.path);
 		this.readerAutoOpenBypass.add(normalizedPath);
 		try {
 			const leaf = this.app.workspace.getLeaf("tab");
-			await leaf.openFile(file, sourceMode ? { active: true, state: { mode: "source" } } : undefined);
+			await leaf.openFile(file, mode ? { active: true, state: { mode: mode === true ? "source" : mode } } : undefined);
 			return leaf;
 		} finally {
 			window.setTimeout(() => this.readerAutoOpenBypass.delete(normalizedPath), 1000);

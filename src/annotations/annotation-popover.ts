@@ -356,7 +356,7 @@ export class AnnotationPopover extends Component {
 			const record = this.record, status = element.createEl("p", { text: "正在核对摘录来源…", attr: { role: "status" } });
 			void this.service.getExcerptStatus(record).then(text => { if (!this.closed && this.record === record && status.isConnected) status.setText(text); }, () => { if (status.isConnected) status.setText("暂时无法核对原文，保留历史摘录"); });
 			this.renderTextSection(element, "个人备注", record.manualText, "没有填写个人备注");
-			const context = element.createEl("details"); context.createEl("summary", { text: record.bilingual?.language === "zh-CN" ? "保存时的译文上下文" : "保存时的原文上下文" }); context.createEl("pre", { text: (record.pdfExcerpt || record.excerpt)!.context, attr: { style: "white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto" } });
+			const context = element.createEl("details"); context.createEl("summary", { text: (record.bilingual?.language === "zh-CN" || isTranslationPath(record.sourcePath)) ? "保存时的译文上下文" : "保存时的原文上下文" }); context.createEl("pre", { text: (record.pdfExcerpt || record.excerpt)!.context, attr: { style: "white-space:pre-wrap;overflow-wrap:anywhere;max-height:180px;overflow:auto" } });
 			element.createEl("p", { text: "打开摘录列表，可回到原文或编辑个人备注。" });
 			const footer = this.renderFooter(element);
 			if (this.onOpenExcerpt) {
