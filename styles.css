@@ -7090,7 +7090,26 @@ body.agent-dashboard-mineru-resizing {
 .agent-annotation-details summary { cursor: pointer; }
 .agent-annotation-details pre { max-height: 110px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .agent-annotation-details p { margin: 5px 0; overflow-wrap: anywhere; }
-.agent-annotation-colors { display: flex; flex-wrap: wrap; gap: 4px; }
+.agent-annotation-colors { position: relative; display: flex; flex-wrap: wrap; gap: 4px; }
+.agent-annotation-color-tooltip {
+	position: absolute;
+	z-index: 1;
+	inset-inline-start: 0;
+	bottom: calc(100% + 5px);
+	width: max-content;
+	max-width: min(310px, calc(100vw - 56px));
+	box-sizing: border-box;
+	padding: 4px 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 4px;
+	background: var(--background-primary);
+	box-shadow: var(--shadow-s);
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	line-height: 1.35;
+	overflow-wrap: anywhere;
+	pointer-events: none;
+}
 .agent-annotation-popover .agent-annotation-colors button {
 	position: relative;
 	display: inline-grid;
@@ -7120,6 +7139,16 @@ body.agent-dashboard-mineru-resizing {
 	background: var(--text-muted);
 	transform: rotate(-45deg);
 	content: "";
+}
+.rar-annotation-meaning-label::before {
+	content: "";
+	display: inline-block;
+	width: 10px;
+	height: 10px;
+	margin-inline-end: 8px;
+	border-radius: 50%;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--annotation-swatch);
 }
 [data-color="yellow"] { --annotation-swatch: #f2c94c; }
 [data-color="green"] { --annotation-swatch: #4dbb88; }

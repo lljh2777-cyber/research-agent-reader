@@ -9,6 +9,7 @@ import type {
 } from "../actions";
 import type { CliBackendId } from "../config";
 import type { ProviderProfile } from "../providers/profile";
+import { DEFAULT_ANNOTATION_COLOR_MEANINGS, type AnnotationColorMeanings } from "../annotations/colors";
 import { resolveMineruCommand } from "../agent/mineru-publish";
 
 export type ClaudeConfigSource = "official" | "cc-switch";
@@ -169,6 +170,7 @@ export interface DashboardSettings {
 	openCodeConfigSource: OpenCodeConfigSource;
 	openCodeModel: string;
 	openCodeReasoningEffort: string;
+	annotationColorMeanings: AnnotationColorMeanings;
 	annotationBackendId: string;
 	annotationCodeBuddyExecutable: string;
 	annotationCodeBuddyModel: string;
@@ -674,6 +676,7 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	openCodeConfigSource: "official",
 	openCodeModel: "opencode/mimo-v2.5-free",
 	openCodeReasoningEffort: "medium",
+	annotationColorMeanings: { ...DEFAULT_ANNOTATION_COLOR_MEANINGS },
 	annotationBackendId: "auto",
 	annotationCodeBuddyExecutable: detectCliExecutable("codebuddy").executable,
 	annotationCodeBuddyModel: "step-5-preview",

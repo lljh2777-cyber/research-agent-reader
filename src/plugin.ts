@@ -65,6 +65,7 @@ import { readDashboardCuration, type CurationNavigation } from "./services/dashb
 import { libraryCodeLinks, codeLinkStillPresent, type LibraryCodeLink } from "./library/code-links";
 import { openSourceSave } from "./papers/source-save-modal";
 import { isTranslationPath } from "./annotations/bilingual";
+import { normalizeAnnotationColorMeanings } from "./annotations/colors";
 import { JatsIntakeService } from "./jats/intake";
 import { openJatsSave } from "./jats/modal";
 import { JatsWikiService } from "./jats/wiki-service";
@@ -852,6 +853,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		const popover = new AnnotationPopover({
 			app: this.app,
 			service: this.annotationService,
+			colorMeanings: this.settings.annotationColorMeanings,
 			...options,
 			onArchive: (record) => this.archiveAnnotation(record),
 			onOpenExcerpt: (record) => this.openExcerptBrowser(record),
@@ -1187,6 +1189,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			asRecord(rawStoredSettings),
 		);
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings) as DashboardSettings;
+		this.settings.annotationColorMeanings = normalizeAnnotationColorMeanings(storedSettings.annotationColorMeanings);
 		this.settings.fulltextUnpaywallEnabled=storedSettings.fulltextUnpaywallEnabled===true;
 		this.settings.fulltextUnpaywallEmail=typeof storedSettings.fulltextUnpaywallEmail==="string"?storedSettings.fulltextUnpaywallEmail.slice(0,254):"";
 		this.settings.knowledgeRetrievalMode = storedSettings.knowledgeRetrievalMode === "hybrid" || storedSettings.knowledgeRetrievalMode === "rerank" ? storedSettings.knowledgeRetrievalMode : "lexical";

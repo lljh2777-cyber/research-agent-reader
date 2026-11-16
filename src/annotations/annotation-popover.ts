@@ -7,7 +7,7 @@ import {
 	setIcon,
 } from "obsidian";
 
-import { ANNOTATION_COLORS, type AnnotationColorChoice } from "./colors";
+import { ANNOTATION_COLORS, annotationColorLabel, type AnnotationColorChoice, type AnnotationColorMeanings } from "./colors";
 import type { AnnotationService } from "./annotation-service";
 import { listedExcerpt } from "./excerpt";
 import { annotationDisplayText } from "./markdown-selection";
@@ -26,6 +26,7 @@ interface AnnotationPopoverOptions {
 	selection?: AnnotationSelection;
 	record?: AnnotationRecord;
 	historical?: AnnotationRecord[];
+	colorMeanings?: Readonly<AnnotationColorMeanings>;
 	onArchive: (record: AnnotationRecord) => Promise<void>;
 	onOpenExcerpt?: (record: AnnotationRecord) => void;
 	onClose?: () => void;
@@ -42,6 +43,7 @@ export class AnnotationPopover extends Component {
 	private readonly selection?: AnnotationSelection;
 	private record?: AnnotationRecord;
 	private readonly historical: AnnotationRecord[];
+	private readonly colorMeanings?: Readonly<AnnotationColorMeanings>;
 	private readonly onArchive: (record: AnnotationRecord) => Promise<void>;
 	private readonly onOpenExcerpt?: (record: AnnotationRecord) => void;
 	private readonly onClose?: () => void;
@@ -63,6 +65,7 @@ export class AnnotationPopover extends Component {
 		this.app = options.app;
 		this.service = options.service;
 		this.anchorRect = options.anchorRect;
+		this.colorMeanings = options.colorMeanings;
 		this.selection = options.selection;
 		this.record = options.record;
 		this.historical = [...(options.record ? [options.record] : []), ...(options.historical || [])];
@@ -234,9 +237,23 @@ export class AnnotationPopover extends Component {
 		const palette = footer.createDiv({ cls: "agent-annotation-colors", attr: { role: "group", "aria-label": "标注颜色" } });
 		const buttons = new Map<AnnotationColorChoice, HTMLButtonElement>();
 		if (!pdf) {
-			for (const [value, title] of Object.entries({ none: "无颜色", ...ANNOTATION_COLORS })) {
-				const key = value as AnnotationColorChoice;
-				const button = palette.createEl("button", { attr: { type: "button", title, "aria-label": title, "data-color": key } });
+			const tooltip = palette.createSpan({ cls: "agent-annotation-color-tooltip", attr: { "aria-hidden": "true" } });
+			tooltip.hidden = true;
+			let hovered = "", focused = "";
+			const updateTooltip = () => {
+				const label = hovered || focused;
+				tooltip.setText(label);
+				tooltip.hidden = !label;
+			};
+			for (const key of Object.keys({ none: "", ...ANNOTATION_COLORS }) as AnnotationColorChoice[]) {
+				const label = annotationColorLabel(key, this.colorMeanings);
+				const button = palette.createEl("button", { attr: { type: "button", "aria-label": label, "data-color": key } });
+				button.addEventListener("mouseenter", () => { hovered = label; updateTooltip(); });
+				button.addEventListener("mouseleave", () => { hovered = ""; updateTooltip(); });
+				button.addEventListener("focus", () => {
+					if (button.matches(":focus-visible")) { focused = label; updateTooltip(); }
+				});
+				button.addEventListener("blur", () => { focused = ""; updateTooltip(); });
 				buttons.set(key, button);
 				button.addEventListener("click", () => { color = key; refresh(); });
 			}

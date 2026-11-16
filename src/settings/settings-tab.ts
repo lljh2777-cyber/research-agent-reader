@@ -16,6 +16,7 @@ import {
 } from "obsidian";
 
 import { ACTIONS, type DashboardAction } from "../actions";
+import { ANNOTATION_COLORS, ANNOTATION_COLOR_MEANING_LIMIT, DEFAULT_ANNOTATION_COLOR_MEANINGS, normalizeAnnotationColorMeanings, type AnnotationColor, type AnnotationColorMeanings } from "../annotations/colors";
 import {
 	getCliBackendLabel,
 	isCliBackendId,
@@ -1553,16 +1554,58 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		}
 	}
 
+	private renderAnnotationColorSettings(containerEl: HTMLElement): void {
+		this.createProviderSectionHeader(containerEl, "颜色含义", "批注色块悬停时显示含义。留空沿用该颜色的默认值。");
+		const settings = this.plugin.settings;
+		const inputs = new Map<AnnotationColor, HTMLInputElement>();
+		for (const color of Object.keys(ANNOTATION_COLORS) as AnnotationColor[]) {
+			const name = ANNOTATION_COLORS[color];
+			const row = new Setting(containerEl).setName(name);
+			row.nameEl.addClass("rar-annotation-meaning-label");
+			row.nameEl.dataset.color = color;
+			row.addText(text => {
+				text.setPlaceholder(DEFAULT_ANNOTATION_COLOR_MEANINGS[color]).setValue(settings.annotationColorMeanings[color]);
+				text.inputEl.maxLength = ANNOTATION_COLOR_MEANING_LIMIT;
+				text.inputEl.setAttribute("aria-label", name + "含义");
+				inputs.set(color, text.inputEl);
+			});
+		}
+		const actions = new Setting(containerEl);
+		const persist = async (meanings: AnnotationColorMeanings) => {
+			const previous = settings.annotationColorMeanings;
+			const buttons = actions.controlEl.querySelectorAll("button");
+			buttons.forEach(button => { button.disabled = true; });
+			for (const input of inputs.values()) input.disabled = true;
+			settings.annotationColorMeanings = meanings;
+			try {
+				await this.plugin.saveSettings();
+				for (const [color, input] of inputs) input.value = meanings[color];
+				new Notice("颜色含义已保存");
+			} catch {
+				settings.annotationColorMeanings = previous;
+				new Notice("颜色含义保存失败，请重试");
+			} finally {
+				buttons.forEach(button => { button.disabled = false; });
+				for (const input of inputs.values()) input.disabled = false;
+			}
+		};
+		actions.addButton(button => button.setButtonText("恢复默认").onClick(() => persist({ ...DEFAULT_ANNOTATION_COLOR_MEANINGS })));
+		actions.addButton(button => button.setButtonText("保存颜色含义").setCta().onClick(() => {
+			const entries = [...inputs].map(([color, input]) => [color, input.value]);
+			return persist(normalizeAnnotationColorMeanings(Object.fromEntries(entries)));
+		}));
+	}
+
 	private renderAnnotationSettings(containerEl: HTMLElement): void {
 		this.createSettingsPageHeader(
 			containerEl,
-			"批注 AI",
-			"选择划选解释使用的模型。Direct API 与 CLI Agent 均可联网；生成后由你决定是否保存批注。",
+			"批注",
+			"设置颜色含义、划选入口和 AI 解释。",
 			true,
 		);
 		new Setting(containerEl)
 			.setName("划选批注入口")
-			.setDesc("默认入口：在任意 Markdown 视图（阅读器、阅读模式、实时预览）划选文字，点击选区旁的浮动「批注」圆标即可弹出批注方式选择。也可以为「批注所选文字」命令绑定自定义快捷键（如 Shift+S），划选后按键弹出同样的选择。")
+			.setDesc("默认入口：在任意 Markdown 视图（阅读器、阅读模式、实时预览）划选文字，点击选区旁的浮动「批注」圆标即可打开批注面板。也可以为「批注所选文字」命令绑定自定义快捷键（如 Shift+S），划选后按键打开同一面板。")
 			.addButton((button) => button
 				.setButtonText("打开快捷键设置")
 				.onClick(() => {
@@ -1580,6 +1623,8 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						new Notice("请手动前往 设置 → 快捷键，搜索「批注所选文字」绑定");
 					}
 				}));
+		this.renderAnnotationColorSettings(containerEl);
+		this.createProviderSectionHeader(containerEl, "AI 解释");
 		const verifiedProfiles = this.plugin.settings.providerProfiles.filter(
 			(profile) => profile.lastTest?.ok,
 		);

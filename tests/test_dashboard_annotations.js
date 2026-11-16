@@ -77,7 +77,7 @@ assert.match(serviceSource, /最多围绕 2 个检索问题/);
 assert.match(serviceSource, /executionConfig\.retrievalMode\s*=\s*webSearchEnabled/);
 assert.match(serviceSource, /resolveCliActionExecutionConfig/);
 assert.match(serviceSource, /getCliBackendLabel/);
-assert.match(source("src/settings/navigation.ts"), /title:\s*"批注 AI"/);
+assert.match(source("src/settings/navigation.ts"), /title:\s*"批注"/);
 assert.match(settingsSource, /renderAnnotationSettings/);
 assert.match(settingsSource, /划选批注入口/);
 assert.match(settingsSource, /打开快捷键设置/);

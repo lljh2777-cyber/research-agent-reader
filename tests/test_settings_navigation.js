@@ -12,7 +12,7 @@ assert.ok(!pages("reading").includes("codex"));
 for (const [question, expected] of [
 	["API key", "direct-api"], ["ＳｉｌｉｃｏｎＦｌｏｗ", "retrieval"],
 	["embedding", "retrieval"], ["PDF OCR", "mineru"], ["导出", "data"],
-	["Codex 路径", "runtime"], ["  cLaUdE  ", "claude"], ["划选", "annotations"],
+	["Codex 路径", "runtime"], ["  cLaUdE  ", "claude"], ["划选", "annotations"], ["颜色 含义", "annotations"],
 	["Unpaywall 邮箱", "fulltext"],
 	["双语 联动", "reader"], ["英文 中文", "reader"],
 ]) {

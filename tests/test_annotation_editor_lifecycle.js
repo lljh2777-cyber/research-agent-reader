@@ -4,18 +4,20 @@ const assert = require("node:assert/strict");
 const { loadReading } = require("./reading-test-helpers");
 class Element extends EventTarget {
 	constructor(tag = "div") { super(); this.tag = tag; this.children = []; this.dataset = {}; this.value = ""; this.disabled = false; }
-	createEl(tag, options = {}) { const child = new Element(tag); child.text = options.text || ""; child.attributes = options.attr || {}; child.parent = this; this.children.push(child); return child; }
+	createEl(tag, options = {}) { const child = new Element(tag); child.text = options.text || ""; child.attributes = options.attr || {}; child.cls = options.cls; child.parent = this; this.children.push(child); return child; }
 	createDiv(options) { return this.createEl("div", options); }
 	createSpan(options) { return this.createEl("span", options); }
 	empty() { for (const child of this.children) child.parent = undefined; this.children = []; }
 	contains(child) { return child === this || this.all().includes(child); }
 	focus() {}
+	matches(selector) { return selector === ":focus-visible"; }
 	setAttribute(name, value) { (this.attributes ||= {})[name] = value; }
 	setText(text) { this.text = text; }
 	all() { return this.children.flatMap(child => [child, ...child.all()]); }
 	fire(type, properties = {}) { const event = new Event(type, { cancelable: true }); Object.assign(event, properties); let current = this; while (current) { current.dispatchEvent(event); current = current.parent; } }
 }
 class Scope { register(modifiers, key, run) { this.save = run; } }
+const { normalizeAnnotationColorMeanings } = loadReading("annotations/colors.ts");
 const { AnnotationPopover } = loadReading("annotations/annotation-popover.ts", { obsidian: { Component: class {}, Scope, Notice: class {}, setIcon() {} } });
 globalThis.window = { confirm: () => true };
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -27,7 +29,7 @@ function fixture(record = { id: "ann-1", annotationPath: "wiki/annotations/sourc
 	};
 	const service = { updateAnnotation: save, saveSelectionAnnotation: (_selection, draft) => save(undefined,draft) };
 	const scopes = [], app = { keymap: { pushScope(scope) { scopes.push(scope); }, popScope(scope) { scopes.splice(scopes.indexOf(scope), 1); } } };
-	const popover = new AnnotationPopover({ app, service, anchorRect: {}, record, selection: { sourcePath: "source.md", selectedText: "Selected source", sourceRevision: {} }, onArchive: async () => {} });
+	const popover = new AnnotationPopover({ app, service, anchorRect: {}, record, selection: { sourcePath: "source.md", selectedText: "Selected source", sourceRevision: {} }, colorMeanings: normalizeAnnotationColorMeanings({ blue: "  样本与模型  ", green: "", red: 9, unknown: "ignore" }), onArchive: async () => {} });
 	const element = popover.element = new Element(); popover.closed = false;
 	popover.position = () => {};
 	const controls = () => {
@@ -40,7 +42,24 @@ function fixture(record = { id: "ann-1", annotationPath: "wiki/annotations/sourc
 }
 (async () => {
 	const f = fixture(), first = f.controls();
-	assert.ok(first.color("blue"), "palette is in the initial form");
+	const tooltip = f.element.all().find(e => e.cls === "agent-annotation-color-tooltip");
+	assert.equal(tooltip.hidden, true);
+	first.color("blue").fire("mouseenter");
+	assert.equal(tooltip.hidden, false);
+	assert.equal(tooltip.text, "蓝色 · 样本与模型");
+	assert.equal(first.color("blue").attributes["aria-label"], tooltip.text);
+	first.color("blue").fire("mouseleave");
+	assert.equal(tooltip.hidden, true);
+	first.color("red").fire("focus");
+	assert.equal(tooltip.hidden, false);
+	assert.equal(tooltip.text, "红色 · 疑点与限制");
+	first.color("red").fire("blur");
+	assert.equal(tooltip.hidden, true);
+	for (const [color, label] of Object.entries({ green: "绿色 · 数据与证据", yellow: "黄色 · 主要结论", purple: "紫色 · 概念与定义", none: "无颜色" })) {
+		assert.equal(first.color(color).attributes["aria-label"], label);
+	}
+	assert.equal(first.color("blue").text, "", "the tooltip adds no persistent label");
+	assert.deepEqual(Object.keys(normalizeAnnotationColorMeanings({ unknown: "ignore" })).sort(), ["blue", "green", "purple", "red", "yellow"]);
 	first.note.value = "current draft"; first.note.fire("input"); first.color("blue").fire("click");
 	assert.equal(f.scopes[0].save(), false, "host shortcut is consumed");
 	first.save.fire("click");
