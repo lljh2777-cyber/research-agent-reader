@@ -137,7 +137,7 @@ export const ACTIONS: readonly DashboardAction[] = [
 		agent: "research-vault-lint",
 		description: "读取最新内置体检报告，由 AI 提出修复方案并执行低风险修复，随后重新体检。修复过程不得在 papers、wiki、Clippings 三个主目录之间创建链接；高影响项目只报告，不自动处理。",
 		placeholder: "",
-		requiresInput: false,
+		requiresInput: true,
 		writes: true,
 		enabled: true,
 		showInRail: false,

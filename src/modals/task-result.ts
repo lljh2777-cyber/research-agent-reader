@@ -31,14 +31,14 @@ interface TaskResultHost {
 export class TaskResultModal extends Modal {
 	private readonly plugin: TaskResultHost;
 	private run: TaskRun;
-	private readonly onRepair: (() => void) | null;
+	private readonly onRepair: ((scope: string) => void) | null;
 	private unsubscribeTasks?: () => void;
 
 	constructor(
 		app: App,
 		plugin: TaskResultHost,
 		run: TaskRun,
-		onRepair: (() => void) | null,
+		onRepair: ((scope: string) => void) | null,
 	) {
 		super(app);
 		this.plugin = plugin;
@@ -108,18 +108,22 @@ export class TaskResultModal extends Modal {
 			new Notice("任务结果已复制");
 		});
 		if (this.canRepair()) {
-			const repair = footer.createEl("button", {
-				cls: "mod-warning",
-				text: "提出方案并修复",
-				attr: {
-					title: "AI 将逐项核验体检结果，处理确认属于低风险的结构问题，并在修改后重新体检",
-				},
-			});
-			repair.type = "button";
-			repair.addEventListener("click", () => {
-				this.close();
-				this.onRepair?.();
-			});
+			const report = this.plugin.getLintStatus().latest;
+			const findings = (report?.findings || []).filter(f => f.path && f.message && (f.severity === "error" || f.severity === "warning"));
+			if (findings.length) {
+				const group = footer.createEl("details"); group.createEl("summary",{text:"从具体问题发起 AI 修复"});
+				const select = group.createEl("select",{attr:{"aria-label":"选择要修复的问题"}});
+				findings.forEach((f,i)=>select.createEl("option",{value:String(i),text:f.path+" · "+f.message}));
+				const preview = group.createEl("p");
+				const describe=()=>{ const f=findings[select.selectedIndex]; preview.setText("涉及笔记："+f.path+"。AI 将核对「"+f.message+"」并处理可确认的低风险修改。位置或链接目标有歧义时，保留原状并报告。"); };
+				describe(); select.onchange=describe;
+				const inspect = group.createEl("button",{text:"打开笔记"});inspect.onclick=()=>this.plugin.openVaultFile?.(findings[select.selectedIndex].path);
+				const repair = group.createEl("button",{text:"修复所选问题"});repair.onclick=()=>{
+					const f=findings[select.selectedIndex];
+					if(this.plugin.getLintStatus().latest?.generated_at!==report?.generated_at){new Notice("体检报告已更新，请打开最新报告");return;}
+					this.close();this.onRepair?.("仅核对并修复以下一条体检发现。仅可修改所列笔记；需要改其他文件或原文、批注位置不确定时，只报告。\n"+JSON.stringify({report:report?.generated_at,path:f.path,code:f.code,message:f.message}));
+				};
+			}
 		}
 		// Prefer the in-memory structured result, then artifacts persisted on
 		// the TaskRun (survive plugin reloads), then the regex fallback.
