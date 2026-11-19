@@ -66,6 +66,7 @@ import type {
 } from "../types/contracts";
 
 interface SettingsPluginHost extends PluginHost {
+	configureClipper(root: string): Promise<void>;
 	openMaintenanceAction(id: "vault-lint" | "okf-export"): Promise<void>;
 	getAnnotationCliDiscovery(backend: AnnotationCliBackend): AnnotationCliDiscovery | null;
 	refreshAnnotationCliDiscovery(backend: AnnotationCliBackend): Promise<AnnotationCliDiscovery>;
@@ -823,6 +824,12 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			"右键任意 Markdown／PDF 文件，或在内容页右上角选择“选择阅读方式”，再选择另一份文件。双栏在同一标签内显示，不限制目录与文件名。已保存的阅读状态优先。",
 			true,
 		);
+		let directory = this.plugin.settings.clipperDirectory;
+		new Setting(containerEl).setName("Paper Clipper 文献目录").setDesc("直接读取每篇论文的英文、译文和配图。阅读记录与批注保存在当前知识库。")
+			.addText(text => text.setValue(directory).setPlaceholder("选择本机目录的绝对路径").onChange(value => { directory = value.trim(); }))
+			.addButton(button => button.setButtonText("保存目录").onClick(async () => {
+				try { await this.plugin.configureClipper(directory); new Notice("文献目录已保存，刷新文献库即可查看"); } catch (error) { new Notice(String(error)); }
+			}));
 		new Setting(containerEl)
 			.setName("默认双栏模式")
 			.setDesc("单份 Markdown 在文献阅读器中的初始布局。双栏文件可通过菜单手动选择；已有配对资料仍可沿用双语默认值。打开普通文件不自动接管标签。")

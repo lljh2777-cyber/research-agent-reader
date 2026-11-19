@@ -10,7 +10,7 @@ import { renderReadingNoteProperties } from "./reading-note-properties";
 import { bindSplitOutline, createSplitOutlineButton, refreshSplitOutline, scrollWithinReadingPane, splitOutlineHeadings, type OutlineHeading } from "./split-outline";
 
 /** Markers affect rendering only. Source offsets remain those of the unmodified files. */
-export function bilingualRenderMarkdown(file: BilingualFile): string {
+export function bilingualRenderMarkdown(file: Pick<BilingualFile, "bodyStart" | "text" | "blocks">): string {
 	let cursor = file.bodyStart, result = "";
 	for (const block of file.blocks) {
 		if (block.kind === "footnote" || block.kind === "reference") continue;
@@ -20,7 +20,7 @@ export function bilingualRenderMarkdown(file: BilingualFile): string {
 	return result + file.text.slice(cursor);
 }
 export interface BilingualPane { language: BilingualLanguage; scroller: HTMLElement; article: HTMLElement; anchors: Map<string, HTMLElement>; }
-export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; hideOrdinary?: boolean; annotate?(): Promise<void>; ratio?: number; reversed?: boolean; onRatio?(ratio: number): void; defaultLinked?: boolean; defaultPropertiesLanguage?: BilingualLanguage; state?: unknown; onState?(state: BilingualReadingState): void; outlineLeaf?: WorkspaceLeaf; }
+export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; hideOrdinary?: boolean; annotate?(): Promise<void>; ratio?: number; reversed?: boolean; onRatio?(ratio: number): void; defaultLinked?: boolean; defaultPropertiesLanguage?: BilingualLanguage; state?: unknown; renderMarkdown?(app: App, markdown: string, article: HTMLElement, source: string, owner: Component, signal: AbortSignal): Promise<void>; onState?(state: BilingualReadingState): void; outlineLeaf?: WorkspaceLeaf; }
 const STATUS: Record<string, string> = { "not-started": "尚未翻译", "in-progress": "翻译中", "needs-review": "译文待复核", reviewed: "记录标为已审阅", failed: "翻译记录失败", unknown: "译文状态未确认" };
 
 export class BilingualReader extends Component {
@@ -85,7 +85,8 @@ export class BilingualReader extends Component {
 			annotate.addEventListener("click", () => { this.activate(language); const selection = window.getSelection(); if (!selection?.anchorNode || !article.contains(selection.anchorNode) || !selection.focusNode || !article.contains(selection.focusNode)) { this.message?.setText("请先在本栏选择文字"); return; } void this.options.annotate?.(); }, { signal });
 			const scroller = pane.createDiv({ cls: "agent-bilingual-scroll markdown-reading-view", attr: { tabindex: "0" } });
 			const article = scroller.createEl("article", { cls: "markdown-rendered agent-bilingual-article", attr: { "data-bilingual-document": doc.root } });
-			await MarkdownRenderer.render(app, bilingualRenderMarkdown(file), article, file.path, this);
+			if (this.options.renderMarkdown) await this.options.renderMarkdown(app, bilingualRenderMarkdown(file), article, file.path, this, signal);
+			else await MarkdownRenderer.render(app, bilingualRenderMarkdown(file), article, file.path, this);
 			if (signal.aborted || !article.isConnected) return;
 			// Discard offsets supplied by rendering transformed Markdown; bind the raw source below.
 			article.querySelectorAll("[data-agent-annotation-source]").forEach(el => el.removeAttribute("data-agent-annotation-source"));

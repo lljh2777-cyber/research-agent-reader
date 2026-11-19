@@ -1,3 +1,4 @@
+import { isClipperPath, requireClipper } from "../library/clipper";
 import type { App } from "obsidian";
 import { objectDigest } from "../papers/identity";
 import { FileSourceStorage } from "../sources/storage";
@@ -45,7 +46,7 @@ export function requiresBilingualProof(app: App, path: string): boolean {
 export async function readBilingual(app: App, path: string, signal?: AbortSignal, selected?: SelectedBilingualFiles): Promise<BilingualDocument> {
 	const adapter = app.vault.adapter as { getBasePath?: () => string };
 	if (!adapter?.getBasePath) throw new Error("双语来源核对需要桌面本地知识库");
-	const io = new FileSourceStorage(adapter.getBasePath());
+	const io = isClipperPath(path) ? requireClipper(app) : new FileSourceStorage(adapter.getBasePath());
 	return selected ? loadSelectedBilingualDocument(io, selected, signal) : loadBilingualDocument(io, path, signal);
 }
 /** Optional evidence for a single Markdown tab. A missing pair never invalidates the local selection. */

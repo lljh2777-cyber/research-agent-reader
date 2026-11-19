@@ -1,3 +1,6 @@
+import { requireClipper, isClipperPath } from "../library/clipper";
+import { imagePath, parseBilingualMarkdown } from "../reader/bilingual-document";
+import { markdownImagePattern } from "../reader/markdown-images";
 import { TFile, loadPdfJs, type App } from "obsidian";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -89,10 +92,39 @@ export function selectReadingEvidence(document: ReadingDocument, query: string, 
 export class ReadingDocumentLoader {
 	constructor(private readonly app: App, private readonly vaultRoot: string) {}
 	async open(kind: ReadingSource["kind"], rawPath: string): Promise<ReadingDocument> {
+		if (kind === "article" && isClipperPath(rawPath)) return this.clippedArticle(rawPath);
 		if (kind === "structured") return openStructuredDocument(this.vaultRoot, rawPath);
 		if (kind === "code") { if (!rawPath.trim()) throw new Error("请输入 Python/R 文件或项目目录"); return openCodeProject(path.isAbsolute(rawPath) ? rawPath : path.resolve(this.vaultRoot, rawPath)); }
 		return kind === "pdf" ? this.pdf(rawPath) : this.article(rawPath.replace(/\\/g, "/"));
 	}
+	private async clippedArticle(sourcePath: string): Promise<ReadingDocument> {
+		const dir = requireClipper(this.app), paper = await dir.paper(sourcePath.split("/")[1]);
+		const text = await dir.text(sourcePath), parsed = parseBilingualMarkdown(text);
+		const fingerprint = readingHash(text), evidence: ReadingEvidence[] = [], figures = new Map<string, string>();
+		let section = "正文";
+		for (const block of parsed.blocks) {
+			const raw = text.slice(block.start, block.end);
+			if (block.kind === "heading") section = raw.replace(/^#+\s*/, "").trim();
+			for (let offset = 0; offset < raw.length; offset += 4000) {
+				const content = raw.slice(offset, offset + 4000), item: ReadingEvidence = { kind: "paper", path: sourcePath, id: block.id + "-" + offset, label: section.slice(0, 180), text: content, start: block.start + offset, end: block.start + offset + content.length };
+				evidence.push(item);
+			}
+			for (const match of raw.matchAll(markdownImagePattern())) {
+				const asset = imagePath(sourcePath.slice(0,sourcePath.lastIndexOf("/")), match[2] || match[3] || match[4]);
+				const bytes = await dir.read(asset,12*1024*1024); if (!bytes) continue;
+				figures.set(asset, readingHash(bytes));
+				evidence.push({ id:"figure-" + evidence.length, kind:"paper", path:sourcePath, label:match[1] || section, text:raw.slice(0,1200), start:block.start,end:block.end,asset });
+			}
+		}
+		return { source:{kind:"article",path:sourcePath,title:paper.title,fingerprint}, evidence, catalog: readingCatalog(evidence),
+			verify: async () => { if (readingHash(await dir.text(sourcePath)) !== fingerprint) throw new Error("原文已更新，请重新打开核对"); },
+			image: async (item,signal) => { signal?.throwIfAborted(); if (!item.asset || !figures.has(item.asset)) return null;
+				const bytes = await dir.read(item.asset,12*1024*1024); signal?.throwIfAborted();
+				if (!bytes || readingHash(bytes)!==figures.get(item.asset)) throw new Error("配图已更新，请重新打开核对");
+				const ext = item.asset.split(".").pop()!.toLowerCase();
+				return {evidenceId:item.id, dataUrl:"data:image/"+(ext==="jpg"?"jpeg":ext)+";base64,"+Buffer.from(bytes).toString("base64")}; }, destroy:async()=>{} };
+	}
+
 	private async pdf(rawPath: string): Promise<ReadingDocument> {
 		const filename = path.isAbsolute(rawPath) ? path.resolve(rawPath) : path.resolve(this.vaultRoot, rawPath);
 		if (!/\.pdf$/i.test(filename)) throw new Error("请选择 PDF 文件");

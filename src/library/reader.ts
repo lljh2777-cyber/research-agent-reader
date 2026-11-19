@@ -1,3 +1,4 @@
+import { clipSource, isClipperPath, type ClipperDirectory } from "./clipper";
 import * as path from "node:path";
 import { parseAcquisitionInput } from "../fulltext/contracts";
 import { SourceCatalog } from "../papers/catalog";
@@ -27,6 +28,7 @@ export interface LibraryReadResult extends LibraryProjection {
 	complete: boolean;
 }
 export interface LibraryReaderOptions {
+	clipper?: ClipperDirectory;
 	vaultRoot: string;
 	parseYaml(text: string): unknown;
 	/** Trusted verifier must use the supplied storage so all file bytes share the scan budget. */
@@ -158,6 +160,13 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 		let meta: ReturnType<typeof metadata> = { identifiers: {} }; try { meta = metadata(text); } catch (error) { issue("sources", name, error); }
 		addSource({ kind: "source", id: name, title: meta.title || fileName(name), ...meta, source: { format: "markdown", path: name, saved: true, verification: { state: "verified", fingerprint: bytesDigest(bytes) } } });
 	});
+	if (options.clipper) {
+		try {
+			const scan = await options.clipper.scan(options.signal);
+			for (const error of scan.issues) issue("sources", "Paper Clipper", error);
+			for (const paper of scan.papers) addSource(clipSource(paper));
+		} catch (error) { options.signal?.throwIfAborted(); issue("sources", "Paper Clipper", error); }
+	}
 	await walk("wiki/sources", "notes", async name => {
 		const bytes = await v.read(name, 2 * 1024 * 1024); if (!bytes) throw new Error("论文笔记已不存在");
 		const text = decode(bytes); let meta: ReturnType<typeof metadata> = { identifiers: {} };
@@ -172,10 +181,11 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 			const sourcePath = canonicalPath(record.sourcePath);
 			// External Vault identity/revision semantics are unknown. Even the same local path
 			// is not sufficient to compare its anchor or report that historical text changed.
-			const source = record.provenance.format === "annotation-schema-2" ? undefined : sourcePath && sources.get(sourcePath);
+			const external = sourcePath && isClipperPath(sourcePath) ? options.clipper : undefined;
+			const source = record.provenance.format === "annotation-schema-2" ? undefined : sourcePath && sources.get(external ? sourcePath.replace(/paper\.zh-CN\.md$/, "paper.md") : sourcePath);
 			// Dashboard anchors lack an immutable fingerprint; their path is only a hint.
 			const binding: LibrarySourceBinding = { state: "unresolved", ...(source ? { sourceId: source.id } : {}), reason: "旧批注没有固定来源指纹，需核对后确认关联" };
-			const text = source && markdown.get(source.source.path), anchor = record.anchor;
+			const text = external && sourcePath && source ? await external.text(sourcePath) : source && markdown.get(source.source.path), anchor = record.anchor;
 			if (text && anchor && text.slice(anchor.start, anchor.end) !== record.selectedText) { binding.state = "changed"; binding.reason = "旧批注位置与当前原文不同，未重新绑定"; }
 			if (record.provenance.format === "dashboard-excerpt-1") {
 				if (text === undefined || !anchor) binding.reason = "本次未取得可核对的原文文本或位置，保留历史摘录，需复查";
@@ -197,9 +207,10 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 			const bilingual = record.provenance.bilingual;
 			if (bilingual) {
 				const selected = bilingual.files;
+				const io = external || v;
 				const enBytes = selected ? await v.read(selected.en, 16 * 1024 * 1024) : undefined, zhBytes = selected ? await v.read(selected.zh, 16 * 1024 * 1024) : undefined;
-				const en = selected ? enBytes ? decode(enBytes) : undefined : markdown.get(bilingual.root + "/paper.md"), zh = selected ? zhBytes ? decode(zhBytes) : undefined : markdown.get(bilingual.root + "/paper.zh-CN.md");
-				const metadata = selected && !selected.metadata ? undefined : await v.read(selected?.metadata || bilingual.root + "/translation.json", 256 * 1024);
+				const en = selected ? enBytes ? decode(enBytes) : undefined : external && source ? await external.text(bilingual.root + "/paper.md") : markdown.get(bilingual.root + "/paper.md"), zh = selected ? zhBytes ? decode(zhBytes) : undefined : external && source ? await external.read(bilingual.root + "/paper.zh-CN.md", 16 * 1024 * 1024).then(b => b ? decode(b) : undefined) : markdown.get(bilingual.root + "/paper.zh-CN.md");
+				const metadata = selected && !selected.metadata ? undefined : await io.read(selected?.metadata || bilingual.root + "/translation.json", 256 * 1024);
 				const metadataDigest = selected && !selected.metadata ? objectDigest(selected) : metadata ? bytesDigest(metadata) : "";
 				const selectedText = bilingual.language === "en" ? en : zh;
 				if (en === undefined || zh === undefined || !anchor || selectedText?.slice(anchor.start, anchor.end) !== record.selectedText || bytesDigest(new TextEncoder().encode(en)) !== bilingual.digests.en || bytesDigest(new TextEncoder().encode(zh)) !== bilingual.digests["zh-CN"] || metadataDigest !== bilingual.digests.metadata || bilingual.english && en.slice(bilingual.english.start, bilingual.english.end) !== bilingual.english.text) { binding.state = "changed"; binding.reason = "双语资料缺失或版本已变化；保留历史内容，需复查"; }

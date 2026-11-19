@@ -51,7 +51,7 @@ export class ReadingEvidencePanel {
 			if (controller.signal.aborted) return;
 			if (evidence.kind === "vault") return this.plugin.openVaultFile(evidence.path);
 			if (evidence.kind === "code") { this.plugin.showCurationModal(new CodeSourceModal(this.app, this.service, session, id => { void this.plugin.openLearningRecord(session.id, id).catch(error => { status.textContent = String(error); }); })); return; }
-			if (["article", "structured"].includes(session.source.kind)) return this.plugin.openReadingEvidence(evidence.path, evidence.page, evidence.structured?.blockId);
+			if (["article", "structured"].includes(session.source.kind)) return this.plugin.openReadingEvidence(evidence.path, evidence.page, evidence.structured?.blockId, evidence.start);
 			return (require("electron") as { shell: { openPath(path: string): Promise<string> } }).shell.openPath(session.source.path).then(error => { if (error) throw new Error(error); });
 		}).catch(error => { status.textContent = String(error); }); }); open.disabled = true;
 		void verify().then(async source => {

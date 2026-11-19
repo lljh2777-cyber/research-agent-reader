@@ -142,6 +142,8 @@ import { searchTavily, type WebSearchHttpDeps } from "./services/web-search";
 import { AgentDashboardSettingTab } from "./settings/settings-tab";
 import { requestHumanIdentityConfirmation } from "./modals/human-identity-confirmation";
 import { CodePracticeView } from "./views/code-practice";
+import { clipperDirectory, isClipperPath, setClipperDirectory } from "./library/clipper";
+import { CLIPPER_READER, ClipperReaderView } from "./views/clipper-reader";
 import { DashboardView } from "./views/dashboard";
 import { MineruReaderView } from "./views/mineru-reader";
 import { QueryWikiView } from "./views/query-wiki";
@@ -501,6 +503,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationHighlights = this.addChild(new AnnotationHighlights(this.app));
 		this.lastContextFile = this.app.workspace.getActiveFile();
 		await this.loadSettings();
+		this.registerView(CLIPPER_READER, leaf => new ClipperReaderView(leaf, this));
 		this.registerView(VIEW_TYPE, (leaf) => new DashboardView(leaf, this));
 		this.registerView(CODE_PRACTICE_VIEW_TYPE, (leaf) => new CodePracticeView(leaf));
 		this.registerView(QUERY_WIKI_VIEW_TYPE, (leaf) => new QueryWikiView(leaf, this));
@@ -782,6 +785,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			read: (ref, signal) => this.readExcerptHistory(ref, signal), open: (ref, entry, signal) => this.openExcerptHistoryTarget(ref, entry, signal),
 		}, () => this.openAnswerExcerptBrowser(), ref => { void this.openDraftFromExcerpt({ kind: "excerpt", ref, includeNote: false }); }, async (record, signal) => {
 			signal?.throwIfAborted();
+			if (isClipperPath(record.sourcePath)) { const view = await this.openClippedPaper(record.sourcePath.split("/")[1]); signal?.throwIfAborted(); await view.reveal(record); return; }
 			if (record.bilingual?.files) {
 				const files = record.bilingual.files;
 				const view = await this.openManualSplit({ mode: "bilingual", left: files.en, right: files.zh, entry: record.sourcePath, ratio: this.settings.mineruReaderBilingualSplitRatio, linked: false, markdownProgress: 0, pdfPage: 1, pdfProgress: 0 });
@@ -1041,6 +1045,9 @@ export default class AgentDashboardPlugin extends Plugin {
 			asRecord(rawStoredSettings),
 		);
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings) as DashboardSettings;
+		this.settings.clipperDirectory = typeof storedSettings.clipperDirectory === "string" && path.isAbsolute(storedSettings.clipperDirectory) ? storedSettings.clipperDirectory : "";
+		this.settings.clipperProgress = storedSettings.clipperProgress && typeof storedSettings.clipperProgress === "object" && !Array.isArray(storedSettings.clipperProgress) ? storedSettings.clipperProgress as DashboardSettings["clipperProgress"] : {};
+		setClipperDirectory(this.app, this.settings.clipperDirectory);
 		this.settings.annotationColorMeanings = normalizeAnnotationColorMeanings(storedSettings.annotationColorMeanings);
 		this.settings.fulltextUnpaywallEnabled=storedSettings.fulltextUnpaywallEnabled===true;
 		this.settings.fulltextUnpaywallEmail=typeof storedSettings.fulltextUnpaywallEmail==="string"?storedSettings.fulltextUnpaywallEmail.slice(0,254):"";
@@ -2691,8 +2698,24 @@ export default class AgentDashboardPlugin extends Plugin {
 		return path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader");
 	}
 	/** Explicit read-only inspection; never initializes reading recovery or models. */
+	async configureClipper(root: string): Promise<void> {
+		if (root && (!path.isAbsolute(root) || !(await fs.promises.stat(root)).isDirectory())) throw new Error("请输入可读取的本机目录");
+		setClipperDirectory(this.app, root); this.settings.clipperDirectory = root; await this.saveSettings();
+	}
+	async openClippedPaper(key: string): Promise<ClipperReaderView> {
+		const existing = this.app.workspace.getLeavesOfType(CLIPPER_READER).find(leaf => leaf.view instanceof ClipperReaderView && leaf.view.key === key);
+		const leaf = existing || this.app.workspace.getLeaf("tab");
+		if (!existing) await leaf.setViewState({type: CLIPPER_READER, active: true, state: { key }});
+		await this.app.workspace.revealLeaf(leaf);
+		if (!(leaf.view instanceof ClipperReaderView)) throw new Error("阅读器未就绪");
+		return leaf.view;
+	}
+	async startClippedReading(path: string): Promise<void> {
+		await this.activateLearningSpace({kind:"document",reading:{source:{kind:"article",path}}});
+	}
 	async inspectPaperLibrary(signal?: AbortSignal, verifyMineruPath?: string) {
 		const result = await readPaperLibrary(new FileSourceStorage(this.getActiveVaultRoot()), new FileSourceStorage(this.readingPluginDirectory()), {
+			clipper: clipperDirectory(this.app),
 			vaultRoot: this.getActiveVaultRoot(), parseYaml, signal,
 			...(verifyMineruPath !== undefined ? { verifyMineruPath, verifyMineru: libraryMineruVerifier(this.app, signal) } : {}),
 		});
@@ -2851,6 +2874,9 @@ export default class AgentDashboardPlugin extends Plugin {
 			if (source.kind !== expected.kind || source.path !== expected.path || source.fingerprint !== expected.fingerprint) throw new Error("会话来源已变化，请刷新后重试");
 			await this.activateLearningSpace({ kind: "document", reading: { sessionId: target.sessionId } }); return;
 		}
+		if (target.kind === "source" && isClipperPath(target.path) && !target.read) {
+			await this.openClippedPaper(target.path.split("/")[1]); return;
+		}
 		if (target.kind === "source" && target.read) {
 			const kind = { pdf: "pdf", mineru: "article", jats: "structured", markdown: "article" }[target.format] as "pdf" | "article" | "structured";
 			await this.activateLearningSpace({ kind: "document", reading: { source: { kind, path: target.path } } }); return;
@@ -2999,7 +3025,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		const modal = new Modal(this.app); modal.titleEl.setText(evidence.label); modal.modalEl.addClass("reading-modal"); modal.contentEl.createEl("p", { text: evidence.path + (evidence.page ? " · 第 " + evidence.page + " 页" : "") });
 		modal.contentEl.createEl("pre", { text: evidence.text, cls: "reading-evidence-text" });
 		if (evidence.structured) modal.contentEl.createEl("p", { cls: "reading-evidence-location", text: structuredLocationLabel(evidence) + " · " + context.source.structured!.manifest.sourceVersionId });
-		if (["article", "structured"].includes(source.source.kind)) { const open = modal.contentEl.createEl("button", { text: "在阅读器打开原文" }); open.onclick = () => { void source.verify().then(() => this.openReadingEvidence(evidence.path, evidence.page, evidence.structured?.blockId)).catch(error => new Notice(String(error))); }; }
+		if (["article", "structured"].includes(source.source.kind)) { const open = modal.contentEl.createEl("button", { text: "在阅读器打开原文" }); open.onclick = () => { void source.verify().then(() => this.openReadingEvidence(evidence.path, evidence.page, evidence.structured?.blockId, evidence.start)).catch(error => new Notice(String(error))); }; }
 		this.showCurationModal(modal);
 		const image = await source.image(source.source.kind === "pdf" && original.page ? { ...original, asset: "pdf-page" } : original);
 		if (image && modal.modalEl.isConnected) { const img = modal.contentEl.createEl("img", { attr: { alt: evidence.label } }); img.src = image.dataUrl; img.style.maxWidth = "100%"; }
@@ -3860,7 +3886,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		await leaf.openFile(file, { active: true }); await this.app.workspace.revealLeaf(leaf);
 	}
 
-	async openReadingEvidence(articlePath: string, page?: number, blockId?: string): Promise<void> {
+	async openReadingEvidence(articlePath: string, page?: number, blockId?: string, offset?: number): Promise<void> {
+		if (isClipperPath(articlePath)) {
+			const view = await this.openClippedPaper(articlePath.split("/")[1]); if (offset !== undefined) await view.revealOffset(offset); return;
+		}
 		await this.activateMineruReaderView(articlePath);
 		const view = this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE)[0]?.view;
 		if (view instanceof MineruReaderView && page) {

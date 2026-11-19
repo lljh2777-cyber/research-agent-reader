@@ -1,3 +1,4 @@
+import { isClipperPath } from "./clipper";
 import { decodeInput } from "../fulltext/contracts";
 import { identityRelation, objectDigest, safeCitekey } from "../papers/identity";
 import { readingCategory } from "../reading/catalog";
@@ -44,7 +45,7 @@ export function librarySourceCapabilities(source: LibrarySourceDescription): Lib
 	if (!/^[a-f0-9]{64}$/.test(source.verification.fingerprint)) throw new Error("已核验来源缺少内容指纹");
 	return {
 		openOriginal: available(),
-		interactiveReading: source.format === "markdown" ? blocked("普通 Markdown 尚未接入交互深读") : available(),
+		interactiveReading: source.format === "markdown" && !isClipperPath(source.path) ? blocked("普通 Markdown 尚未接入交互深读") : available(),
 		pageNavigation: source.format === "pdf" || source.format === "mineru" ? available() : blocked("此来源不提供 PDF 页码定位"),
 		structuredNavigation: source.format === "jats" ? available() : blocked("此来源不提供 JATS 正文块定位"),
 	};

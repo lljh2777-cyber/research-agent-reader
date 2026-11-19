@@ -1,3 +1,4 @@
+import { isClipperPath } from "../library/clipper";
 import { App, MarkdownView, TFile, type WorkspaceLeaf } from "obsidian";
 import { renderedAnnotationRanges } from "./rendered-source-range";
 import { readAnnotationRecords } from "./annotation-service";
@@ -185,6 +186,7 @@ export class ExcerptLibraryService {
 			}, signal);
 			return;
 		}
+		if (isClipperPath(record.sourcePath) && this.openBilingual) { await this.openBilingual(record,signal); return; }
 		const file = this.app.vault.getAbstractFileByPath(record.sourcePath);
 		if (!(file instanceof TFile)) throw new Error("原文已缺失；请保留历史摘录并复查来源");
 		if (file.stat?.size > 32 * 1024 * 1024) throw new Error("原文超过定位核对上限");

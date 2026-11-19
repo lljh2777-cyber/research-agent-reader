@@ -156,6 +156,8 @@ export interface DashboardSettings {
 	knowledgeRetrievalMode: "lexical" | "rerank" | "hybrid";
 	knowledgeSecretId: string;
 	toolkitRoot: string;
+	clipperDirectory: string;
+	clipperProgress: Record<string, import("../views/clipper-reader").ClipProgress>;
 	readerMarkdownFolders: string[];
 	obsidianCliExecutable: string;
 	codexExecutable: string;
@@ -661,6 +663,8 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	knowledgeRetrievalMode: "lexical",
 	knowledgeSecretId: "siliconflow",
 	toolkitRoot: "",
+	clipperDirectory: "",
+	clipperProgress: {},
 	readerMarkdownFolders: [],
 	obsidianCliExecutable: findPreferredObsidianCliExecutable(),
 	codexExecutable: findPreferredCodexExecutable(),

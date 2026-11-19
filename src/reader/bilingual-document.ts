@@ -36,7 +36,7 @@ const pathParts = (value: string): boolean => value.length <= 600 && !/[\\<>:"|?
 
 /** Entry names are fixed. Metadata never chooses an arbitrary filesystem target. */
 export function bilingualPaths(path: string): { root: string; en: string; zh: string; metadata: string } {
-	if (!pathParts(path) || !/^Clippings\/.+\/(?:paper\.md|paper\.zh-CN\.md)$/.test(path)) throw new Error("双语阅读仅支持 Clippings/ 内的规范 paper.md 与 paper.zh-CN.md");
+	if (!pathParts(path) || !/^(?:Clippings\/.+|@paper-clipper\/[a-f0-9]{64})\/(?:paper\.md|paper\.zh-CN\.md)$/.test(path)) throw new Error("双语阅读仅支持 Clippings/ 内的规范 paper.md 与 paper.zh-CN.md");
 	const root = path.slice(0, path.lastIndexOf("/"));
 	return { root, en: root + "/paper.md", zh: root + "/paper.zh-CN.md", metadata: root + "/translation.json" };
 }
@@ -125,7 +125,7 @@ export function createBilingualDocument(entry: string, enBytes: Uint8Array, zhBy
 		sourceVersion, stale, syncAvailable: pairs.length > 0, issues, files: { en, "zh-CN": zh }, pairs,
 		...(pairs.length ? { sentenceAlignment: readSentenceAlignment(meta.sentenceAlignment, en.digest, zh.digest) } : {}) };
 }
-function imagePath(root: string, relative: string): string {
+export function imagePath(root: string, relative: string): string {
 	let decoded: string; try { decoded = decodeURIComponent(relative); } catch { throw new Error("图片路径编码无效"); }
 	if (!pathParts(decoded) || !/^images\/.+\.(?:png|jpe?g|webp|gif)$/i.test(decoded)) throw new Error("双语资料仅支持 images/ 内的本地图片");
 	return root + "/" + decoded;

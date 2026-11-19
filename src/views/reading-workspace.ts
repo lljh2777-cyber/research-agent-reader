@@ -767,7 +767,7 @@ export class ReadingWorkspaceView extends ItemView {
 		else element(modal.contentEl, "pre", "reading-evidence-text", item.text);
 		if (item.kind === "vault") button(modal.contentEl, "打开来源笔记", () => { this.plugin.openVaultFile(item.path); modal.close(); });
 		if (item.structured) element(modal.contentEl, "p", "reading-evidence-location", "JATS 块 " + item.structured.blockId + " · 投影字符 " + item.start + "–" + item.end + " · 无 PDF 页码");
-		if (item.kind === "paper" && ["article", "structured"].includes(this.session!.source.kind)) button(modal.contentEl, "在阅读器打开原文", () => this.handle(this.service.document(this.sessionId).then(async (source) => { await source.verify(); await this.plugin.openReadingEvidence(item.path, item.page, item.structured?.blockId); modal.close(); })));
+		if (item.kind === "paper" && ["article", "structured"].includes(this.session!.source.kind)) button(modal.contentEl, "在阅读器打开原文", () => this.handle(this.service.document(this.sessionId).then(async (source) => { await source.verify(); await this.plugin.openReadingEvidence(item.path, item.page, item.structured?.blockId, item.start); modal.close(); })));
 		if (item.kind === "paper") this.handle(this.service.document(this.sessionId).then(async (document) => {
 			await document.verify(); const image = await document.image(document.source.kind === "pdf" && item.page ? { ...item, asset: "pdf-page" } : item); if (image) { const img = element(modal.contentEl, "img"); img.src = image.dataUrl; img.style.maxWidth = "100%"; }
 		})); modal.open();

@@ -1,3 +1,4 @@
+import { isClipperPath, requireClipper } from "../library/clipper";
 import {
 	App,
 	MarkdownView,
@@ -322,6 +323,13 @@ export class AnnotationService {
 		}
 	}
 
+	private async sourceText(path: string): Promise<string> {
+		if (isClipperPath(path)) return requireClipper(this.app).text(path);
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile) || file.extension !== "md") throw new Error("批注来源不存在");
+		return this.app.vault.read(file);
+	}
+
 	private async verifySelection(selection: AnnotationSelection, signal?: AbortSignal): Promise<void> {
 		await verifyBilingual(this.app, { ...selection, sourceAnchor: { start: selection.sourceStart, end: selection.sourceEnd, prefix: selection.prefix, suffix: selection.suffix } }, signal);
 	}
@@ -401,11 +409,7 @@ export class AnnotationService {
 		const sectionElement = element.closest<HTMLElement>("[data-agent-annotation-source]");
 		const bilingual = bilingualSelectionContext(element);
 		const sourcePath = bilingual ? bilingual.document.files[bilingual.language].path : String(sectionElement?.dataset.agentAnnotationSource || "");
-		const file = this.app.vault.getAbstractFileByPath(sourcePath);
-		if (!(file instanceof TFile) || file.extension !== "md") {
-			throw new Error("无法确定选区对应的 Markdown 文件");
-		}
-		const content = await this.app.vault.read(file);
+		const content = await this.sourceText(sourcePath);
 		if (bilingual && content !== bilingual.document.files[bilingual.language].text) throw new Error("双语资料已变化，请重新打开划选");
 		const lineStart = Number.parseInt(
 			String(sectionElement?.dataset.agentAnnotationLineStart || "0"),
@@ -539,8 +543,8 @@ export class AnnotationService {
 		if (manualText.length > 10000 || manualText.includes("<!-- agent-dashboard:")) throw new Error("个人备注过长或包含批注控制标记，未保存");
 		signal?.throwIfAborted();
 		const source = this.app.vault.getAbstractFileByPath(selection.sourcePath);
-		if (!(source instanceof TFile) || (selection.pdfExcerpt ? source.extension.toLowerCase() !== "pdf" : source.extension !== "md")) throw new Error("摘录原文不存在");
-		const content = selection.pdfExcerpt ? "" : await this.app.vault.read(source);
+		if ((!isClipperPath(selection.sourcePath) || selection.pdfExcerpt) && (!(source instanceof TFile) || (selection.pdfExcerpt ? source.extension.toLowerCase() !== "pdf" : source.extension !== "md"))) throw new Error("摘录原文不存在");
+		const content = selection.pdfExcerpt ? "" : await this.sourceText(selection.sourcePath);
 		if (!selection.pdfExcerpt) await this.verifySelection(selection, signal);
 		const prepared = selection.pdfExcerpt ? await verifyPdfSelection(this.app, selection, signal) : prepareExcerpt(selection, content);
 		const annotationPath = `${ANNOTATION_FOLDER}/${prepared.id}.md`;
@@ -557,9 +561,9 @@ export class AnnotationService {
 		const existing = await reuse(); signal?.throwIfAborted(); if (existing) return existing;
 		await this.ensureFolder(ANNOTATION_FOLDER); signal?.throwIfAborted();
 		if (selection.pdfExcerpt) await verifyPdfSelection(this.app, selection, signal);
-		else { prepareExcerpt(selection, await this.app.vault.read(source)); await this.verifySelection(selection, signal); }
+		else { prepareExcerpt(selection, await this.sourceText(selection.sourcePath)); await this.verifySelection(selection, signal); }
 		signal?.throwIfAborted();
-		if (source.path !== selection.sourcePath || this.app.vault.getAbstractFileByPath(selection.sourcePath) !== source) throw new Error("原文在保存前已移动或替换，请重新选择");
+		if (!isClipperPath(selection.sourcePath) && (source?.path !== selection.sourcePath || this.app.vault.getAbstractFileByPath(selection.sourcePath) !== source)) throw new Error("原文在保存前已移动或替换，请重新选择");
 		const now = new Date().toISOString(), record: AnnotationRecord = {
 			id: prepared.id, annotationPath, sourcePath: selection.sourcePath, selectedText: selection.selectedText,
 			section: selection.pdfExcerpt ? `PDF 第 ${selection.pdfExcerpt.page} 页（文件页码）` : currentHeading(content, selection.sourceStart), sourceAnchor: { start: selection.sourceStart, end: selection.sourceEnd, prefix: selection.prefix, suffix: selection.suffix },
@@ -577,6 +581,7 @@ export class AnnotationService {
 	async getExcerptStatus(record: AnnotationRecord): Promise<string> {
 		if (record.pdfExcerpt) return pdfExcerptStatus(this.app, record);
 		try { await verifyBilingual(this.app, record); } catch (error) { return String(error instanceof Error ? error.message : error); }
+		if (isClipperPath(record.sourcePath)) return excerptMatches(record, await this.sourceText(record.sourcePath)) ? "外部原文与保存版本一致" : "外部原文版本已变化，保留历史摘录";
 		const file = this.app.vault.getAbstractFileByPath(record.sourcePath);
 		if (!(file instanceof TFile)) return "原文已缺失；保留历史摘录，需复查";
 		return excerptMatches(record, await this.app.vault.read(file)) ? "当前 Markdown 文本与保存时一致；未据此核验 PDF、图片或科学结论" : "原文版本已变化；保留历史摘录，需复查";
@@ -653,8 +658,7 @@ export class AnnotationService {
 		if (!draft.manualText?.trim() && !draft.aiText?.trim() && !annotationColor(draft.color) && !draft.excerptListed) throw new Error("请填写备注、选择颜色或收录摘录");
 		if ((await this.findAnnotationsForSelection(selection)).length) throw new Error("此选区已有批注，请重新打开后继续修改");
 		const source = this.app.vault.getAbstractFileByPath(selection.sourcePath);
-		if (!(source instanceof TFile)) throw new Error("批注来源不存在");
-		const content = await this.app.vault.read(source);
+		const content = await this.sourceText(selection.sourcePath);
 		const { id, receipt } = prepareExcerpt({ ...selection, bilingual: undefined }, content);
 		const annotationPath = `${ANNOTATION_FOLDER}/${id}.md`;
 		const now = new Date().toISOString();
@@ -667,7 +671,7 @@ export class AnnotationService {
 		}, draft, now);
 		await this.ensureFolder(ANNOTATION_FOLDER);
 		await this.verifySelection(selection);
-		if (this.app.vault.getAbstractFileByPath(selection.sourcePath) !== source || await this.app.vault.read(source) !== content) throw new Error("批注来源在保存前已变化，请重新选择");
+		if (this.app.vault.getAbstractFileByPath(selection.sourcePath) !== source || await this.sourceText(selection.sourcePath) !== content) throw new Error("批注来源在保存前已变化，请重新选择");
 		try { await this.app.vault.create(annotationPath, this.renderNewDocument(record)); }
 		catch (error) {
 			const saved = await this.loadAnnotation(annotationPath, id);
@@ -686,13 +690,13 @@ export class AnnotationService {
 	async findAnnotationsForSelection(selection: AnnotationSelection): Promise<AnnotationRecord[]> {
 		if (!selection.pdfExcerpt) await this.verifySelection(selection);
 		const sourceFile = this.app.vault.getAbstractFileByPath(selection.sourcePath);
-		if (!(sourceFile instanceof TFile)) return [];
+		if (!(sourceFile instanceof TFile) && !isClipperPath(selection.sourcePath)) return [];
 		if (selection.pdfExcerpt) {
 			const prepared = await verifyPdfSelection(this.app, selection);
 			const excerpt = await this.loadAnnotation(`${ANNOTATION_FOLDER}/${prepared.id}.md`, prepared.id);
 			return excerpt?.pdfExcerpt && excerpt.sourcePath === selection.sourcePath && objectDigest(excerpt.pdfExcerpt) === objectDigest(prepared.receipt) ? [excerpt] : [];
 		}
-		const source = await this.app.vault.read(sourceFile), matches: AnnotationRecord[] = [];
+		const source = await this.sourceText(selection.sourcePath), matches: AnnotationRecord[] = [];
 		if (selection.sourceRevision) {
 			const canonical = prepareExcerpt({ ...selection, bilingual: undefined }, source);
 			const ids = new Set([canonical.id, prepareExcerpt(selection, source).id]);
@@ -703,6 +707,7 @@ export class AnnotationService {
 					&& objectDigest(excerpt.excerpt) === objectDigest(canonical.receipt)) matches.push(excerpt);
 			}
 		}
+		if (!(sourceFile instanceof TFile) || isClipperPath(selection.sourcePath)) return matches;
 		const annotationPath = await this.resolveAnnotationPath(sourceFile);
 		const annotationFile = this.app.vault.getAbstractFileByPath(annotationPath);
 		if (!(annotationFile instanceof TFile)) return matches;
@@ -728,15 +733,14 @@ export class AnnotationService {
 		if (takeProof || (draft.excerptListed && !latest.excerpt && !latest.pdfExcerpt)) {
 			if (!selection || selection.sourcePath !== latest.sourcePath || selection.selectedText !== latest.selectedText || !latest.sourceAnchor) throw new Error("请重新划选原文后收录摘录");
 			const source = this.app.vault.getAbstractFileByPath(latest.sourcePath);
-			if (!(source instanceof TFile)) throw new Error("摘录来源不存在");
-			const content = await this.app.vault.read(source);
+			const content = await this.sourceText(latest.sourcePath);
 			if (findSourceAnchorOffset(content, latest.selectedText, latest.sourceAnchor) !== selection.sourceStart) throw new Error("原文选区已变化，请重新划选");
 			await this.verifySelection(selection);
 			const { receipt } = prepareExcerpt(selection, content);
 			const sourceAnchor = { start: selection.sourceStart, end: selection.sourceEnd, prefix: selection.prefix, suffix: selection.suffix };
 			if (latest.bilingual && (sourceAnchor.start !== latest.sourceAnchor.start || sourceAnchor.end !== latest.sourceAnchor.end)) throw new Error("双语批注来源已变化，请保留原记录");
 			if (latest.bilingual) await verifyBilingual(this.app, latest);
-			if (this.app.vault.getAbstractFileByPath(latest.sourcePath) !== source || await this.app.vault.read(source) !== content) throw new Error("摘录来源在保存前已变化，请重新选择");
+			if (this.app.vault.getAbstractFileByPath(latest.sourcePath) !== source || await this.sourceText(latest.sourcePath) !== content) throw new Error("摘录来源在保存前已变化，请重新选择");
 			base = { ...latest, sourceAnchor, excerpt: receipt, ...(takeProof ? { bilingual: selection.bilingual, excerptListed: latest.excerptListed ?? listedExcerpt(latest) } : {}) };
 		}
 		if (draft.aiProvider && draft.aiText?.trim()) {
