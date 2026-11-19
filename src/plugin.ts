@@ -1052,7 +1052,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, storedSettings) as DashboardSettings;
 		this.settings.clipperDirectory = typeof storedSettings.clipperDirectory === "string" && path.isAbsolute(storedSettings.clipperDirectory) ? storedSettings.clipperDirectory : "";
 		this.settings.clipperProgress = storedSettings.clipperProgress && typeof storedSettings.clipperProgress === "object" && !Array.isArray(storedSettings.clipperProgress) ? storedSettings.clipperProgress as DashboardSettings["clipperProgress"] : {};
-		setClipperDirectory(this.app, this.settings.clipperDirectory);
+		setClipperDirectory(this.app, this.settings.clipperDirectory || this.getActiveVaultRoot());
 		this.settings.annotationColorMeanings = normalizeAnnotationColorMeanings(storedSettings.annotationColorMeanings);
 		this.settings.fulltextUnpaywallEnabled=storedSettings.fulltextUnpaywallEnabled===true;
 		this.settings.fulltextUnpaywallEmail=typeof storedSettings.fulltextUnpaywallEmail==="string"?storedSettings.fulltextUnpaywallEmail.slice(0,254):"";
@@ -2705,7 +2705,9 @@ export default class AgentDashboardPlugin extends Plugin {
 	/** Explicit read-only inspection; never initializes reading recovery or models. */
 	async configureClipper(root: string): Promise<void> {
 		if (root && (!path.isAbsolute(root) || !(await fs.promises.stat(root)).isDirectory())) throw new Error("请输入可读取的本机目录");
-		setClipperDirectory(this.app, root); this.settings.clipperDirectory = root; await this.saveSettings();
+		setClipperDirectory(this.app, root || this.getActiveVaultRoot());
+		this.settings.clipperDirectory = root;
+		await this.saveSettings();
 	}
 	async openClippedPaper(key: string): Promise<ClipperReaderView> {
 		const existing = this.app.workspace.getLeavesOfType(CLIPPER_READER).find(leaf => leaf.view instanceof ClipperReaderView && leaf.view.key === key);
@@ -3155,11 +3157,11 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	/** Absolute filesystem path of the active vault (desktop adapter only). */
 	getActiveVaultRoot(): string {
-		const adapter = this.app.vault.adapter as unknown as {
+		const adapter = this.app?.vault?.adapter as unknown as {
 			getBasePath?: () => string;
 		};
 		try {
-			return typeof adapter.getBasePath === "function" ? adapter.getBasePath() : "";
+			return typeof adapter?.getBasePath === "function" ? adapter.getBasePath() : "";
 		} catch {
 			return "";
 		}

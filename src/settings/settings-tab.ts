@@ -825,10 +825,10 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			true,
 		);
 		let directory = this.plugin.settings.clipperDirectory;
-		new Setting(containerEl).setName("Paper Clipper 文献目录").setDesc("直接读取每篇论文的英文、译文和配图。阅读记录与批注保存在当前知识库。")
-			.addText(text => text.setValue(directory).setPlaceholder("选择本机目录的绝对路径").onChange(value => { directory = value.trim(); }))
+		new Setting(containerEl).setName("Paper Clipper 文献目录").setDesc("默认在当前库的一级论文文件夹中查找 paper.md，并读取对应译文和配图。论文存放在库外时，可指定目录；清空后保存即可恢复自动识别。")
+			.addText(text => text.setValue(directory).setPlaceholder("自动使用当前库").onChange(value => { directory = value.trim(); }))
 			.addButton(button => button.setButtonText("保存目录").onClick(async () => {
-				try { await this.plugin.configureClipper(directory); new Notice("文献目录已保存，刷新文献库即可查看"); } catch (error) { new Notice(String(error)); }
+				try { await this.plugin.configureClipper(directory); new Notice(directory ? "已使用指定文献目录" : "已恢复自动识别当前库"); } catch (error) { new Notice(String(error)); }
 			}));
 		new Setting(containerEl)
 			.setName("默认双栏模式")
