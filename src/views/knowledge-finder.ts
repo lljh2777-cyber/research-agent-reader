@@ -8,16 +8,43 @@ import type AgentDashboardPlugin from "../plugin";
 
 export const KNOWLEDGE_FINDER = "paper-local-knowledge-finder";
 type Hit = { title: string; topic: string; path: string; text: string; personal: boolean; paper: boolean; score: number; citation?: string; open(): Promise<void> };
-export function snippetScore(query: string, value: string): number {
-	const phrase=query.trim().normalize("NFKC").toLowerCase(), text=value.normalize("NFKC").toLowerCase();
-	if (!phrase) return 0;
-	if (text.includes(phrase)) return 20 + Math.min(4,text.split(phrase).length-1);
-	const topic=phrase.replace(/是什么|是什么意思|什么是|为什么|怎么|如何|我读过的|在哪篇论文|[？?]/g," ");
-	const terms=tokenizeForLexicalRetrieval(topic,24);
-	if(!terms.length)return 0;
-	const matched=terms.filter(t=>text.includes(t)).length;
-	return matched>=Math.max(1,Math.ceil(terms.length*.65)) ? matched/terms.length*10 : 0;
+function prepareSnippetScorer(query: string): (value: string) => number {
+	const phrase = query.trim().normalize("NFKC").toLowerCase();
+	const topic = phrase.replace(/是什么|是什么意思|什么是|为什么|怎么|如何|我读过的|在哪篇论文|[？?]/g, " ");
+	const terms = tokenizeForLexicalRetrieval(topic, 24);
+	const minimum = Math.max(1, Math.ceil(terms.length * 0.65));
+	return value => {
+		if (!phrase) return 0;
+		const text = value.normalize("NFKC").toLowerCase();
+		if (text.includes(phrase)) return 20 + Math.min(4, text.split(phrase, 5).length - 1);
+		const matched = terms.filter(term => text.includes(term)).length;
+		return matched >= minimum ? matched / terms.length * 10 : 0;
+	};
 }
+
+function renderHits(result: HTMLElement, title: string, hits: Hit[], query: string): void {
+	if (!hits.length) return;
+	result.createEl("h3", { text: title });
+	const cards = result.createDiv();
+	const more = result.createEl("button", { text: "显示更多" });
+	const term = query.split(/\s+/)[0].toLocaleLowerCase();
+	let shown = 0;
+	const showPage = () => {
+		for (const hit of hits.slice(shown, shown + 15)) {
+			const card = cards.createEl("article");
+			const open = card.createEl("button", { text: hit.title + " · " + hit.topic });
+			open.onclick = () => void hit.open().catch(error => new Notice(String(error)));
+			const start = Math.max(0, hit.text.toLocaleLowerCase().indexOf(term) - 95);
+			const end = start + 340;
+			card.createEl("p", { text: (start ? "…" : "") + hit.text.slice(start, end) + (end < hit.text.length ? "…" : "") });
+		}
+		shown += 15;
+		more.hidden = shown >= hits.length;
+	};
+	more.onclick = showPage;
+	showPage();
+}
+
 export class KnowledgeFinder extends ItemView {
 	private active?: AbortController;
 	private input?: HTMLInputElement;
@@ -40,22 +67,14 @@ export class KnowledgeFinder extends ItemView {
 			if(!query){status.setText("请输入要找的知识点。");return false;}
 			status.setText("正在查找本地片段…");
 			try {
-				const hits=await this.find(query,ctl.signal);ctl.signal.throwIfAborted();
+				const warnings: string[] = [];
+				const hits=await this.find(query,ctl.signal,warnings);ctl.signal.throwIfAborted();
 				hits.sort((a,b)=>Number(b.personal)-Number(a.personal)||b.score-a.score||a.title.localeCompare(b.title));
 				evidence=hits.filter(h=>h.paper).sort((a,b)=>b.score-a.score).slice(0,8);lastQuery=query;
 				status.setText(hits.length ? "找到 "+hits.length+" 个相关片段" : "库内没有匹配片段，可换用论文中的术语。");
-				for(const personal of [true,false]){
-					const group=hits.filter(h=>h.personal===personal);if(!group.length)continue;
-					result.createEl("h3",{text:personal?"我读过、标过或问过的片段":"其他库内正文"});
-					let shown=0;
-					const more=result.createEl("button",{text:"显示更多"});
-					const display=()=>{for(const h of group.slice(shown,shown+15)){
-						const card=document.createElement("article");result.insertBefore(card,more);
-						const b=card.createEl("button",{text:h.title+" · "+h.topic});b.onclick=()=>void h.open().catch(e=>new Notice(String(e)));
-						const at=h.text.toLocaleLowerCase().indexOf(query.split(/\s+/)[0].toLocaleLowerCase());const start=Math.max(0,at-95);
-						card.createEl("p",{text:(start?"…":"")+h.text.slice(start,start+340)+(start+340<h.text.length?"…":"")});
-					}shown+=15;more.hidden=shown>=group.length;};display();more.onclick=display;
-				}
+				renderHits(result, "我读过、标过或问过的片段", hits.filter(hit => hit.personal), query);
+				renderHits(result, "其他库内正文", hits.filter(hit => !hit.personal), query);
+				if (warnings.length) result.createEl("p", { text: warnings.join("；") });
 				return true;
 			}catch(error){if(!ctl.signal.aborted)status.setText(String(error));return false;}
 		};
@@ -67,19 +86,32 @@ export class KnowledgeFinder extends ItemView {
 		topic.onclick=()=>{const q=input.value.trim();if(q)void this.plugin.activateLearningSpace({kind:"topic",subject:q});};
 		input.focus();
 	}
-	private async find(query:string,signal:AbortSignal):Promise<Hit[]> {
-		const hits:Hit[]=[];
+	private async find(query:string,signal: AbortSignal, warnings: string[] = []): Promise<Hit[]> {
+		const hits: Hit[] = [];
+		const scoreSnippet = prepareSnippetScorer(query);
 		const add=(title:string,topic:string,path:string,text:string,personal:boolean,paper:boolean,open:Hit["open"], locator?: {offset:number;digest:string})=>{
-			const score=snippetScore(query,text);if(!score)return;
+			const score=scoreSnippet(text);if(!score)return;
 			const citation=locator ? "obsidian://rar-paper-evidence?"+new URLSearchParams({source:path,at:String(locator.offset),digest:locator.digest}).toString() : undefined;
 			hits.push({title,topic,path,text,personal,paper,score,open,citation});
 		};
 		const directory=clipperDirectory(this.app);
 		if(directory){
-			const scan=await directory.scan(signal);
+			const scan = await directory.scan(signal).catch((error: unknown) => {
+				signal.throwIfAborted();
+				return { papers: [], issues: [String(error)] };
+			});
+			if (scan.issues.length) warnings.push("部分外部文献未能检索：" + scan.issues.join("；"));
 			for(const p of scan.papers)for(const lang of (p.bilingual?["en","zh-CN"]:["en"]) as BilingualLanguage[]){
 				signal.throwIfAborted();const source=CLIPPER_PREFIX+p.key+(lang==="en"?"/paper.md":"/paper.zh-CN.md");
-				const raw=await directory.text(source),version=bytesDigest(new TextEncoder().encode(raw));
+				let raw: string;
+				try {
+					raw = await directory.text(source);
+				} catch (error) {
+					signal.throwIfAborted();
+					warnings.push(p.title + " · " + String(error));
+					continue;
+				}
+				const version = bytesDigest(new TextEncoder().encode(raw));
 				const history=this.plugin.settings.clipperProgress[p.key],seen=history?.visited || [];
 				const blocks=parseBilingualMarkdown(raw).blocks;let section="";
 				for(const b of blocks){const fragment=raw.slice(b.start,b.end);if(b.kind==="heading")section=fragment.replace(/^#+\s*/,"").trim();
