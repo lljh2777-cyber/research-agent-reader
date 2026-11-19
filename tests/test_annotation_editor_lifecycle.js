@@ -18,7 +18,7 @@ class Element extends EventTarget {
 }
 class Scope { register(modifiers, key, run) { this.save = run; } }
 const { normalizeAnnotationColorMeanings } = loadReading("annotations/colors.ts");
-const { AnnotationPopover } = loadReading("annotations/annotation-popover.ts", { obsidian: { Component: class {}, Scope, Notice: class {}, setIcon() {} } });
+const { AnnotationPopover } = loadReading("annotations/annotation-popover.ts", { obsidian: { Component: class {}, Scope, Notice: class {}, setIcon() {}, MarkdownRenderer: { async render(_app, text, element) { element.setText(text); } } } });
 globalThis.window = { confirm: () => true };
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function fixture(record = { id: "ann-1", annotationPath: "wiki/annotations/source.md", sourcePath: "source.md", selectedText: "Selected source", manualText: "saved", aiText: "existing AI", aiProvider: "provider", archiveTargets: [] }) {
