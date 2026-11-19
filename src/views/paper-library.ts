@@ -13,6 +13,7 @@ import { continuationBlockReason } from "../library/paper-continuation";
 
 export const PAPER_LIBRARY_VIEW_TYPE = "research-paper-library";
 export interface PaperLibraryHost extends ReadingStateHost, PendingCenterHost {
+	subscribeClipperChanges(listener: () => boolean): () => void;
 	inspectPaperLibrary(signal?: AbortSignal, verifyMineruPath?: string): Promise<LibraryReadResult>;
 	openLibraryObject(item: LibraryObjectSummary, read: boolean, signal: AbortSignal): Promise<void>;
 	openLibraryCodeLink(paperKey: string, link: LibraryCodeLink, signal: AbortSignal): Promise<void>;
@@ -64,7 +65,18 @@ export class PaperLibraryView extends ItemView {
 		this.selectedKey = typeof state?.selectedKey === "string" ? state.selectedKey.slice(0, 2048) : "";
 		this.renderShell();
 	}
-	async onOpen(): Promise<void> { this.closed = false; this.renderShell(); await this.browser.refresh(); }
+	async onOpen(): Promise<void> {
+		this.closed = false;
+		this.renderShell();
+		this.register(this.host.subscribeClipperChanges(() => {
+			if (this.closed) return true;
+			if (this.editingRecord || this.action || this.browser.busy) return false;
+			if (this.attention && !this.attention.refreshIfIdle()) return false;
+			void this.browser.refresh();
+			return true;
+		}));
+		await this.browser.refresh();
+	}
 	async onClose(): Promise<void> { this.closed = true; this.attention?.dispose(); this.browser.dispose(); this.readingEditor.dispose(); this.primaryEditor.dispose(); this.action?.abort(); this.contentEl.empty(); }
 	async revealPaper(paperId: string): Promise<void> {
 		if (this.closed || this.editingRecord || this.action) throw new Error("请先结束当前文献操作后再打开记录");
@@ -154,7 +166,8 @@ export class PaperLibraryView extends ItemView {
 			row.disabled = this.editingRecord || Boolean(this.action);
 			row.className = "rar-library-row"; row.dataset.paperKey = paper.key; row.setAttribute("aria-pressed", String(paper.key === this.selectedKey));
 			row.createSpan({ text: paper.title, cls: "rar-library-row-title" });
-			row.createSpan({ text: `${associationLabel(paper)} · ${paper.objects.length} 项内容`, cls: "rar-library-muted" });
+			const bilingualLabel = paper.objects.some(item => item.source?.bilingual) ? " · 中英双版" : "";
+			row.createSpan({ text: `${associationLabel(paper)} · ${paper.objects.length} 项内容${bilingualLabel}`, cls: "rar-library-muted" });
 			row.createSpan({ text: paperStateLabel(paper.readingState), cls: "rar-library-muted" });
 			row.createSpan({ text: libraryRowContext(paper), cls: "rar-library-row-context" });
 		}

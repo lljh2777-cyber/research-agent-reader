@@ -31,6 +31,11 @@ export class LibraryAttentionList {
 		void this.controller.refresh();
 	}
 	setQuery(query: string): void { this.query = query; this.limit = 40; this.render(); }
+	refreshIfIdle(): boolean {
+		if (this.closed || this.action || this.controller.busy) return false;
+		void this.controller.refresh();
+		return true;
+	}
 	dispose(): void { this.closed = true; this.controller.dispose(); this.action?.abort(); this.contentEl.empty(); }
 	private button(parent: HTMLElement, text: string, run: () => void): HTMLButtonElement { const button = parent.createEl("button", { text, attr: { type: "button" } }); button.onclick = run; return button; }
 	private render(): void {

@@ -143,6 +143,7 @@ import { searchTavily, type WebSearchHttpDeps } from "./services/web-search";
 import { AgentDashboardSettingTab } from "./settings/settings-tab";
 import { requestHumanIdentityConfirmation } from "./modals/human-identity-confirmation";
 import { CodePracticeView } from "./views/code-practice";
+import { ClipperChanges } from "./library/clipper-changes";
 import { clipperDirectory, isClipperPath, setClipperDirectory } from "./library/clipper";
 import { CLIPPER_READER, ClipperReaderView } from "./views/clipper-reader";
 import { DashboardView } from "./views/dashboard";
@@ -620,6 +621,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		this.clipperChanges.stop();
 		await this.annotationCliDiscovery.dispose();
 		this.answerExcerptBrowser?.dispose();
 		this.topicLearning?.dispose();
@@ -2703,6 +2705,12 @@ export default class AgentDashboardPlugin extends Plugin {
 		return path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader");
 	}
 	/** Explicit read-only inspection; never initializes reading recovery or models. */
+	private readonly clipperChanges = new ClipperChanges(() => clipperDirectory(this.app)?.root || "");
+
+	subscribeClipperChanges(listener: () => boolean): () => void {
+		return this.clipperChanges.subscribe(listener);
+	}
+
 	async configureClipper(root: string): Promise<void> {
 		if (root && (!path.isAbsolute(root) || !(await fs.promises.stat(root)).isDirectory())) throw new Error("请输入可读取的本机目录");
 		setClipperDirectory(this.app, root || this.getActiveVaultRoot());

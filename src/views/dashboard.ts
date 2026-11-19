@@ -66,6 +66,7 @@ import { dashboardActionGroup } from "../services/dashboard-navigation";
 import { emptyCurationSummary, type CurationNavigation, type DashboardCurationSummary } from "../services/dashboard-curation";
 
 interface DashboardHost extends PluginHost {
+	subscribeClipperChanges(listener: () => boolean): () => void;
 	openKnowledgeMaintenance(entry?: CurationNavigation): void;
 	readDashboardCuration(): Promise<DashboardCurationSummary>;
 	subscribeTaskRuns?(listener: (progressOnly?: boolean) => void): () => void;
@@ -157,6 +158,10 @@ export class DashboardView extends ItemView {
 		this.closed = false;
 		this.renderLoading();
 		this.registerVaultRefreshEvents();
+		this.register(this.plugin.subscribeClipperChanges(() => {
+			if (!this.closed) this.scheduleReload();
+			return true;
+		}));
 		this.unsubscribeTaskRuns?.();
 		this.unsubscribeTaskRuns = this.plugin.subscribeTaskRuns?.((progressOnly) => {
 			if (!this.closed) { if (progressOnly) this.refreshIngestProgress(); else void this.loadAndRender(); }
