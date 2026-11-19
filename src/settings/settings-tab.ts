@@ -2010,6 +2010,17 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			"先选择已有配置或新建配置，再按页面顺序填写供应商、凭据、endpoint 和模型。",
 		);
 		const profiles = this.plugin.settings.providerProfiles;
+		for (const [scene, label] of [["annotation", "批注提问"], ["reading", "全文带读"], ["query", "库内问答"]] as const) {
+			new Setting(containerEl).setName(label + "使用的模型").addDropdown(drop => {
+				drop.addOption("", "共用默认模型");
+				for (const profile of profiles.filter(item => item.lastTest?.ok)) drop.addOption(profile.id, profile.name);
+				drop.setValue(this.plugin.settings.sceneProfiles[scene] || "").onChange(async id => {
+					this.plugin.settings.sceneProfiles[scene] = id;
+					if (scene === "annotation" && !id) this.plugin.settings.annotationBackendId = "auto";
+					await this.plugin.saveSettings();
+				});
+			});
+		}
 		const selectedProfile = this.getEditorProviderProfile();
 		const profileSetting = new Setting(containerEl)
 			.setName("配置")

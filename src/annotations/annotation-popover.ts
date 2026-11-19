@@ -325,7 +325,7 @@ export class AnnotationPopover extends Component {
 			try {
 				const context = baseline && (baseline.bilingual || !this.selection?.bilingual) ? await this.service.getRecordExplanationContext(baseline) : this.selection!;
 				if (!isCurrent()) return;
-				const explanation = await this.service.generateExplanation(context, cancel => { if (isCurrent()) this.cancelGeneration = cancel; else cancel(); },{question:question?.value,depth:deep?"context":"brief"});
+				const explanation = await this.service.generateExplanation(context, cancel => { if (isCurrent()) this.cancelGeneration = cancel; else cancel(); },{profileId:retryProfile?.value,question:question?.value,depth:deep?"context":"brief"});
 				if (!isCurrent()) return;
 				generated = explanation;
 				const asked = question?.value.trim();
@@ -345,6 +345,9 @@ export class AnnotationPopover extends Component {
 				if (isCurrent()) { generating = false; this.cancelGeneration = null; refresh(); }
 			}
 		};
+		const retryProfile = explanationPanel?.createEl("select", { attr: { "aria-label": "本次批注使用的模型" } });
+		retryProfile?.createEl("option", { value: "", text: "使用批注默认模型" });
+		for (const profile of this.service.explanationProfiles?.() || []) retryProfile?.createEl("option", { value: profile.id, text: profile.name });
 		generate?.addEventListener("click",()=>void explain(false)); expand?.addEventListener("click",()=>void explain(true));
 		const submit = async () => {
 			if (this.closed || this.saving || save.disabled) return;

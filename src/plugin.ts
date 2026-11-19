@@ -1064,6 +1064,11 @@ export default class AgentDashboardPlugin extends Plugin {
 			? storedSettings.providerProfiles.slice(0, 20).map((profile) => normalizeProviderProfile(profile))
 			: [];
 		this.settings.providerProfiles = normalizedProfiles;
+		this.settings.sceneProfiles = {};
+		for (const scene of ["reading", "query", "annotation"] as const) {
+			const id = asRecord(storedSettings.sceneProfiles)[scene];
+			if (typeof id === "string" && id) this.settings.sceneProfiles[scene] = id;
+		}
 		this.settings.activeProviderId = String(storedSettings.activeProviderId || "");
 		const providerTimeout = Number.parseInt(String(storedSettings.providerTimeoutSeconds || ""), 10);
 		this.settings.providerTimeoutSeconds = Number.isFinite(providerTimeout)
@@ -1831,7 +1836,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	makeQuerySession(title = "新对话"): QuerySession {
 		const now = new Date().toISOString();
-		const queryBackendId = this.resolveQueryBackendId(this.settings.queryDefaultBackendId);
+		const queryBackendId = this.resolveQueryBackendId(this.settings.sceneProfiles?.query || this.settings.activeProviderId || this.settings.queryDefaultBackendId);
 		const directApi = !isCliBackendId(queryBackendId);
 		const defaultRetrievalMode = this.settings.queryDefaultRetrievalMode === "vault"
 			? "vault"

@@ -818,10 +818,12 @@ export class AnnotationService {
 		};
 	}
 
+	explanationProfiles() { return this.plugin.getVerifiedProviderProfiles(); }
+
 	async generateExplanation(
 		selection: Pick<AnnotationSelection, "selectedText" | "section" | "context" | "sourcePath" | "bilingual">,
 		registerCancel: (cancel: () => void) => void,
-		request: { question?: string; depth?: "brief" | "context" } = {},
+		request: { profileId?: string; question?: string; depth?: "brief" | "context" } = {},
 	): Promise<AnnotationExplanation> {
 		this.requireExplanationProof(selection);
 		const proof = selection.bilingual;
@@ -834,7 +836,7 @@ export class AnnotationService {
 			: selection.context;
 		if (proof && context.length > 16000) throw new Error("双语当前段落超过请求上限；请选择较短段落");
 		const webSearchEnabled = this.plugin.settings.annotationWebSearchEnabled === true;
-		const configuredBackend = this.plugin.settings.annotationBackendId || "auto";
+		const configuredBackend = request.profileId || this.plugin.settings.sceneProfiles?.annotation || this.plugin.settings.annotationBackendId || "auto";
 		const nativeOpenCode = configuredBackend === "opencode" && !webSearchEnabled && this.plugin.settings.openCodeConfigSource === "official";
 		const nativeText = configuredBackend === "codebuddy" || configuredBackend === "qoderclicn" || nativeOpenCode;
 		// Give the model and exact-quote validator the same visible prose. Link destinations

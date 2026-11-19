@@ -217,6 +217,7 @@ export interface DashboardSettings {
 	actionExecutionDefaults: Record<string, ActionExecutionDefault>;
 	queryDefaultBackendId: string;
 	queryDefaultRetrievalMode: "vault" | "web";
+	sceneProfiles: Partial<Record<"annotation" | "reading" | "query", string>>;
 	activeProviderId: string;
 	providerProfiles: ProviderProfile[];
 	providerTimeoutSeconds: number;
@@ -724,6 +725,7 @@ export const DEFAULT_SETTINGS: DashboardSettings = {
 	actionExecutionDefaults: normalizeActionExecutionDefaults(DEFAULT_ACTION_EXECUTION_DEFAULTS),
 	queryDefaultBackendId: "codex-cli",
 	queryDefaultRetrievalMode: "web",
+	sceneProfiles: {},
 	activeProviderId: "",
 	providerProfiles: [],
 	providerTimeoutSeconds: 20,

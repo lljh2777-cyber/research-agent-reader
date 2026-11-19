@@ -746,7 +746,8 @@ export class ReadingWorkspaceView extends ItemView {
 		backend.onchange = () => { model.parentElement!.hidden = backend.value !== "codex-cli"; };
 		if (entry?.source) { kind.value = entry.source.kind; path.value = entry.source.path; }
 		kind.onchange = () => sourceLocation.refresh(); sourceLocation.refresh();
-		if (entry?.backend && [...backend.options].some(o => o.value === entry.backend)) backend.value = entry.backend;
+		const preferred = entry?.backend || (kind.value !== "code" && (this.plugin.settings.sceneProfiles?.reading || this.plugin.settings.activeProviderId));
+		if (preferred && [...backend.options].some(option => option.value === preferred)) backend.value = preferred;
 		model.parentElement!.hidden = backend.value !== "codex-cli";
 		const startNew = element(modal.contentEl, "label", "reading-new-session-option"); const forceNew = element(startNew, "input"); forceNew.type = "checkbox"; element(startNew, "span", "", "为同一原文重新建立会话");
 		element(modal.contentEl, "p", "reading-modal-intro", "默认继续相同原文的已有会话，并沿用该会话的模型。原文变化时会创建新会话。");

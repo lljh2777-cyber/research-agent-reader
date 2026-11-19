@@ -1732,6 +1732,10 @@ export class QueryWikiView extends ItemView {
 			this.activeMessageId = "";
 			this.stopRequested = false;
 			await this.render({ scrollToBottom: true });
+			if (completedRun?.status === "failed" && !this.queryDrafts.get(session.id)) {
+				this.queryDrafts.set(session.id, question);
+				if (this.session.id === session.id) { this.pendingImages = attachments; await this.render(); }
+			}
 			if (!completedRun) console.warn("Query run completed without a persisted task record");
 		}
 	}
