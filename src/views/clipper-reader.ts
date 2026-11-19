@@ -66,7 +66,7 @@ export class ClipperReaderView extends ItemView {
 		const history = this.plugin.settings.clipperProgress, old = history[this.key];
 		const visit = state ? {lang:state.active,digest:state.digests[state.active],block:state.positions[state.active].blockId} : monoBlock ? {lang:"en" as const,digest,block:monoBlock} : undefined;
 		const seen = old?.visited || [], visited = visit ? [...seen.filter(v=>v.lang!==visit.lang || v.digest!==visit.digest || v.block!==visit.block),visit].slice(-500) : seen;
-		history[this.key] = { title, digest, visited, date: date.toISOString(), section, days: [...new Set([...(old?.days || []), day])].slice(-45), ...(state ? { position: state } : {}), ...(top !== undefined ? { top } : {}) };
+		history[this.key] = { ...(old?.digest === digest ? old : {}), title, digest, visited, date: date.toISOString(), section, days: [...new Set([...(old?.days || []), day])].slice(-45), ...(state ? { position: state } : {}), ...(top !== undefined ? { top } : {}) };
 		window.clearTimeout(this.timer);
 		this.timer = window.setTimeout(() => { this.timer = undefined; void this.plugin.saveSettings().catch(e => new Notice(String(e))); }, 400);
 	}
@@ -80,10 +80,11 @@ export class ClipperReaderView extends ItemView {
 			header.createEl("h2", { text: paper.title, attr: { title: paper.title } });
 			header.createEl("button", { text: "AI 带读全文" }).onclick = () => void this.plugin.startClippedReading(source).catch(e => new Notice(String(e)));
 			if (paper.bilingual) {
+				const pairedHost = host.createDiv();
 				try {
 					const doc = await loadBilingualDocument(dir, source, signal); signal.throwIfAborted();
 					host.addClass("rar-clip-paired");
-					const b = new BilingualReader({ app: this.app, host: host.createDiv(), document: doc, signal, ordinary: () => {}, hideOrdinary: true,
+					const b = new BilingualReader({ app: this.app, host: pairedHost, document: doc, signal, ordinary: () => {}, hideOrdinary: true,
 						annotate: () => this.plugin.openSelectionAnnotation(), outlineLeaf: this.leaf, state: saved?.position, defaultLinked: this.plugin.settings.mineruReaderBilingualLinked,
 						ratio: this.plugin.settings.mineruReaderBilingualSplitRatio, renderMarkdown: renderClip, onState: state => {
 							const file = doc.files[state.active], block = file.blocks.find(x => x.id === state.positions[state.active].blockId);
@@ -91,7 +92,14 @@ export class ClipperReaderView extends ItemView {
 							this.track(paper.title, paper.englishDigest, state, undefined, h ? file.text.slice(h.start,h.end).replace(/^#+\s*/, "").trim() : "正文");
 						} });
 					this.bilingual = b; this.addChild(b); await b.render(); return;
-				} catch (error) { signal.throwIfAborted(); host.removeClass("rar-clip-paired"); host.createEl("p", { text: "对照资料暂不可用，已打开英文原文。 " + String(error) }); }
+				} catch (error) {
+					signal.throwIfAborted();
+					if (this.bilingual) this.removeChild(this.bilingual);
+					this.bilingual = undefined;
+					pairedHost.remove();
+					host.removeClass("rar-clip-paired");
+					host.createEl("p", { text: "对照资料暂不可用，已打开英文原文。 " + String(error) });
+				}
 			}
 			const text = await dir.text(source); signal.throwIfAborted();
 			const wrapper = host.createDiv("markdown-reading-view"), article = wrapper.createEl("article", { cls: "markdown-rendered" });
@@ -108,7 +116,7 @@ export class ClipperReaderView extends ItemView {
 		const text = await requireClipper(this.app).text(source);
 		const blocks = parseBilingualMarkdown(text).blocks;
 		const block = blocks.find(b => offset >= b.start && offset < b.end);
-		const article = this.mono || this.bilingual?.panes.get(lang)?.article;
+		const article = this.bilingual?.panes.get(lang)?.article ?? (lang === "en" ? this.mono : undefined);
 		const el = block && article?.querySelector('[data-bilingual-anchor="' + block.id + '"]');
 		if (!el) throw new Error("不能确认这个证据段落的位置，请刷新后核对");
 		el.scrollIntoView({ block: "center" });
