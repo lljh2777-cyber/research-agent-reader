@@ -6020,8 +6020,23 @@ body.agent-dashboard-mineru-resizing {
 .agent-dashboard-view .is-secondary .agent-dashboard-action-state:empty { display: none; }
 .agent-dashboard-view .agent-dashboard-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 18px; align-items: start; }
 .agent-dashboard-view :is(.agent-dashboard-recent, .agent-dashboard-panel) { padding: 18px; border: 1px solid var(--dashboard-line); border-radius: 12px; background: transparent; box-shadow: none; }
-.agent-dashboard-view .agent-dashboard-recent { grid-column: span 5; }
-.agent-dashboard-view .agent-dashboard-recent h2 { margin-bottom: 12px; }
+.agent-dashboard-view .agent-dashboard-recent {
+	grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%, 280px),1fr));
+	gap: 16px 28px; padding: clamp(18px, 3cqi, 30px);
+	background: linear-gradient(105deg, var(--dashboard-tint), var(--background-primary) 80%);
+	border-inline-start: 3px solid var(--dashboard-accent);
+}
+.agent-dashboard-view .rar-reading-counts { grid-column: 1 / -1; color: var(--text-muted); border-top: 1px solid var(--dashboard-line); padding-top: 12px; }
+.agent-dashboard-view :is(.rar-reading-last,.rar-reading-week) { min-width: 0; }
+.agent-dashboard-view :is(.rar-reading-last,.rar-reading-week) p { margin: 0; color: var(--text-muted); font-size: var(--font-ui-small); }
+.agent-dashboard-view .agent-dashboard-grid > nav { grid-column: 1 / -1; margin-bottom: 0; }
+.agent-dashboard-view .agent-dashboard-maintenance-grid > :is(.agent-dashboard-followup,.agent-dashboard-heatmap-panel) { grid-column: 1 / -1; }
+.agent-dashboard-view .agent-dashboard-shell :is(h1,h2) { border: 0; background: none; box-shadow: none; }
+.agent-dashboard-view .agent-dashboard-shell :is(h1,h2,.agent-dashboard-recent,.agent-dashboard-panel)::before,
+.agent-dashboard-view .agent-dashboard-shell :is(h1,h2,.agent-dashboard-recent,.agent-dashboard-panel)::after { content: none; }
+
+.agent-dashboard-view .agent-dashboard-recent h2 { margin: 0 0 12px; }
+.agent-dashboard-view .agent-dashboard-recent button.agent-dashboard-recent-item { display: grid; gap: 4px; min-height: 0; padding: 8px 0; }
 .agent-dashboard-view .agent-dashboard-recent-list { display: grid; gap: 4px; }
 .agent-dashboard-view button.agent-dashboard-recent-item { display: flex; align-items: center; gap: 12px; height: auto; min-height: 78px; width: 100%; padding: 12px 8px; text-align: left; white-space: normal; border: 0; border-radius: 8px; background: transparent; box-shadow: none; }
 .agent-dashboard-view button.agent-dashboard-recent-item:hover { background: var(--dashboard-tint); }
@@ -6083,7 +6098,7 @@ body.agent-dashboard-mineru-resizing {
 .agent-dashboard-view .agent-dashboard-maintenance { grid-column: 1 / -1; border-top: 1px solid var(--dashboard-line); padding-top: 14px; }
 .agent-dashboard-view .agent-dashboard-maintenance > summary { cursor: pointer; color: var(--text-muted); font-size: 12px; width: fit-content; padding: 5px 0; }
 .agent-dashboard-view .agent-dashboard-maintenance-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 14px; }
-.agent-dashboard-view .agent-dashboard-maintenance-grid > .agent-dashboard-panel { grid-column: auto; }
+.agent-dashboard-view .agent-dashboard-maintenance-grid > .agent-dashboard-tri-panel { grid-column: auto; }
 .agent-dashboard-view .agent-dashboard-maintenance-grid > .agent-dashboard-list-panel { grid-column: 1 / -1; }
 .agent-dashboard-view .agent-dashboard-gap-row { padding: 10px 0; }
 .agent-dashboard-view .agent-dashboard-empty-state { color: var(--text-muted); font-size: 12px; line-height: 1.7; padding-block: 18px; }
@@ -6108,7 +6123,6 @@ body.agent-dashboard-mineru-resizing {
 	.agent-dashboard-view .agent-dashboard-secondary-actions { gap: 2px; }
 	.agent-dashboard-view button.agent-dashboard-action-button.is-secondary { padding: 6px 8px; }
 	.agent-dashboard-view .agent-dashboard-recent-list { grid-template-columns: 1fr; gap: 2px; }
-	.agent-dashboard-view .agent-dashboard-recent:not(.is-expanded) .agent-dashboard-recent-item:nth-child(n + 2) { display: none; }
 	.agent-dashboard-view button.agent-dashboard-recent-more { display: inline-flex; margin-top: 4px; }
 	.agent-dashboard-view button.agent-dashboard-recent-item { min-height: 63px; padding: 10px 0; }
 	.agent-dashboard-view .agent-dashboard-recent-arrow { display: inline-flex; }

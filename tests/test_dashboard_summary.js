@@ -25,7 +25,7 @@ const fixture = (reviews = [], revisions = []) => {
 	// The dashboard's existing sequence/closed guards also own late summary reads.
 	for (const mode of ["stale", "closed", "error"]) {
 		let release; const pending = new Promise(r => release = r), view = Object.create(DashboardView.prototype); let renders = 0;
-		view.loadSequence = 0; view.closed = false; view.dataService = { load: async () => ({ ready: true }) }; view.plugin = { readDashboardCuration: () => mode === "error" ? Promise.reject(new Error("summary failed")) : pending };
+		view.loadSequence = 0; view.closed = false; view.dataService = { load: async () => ({ ready: true }) }; view.contentEl = { querySelector: () => null }; view.plugin = { inspectPaperLibrary: async () => ({ papers: [], complete: true }), readDashboardCuration: () => mode === "error" ? Promise.reject(new Error("summary failed")) : pending };
 		view.renderDashboard = () => renders++; view.renderError = () => assert.fail("summary error must not blank dashboard");
 		const run = view.loadAndRender(); if (mode === "stale") view.loadSequence++; if (mode === "closed") view.closed = true; release(result); await run;
 		if (mode === "error") { assert.equal(renders, 1); assert.match(view.curationSummary.issues[0], /summary failed/); } else assert.equal(renders, 0);

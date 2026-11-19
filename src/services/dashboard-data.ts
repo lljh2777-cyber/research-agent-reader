@@ -162,7 +162,7 @@ export class DashboardDataService {
 							: "检查链接、结构与来源完整性",
 				},
 				{
-					label: "文献与阅读",
+					label: "论文笔记",
 					value: String(sourceRecords.length),
 					unit: "篇",
 					tone: "neutral",

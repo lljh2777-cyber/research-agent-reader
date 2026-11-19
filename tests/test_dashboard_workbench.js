@@ -6,8 +6,9 @@ const { dashboardActionGroup } = loadReading("services/dashboard-navigation.ts")
 const { ACTIONS } = loadReading("actions.ts");
 const record = (frontmatter = {}, extra = {}) => ({ frontmatter, tags: [], path: "wiki/sources/example.md", name: "example", text: "", ...extra });
 (async () => {
-	assert.deepEqual(ACTIONS.filter(a => a.showInRail !== false && dashboardActionGroup(a.id) === "tools").map(a => a.id), ["code-analysis", "vault-lint", "okf-export"]);
-	for (const id of ["paper-ingest", "pdf-xray", "vault-retrieval", "fulltext-acquisition", "future-action"]) assert.equal(dashboardActionGroup(id), "common");
+	assert.deepEqual(ACTIONS.filter(a => a.showInRail !== false && dashboardActionGroup(a.id) === "tools").map(a => a.id), ["fulltext-acquisition", "paper-ingest", "pdf-xray", "code-analysis"]);
+	for (const id of ["paper-ingest", "pdf-xray", "fulltext-acquisition", "future-action"]) assert.equal(dashboardActionGroup(id), "tools");
+	assert.equal(dashboardActionGroup("vault-retrieval"), "common");
 	assert.equal(ACTIONS.find(a => a.id === "pdf-xray").label, "文献深读");
 	assert.deepEqual(ACTIONS.map(a => a.id), ["fulltext-acquisition", "paper-ingest", "pdf-xray", "code-analysis", "vault-retrieval", "annotation-explain", "vault-lint", "vault-lint-fix", "okf-export"]);
 	const service = new DashboardDataService({}, { getTaskRuns: () => [] });

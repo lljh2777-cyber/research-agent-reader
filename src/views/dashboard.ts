@@ -282,7 +282,6 @@ export class DashboardView extends ItemView {
 		this.contentEl.addClass("agent-dashboard-view");
 		const shell = this.contentEl.createDiv({ cls: "agent-dashboard-shell" });
 		this.renderHeader(shell);
-		this.renderActions(shell);
 		shell.createDiv({ cls: "ingest-progress" });
 		this.refreshIngestProgress();
 		const main = shell.createEl("main", {
@@ -292,13 +291,14 @@ export class DashboardView extends ItemView {
 		this.recentSignature = "";
 		const recent = main.createDiv({ cls: "agent-dashboard-recent", attr: { "aria-label": "最近阅读" } });
 		this.refreshRecentReading(recent);
-		this.renderFollowup(main);
-		this.renderAgentRuns(main);
+		this.renderActions(main);
 
 		const maintenance = main.createEl("details", { cls: "agent-dashboard-maintenance" }); maintenance.open = this.maintenanceExpanded;
-		maintenance.createEl("summary", { text: "知识库维护与详细统计" });
+		maintenance.createEl("summary", { text: "任务、整理记录与统计" });
 		maintenance.addEventListener("toggle", () => { this.maintenanceExpanded = maintenance.open; });
 		const detail = maintenance.createDiv({ cls: "agent-dashboard-maintenance-grid" });
+		this.renderFollowup(detail);
+		this.renderAgentRuns(detail);
 		this.renderStats(detail);
 		this.renderHeatmap(detail);
 		this.renderKnowledgeGaps(detail);
@@ -374,42 +374,43 @@ export class DashboardView extends ItemView {
 	renderActions(parent: HTMLElement): void {
 		const rail = parent.createEl("nav", { cls: "agent-dashboard-action-rail", attr: { "aria-label": "研究知识库操作" } });
 		const primary = rail.createDiv({ cls: "agent-dashboard-primary-actions" });
-		const secondary = rail.createDiv({ cls: "agent-dashboard-secondary-actions", attr: { "aria-label": "常用操作" } });
 		const tools = rail.createEl("details", { cls: "agent-dashboard-tools" });
 		const runningTools = this.currentData.actions.some(action => dashboardActionGroup(action.id) === "tools" && this.plugin.isActionRunning(action.id));
 		tools.open = this.toolsExpanded || runningTools;
-		tools.createEl("summary", { text: "扩展工具：代码、维护与导出" + (runningTools ? " · 有任务运行" : "") });
+		tools.createEl("summary", { text: "更多工具" + (runningTools ? " · 有任务运行" : "") });
 		tools.addEventListener("toggle", () => { if (tools.isConnected) this.toolsExpanded = tools.open; });
-		const toolActions = tools.createDiv({ cls: "agent-dashboard-secondary-actions", attr: { "aria-label": "扩展工具" } });
+		const toolActions = tools.createDiv({ cls: "agent-dashboard-secondary-actions", attr: { "aria-label": "更多工具" } });
 		const library = primary.createEl("button", { cls: "agent-dashboard-action-button is-primary", attr: { type: "button", "aria-label": "文献库" } });
 		library.dataset.actionId = "paper-library";
 		setIcon(library.createSpan({ cls: "agent-dashboard-action-icon" }), "library-big");
 		library.createSpan({ cls: "agent-dashboard-action-label", text: "文献库" });
-		library.createSpan({ cls: "agent-dashboard-action-state", text: "原文版本、阅读会话与笔记" });
+		library.createSpan({ cls: "agent-dashboard-action-state", text: "浏览原文与译文" });
 		library.onclick = () => { void this.plugin.activatePaperLibrary().catch(error => new Notice(String(error))); };
 		for (const [id, label, description, icon, run] of [
-			["learning-space", "阅读空间", "从资料开始，继续对话与导图阅读", "book-open", () => this.plugin.activateLearningSpace({ kind: "document" })],
-			["knowledge-curation", "知识整理", "审阅整理建议，回看修订与索引", "notebook-pen", () => this.plugin.openKnowledgeMaintenance()],
+			["learning-space", "阅读空间", "继续带读与提问", "book-open", () => this.plugin.activateLearningSpace({ kind: "document" })],
+			["vault-retrieval", "查知识点", "检索片段与批注", "search", () => this.plugin.activateQueryWikiView()],
 		] as const) {
 			const button = primary.createEl("button", { cls: "agent-dashboard-action-button is-primary", attr: { type: "button", "aria-label": label } });
 			button.dataset.actionId = id; setIcon(button.createSpan({ cls: "agent-dashboard-action-icon" }), icon);
 			button.createSpan({ cls: "agent-dashboard-action-label", text: label }); button.createSpan({ cls: "agent-dashboard-action-state", text: description });
 			button.onclick = () => { button.disabled = true; void Promise.resolve().then(run).catch(error => new Notice(String(error))).finally(() => { if (button.isConnected) button.disabled = false; }); };
 		}
-		const topic = secondary.createEl("button", { cls: "agent-dashboard-action-button is-secondary", attr: { type: "button", "aria-label": "主题路线（预览）" } });
+		const curation = toolActions.createEl("button", { text: "知识整理", cls: "agent-dashboard-action-button is-secondary" });
+		curation.onclick = () => this.plugin.openKnowledgeMaintenance();
+		const topic = toolActions.createEl("button", { cls: "agent-dashboard-action-button is-secondary", attr: { type: "button", "aria-label": "主题路线（预览）" } });
 		topic.dataset.actionId = "topic-planning";
 		setIcon(topic.createSpan({ cls: "agent-dashboard-action-icon" }), "route");
 		topic.createSpan({ cls: "agent-dashboard-action-label", text: "主题路线（预览）" });
 		topic.onclick = () => { void this.plugin.activateLearningSpace({ kind: "topic" }).catch(error => new Notice(String(error))); };
-		const mainIds = ["paper-ingest", "pdf-xray", "vault-retrieval"];
-		const descriptions: Record<string, string> = { "paper-ingest": "导入论文，整理原文与初始笔记", "pdf-xray": "沿主线阅读，带着问题探索", "vault-retrieval": "从已有文献中查找依据与答案" };
-		const actions = this.currentData.actions.filter(action => action.showInRail !== false);
+		const mainIds = ["paper-ingest", "pdf-xray"];
+		const descriptions: Record<string, string> = { "paper-ingest": "导入论文，整理原文与初始笔记", "pdf-xray": "沿主线阅读，带着问题探索" };
+		const actions = this.currentData.actions.filter(action => action.showInRail !== false && dashboardActionGroup(action.id) === "tools");
 		const ordered = [...mainIds.flatMap(id => actions.filter(a => a.id === id)), ...actions.filter(a => !mainIds.includes(a.id))];
 		ordered.forEach((action) => {
 			const isRunning = this.plugin.isActionRunning(action.id);
 			const runningTask = isRunning ? this.plugin.getRunningTaskRun(action.id) : null;
 			const isStopping = Boolean(runningTask && this.stoppingRunIds.has(runningTask.id));
-			const button = (dashboardActionGroup(action.id) === "tools" ? toolActions : secondary).createEl("button", {
+			const button = toolActions.createEl("button", {
 				cls: "agent-dashboard-action-button is-secondary",
 				attr: {
 					"aria-label": !action.enabled
@@ -477,12 +478,14 @@ export class DashboardView extends ItemView {
 		const signature = JSON.stringify([monday,ordered.map(p=>[p.title,p.date,p.section,p.days])]);
 		if (signature === this.recentSignature) return; this.recentSignature = signature;
 		parent.empty();
-		const button = (row: typeof ordered[number]) => { const item = parent.createEl("button",{cls:"agent-dashboard-recent-item",attr:{type:"button"}}); item.createSpan({text:row.title,cls:"agent-dashboard-recent-title"}); item.createSpan({text:row.section,cls:"agent-dashboard-recent-state"}); item.onclick=row.open; };
-		parent.createEl("h2",{text:"上次读到哪里"});
-		if (ordered.length) button(ordered[0]); else parent.createEl("p",{text:"打开一篇论文后，这里会记住读到的位置。"});
-		parent.createEl("h2",{text:"这周读了什么"});
-		for (const row of weekly) button(row);
-		if (!weekly.length) parent.createEl("p",{text:"本周尚无阅读记录。"});
+		const button = (panel: HTMLElement, row: typeof ordered[number]) => { const item = panel.createEl("button",{cls:"agent-dashboard-recent-item",attr:{type:"button"}}); item.createSpan({text:row.title,cls:"agent-dashboard-recent-title"}); item.createSpan({text:row.section,cls:"agent-dashboard-recent-state"}); item.onclick=row.open; };
+		const last = parent.createDiv("rar-reading-last");
+		const week = parent.createDiv("rar-reading-week");
+		last.createEl("h2",{text:"上次读到哪里"});
+		if (ordered.length) button(last, ordered[0]); else last.createEl("p",{text:"打开一篇论文后，这里会记住读到的位置。"});
+		week.createEl("h2",{text:"这周读了什么"});
+		for (const row of weekly) button(week,row);
+		if (!weekly.length) week.createEl("p",{text:"本周尚无阅读记录。"});
 		parent.createEl("small",{cls:"rar-reading-counts",text:this.libraryCounts});
 
 	}
