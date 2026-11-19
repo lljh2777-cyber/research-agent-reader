@@ -52,9 +52,8 @@ export class BilingualReader extends Component {
 		const outlineButton = outlineLeaf && createSplitOutlineButton(toolbar, outlineLeaf, signal);
 		const headings: Record<BilingualLanguage, OutlineHeading[]> = { en: [], "zh-CN": [] };
 		let detachOutline: (() => void) | undefined;
-		const progressSync = !!doc.selectedFiles && !doc.syncAvailable;
-		const canSync = doc.syncAvailable || progressSync;
-		toolbar.createEl("span", { text: progressSync ? "双语阅读 · 按阅读进度同步，段落对应未确认" : "双语对照 · 结构对应，语义仍需核对" });
+		const canSync = doc.syncAvailable;
+		toolbar.createEl("span", { text: canSync ? "双语对照 · 按段落联动" : "双语阅读 · 段落对应未确认，两栏独立滚动" });
 		const linkedLabel = toolbar.createEl("label", { cls: "agent-bilingual-linked" });
 		this.linkedInput = linkedLabel.createEl("input", { attr: { type: "checkbox", "aria-label": "双栏联动" } });
 		linkedLabel.createSpan({ text: "双栏联动" }); this.linkedInput.checked = this.state.linked; this.linkedInput.disabled = !canSync;
@@ -238,13 +237,6 @@ export class BilingualReader extends Component {
 	}
 	synchronize(from: BilingualLanguage): void {
 		if (this.invalidated || this.options.signal.aborted) return;
-		if (this.options.document.selectedFiles && !this.options.document.syncAvailable) {
-			const source = this.panes.get(from), to = from === "en" ? "zh-CN" : "en", target = this.panes.get(to);
-			if (!source || !target) return;
-			const progress = source.scroller.scrollTop / Math.max(1, source.scroller.scrollHeight - source.scroller.clientHeight);
-			this.programmatic.add(to); target.scroller.scrollTop = progress * Math.max(0, target.scroller.scrollHeight - target.scroller.clientHeight);
-			this.capture(from); this.capture(to); this.message?.setText("已按阅读进度同步；对应段落仍需核对"); this.publish(); return;
-		}
 		if (!this.options.document.syncAvailable) return;
 		this.capture(from); const target = from === "en" ? "zh-CN" : "en", position = correspondingBilingualPosition(this.options.document, from, this.state.positions[from]);
 		if (!position || !this.panes.get(target)?.anchors.has(position.blockId)) { this.message?.setText("此处没有可定位的对应段落"); return; }

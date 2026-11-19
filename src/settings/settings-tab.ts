@@ -838,7 +838,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName("英文／中文双栏").setHeading();
 		new Setting(containerEl)
 			.setName("双语双栏默认联动")
-			.setDesc("首次打开手动双栏或双语对照时默认联动。有有效配对记录时按对应段落同步，否则仅按阅读进度同步；两侧仍有单次同步按钮。续读沿用已保存状态。")
+			.setDesc("首次打开手动双栏或双语对照时默认联动。有可靠配对时按段落联动。没有段落对应时，两栏独立滚动。续读沿用已保存状态。")
 			.addToggle((toggle) => toggle
 				.setValue(this.plugin.settings.mineruReaderBilingualLinked)
 				.onChange(async (value) => {

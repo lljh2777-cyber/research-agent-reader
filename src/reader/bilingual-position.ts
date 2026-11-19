@@ -19,7 +19,7 @@ export function normalizeBilingualState(value: unknown, doc: BilingualDocument, 
 		return digests[language] === doc.files[language].digest && doc.files[language].blocks.some(b => b.id === saved.blockId)
 			? { blockId: String(saved.blockId), progress: bounded(saved.progress) } : { blockId: doc.files[language].blocks[0]?.id || "", progress: 0 };
 	};
-	return { linked: (doc.syncAvailable || !!doc.selectedFiles) && (typeof input.linked === "boolean" ? input.linked : defaultLinked), active: input.active === "zh-CN" ? "zh-CN" : "en",
+	return { linked: doc.syncAvailable && (typeof input.linked === "boolean" ? input.linked : defaultLinked), active: input.active === "en" ? "en" : "zh-CN",
 		...(doc.syncAvailable && !doc.stale && (input.paragraphHover === true || input.paragraphHover === undefined && input.sentenceHover === true)
 			? { paragraphHover: true } : {}),
 		...(noteProperties ? { noteProperties } : {}),
