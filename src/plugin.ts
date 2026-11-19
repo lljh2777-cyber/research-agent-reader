@@ -614,7 +614,8 @@ export default class AgentDashboardPlugin extends Plugin {
 				return true;
 			},
 		});
-		this.addSettingTab(new AgentDashboardSettingTab(this.app, this));
+		this.readerSettingsTab = new AgentDashboardSettingTab(this.app, this);
+		this.addSettingTab(this.readerSettingsTab);
 	}
 
 	async onunload(): Promise<void> {
@@ -3757,6 +3758,13 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.isVaultActionProcessActive(runId);
 	}
 
+	private readerSettingsTab?: AgentDashboardSettingTab;
+	openModelSettings(context: "annotations" | "reading" | "query"): void {
+		const settings = (this.app as typeof this.app & {setting?:{open():void;openTabById(id:string):void}}).setting;
+		if (!settings || !this.readerSettingsTab) return;
+		settings.open();settings.openTabById(this.manifest.id);
+		this.readerSettingsTab.navigateSettings(context === "annotations" ? "annotations" : context === "reading" ? "direct-api" : "tasks");
+	}
 	async openMaintenanceAction(id: "vault-lint" | "okf-export"): Promise<void> {
 		const action = ACTION_BY_ID.get(id);
 		if (!action) return;

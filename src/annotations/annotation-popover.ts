@@ -328,7 +328,12 @@ export class AnnotationPopover extends Component {
 				generated = { ...explanation, text: ai.value };
 				showMessage("解释已生成，可修改后保存");
 			} catch (error) {
-				if (isCurrent()) showMessage(displayError(error));
+				if (isCurrent()) {
+					showMessage(displayError(error));
+					if (/模型|连接|CLI|超时|认证|凭据|API|network|timeout/i.test(displayError(error))) {
+						info.createEl("button",{text:"检查批注模型"}).onclick=()=>this.service.openModelSettings();
+					}
+				}
 			} finally {
 				if (isCurrent()) { generating = false; this.cancelGeneration = null; refresh(); }
 			}

@@ -324,6 +324,8 @@ export class AnnotationService {
 		}
 	}
 
+	openModelSettings(): void { this.plugin.openModelSettings("annotations"); }
+
 	private async sourceText(path: string): Promise<string> {
 		if (isClipperPath(path)) return requireClipper(this.app).text(path);
 		const file = this.app.vault.getAbstractFileByPath(path);

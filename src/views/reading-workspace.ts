@@ -543,6 +543,7 @@ export class ReadingWorkspaceView extends ItemView {
 			for (const entry of node.usage) element(usage, "p", "reading-usage-entry", USAGE_STAGES[entry.stage] + " · " + ({ running: "进行中", done: "已返回", failed: "失败", interrupted: "中断", cached: "复用缓存，无模型调用" })[entry.state] + "\n" + entry.model + "\n输入 " + (entry.input ?? "未报告，文字估算约 " + entry.estimatedInput) + " / 输出 " + (entry.output ?? (entry.estimatedOutput === undefined ? "未知" : "未报告，估算约 " + entry.estimatedOutput)) + " token" + (entry.cachedInput === undefined ? "" : " · 其中缓存输入 " + entry.cachedInput));
 		} else if (node.status === "done" && !this.session!.demo) element(article, "small", "reading-usage-unrecorded", "此回答未记录模型用量");
 		if (node.status === "failed" || node.status === "interrupted") element(article, "small", "reading-usage-unrecorded", "重试会核对原文，匹配的证据选择可复用；讲解将重新请求，已完成的记忆摘要保留。");
+		if (node.status === "failed" && /模型|连接|CLI|超时|认证|凭据|API|network|timeout/i.test(node.error || "")) actionButton(tools,"settings","检查带读模型",()=>this.plugin.openModelSettings("reading"));
 		if (node.status === "failed" || node.status === "interrupted") actionButton(tools, "rotate-cw", "重试", () => this.handle(this.service.generate(this.sessionId, node.id)));
 		if (node.status === "running" || node.status === "pending") actionButton(tools, "square", "停止", () => this.service.stop(this.sessionId, node.id));
 	}

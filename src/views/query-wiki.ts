@@ -115,6 +115,7 @@ interface QueryRunnerHooks {
 }
 
 interface QueryViewHost extends PluginHost {
+	openModelSettings?(context:"query"):void;
 	lightPaperIngestAvailable(): { ready: boolean; reason: string };
 	lightAgentMineruReady(): boolean;
 	getActiveDirectProviderSummary(): { name: string; model: string } | null;
@@ -638,6 +639,9 @@ export class QueryWikiView extends ItemView {
 				cls: "query-wiki-error",
 				text: message.error || "本轮查询未完成。",
 			});
+			if (this.plugin.openModelSettings && /模型|连接|CLI|超时|认证|凭据|API|network|timeout/i.test(message.error || "")) {
+				body.createEl("button",{text:"检查问答模型"}).onclick=()=>this.plugin.openModelSettings?.("query");
+			}
 		} else if (message.content) {
 			const markdown = body.createDiv({ cls: "query-wiki-markdown markdown-rendered" });
 			await MarkdownRenderer.render(this.app, message.content, markdown, "", this);

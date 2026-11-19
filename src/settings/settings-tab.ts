@@ -182,7 +182,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			try {const value=email.trim()?contactEmail(email):"";this.plugin.settings.fulltextUnpaywallEmail=value;await this.plugin.saveSettings();status.setText("联系邮箱已保存，新查询将使用此配置");}catch{status.setText("邮箱格式无效或保存失败，请检查后重试");}
 		}));
 	}
-	private navigateSettings(page: SettingsPage): void {
+	navigateSettings(page: SettingsPage): void {
 		const previous = this.activePage;
 		this.activePage = page;
 		this.display();
