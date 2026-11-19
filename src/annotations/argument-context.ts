@@ -3,6 +3,7 @@ import { parseBilingualMarkdown } from "../reader/bilingual-document";
 export function argumentPassages(text: string, selected: string, offset?: number): string[] {
 	const blocks=parseBilingualMarkdown(text).blocks;
 	const first=text.indexOf(selected), start=offset ?? (first>=0 && text.indexOf(selected,first+selected.length)<0 ? first : -1);
+	if (start < 0 || text.slice(start, start + selected.length) !== selected) return [];
 	const at=blocks.findIndex(b=>start>=b.start && start<b.end);
 	if(at<0)return [];
 	const chosen=new Set<number>();

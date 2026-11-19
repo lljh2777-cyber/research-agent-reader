@@ -212,6 +212,7 @@ export interface WebSearchResult {
 }
 
 export interface ProviderChatRequest {
+	gptAnnotation?: ReturnType<typeof import("../annotations/gpt-options").gptAnnotationRequest>;
 	/** A cost preference, applied only to explicitly supported hybrid-thinking endpoints. */
 	disableReasoning?: boolean;
 	responseSchema?: { name: string; schema: Record<string, unknown> };

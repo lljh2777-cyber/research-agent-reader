@@ -1,3 +1,5 @@
+import { supportsGptAnnotations, gptAnnotationRequest, type GptChoices } from "./gpt-options";
+import { parseBilingualMarkdown } from "../reader/bilingual-document";
 import { argumentPassages, attachContextQuotes, contextSentences } from "./argument-context";
 import { isClipperPath, requireClipper } from "../library/clipper";
 import {
@@ -86,6 +88,13 @@ interface AnnotationMeta {
 	archiveTargets: string[];
 	archiveRunId: string;
 	archiveError: string;
+}
+
+type ExplanationSelection = Pick<AnnotationSelection, "selectedText" | "section" | "context" | "sourcePath" | "bilingual"> & { sourceStart?: number };
+
+function currentAnnotationParagraph(context: string, selected: string): string {
+	const paragraphs = context.split(/\r?\n[ \t]*\r?\n/).filter(p => p.includes(selected));
+	return paragraphs.length === 1 ? paragraphs[0] : selected;
 }
 
 function escapeRegExp(value: string): string {
@@ -820,10 +829,16 @@ export class AnnotationService {
 
 	explanationProfiles() { return this.plugin.getVerifiedProviderProfiles(); }
 
+	defaultExplanationBackend() { return this.plugin.settings.sceneProfiles?.annotation || this.plugin.settings.annotationBackendId || "auto"; }
+	defaultExplanationProfileId() {
+		const backend = this.defaultExplanationBackend();
+		return backend === "auto" ? this.plugin.settings.activeProviderId : backend;
+	}
+
 	async generateExplanation(
-		selection: Pick<AnnotationSelection, "selectedText" | "section" | "context" | "sourcePath" | "bilingual">,
+		selection: ExplanationSelection,
 		registerCancel: (cancel: () => void) => void,
-		request: { profileId?: string; question?: string; depth?: "brief" | "context" } = {},
+		request: { profileId?: string; question?: string; depth?: "brief" | "context"; gpt?: GptChoices } = {},
 	): Promise<AnnotationExplanation> {
 		this.requireExplanationProof(selection);
 		const proof = selection.bilingual;
@@ -831,12 +846,28 @@ export class AnnotationService {
 		if (proof && !proof.english) throw new Error(proof.files ? "手动配对尚未确认对应英文段落；可保存个人批注与摘录，AI 对照解释需先核对配对记录" : "对应英文段落未确认或超过请求上限；请核对配对后重试");
 		// Nearby translated paragraphs have no English receipt in this request.
 		// Use the verified current block for both new and reopened annotations.
-		const context = proof && verified
+		const configuredBackend = request.profileId || this.defaultExplanationBackend();
+		const localBackend = isCliBackendId(configuredBackend) || configuredBackend === "qoderclicn" || configuredBackend === "codebuddy";
+		const selectedDirectProfile = localBackend ? null :
+			this.plugin.getProviderProfile(configuredBackend === "auto" ? this.plugin.settings.activeProviderId : configuredBackend);
+		const model = request.gpt?.model || selectedDirectProfile?.model || "";
+		const guidedGpt = selectedDirectProfile?.type === "openai" && supportsGptAnnotations(model);
+		if (request.gpt?.model && !guidedGpt) throw new Error("请选择有效的 OpenAI GPT 配置");
+		const gptAnnotation = guidedGpt ? gptAnnotationRequest(model, request.depth, request.gpt) : undefined;
+		let context = proof && verified
 			? verified.files[proof.language].text.slice(proof.block.start, proof.block.end)
-			: selection.context;
+			: guidedGpt && request.depth !== "context"
+				? currentAnnotationParagraph(selection.context, selection.selectedText) : selection.context;
+		if (guidedGpt && !proof && request.depth !== "context" && selection.sourceStart !== undefined) {
+			const original = await this.sourceText(selection.sourcePath);
+			const start = selection.sourceStart, end = start + selection.selectedText.length;
+			if (original.slice(start, end) !== selection.selectedText) throw new Error("选区原文已变化，请重新划选");
+			const block = parseBilingualMarkdown(original).blocks.find(b => b.start <= start && end <= b.end);
+			context = block ? original.slice(block.start, block.end).trim() : selection.selectedText;
+			if (context.length > 16000) throw new Error("当前段落超过请求上限，请缩短原文后重试");
+		}
 		if (proof && context.length > 16000) throw new Error("双语当前段落超过请求上限；请选择较短段落");
-		const webSearchEnabled = this.plugin.settings.annotationWebSearchEnabled === true;
-		const configuredBackend = request.profileId || this.plugin.settings.sceneProfiles?.annotation || this.plugin.settings.annotationBackendId || "auto";
+		const webSearchEnabled = guidedGpt ? Boolean(request.gpt?.search) : this.plugin.settings.annotationWebSearchEnabled === true;
 		const nativeOpenCode = configuredBackend === "opencode" && !webSearchEnabled && this.plugin.settings.openCodeConfigSource === "official";
 		const nativeText = configuredBackend === "codebuddy" || configuredBackend === "qoderclicn" || nativeOpenCode;
 		// Give the model and exact-quote validator the same visible prose. Link destinations
@@ -858,7 +889,7 @@ export class AnnotationService {
 		let passages: string[] = [];
 		if (request.depth === "context") {
 			const original = verified?.files.en.text || await this.sourceText(selection.sourcePath);
-			passages = argumentPassages(original, proof?.english?.text || selection.selectedText, proof?.english?.start);
+			passages = argumentPassages(original, proof?.english?.text || selection.selectedText, proof?.english?.start ?? selection.sourceStart);
 			if (!passages.length) throw new Error("无法唯一定位所选文字，请回原文重新划选");
 		}
 		const sentences = contextSentences(nativeText ? [] : passages);
@@ -948,14 +979,9 @@ export class AnnotationService {
 			return { text: grounded, provider: adapter.label, model: result.reportedModel || `请求：${result.requestedModel}（CLI 未报告实际模型）`,
 				cli: { requestedModel: result.requestedModel, reportedModel: result.reportedModel, usage: result.usage as Record<string, number> | undefined, costUsd: result.costUsd, ...(evidenceSelection ? { evidenceSelection } : {}) } };
 		}
-		const selectedDirectProfile = configuredBackend === "auto"
-			? this.plugin.getProviderProfile(this.plugin.settings.activeProviderId)
-			: !["codex-cli", "claude-code", "opencode"].includes(configuredBackend)
-				? this.plugin.getProviderProfile(configuredBackend)
-				: null;
-		const directWebBackend = webSearchEnabled && selectedDirectProfile
+		const directWebBackend = !guidedGpt && webSearchEnabled && selectedDirectProfile
 			? this.plugin.resolveWebSearchBackend(selectedDirectProfile) : undefined;
-		if (configuredBackend !== "auto" && !isCliBackendId(configuredBackend) && !selectedDirectProfile?.lastTest?.ok) {
+		if ((guidedGpt || configuredBackend !== "auto") && !isCliBackendId(configuredBackend) && !selectedDirectProfile?.lastTest?.ok) {
 			throw new Error("所选 Direct API 批注配置不存在或未通过连接测试，请在设置中重新选择");
 		}
 		// Only automatic selection may fall back to a CLI; an explicit API choice
@@ -964,11 +990,11 @@ export class AnnotationService {
 			? null : selectedDirectProfile;
 		if (directProfile?.lastTest?.ok) {
 			const explanation = await generateDirectExplanation({
-				profile: directProfile, provider: this.plugin.createLLMProvider(directProfile),
+				profile: { ...directProfile, model }, provider: this.plugin.createLLMProvider(directProfile), gptAnnotation,
 				backend: directWebBackend, system, user,
 				query: `${selection.selectedText.slice(0, 300)} ${selection.section.slice(0, 80)}`,
 				maxTokens: this.plugin.settings.annotationMaxTokens,
-				timeoutMs: (webSearchEnabled ? webSearchTimeoutSeconds : directProfile.timeoutSeconds) * 1000,
+				timeoutMs: (webSearchEnabled && !guidedGpt ? webSearchTimeoutSeconds : directProfile.timeoutSeconds) * 1000,
 				registerCancel,
 			});
 			if (sentences.size) explanation.text = attachContextQuotes(explanation.text, sentences);
@@ -1038,17 +1064,19 @@ export class AnnotationService {
 
 	async getRecordExplanationContext(
 		record: AnnotationRecord,
-	): Promise<Pick<AnnotationSelection, "selectedText" | "section" | "context" | "sourcePath" | "bilingual">> {
+	): Promise<ExplanationSelection> {
 		this.requireExplanationProof(record);
 		await verifyBilingual(this.app, record);
 		const file = this.app.vault.getAbstractFileByPath(record.sourcePath);
 		let context = record.selectedText;
-		if (file instanceof TFile) {
-			const content = await this.app.vault.read(file);
+		let sourceStart: number | undefined;
+		if (isClipperPath(record.sourcePath) || (file instanceof TFile && file.extension === "md")) {
+			const content = await this.sourceText(record.sourcePath);
 			const offset = record.sourceAnchor
 				? findSourceAnchorOffset(content, record.selectedText, record.sourceAnchor) ?? -1
 				: countOccurrences(content, record.selectedText)[0] ?? -1;
 			if (offset >= 0) {
+				sourceStart = offset;
 				context = content.slice(
 					Math.max(0, offset - Math.floor(CONTEXT_LIMIT / 2)),
 					Math.min(content.length, offset + record.selectedText.length + Math.floor(CONTEXT_LIMIT / 2)),
@@ -1058,6 +1086,7 @@ export class AnnotationService {
 		return {
 			selectedText: record.selectedText,
 			section: record.section,
+			sourceStart,
 			context,
 			sourcePath: record.sourcePath,
 			...(record.bilingual ? { bilingual: structuredClone(record.bilingual) } : {}),

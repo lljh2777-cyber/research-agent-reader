@@ -6,6 +6,7 @@ import type { WebSearchResult } from "../types/contracts";
 import type { AnnotationExplanation } from "./types";
 
 interface DirectExplanationOptions {
+	gptAnnotation?: import("../types/contracts").ProviderChatRequest["gptAnnotation"];
 	profile: ProviderProfile;
 	provider: LLMProvider;
 	backend?: WebSearchBackendResolution;
@@ -78,6 +79,7 @@ export async function generateDirectExplanation(options: DirectExplanationOption
 					{ role: "user", content: options.user + (sources.length ? `\n\n网络参考摘录：\n${buildWebEvidenceContext(sources, { totalChars: 4500 })}` : "") },
 				],
 				maxTokens: options.maxTokens,
+				...(options.gptAnnotation ? { gptAnnotation: options.gptAnnotation } : {}),
 				...(backend?.kind === "native" ? { webSearch: { protocol: backend.protocol, maxResults: 3 } } : {}),
 			}, {
 				timeoutMs: remaining(),
@@ -93,7 +95,18 @@ export async function generateDirectExplanation(options: DirectExplanationOption
 			}
 			let text = String(result.text || "").trim();
 			if (!text) throw new Error("模型返回了空解释");
-			if (backend?.kind === "tavily") {
+			if (options.gptAnnotation?.tools) {
+				const citations = [];
+				for (const item of Array.isArray(raw?.output) ? raw.output : []) {
+					for (const part of Array.isArray(item?.content) ? item.content : []) {
+						for (const a of Array.isArray(part?.annotations) ? part.annotations : []) {
+							if (a?.type === "url_citation") citations.push({ title: a.title, url: a.url });
+						}
+					}
+				}
+				const links = normalizeQueryWebSources(citations);
+				text += links.length ? "\n\n联网来源（OpenAI）\n" + links.map(s => sourceLink(s.title, s.url)).join("  \n") : "\n\n本次回答没有返回可核对的网页引用。";
+			} else if (backend?.kind === "tavily") {
 				const allowedUrls = new Set(sources.map(source => source.url));
 				const citedUrls = new Set(answerLinks(text).map(source => source.url));
 				if ([...citedUrls].some(url => !allowedUrls.has(url))) {

@@ -241,6 +241,7 @@ export class OpenAIProvider extends LLMProvider {
 			body: {
 				model: request.model || this.config.model,
 				input: request.messages,
+				...request.gptAnnotation,
 				max_output_tokens: request.maxTokens || 256,
 				...(request.responseSchema ? { text: { format: { type: "json_schema", strict: true, ...request.responseSchema } } } : {}),
 				store: false,

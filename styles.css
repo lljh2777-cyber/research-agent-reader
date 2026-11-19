@@ -6611,6 +6611,18 @@ body.agent-dashboard-mineru-resizing {
 	margin-top: 7px;
 	padding: 6px 0 0;
 }
+.agent-annotation-gpt-options:not([hidden]) {
+	display: grid;
+	gap: 0.4em;
+	margin-block: 0.5em;
+}
+.agent-annotation-gpt-options label:not([hidden]) {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5em;
+}
+.agent-annotation-gpt-options label:last-child { justify-content: flex-start; }
 .agent-annotation-actions, .agent-annotation-history {
 	display: flex;
 	flex-wrap: wrap;

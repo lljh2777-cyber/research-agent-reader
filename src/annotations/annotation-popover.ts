@@ -1,3 +1,4 @@
+import { GPT_ANNOTATION_MODELS, gptOptions, supportsGptAnnotations, type GptChoices } from "./gpt-options";
 import type { TopicPassage } from "../learning/entry";
 import { EXPLANATION_DIVIDER } from "./argument-context";
 import {
@@ -331,7 +332,7 @@ export class AnnotationPopover extends Component {
 			try {
 				const context = baseline && (baseline.bilingual || !this.selection?.bilingual) ? await this.service.getRecordExplanationContext(baseline) : this.selection!;
 				if (!isCurrent()) return;
-				const explanation = await this.service.generateExplanation(context, cancel => { if (isCurrent()) this.cancelGeneration = cancel; else cancel(); },{profileId:retryProfile?.value,question:question?.value,depth:deep?"context":"brief"});
+				const explanation = await this.service.generateExplanation(context, cancel => { if (isCurrent()) this.cancelGeneration = cancel; else cancel(); },{profileId:retryProfile?.value,question:question?.value,depth:deep?"context":"brief",gpt:readGptChoices(deep)});
 				if (!isCurrent()) return;
 				generated = explanation;
 				const asked = question?.value.trim();
@@ -353,7 +354,45 @@ export class AnnotationPopover extends Component {
 		};
 		const retryProfile = explanationPanel?.createEl("select", { attr: { "aria-label": "本次批注使用的模型" } });
 		retryProfile?.createEl("option", { value: "", text: "使用批注默认模型" });
-		for (const profile of this.service.explanationProfiles?.() || []) retryProfile?.createEl("option", { value: profile.id, text: profile.name });
+		const profiles = this.service.explanationProfiles?.() || [];
+		for (const profile of profiles) retryProfile?.createEl("option", { value: profile.id, text: profile.name + " · " + profile.model });
+		const gptPanel = explanationPanel.createDiv({ cls: "agent-annotation-gpt-options" });
+		const selectField = (label: string) => {
+			const field = gptPanel.createEl("label");
+			field.createSpan({ text: label });
+			return field.createEl("select", { attr: { "aria-label": label } });
+		};
+		const model = selectField("GPT 模型"), speed = selectField("处理速度");
+		const brief = selectField("简短释义思考强度"), expanded = selectField("展开解释思考强度");
+		const searchLabel = gptPanel.createEl("label");
+		const search = searchLabel.createEl("input", { type: "checkbox" });
+		searchLabel.createSpan({ text: "本次允许 OpenAI 联网搜索" });
+		const fill = (select: HTMLSelectElement, values: readonly string[], preferred: string, labels: Record<string,string> = {}) => {
+			select.empty();
+			for (const value of values) select.createEl("option", { value, text: labels[value] || value });
+			select.value = preferred;
+		};
+		const syncModel = () => {
+			const active = supportsGptAnnotations(model.value);
+			for (const control of [speed, brief, expanded, search]) control.parentElement!.hidden = !active;
+			const { speeds, efforts } = gptOptions(model.value);
+			fill(speed, speeds, speeds.includes(speed.value) ? speed.value : "default", { default: "标准", fast: "Fast", ultrafast: "Ultrafast" });
+			fill(brief, efforts, efforts.includes(brief.value) ? brief.value : "medium");
+			fill(expanded, efforts, efforts.includes(expanded.value) ? expanded.value : "high");
+		};
+		const syncProfile = () => {
+			const id = retryProfile?.value || this.service.defaultExplanationProfileId?.();
+			const profile = profiles.find(p => p.id === id);
+			gptPanel.hidden = profile?.type !== "openai";
+			if (!profile || gptPanel.hidden) return;
+			fill(model, [...new Set([profile.model, ...GPT_ANNOTATION_MODELS])], profile.model);
+			syncModel();
+		};
+		model.onchange = syncModel;
+		retryProfile?.addEventListener("change", syncProfile);
+		syncProfile();
+		const readGptChoices = (deep: boolean): GptChoices | undefined => gptPanel.hidden || !supportsGptAnnotations(model.value)
+			? undefined : { model: model.value, speed: speed.value, effort: deep ? expanded.value : brief.value, search: search.checked };
 		generate?.addEventListener("click",()=>void explain(false)); expand?.addEventListener("click",()=>void explain(true));
 		const submit = async () => {
 			if (this.closed || this.saving || save.disabled) return;

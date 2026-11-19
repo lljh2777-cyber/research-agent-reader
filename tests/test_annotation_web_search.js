@@ -3,7 +3,7 @@ const { loadReading } = require("./reading-test-helpers");
 const { AnnotationService } = loadReading("annotations/annotation-service.ts");
 const { generateDirectExplanation } = loadReading("annotations/direct-explanation.ts");
 const { searchTavily } = loadReading("services/web-search.ts");
-const { OpenAICompatibleProvider } = loadReading("providers/adapters.ts");
+const { OpenAICompatibleProvider, OpenAIProvider } = loadReading("providers/adapters.ts");
 
 const profile = { id: "api", type: "openai-compatible", name: "Test API", model: "model", timeoutSeconds: 2, baseUrl: "https://api.example.test/v1", lastTest: { ok: true }, webSearch: "auto" };
 const selection = { sourcePath: "papers/private-title/article.md", selectedText: "graph neural network", section: "Methods", context: "Nearby article context" };
@@ -23,6 +23,51 @@ function fixture(backend, settings = {}) {
 const base = { profile, system: "Explain a selected phrase.", user: "Local context", query: "a query", maxTokens: 900, timeoutMs: 1000, registerCancel: () => {} };
 
 (async () => {
+	const gpt = fixture();
+	const gptProfile = { ...profile, secretId: "fixture", type: "openai", model: "gpt-6.2-sol", baseUrl: "https://api.openai.com" };
+	const bodies = [];
+	gpt.plugin.getProviderProfile = () => gptProfile;
+	gpt.plugin.resolveWebSearchBackend = () => { throw Error("GPT must use Responses search"); };
+	gpt.plugin.createLLMProvider = () => new OpenAIProvider({
+		app: { secretStorage: { getSecret: () => "fixture-key" } },
+		providerHttpRequest: async ({ url, body }) => {
+			assert.equal(url, "https://api.openai.com/v1/responses");
+			bodies.push(body);
+			const ref = body.input[1].content.match(/\[段 \d+ 句 \d+\]/)?.[0];
+			return { status: 200, json: { output: [{ type: "message", content: [{ type: "output_text",
+				text: "释义。" + (ref || ""), annotations: [{ type: "url_citation", title: "Source", url: "https://example.org/ref" }] }] }] } };
+		},
+	}, gptProfile);
+	const article = "The introduction.\n\nThe selected phrase belongs here.\n\nThe outcome was recorded.";
+	const excerpt = { ...selection, context: article, selectedText: "selected phrase", sourceStart: article.indexOf("selected phrase") };
+	gpt.service.sourceText = async () => article;
+	for (const model of ["gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6.1-sol"]) {
+		const answer = await gpt.service.generateExplanation(excerpt, () => {}, { gpt: { model } });
+		const briefBody = bodies.at(-1);
+		assert.equal(answer.model, model);
+		assert.equal(briefBody.model, model);
+		assert.deepEqual(briefBody.reasoning, { effort: "medium" });
+		assert.equal(briefBody.service_tier, "default");
+		assert.equal(briefBody.tools, undefined);
+		assert.match(briefBody.input[1].content, /belongs here/);
+		assert.doesNotMatch(briefBody.input[1].content, /introduction|outcome/);
+		const deep = await gpt.service.generateExplanation(excerpt, () => {}, { depth: "context", gpt: { model, speed: "fast", search: true } });
+		const deepBody = bodies.at(-1);
+		assert.deepEqual(deepBody.tools, [{ type: "web_search" }]);
+		assert.equal(deepBody.service_tier, "fast");
+		assert.equal(deepBody.reasoning.effort, "high");
+		assert.match(deepBody.input[1].content, /outcome/);
+		assert.match(deep.text, /原文依据/);
+		assert.match(deep.text, /https:\/\/example.org\/ref/);
+		const sol = model.endsWith("-sol");
+		const custom = { model, speed: sol ? "ultrafast" : "fast", effort: sol ? "max" : "none" };
+		await gpt.service.generateExplanation(excerpt, () => {}, { gpt: custom });
+		assert.equal(bodies.at(-1).reasoning.effort, custom.effort);
+		assert.equal(bodies.at(-1).service_tier, custom.speed);
+		const count = bodies.length;
+		await assert.rejects(gpt.service.generateExplanation(excerpt, () => {}, { gpt: { model, ...(sol ? { effort: "none" } : { speed: "ultrafast" }) } }), /不支持所选挡位/);
+		assert.equal(bodies.length, count);
+	}
 	const tavily = fixture();
 	const explained = await tavily.service.generateExplanation(selection, () => {});
 	assert.equal(tavily.calls.length, 1, "shallow search should not need a keyword-planning model call");
