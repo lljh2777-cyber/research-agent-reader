@@ -115,14 +115,53 @@ export class TaskResultModal extends Modal {
 				const select = group.createEl("select",{attr:{"aria-label":"选择要修复的问题"}});
 				findings.forEach((f,i)=>select.createEl("option",{value:String(i),text:f.path+" · "+f.message}));
 				const preview = group.createEl("p");
-				const describe=()=>{ const f=findings[select.selectedIndex]; preview.setText("涉及笔记："+f.path+"。AI 将核对「"+f.message+"」并处理可确认的低风险修改。位置或链接目标有歧义时，保留原状并报告。"); };
-				describe(); select.onchange=describe;
-				const inspect = group.createEl("button",{text:"打开笔记"});inspect.onclick=()=>this.plugin.openVaultFile?.(findings[select.selectedIndex].path);
-				const repair = group.createEl("button",{text:"修复所选问题"});repair.onclick=()=>{
-					const f=findings[select.selectedIndex];
-					if(this.plugin.getLintStatus().latest?.generated_at!==report?.generated_at){new Notice("体检报告已更新，请打开最新报告");return;}
-					this.close();this.onRepair?.("仅核对并修复以下一条体检发现。仅可修改所列笔记；需要改其他文件或原文、批注位置不确定时，只报告。\n"+JSON.stringify({report:report?.generated_at,path:f.path,code:f.code,message:f.message}));
+				const inspect = group.createEl("button", { text: "打开笔记核对" });
+				inspect.onclick = () => this.plugin.openVaultFile?.(findings[select.selectedIndex].path);
+				const apply = group.createEl("button", { text: "确认并应用预览" });
+				let revision = 0;
+				const describe = async () => {
+					const request = ++revision;
+					apply.disabled = true;
+					const f = findings[select.selectedIndex];
+					preview.setText(f.message + " · 请核对原文、版本和目标。");
+					const file = this.app.vault.getFileByPath(f.path);
+					if (!file || !file.path.startsWith("wiki/") || file.path.startsWith("wiki/annotations/")) return;
+					const link = /`([^`]+)`/.exec(f.message)?.[1];
+					if (!link || /[#|\x60]/.test(link)) return;
+					const original = "[[" + link + "]]";
+					const resolve = () => {
+						if (f.code === "cross-root-link" && link.startsWith("papers/") && this.app.vault.getAbstractFileByPath(link)) return "`" + link + "`";
+						if (f.code?.includes("ambiguous") || !/link/i.test(f.code || "") || this.app.metadataCache.getFirstLinkpathDest(link,file.path)) return;
+						const candidates = this.app.vault.getMarkdownFiles().filter(target => {
+							const aliases = this.app.metadataCache.getFileCache(target)?.frontmatter?.aliases;
+							return target.path.startsWith("wiki/") && Array.isArray(aliases) && aliases.includes(link);
+						});
+						if (candidates.length === 1) return "[[" + candidates[0].path.slice(0,-3) + "|" + link + "]]";
+					};
+					const replacement = resolve();
+					if (!replacement) return;
+					const before = await this.app.vault.read(file);
+					const links = this.app.metadataCache.getFileCache(file)?.links?.filter(item => item.original === original) || [];
+					if (request !== revision || links.length !== 1) return;
+					const at = links[0].position.start.offset;
+					if (before.slice(at, at + original.length) !== original) return;
+					const after = before.slice(0,at) + replacement + before.slice(at + original.length);
+					preview.setText(file.path + " · " + original + " → " + replacement + (f.code === "cross-root-link" ? "（保留已存在的原文路径）" : "（唯一匹配的显式别名）"));
+					apply.disabled = false;
+					apply.onclick = async () => {
+						apply.disabled = true;
+						try {
+							await this.app.vault.process(file, current => {
+								if (current !== before || resolve() !== replacement || this.plugin.getLintStatus().latest?.generated_at !== report?.generated_at) throw Error("依据已变化，请重新体检");
+								return after;
+							});
+							if (await this.app.vault.read(file) !== after) throw Error("写后检查发现内容变化，请核对笔记");
+							new Notice("修复已保存并核对");
+						} catch (error) { new Notice(String(error)); }
+					};
 				};
+				select.onchange = () => void describe().catch(error => new Notice(String(error)));
+				select.onchange(new Event("change"));
 			}
 		}
 		// Prefer the in-memory structured result, then artifacts persisted on
