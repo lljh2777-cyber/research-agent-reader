@@ -1,3 +1,4 @@
+import { EXPLANATION_DIVIDER } from "./argument-context";
 import {
 	App,
 	Component,
@@ -192,17 +193,21 @@ export class AnnotationPopover extends Component {
 		const browse = excerpt && baseline && this.onOpenExcerpt ? actions.createEl("button", { text: "查看摘录", attr: { type: "button" } }) : undefined;
 		const detail = !pdf ? actions.createEl("button", { text: baseline?.aiText ? "AI 解释 ▾" : "AI 解释", attr: { type: "button", "aria-expanded": "false" } }) : undefined;
 		const explanationPanel = element.createDiv({ cls: "agent-annotation-explanation" });
-		explanationPanel.hidden = true;
+		explanationPanel.hidden = !baseline?.aiText;
+		detail?.setAttribute("aria-expanded",String(!explanationPanel.hidden));
 		let ai: HTMLTextAreaElement | undefined, generate: HTMLButtonElement | undefined;
+		let question: HTMLInputElement | undefined, expand: HTMLButtonElement | undefined;
 		let preview: HTMLDivElement | undefined, editAI: HTMLButtonElement | undefined;
-		let editingAI = false, renderedAI = "";
+		let editingAI = false, renderedAI = "", showContext = false;
 		if (!pdf) {
+			question = explanationPanel.createEl("input",{type:"text",placeholder:"对这段话有什么疑问？",attr:{"aria-label":"批注提问",maxlength:"1200"}});
 			ai = explanationPanel.createEl("textarea", { cls: "agent-annotation-editor", attr: { rows: "4", maxlength: "24000", "aria-label": "AI 解释", placeholder: "生成后可在此修改解释" } });
 			ai.value = baseline?.aiText || "";
 			ai.hidden = true;
 			preview = explanationPanel.createDiv({ cls: "agent-annotation-ai-preview markdown-rendered" });
 			const aiActions = explanationPanel.createDiv({ cls: "agent-annotation-actions" });
 			editAI = aiActions.createEl("button", { text: "编辑解释", attr: { type: "button" } });
+			expand = aiActions.createEl("button",{text:"展开上下文解释",attr:{type:"button"}});
 			generate = aiActions.createEl("button", { text: ai.value ? "重新生成" : "生成解释", attr: { type: "button" } });
 		}
 		const info = element.createDiv({ cls: "agent-annotation-caption", attr: { role: "status" } });
@@ -269,7 +274,9 @@ export class AnnotationPopover extends Component {
 			if (!explanationPanel.hidden && !preview.hidden && renderedAI !== ai.value) {
 				renderedAI = ai.value;
 				preview.empty();
-				void MarkdownRenderer.render(this.app, ai.value, preview, source.sourcePath, this);
+				const [brief, ...rest] = ai.value.split(EXPLANATION_DIVIDER);
+				void MarkdownRenderer.render(this.app, brief, preview, source.sourcePath, this);
+				if(rest.length){ const section=preview.createEl("details"); section.open=showContext; section.createEl("summary",{text:"查看上下文解释"}); void MarkdownRenderer.render(this.app,rest.join(EXPLANATION_DIVIDER),section.createDiv(),source.sourcePath,this); }
 			}
 		};
 		const refresh = () => {
@@ -279,6 +286,7 @@ export class AnnotationPopover extends Component {
 			const locked = this.saving || pending;
 			note.disabled = Boolean(locked);
 			if (ai) ai.disabled = Boolean(locked || generating || (!generated && !baseline?.aiText));
+			if (expand) { expand.hidden = !ai?.value || ai.value.includes(EXPLANATION_DIVIDER); expand.disabled = Boolean(locked || generating); }
 			if (generate) { generate.disabled = Boolean(locked || (!generating && !this.selection && !baseline)); generate.setText(generating ? "停止生成" : ai?.value ? "重新生成" : "生成解释"); }
 			if (list) {
 				list.disabled = Boolean(locked);
@@ -300,27 +308,32 @@ export class AnnotationPopover extends Component {
 			refreshExplanation();
 			this.position();
 		});
-		generate?.addEventListener("click", async () => {
+		const explain = async (deep: boolean) => {
 			if (!ai) return;
 			if (generating) { this.stopGeneration(); generating = false; showMessage("已停止生成"); refresh(); return; }
-			if (ai.value.trim() && !window.confirm("重新生成会替换面板中的解释，确定继续？")) return;
+			if (!deep && ai.value.trim() && !window.confirm("重新生成会替换面板中的解释，确定继续？")) return;
 			const version = ++this.generationVersion;
 			generating = true; showMessage("正在生成解释…"); refresh();
 			const isCurrent = () => !this.closed && version === this.generationVersion;
 			try {
 				const context = baseline && (baseline.bilingual || !this.selection?.bilingual) ? await this.service.getRecordExplanationContext(baseline) : this.selection!;
 				if (!isCurrent()) return;
-				const explanation = await this.service.generateExplanation(context, cancel => { if (isCurrent()) this.cancelGeneration = cancel; else cancel(); });
+				const explanation = await this.service.generateExplanation(context, cancel => { if (isCurrent()) this.cancelGeneration = cancel; else cancel(); },{question:question?.value,depth:deep?"context":"brief"});
 				if (!isCurrent()) return;
 				generated = explanation;
-				ai.value = explanation.text;
+				const asked = question?.value.trim();
+				const answer = (asked ? "**提问** " + asked + "\n\n" : "") + explanation.text;
+				ai.value = deep ? ai.value + EXPLANATION_DIVIDER + answer : answer;
+				showContext = deep;
+				generated = { ...explanation, text: ai.value };
 				showMessage("解释已生成，可修改后保存");
 			} catch (error) {
 				if (isCurrent()) showMessage(displayError(error));
 			} finally {
 				if (isCurrent()) { generating = false; this.cancelGeneration = null; refresh(); }
 			}
-		});
+		};
+		generate?.addEventListener("click",()=>void explain(false)); expand?.addEventListener("click",()=>void explain(true));
 		const submit = async () => {
 			if (this.closed || this.saving || save.disabled) return;
 			this.saving = true; refresh();
