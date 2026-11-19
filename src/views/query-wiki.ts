@@ -1090,7 +1090,7 @@ export class QueryWikiView extends ItemView {
 					&& !isCliBackendId(activeBackendId)
 					&& !this.plugin.directProfileSupportsWebSearch(activeBackendId)
 				) {
-					if (this.pendingImages.length) this.pendingImages = [];
+					if (this.pendingImages.length) { new Notice("请先保留当前模式或自行移除图片，再切换联网查询"); return; }
 					await this.plugin.setActiveQueryBackend("codex-cli");
 					new Notice(
 						"该 Direct API 供应商未启用联网搜索；已切换到 Codex CLI",
@@ -1434,8 +1434,9 @@ export class QueryWikiView extends ItemView {
 			const selectedSupportsImages = backend.value === "claude-code"
 				|| profileSupportsQueryImage(selectedProfile);
 			if (this.pendingImages.length && !selectedSupportsImages) {
-				this.pendingImages = [];
-				new Notice("所选后端未启用视觉输入，已移除待发送图片");
+				backend.value = backendId;
+				new Notice("当前问题含有图片，请选用支持图片的模型，或先移除附件");
+				return;
 			}
 			await this.plugin.setActiveQueryBackend(backend.value);
 			await this.render();
@@ -1627,6 +1628,7 @@ export class QueryWikiView extends ItemView {
 		);
 		let run = null;
 		let completedRun = null;
+		let restoreQuestion = false;
 		try {
 			await this.plugin.appendQueryMessages(session.id, [userMessage, assistantMessage], question);
 			this.queryDrafts.delete(session.id);
@@ -1703,6 +1705,7 @@ export class QueryWikiView extends ItemView {
 				response,
 				result.stderr.trim() ? `运行日志\n${result.stderr.trim()}` : "",
 			].filter(Boolean).join("\n\n").slice(0, 120000) || error;
+			restoreQuestion = status === "failed";
 			completedRun = await this.plugin.finishTaskRun(run.id, {
 				status,
 				exitCode: result.exitCode,
@@ -1713,6 +1716,7 @@ export class QueryWikiView extends ItemView {
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const interrupted = this.stopRequested || /cancelled|canceled|已停止|正在停止/i.test(message);
+			restoreQuestion = !interrupted;
 			await this.plugin.updateQueryMessage(session.id, assistantMessage.id, {
 				status: interrupted ? "interrupted" : "failed",
 				error: interrupted ? "已停止本轮查询。" : message,
@@ -1731,11 +1735,11 @@ export class QueryWikiView extends ItemView {
 			this.activeRunId = "";
 			this.activeMessageId = "";
 			this.stopRequested = false;
-			await this.render({ scrollToBottom: true });
-			if (completedRun?.status === "failed" && !this.queryDrafts.get(session.id)) {
+			if (restoreQuestion && !this.queryDrafts.get(session.id)) {
 				this.queryDrafts.set(session.id, question);
-				if (this.session.id === session.id) { this.pendingImages = attachments; await this.render(); }
+				if (this.session.id === session.id) this.pendingImages = attachments;
 			}
+			await this.render({ scrollToBottom: true });
 			if (!completedRun) console.warn("Query run completed without a persisted task record");
 		}
 	}
