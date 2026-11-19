@@ -77,6 +77,8 @@ interface DashboardHost extends PluginHost {
 	openFulltextAcquisition(mode?: "production" | "demo", jobId?: string): void;
 	activateReadingWorkspace(entry?: ReadingEntry): Promise<void>;
 	activatePaperLibrary(): Promise<void>;
+	openClippedPaper(key: string): Promise<unknown>;
+	inspectPaperLibrary(): Promise<import("../library/reader").LibraryReadResult>;
 	activateLearningSpace(entry?: import("../learning/entry").LearningEntry): Promise<void>;
 	getReadingWorkspace?(): ReadingWorkspaceService;
 	supportsFast(model: string): boolean;
@@ -115,6 +117,7 @@ export class DashboardView extends ItemView {
 	private toolsExpanded = false;
 	private curationSummary = emptyCurationSummary();
 	private recentSignature = "";
+	private libraryCounts = "";
 	private recentExpanded = false;
 	private unsubscribeTaskRuns?: () => void;
 
@@ -230,6 +233,12 @@ export class DashboardView extends ItemView {
 			this.curationSummary = summary;
 			this.data = data;
 			this.renderDashboard();
+			void this.plugin.inspectPaperLibrary().then(library => {
+				if (this.closed || sequence !== this.loadSequence) return;
+				const papers = library.papers.filter(p => p.objects.some(o => o.source || o.kind === "record" || o.kind === "note"));
+				this.libraryCounts = (library.complete ? "" : "已读取 · ") + "文献 " + papers.length + " 篇 · 有中英两份正文 " + papers.filter(p => p.objects.some(o => o.source?.bilingual)).length + " 篇";
+				this.contentEl.querySelector(".rar-reading-counts")?.setText(this.libraryCounts);
+			}).catch(() => { if (sequence === this.loadSequence) this.contentEl.querySelector(".rar-reading-counts")?.setText("文献数量暂时不可用"); });
 		} catch (error) {
 			if (this.closed || sequence !== this.loadSequence) return;
 			console.error("Research Agent Reader failed to load vault data", error);
@@ -285,16 +294,17 @@ export class DashboardView extends ItemView {
 		this.refreshRecentReading(recent);
 		this.renderFollowup(main);
 		this.renderAgentRuns(main);
-		this.renderStats(main);
-		this.renderHeatmap(main);
+
 		const maintenance = main.createEl("details", { cls: "agent-dashboard-maintenance" }); maintenance.open = this.maintenanceExpanded;
 		maintenance.createEl("summary", { text: "知识库维护与详细统计" });
 		maintenance.addEventListener("toggle", () => { this.maintenanceExpanded = maintenance.open; });
 		const detail = maintenance.createDiv({ cls: "agent-dashboard-maintenance-grid" });
+		this.renderStats(detail);
+		this.renderHeatmap(detail);
 		this.renderKnowledgeGaps(detail);
 		this.renderProcessingDepth(detail);
 		this.renderCoverage(detail);
-		this.renderOkfReadiness(detail);
+
 		this.contentEl.scrollTop = scrollTop;
 	}
 
@@ -447,26 +457,34 @@ export class DashboardView extends ItemView {
 		}
 	}
 	private refreshRecentReading(parent: HTMLElement): void {
-		const sessions = this.plugin.getReadingWorkspace ? recentReading(this.plugin.getReadingWorkspace().repository.sessions.values()).slice(0, 3) : [];
-		const signature = JSON.stringify(sessions.map(s => [s.id, readingTitle(s), readingDashboardState([s], s.source.kind === "code" ? "code" : "paper").label]));
+		const sessions = this.plugin.getReadingWorkspace ? recentReading(this.plugin.getReadingWorkspace().repository.sessions.values()).filter(s => s.source.kind !== "code") : [];
+		const rows = new Map<string, { title: string; date: string; section: string; days: string[]; open(): void }>();
+		for (const [key, p] of Object.entries(this.plugin.settings.clipperProgress || {})) {
+			if (!p || !Array.isArray(p.days)) continue;
+			rows.set("@paper-clipper/" + key + "/paper.md", { ...p, open: () => { void this.plugin.openClippedPaper(key).catch(e => new Notice(String(e))); } });
+		}
+		const localDay = (date: Date) => [date.getFullYear(),String(date.getMonth()+1).padStart(2,"0"),String(date.getDate()).padStart(2,"0")].join("-");
+		for (const session of sessions) {
+			const key = session.source.path, old = rows.get(key), date = session.updatedAt;
+			const days = [...new Set([...(old?.days || []), ...session.nodes.map(node => localDay(new Date(node.createdAt)))])];
+			if (old && old.date >= date) { old.days = days; continue; }
+			rows.set(key,{title:readingTitle(session), date, section:session.nodes.find(node => node.id === session.ui.selectedId)?.title || "全文带读", days,
+				open:()=>{ void this.plugin.activateLearningSpace({kind:"document",reading:{sessionId:session.id}}); }});
+		}
+		const ordered = Array.from(rows.values()).sort((a,b)=>b.date.localeCompare(a.date));
+		const today = new Date(), start = new Date(today); start.setDate(start.getDate() - (start.getDay()+6)%7);
+		const monday = localDay(start), end = localDay(today), weekly = ordered.filter(p => p.days.some(d => d >= monday && d <= end));
+		const signature = JSON.stringify([monday,ordered.map(p=>[p.title,p.date,p.section,p.days])]);
 		if (signature === this.recentSignature) return; this.recentSignature = signature;
 		parent.empty();
-		parent.classList.toggle("is-expanded", this.recentExpanded);
-		parent.createEl("h2", { text: "最近阅读" });
-		if (!sessions.length) { parent.createEl("p", { cls: "agent-dashboard-empty-state", text: "打开一篇论文后，可以从这里继续阅读。" }); return; }
-		const list = parent.createDiv({ cls: "agent-dashboard-recent-list" });
-		for (const session of sessions) {
-			const state = readingDashboardState([session], session.source.kind === "code" ? "code" : "paper"); const item = list.createEl("button", { cls: "agent-dashboard-recent-item", attr: { title: readingTitle(session), "aria-label": "继续阅读：" + readingTitle(session) } }); item.type = "button";
-			setIcon(item.createSpan({ cls: "agent-dashboard-recent-icon", attr: { "aria-hidden": "true" } }), session.source.kind === "code" ? "code-xml" : "book-open");
-			const copy = item.createSpan({ cls: "agent-dashboard-recent-copy" }); copy.createSpan({ cls: "agent-dashboard-recent-title", text: readingTitle(session) });
-			copy.createSpan({ cls: "agent-dashboard-recent-state", text: state.label });
-			setIcon(item.createSpan({ cls: "agent-dashboard-recent-arrow", attr: { "aria-hidden": "true" } }), "arrow-right");
-			item.addEventListener("click", () => { void this.plugin.activateReadingWorkspace({ sessionId: session.id }).catch(error => new Notice(String(error))); });
-		}
-		if (sessions.length > 1) {
-			const more = parent.createEl("button", { cls: "agent-dashboard-text-action agent-dashboard-recent-more", text: this.recentExpanded ? "收起其他阅读" : `其他 ${sessions.length - 1} 条阅读` }); more.type = "button";
-			more.addEventListener("click", () => { this.recentExpanded = !this.recentExpanded; parent.classList.toggle("is-expanded", this.recentExpanded); more.textContent = this.recentExpanded ? "收起其他阅读" : `其他 ${sessions.length - 1} 条阅读`; });
-		}
+		const button = (row: typeof ordered[number]) => { const item = parent.createEl("button",{cls:"agent-dashboard-recent-item",attr:{type:"button"}}); item.createSpan({text:row.title,cls:"agent-dashboard-recent-title"}); item.createSpan({text:row.section,cls:"agent-dashboard-recent-state"}); item.onclick=row.open; };
+		parent.createEl("h2",{text:"上次读到哪里"});
+		if (ordered.length) button(ordered[0]); else parent.createEl("p",{text:"打开一篇论文后，这里会记住读到的位置。"});
+		parent.createEl("h2",{text:"这周读了什么"});
+		for (const row of weekly) button(row);
+		if (!weekly.length) parent.createEl("p",{text:"本周尚无阅读记录。"});
+		parent.createEl("small",{cls:"rar-reading-counts",text:this.libraryCounts});
+
 	}
 
 	requestStopRun(run: TaskRun): void {

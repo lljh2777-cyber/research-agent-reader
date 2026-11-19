@@ -25,7 +25,7 @@ export function requireClipper(app: object): ClipperDirectory {
 export function clipSource(p: ClippedPaper): LibrarySourceObject {
 	const location = CLIPPER_PREFIX + p.key + "/paper.md";
 	return { kind: "source", id: location, title: p.title, identifiers: p.doi ? { doi: p.doi } : {},
-		source: { path: location, format: "markdown", saved: true, verification: { state: "verified", fingerprint: p.englishDigest } } };
+		source: { path: location, bilingual: p.bilingual, format: "markdown", saved: true, verification: { state: "verified", fingerprint: p.englishDigest } } };
 }
 
 /** Only the immediate paper packages are indexed. Every file read uses link-checked, bounded IO. */

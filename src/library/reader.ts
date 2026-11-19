@@ -270,6 +270,9 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 		}
 	} catch (error) { issue("records", "paper-records", error); }
 	checkScan();
+	for (const item of sources.values()) {
+		if (item.source.path.startsWith("Clippings/") && item.source.path.endsWith("/paper.md") && markdown.has(item.source.path.replace(/paper\.md$/, "paper.zh-CN.md"))) item.source.bilingual = true;
+	}
 	const result = projectLibrary(objects); stats.objects = objects.length; stats.elapsedMs = Math.round(performance.now() - started);
 	return { ...result, readIssues: issues, recordStates, stats, complete: issues.length === 0 };
 }

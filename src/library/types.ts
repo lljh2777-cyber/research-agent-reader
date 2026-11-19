@@ -37,6 +37,7 @@ export interface LibraryPdfOrigin {
 	reason: string;
 }
 export interface LibrarySourceDescription {
+	bilingual?: boolean;
 	format: "pdf" | "mineru" | "jats" | "markdown" | "unknown";
 	path: string;
 	packageKey?: string;
