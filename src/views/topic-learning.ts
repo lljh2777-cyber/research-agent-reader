@@ -7,6 +7,8 @@ import { TopicWorkspaceController } from "../topic-learning/workspace";
 export const TOPIC_LEARNING_VIEW_TYPE = "research-topic-learning";
 export interface TopicLearningHost {
 	getTopicLearning(): TopicLearningService;
+	openClippedPaper(key:string):Promise<unknown>;
+	openVaultFile(path:string):void;
 	getTopicModels(): Array<{ id: string; name: string; model: string }>;
 	createTopicBackend(profileId: string): ReadingBackend;
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
@@ -17,6 +19,7 @@ export interface TopicLearningHost {
 export class TopicLearningView extends ItemView {
 	readonly controller: TopicWorkspaceController;
 	private profileId = "";
+	private origin = "";
 	private query = "";
 	private closed = false;
 	private restoring: Promise<void> = Promise.resolve();
@@ -26,8 +29,9 @@ export class TopicLearningView extends ItemView {
 	getViewType(): string { return TOPIC_LEARNING_VIEW_TYPE; }
 	getDisplayText(): string { return "主题路线（预览）"; }
 	getIcon(): string { return "route"; }
-	getState(): Record<string, unknown> { return { draft: structuredClone(this.controller.draft), profileId: this.profileId, query: this.query }; }
+	getState(): Record<string, unknown> { return { origin:this.origin, draft: structuredClone(this.controller.draft), profileId: this.profileId, query: this.query }; }
 	async setState(raw: unknown): Promise<void> {
+		const origin=(raw as {origin?: unknown})?.origin; this.origin=typeof origin==="string" ? origin : "";
 		const state = raw as { draft?: unknown; profileId?: unknown; query?: unknown } | undefined;
 		this.restoring = this.restoring.then(async () => {
 			if (this.closed) return;
@@ -86,6 +90,9 @@ export class TopicLearningView extends ItemView {
 		this.contentEl.empty(); this.contentEl.addClass("rar-topic");
 		const c = this.controller, header = this.contentEl.createDiv("rar-topic-header"), title = header.createDiv();
 		title.createEl("h1", { text: "主题路线" }); title.createEl("p", { text: "预览 · 先安排想学的内容，再逐步深入。", cls: "rar-topic-muted" });
+		if (this.origin) this.button(header,"返回刚才的论文","return-source",()=>{
+			if (this.origin.startsWith("@paper-clipper/")) void this.host.openClippedPaper(this.origin.split("/")[1]); else this.host.openVaultFile(this.origin);
+		});
 		this.button(header, "从资料开始", "document", () => { void this.host.activateLearningSpace({ kind: "document" }).catch(e => { c.message = String(e); this.render(); }); }, c.busy);
 		this.contentEl.createEl("p", { text: "无需添加资料即可保存目标和安排路线。确认后可打开讲解与导图的开发预览；模型使用一般知识，尚未完成独立教学审阅。", cls: "rar-topic-intro" });
 		const status = this.contentEl.createDiv({ cls: "rar-topic-status", attr: { role: "status", "aria-live": "polite" } });

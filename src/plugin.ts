@@ -848,6 +848,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			colorMeanings: this.settings.annotationColorMeanings,
 			...options,
 			onArchive: (record) => this.archiveAnnotation(record),
+			onStudyTopic: (subject,origin) => { void this.activateLearningSpace({kind:"topic",subject,origin}); },
 			onOpenExcerpt: (record) => this.openExcerptBrowser(record),
 			onClose: () => {
 				if (this.annotationPopover === popover) this.annotationPopover = null;
@@ -2839,7 +2840,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				const existing = entry.subject ? undefined : this.app.workspace.getLeavesOfType(TOPIC_LEARNING_VIEW_TYPE)[0];
 				if (existing) await existing.loadIfDeferred();
 				const leaf = existing || this.app.workspace.getLeaf("tab");
-				if (!existing) await leaf.setViewState({ type: TOPIC_LEARNING_VIEW_TYPE, active: true, ...(entry.subject ? {state:{draft:{intent:{topic:entry.subject}}}} : {}) });
+				if (!existing) await leaf.setViewState({ type: TOPIC_LEARNING_VIEW_TYPE, active: true, ...(entry.subject ? {state:{draft:{intent:{topic:entry.subject}},origin:entry.origin}} : {}) });
 				await this.app.workspace.revealLeaf(leaf);
 				if (entry.sessionId && leaf.view instanceof TopicLearningView) await leaf.view.selectSession(entry.sessionId);
 			}); this.topicOpenings = operation.catch(() => undefined); return operation;

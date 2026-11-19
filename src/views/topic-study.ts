@@ -112,7 +112,8 @@ export class TopicStudyView extends ItemView {
 		if (this.host.openAnswerExcerpt && excerptAnswer) this.button(article, "保存回答摘录", "save-excerpt", () => {
 			try { this.host.openAnswerExcerpt!(excerptAnswer!); } catch (e) { c.message = String(e); this.render(); }
 		}, c.busy);
-		const understanding = article.createEl("label", { cls: "rar-study-field" }); understanding.createSpan({ text: "我的理解（用户自评）" });
+		const assessment = article.createEl("details"); assessment.createEl("summary",{text:"自评这一步的理解"});
+		const understanding = assessment.createEl("label", { cls: "rar-study-field" }); understanding.createSpan({ text: "我的理解" });
 		const mark = understanding.createEl("select", { attr: { "aria-label": "我的理解" } });
 		for (const [value, text] of Object.entries(UNDERSTANDING_LABELS)) mark.createEl("option", { value, text });
 		mark.value = node.understanding?.state || "unmarked"; mark.disabled = c.busy; mark.onchange = () => { void c.mark(mark.value as TopicUnderstanding); };

@@ -29,6 +29,7 @@ interface AnnotationPopoverOptions {
 	historical?: AnnotationRecord[];
 	colorMeanings?: Readonly<AnnotationColorMeanings>;
 	onArchive: (record: AnnotationRecord) => Promise<void>;
+	onStudyTopic?: (topic:string, path:string) => void;
 	onOpenExcerpt?: (record: AnnotationRecord) => void;
 	onClose?: () => void;
 }
@@ -46,6 +47,7 @@ export class AnnotationPopover extends Component {
 	private readonly historical: AnnotationRecord[];
 	private readonly colorMeanings?: Readonly<AnnotationColorMeanings>;
 	private readonly onArchive: (record: AnnotationRecord) => Promise<void>;
+	private readonly onStudyTopic?: (topic:string, path:string)=>void;
 	private readonly onOpenExcerpt?: (record: AnnotationRecord) => void;
 	private readonly onClose?: () => void;
 	private element: HTMLDivElement | null = null;
@@ -71,6 +73,7 @@ export class AnnotationPopover extends Component {
 		this.record = options.record;
 		this.historical = [...(options.record ? [options.record] : []), ...(options.historical || [])];
 		this.onArchive = options.onArchive;
+		this.onStudyTopic = options.onStudyTopic;
 		this.onOpenExcerpt = options.onOpenExcerpt;
 		this.onClose = options.onClose;
 	}
@@ -191,6 +194,10 @@ export class AnnotationPopover extends Component {
 		const canList = !pdf && (Boolean(baseline?.excerpt) || Boolean(this.selection?.sourceRevision && (!baseline || baseline.sourceAnchor)));
 		const list = canList ? actions.createEl("button", { attr: { type: "button" } }) : undefined;
 		const browse = excerpt && baseline && this.onOpenExcerpt ? actions.createEl("button", { text: "查看摘录", attr: { type: "button" } }) : undefined;
+		if (!pdf && this.onStudyTopic) {
+			const learn = actions.createEl("button",{text:"学习这个概念",attr:{type:"button"}});
+			learn.onclick=()=>{ if(this.requestClose()) this.onStudyTopic?.(quote.slice(0,160),source.sourcePath); };
+		}
 		const detail = !pdf ? actions.createEl("button", { text: baseline?.aiText ? "AI 解释 ▾" : "AI 解释", attr: { type: "button", "aria-expanded": "false" } }) : undefined;
 		const explanationPanel = element.createDiv({ cls: "agent-annotation-explanation" });
 		explanationPanel.hidden = !baseline?.aiText;
