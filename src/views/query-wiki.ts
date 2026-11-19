@@ -182,6 +182,10 @@ interface QueryViewHost extends PluginHost {
 	supportsFast(model: string): boolean;
 }
 
+function backendSupportsImages(backend: string, profile: unknown): boolean {
+	return backend === "claude-code" || profileSupportsQueryImage(profile);
+}
+
 export class QueryWikiView extends ItemView {
 	private readonly plugin: QueryViewHost;
 	private initialQuestion: string;
@@ -995,8 +999,7 @@ export class QueryWikiView extends ItemView {
 		const directProfile = isCliBackendId(backendId)
 			? null
 			: this.plugin.getProviderProfile(backendId);
-		const canAttachImage = backendId === "claude-code"
-			|| profileSupportsQueryImage(directProfile);
+		const canAttachImage = backendSupportsImages(backendId, directProfile);
 		const attach = this.createIconButton(
 			controls,
 			"image-plus",
@@ -1431,9 +1434,7 @@ export class QueryWikiView extends ItemView {
 			if (isCliBackendId(backend.value)) {
 				this.plugin.invalidateCliModelDiscovery(backend.value);
 			}
-			const selectedSupportsImages = backend.value === "claude-code"
-				|| profileSupportsQueryImage(selectedProfile);
-			if (this.pendingImages.length && !selectedSupportsImages) {
+			if (this.pendingImages.length && !backendSupportsImages(backend.value, selectedProfile)) {
 				backend.value = backendId;
 				new Notice("当前问题含有图片，请选用支持图片的模型，或先移除附件");
 				return;
@@ -1509,9 +1510,8 @@ export class QueryWikiView extends ItemView {
 			return;
 		}
 		const selectedImages = normalizeVaultImageAttachments(this.pendingImages);
-		const backendSupportsImages = backendId === "claude-code"
-			|| profileSupportsQueryImage(directProfile);
-		if (selectedImages.length && !backendSupportsImages) {
+		const canSendImages = backendSupportsImages(backendId, directProfile);
+		if (selectedImages.length && !canSendImages) {
 			new Notice("当前执行后端未启用视觉输入，无法发送图片");
 			return;
 		}
@@ -1521,7 +1521,7 @@ export class QueryWikiView extends ItemView {
 			discoveredCount: 0,
 			totalBytes: 0,
 		};
-		if (backendSupportsImages) {
+		if (canSendImages) {
 			try {
 				linkedImageResult = await this.plugin.resolveQuestionImageAttachments(question, selectedImages);
 			} catch (error) {

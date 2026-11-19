@@ -44,7 +44,17 @@ export class TopicLearningView extends ItemView {
 			this.controller.setDraft(state?.draft); await this.controller.refresh(); this.render();
 		}); await this.restoring;
 	}
-	async selectSession(id: string): Promise<void> { await this.restoring; await this.controller.select(id); }
+	async selectSession(id: string): Promise<void> {
+		await this.restoring;
+		const previous = this.controller.draft;
+		await this.controller.select(id);
+		if (previous !== this.controller.draft && (!id || id !== previous.id)) {
+			this.origin = "";
+			this.passage = undefined;
+			this.render();
+			this.persist();
+		}
+	}
 	async onOpen(): Promise<void> { this.render(); }
 	async onClose(): Promise<void> { this.closed = true; this.controller.dispose(); this.contentEl.empty(); }
 	private persist(): void { if (!this.closed) this.app.workspace.requestSaveLayout(); }
@@ -111,14 +121,14 @@ export class TopicLearningView extends ItemView {
 		}
 		const body = this.contentEl.createDiv("rar-topic-body"), sidebar = body.createDiv("rar-topic-sidebar"), editor = body.createDiv("rar-topic-editor");
 		const historyActions = sidebar.createDiv("rar-topic-actions");
-		this.button(historyActions, "新建主题", "new", () => { void c.select(""); }, c.busy);
+		this.button(historyActions, "新建主题", "new", () => { void this.selectSession(""); }, c.busy);
 		this.button(historyActions, "重新读取", "refresh", () => { void c.refresh(); }, c.busy);
 		this.field(sidebar, "搜索已读取主题", "history-search", this.query, 160, value => { this.query = value; });
 		sidebar.createEl("p", { text: `已读取 ${c.items.length} / ${c.total} 个主题`, cls: "rar-topic-muted" });
 		const list = sidebar.createDiv("rar-topic-history");
 		const matches = c.items.filter(item => (item.title + item.goal + item.id).toLowerCase().includes(this.query.trim().toLowerCase()));
 		for (const item of matches) {
-			const b = this.button(list, "", "select", () => { void c.select(item.id); }, c.busy); b.dataset.topicId = item.id; b.setAttribute("aria-pressed", String(item.id === c.draft.id));
+			const b = this.button(list, "", "select", () => { void this.selectSession(item.id); }, c.busy); b.dataset.topicId = item.id; b.setAttribute("aria-pressed", String(item.id === c.draft.id));
 			b.createEl("strong", { text: item.title }); b.createSpan({ text: item.status });
 			b.createSpan({ text: item.goal.length > 90 ? item.goal.slice(0, 90) + "…" : item.goal });
 			if (item.updatedAt) b.createSpan({ text: new Date(item.updatedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) });

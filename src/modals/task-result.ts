@@ -31,19 +31,16 @@ interface TaskResultHost {
 export class TaskResultModal extends Modal {
 	private readonly plugin: TaskResultHost;
 	private run: TaskRun;
-	private readonly onRepair: ((scope: string) => void) | null;
 	private unsubscribeTasks?: () => void;
 
 	constructor(
 		app: App,
 		plugin: TaskResultHost,
 		run: TaskRun,
-		onRepair: ((scope: string) => void) | null,
 	) {
 		super(app);
 		this.plugin = plugin;
 		this.run = run;
-		this.onRepair = onRepair;
 	}
 
 	onOpen() {
@@ -111,7 +108,7 @@ export class TaskResultModal extends Modal {
 			const report = this.plugin.getLintStatus().latest;
 			const findings = (report?.findings || []).filter(f => f.path && f.message && (f.severity === "error" || f.severity === "warning"));
 			if (findings.length) {
-				const group = footer.createEl("details"); group.createEl("summary",{text:"从具体问题发起 AI 修复"});
+				const group = footer.createEl("details"); group.createEl("summary",{text:"核对最新体检发现与修复预览"});
 				const select = group.createEl("select",{attr:{"aria-label":"选择要修复的问题"}});
 				findings.forEach((f,i)=>select.createEl("option",{value:String(i),text:f.path+" · "+f.message}));
 				const preview = group.createEl("p");
@@ -224,7 +221,7 @@ export class TaskResultModal extends Modal {
 	}
 
 	canRepair() {
-		if (this.run.actionId !== "vault-lint" || typeof this.onRepair !== "function") {
+		if (this.run.actionId !== "vault-lint") {
 			return false;
 		}
 		const completedWithReport = this.run.status === "done"

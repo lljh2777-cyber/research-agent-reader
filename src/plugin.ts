@@ -782,7 +782,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (target.kind === "review") { this.openKnowledgeMaintenance({ tab: "activity", reviewId: target.id }); return; }
 		if (target.kind === "revision") { this.openKnowledgeMaintenance({ tab: "history", revisionId: target.id }); return; }
 		const run = this.getTaskRun(target.id); if (!run) throw new Error("入库任务已缺失，请刷新");
-		new TaskResultModal(this.app, this, run, null).open();
+		new TaskResultModal(this.app, this, run).open();
 	}
 
 	openExcerptBrowser(ref?: ExcerptRef): void {
@@ -2126,7 +2126,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 	private showFulltextAcquisition(mode: AcquisitionMode, jobId?: string, identity?: PaperIntakeContext["identity"]): void {
 		if (this.acquisitionClosing) throw new Error("插件已关闭");
-		const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id), {open:id=>openAcquiredIntake(this,id),save:id=>openSourceSave(this,id),jats:id=>openJatsSave(this,id),runs:()=>this.getTaskRuns(),subscribe:listener=>this.subscribeTaskRuns(listener),openRun:run=>new TaskResultModal(this.app,this,run,null).open()}, identity);
+		const modal = new FulltextAcquisitionModal(this.app, this.getAcquisitionService(mode), jobId, () => this.acquisitionModals.delete(modal), id => this.openAcquiredPdf(id), {open:id=>openAcquiredIntake(this,id),save:id=>openSourceSave(this,id),jats:id=>openJatsSave(this,id),runs:()=>this.getTaskRuns(),subscribe:listener=>this.subscribeTaskRuns(listener),openRun:run=>new TaskResultModal(this.app,this,run).open()}, identity);
 		this.acquisitionModals.add(modal); modal.open();
 	}
 	private sourceIntakeService?:SourceIntakeService;

@@ -1,9 +1,15 @@
+export function* readingCitationMarkers(text: string) {
+	for (const match of text.matchAll(/\[(?:证据(?:\s*ID)?(?:\s*[:：]\s*|\s+))?([^\[\]\n]+)\]/gi)) {
+		const ids = match[1].split(/[,，、]\s*/).map(id => id.trim());
+		yield { start: match.index!, end: match.index! + match[0].length, raw: match[0], ids };
+	}
+}
+
 /** Only known evidence identifiers become citations; unmatched markers stay visible. */
 export function readingCitations(text: string, evidenceIds: string[], markdown = text): Array<{ start: number; end: number; raw: string; ids: string[] }> {
 	const known = new Set(evidenceIds); const matches = [];
-	for (const match of text.matchAll(/\[(?:证据\s*ID\s*[:：]\s*)?([^\[\]\n]+)\]/gi)) {
-		const ids = match[1].split(/[,，、]\s*/).map((id) => id.trim());
-		if (ids.length && ids.every((id) => known.has(id))) matches.push({ start: match.index!, end: match.index! + match[0].length, raw: match[0], ids });
+	for (const marker of readingCitationMarkers(text)) {
+		if (marker.ids.every(id => known.has(id))) matches.push(marker);
 	}
 	// The passive Markdown renderer converts inline-code backticks to apostrophes.
 	// Remove those display wrappers only when the original really used code fences.

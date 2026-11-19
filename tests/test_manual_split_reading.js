@@ -6,6 +6,11 @@ class TFile { constructor(p) { this.path = p; this.extension = p.split(".").pop(
 let fixture;
 class FileSourceStorage { async read(p, limit) { const text = fixture.files.get(p)?.text; if (text === undefined) return null; const b = Buffer.from(text); assert.ok(b.length <= limit); return b; } }
 const api = loadReading("../tests/bilingual-annotation-api.ts", { obsidian: { TFile, MarkdownView: class {}, Notice: class {}, normalizePath: p => p, parseYaml: () => ({}) }, "../sources/storage": { FileSourceStorage } });
+const { contextSentences, attachContextQuotes } = loadReading("annotations/argument-context.ts");
+const sentences = contextSentences(["[段 9] The corpus contains 29.9 million profiles.", "[段 58] A limited number of patient samples."]);
+assert.match(attachContextQuotes("下游样本有限[段 58 句 1]", sentences), /A limited number of patient samples\./);
+assert.throws(() => attachContextQuotes("“limited patient samples”[段 58 句 1]", sentences), /英文引句/);
+assert.throws(() => attachContextQuotes("样本量[段 9 句 3]", sentences), /未知段句/);
 const { normalizeManualSplit } = loadReading("reader/manual-split.ts");
 const { supportsPdfExcerpt } = loadReading("annotations/pdf-excerpt.ts");
 async function make(enPath = "Research/English original.md", zhPath = "Notes/中文解释.md", metadata) {

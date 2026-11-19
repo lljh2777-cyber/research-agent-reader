@@ -33,11 +33,11 @@ export async function openIngestContinuation(plugin: AgentDashboardPlugin, previ
 			new Notice("已开始续办入库，可在控制台查看新任务或点击文献入库停止");
 			const outcome = await plugin.runLightPaperIngest(run.id, { ...request.options, remoteUploadConfirmed: remote.checked }, profile.id);
 			const result = await plugin.finishTaskRun(run.id, ingestTaskResult(outcome));
-			if (result) new TaskResultModal(plugin.app, plugin, result, null).open();
+			if (result) new TaskResultModal(plugin.app, plugin, result).open();
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const result = run ? await plugin.finishTaskRun(run.id, { status: "failed", error: message }) : null;
-			if (result) new TaskResultModal(plugin.app, plugin, result, null).open();
+			if (result) new TaskResultModal(plugin.app, plugin, result).open();
 			status.textContent = message; new Notice(message);
 		}
 		finally { start.disabled = false; }

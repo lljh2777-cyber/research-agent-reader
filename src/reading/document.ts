@@ -104,6 +104,7 @@ export class ReadingDocumentLoader {
 		let section = "正文";
 		for (const block of parsed.blocks) {
 			const raw = text.slice(block.start, block.end);
+			const firstChunk = evidence.length;
 			if (block.kind === "heading") section = raw.replace(/^#+\s*/, "").trim();
 			for (let offset = 0; offset < raw.length; offset += 4000) {
 				const content = raw.slice(offset, offset + 4000), item: ReadingEvidence = { kind: "paper", path: sourcePath, id: block.id + "-" + offset, label: section.slice(0, 180), text: content, start: block.start + offset, end: block.start + offset + content.length };
@@ -113,7 +114,11 @@ export class ReadingDocumentLoader {
 				const asset = imagePath(sourcePath.slice(0,sourcePath.lastIndexOf("/")), match[2] || match[3] || match[4]);
 				const bytes = await dir.read(asset,12*1024*1024); if (!bytes) continue;
 				figures.set(asset, readingHash(bytes));
-				evidence.push({ id:"figure-" + evidence.length, kind:"paper", path:sourcePath, label:match[1] || section, text:raw.slice(0,1200), start:block.start,end:block.end,asset });
+				const imageId = "figure-" + evidence.length;
+				const chunk = evidence[firstChunk + Math.floor(match.index! / 4000)];
+				(chunk.relatedIds ??= []).push(imageId);
+				evidence.push({ id: imageId, kind: "paper", path: sourcePath, label: match[1] || section,
+					text: raw.slice(0,1200), start: block.start, end: block.end, asset, relatedIds: [chunk.id] });
 			}
 		}
 		return { source:{kind:"article",path:sourcePath,title:paper.title,fingerprint}, evidence, catalog: readingCatalog(evidence),

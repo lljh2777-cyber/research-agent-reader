@@ -24,7 +24,7 @@ async function fixture(kind = "pdf") {
 		const input = JSON.parse(request.prompt); requests.push({ input, schema: request.schema });
 		if (input.action === "规划全文路线") {
 			assert(input.catalog.includes("Limitations")); assert(input.catalog.includes("Methods"));
-			return JSON.stringify({ modules });
+			return JSON.stringify(kind === "article" ? { output: { modules } } : { modules });
 		}
 		if (input.catalog) {
 			assert(repo.get(s.id).modulePlan, "plan must be durably saved before selection");

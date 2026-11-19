@@ -997,13 +997,7 @@ export class DashboardView extends ItemView {
 
 	openTaskResult(run: TaskRun): void {
 		if (run.actionId === "fulltext-acquisition") { this.plugin.openFulltextAcquisition("production", run.id); return; }
-		const onRepair = run.actionId === "vault-lint"
-			? (scope: string) => {
-				const repairAction = ACTION_BY_ID.get("vault-lint-fix");
-				if (repairAction) this.openAction(repairAction, {initialInput: scope});
-			}
-			: null;
-		new TaskResultModal(this.app, this.plugin, run, onRepair).open();
+		new TaskResultModal(this.app, this.plugin, run).open();
 	}
 
 	formatProcessOutput(result: DashboardProcessResult): string {

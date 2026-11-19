@@ -5,6 +5,7 @@ const { resolveReadingQuote } = loadReading("reading/selection.ts");
 const ids = ["text-0-9", "figure-0-0"];
 const source = "结果 `[证据ID: text-0-9, figure-0-0]` 支持结论。另见 [text-0-9]。";
 const matches = readingCitations(source, ids);
+assert.deepEqual(readingCitations("[证据 b-58-0]", ["b-58-0"])[0].ids, ["b-58-0"]);
 assert.equal(matches.length, 2);
 assert.deepEqual(matches[0].ids, ids);
 assert.equal(source.slice(matches[0].start, matches[0].end), matches[0].raw);

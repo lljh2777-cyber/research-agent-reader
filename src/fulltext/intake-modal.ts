@@ -53,7 +53,7 @@ function openPdfIntake(plugin:AgentDashboardPlugin,source:{path:string;snapshot:
 				const raw=await plugin.getIngestRecords().read("request",run.id);if(closed)return;if(!raw)continue;
 				const request=validateIngestRequestForTask(raw,run);if(!request.options.savedPdfSource||objectDigest(request.options.savedPdfSource)!==objectDigest(binding.savedPdfSource))continue;
 				found++;const open=rows.createEl("button",{text:run.summary+" · "+({done:"已完成",failed:"未完成",interrupted:"已中断",running:"进行中",queued:"等待中"}[run.status]||run.status)});
-				open.onclick=()=>new TaskResultModal(plugin.app,plugin,run,null).open();
+				open.onclick=()=>new TaskResultModal(plugin.app,plugin,run).open();
 			}catch{unreadable++;}}
 			if(!found)rows.createEl("p",{text:"当前任务历史中没有此原文的处理记录。"});
 			if(unreadable)rows.createEl("p",{text:`${unreadable} 条请求无法读取或核验，未推断归属。`});
@@ -77,8 +77,8 @@ function openPdfIntake(plugin:AgentDashboardPlugin,source:{path:string;snapshot:
 			if(binding.acquisitionSource)await plugin.getAcquisitionService().linkIntake(binding.acquisitionSource.jobId,binding.acquisitionSource.snapshotId,run.id);
 			modal.close();new Notice("已开始处理，可在工作台任务结果中查看和继续");
 			const outcome=await plugin.runLightPaperIngest(run.id,options,modelProfile?.id||"");
-			const finished=await plugin.finishTaskRun(run.id,ingestTaskResult(outcome));if(finished)new TaskResultModal(plugin.app,plugin,finished,null).open();
-		} catch(error) {const message=error instanceof Error?error.message:"入库未完成";if(run){const failed=await plugin.finishTaskRun(run.id,{status:"failed",error:message});if(failed)new TaskResultModal(plugin.app,plugin,failed,null).open();}status.setText(message);new Notice(message);}
+			const finished=await plugin.finishTaskRun(run.id,ingestTaskResult(outcome));if(finished)new TaskResultModal(plugin.app,plugin,finished).open();
+		} catch(error) {const message=error instanceof Error?error.message:"入库未完成";if(run){const failed=await plugin.finishTaskRun(run.id,{status:"failed",error:message});if(failed)new TaskResultModal(plugin.app,plugin,failed).open();}status.setText(message);new Notice(message);}
 		finally{busy=false;update();}
 	};modal.open();
 }

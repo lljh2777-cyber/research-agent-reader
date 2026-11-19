@@ -95,15 +95,16 @@ export async function generateDirectExplanation(options: DirectExplanationOption
 			if (!text) throw new Error("模型返回了空解释");
 			if (backend?.kind === "tavily") {
 				const allowedUrls = new Set(sources.map(source => source.url));
-				if (answerLinks(text).some(source => !allowedUrls.has(source.url))) {
+				const citedUrls = new Set(answerLinks(text).map(source => source.url));
+				if ([...citedUrls].some(url => !allowedUrls.has(url))) {
 					throw new Error("联网解释包含未检索到的来源链接，请重试");
 				}
 				const cited = [...text.matchAll(/\[(\d+)\](?!\()/g)].map(match => Number(match[1]));
 				if (cited.some(n => n < 1 || n > sources.length)) throw new Error("联网解释引用了无效来源编号，请重试");
-				const links = sources.map((source, index) => `[${index + 1}] ${sourceLink(source.title, source.url)}`);
-				text += sources.length
-					? `\n\n${cited.length ? "联网参考（Tavily）" : "检索参考（回答未标注引用，需核对）"}：\n\n${links.join("  \n")}`
-					: "\n\n本轮未找到可引用的网络来源，解释尚未经联网核验。";
+				const links = sources.flatMap((source, index) =>
+					cited.includes(index + 1) || citedUrls.has(source.url) ? [`[${index + 1}] ${sourceLink(source.title, source.url)}`] : []);
+				if (links.length) text += "\n\n联网参考（Tavily）：\n\n" + links.join("  \n");
+				else if (!sources.length) text += "\n\n本轮未找到可引用的网络来源，解释尚未经联网核验。";
 			} else if (backend?.kind === "native") {
 				const links = answerLinks(text).slice(0, 3);
 				text += links.length
