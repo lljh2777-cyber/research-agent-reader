@@ -16,6 +16,12 @@ function inputs(){return {library:async()=>empty(),acquisitions:{listJobs:async(
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return{resolve,promise};};
 let n=0;const test=async(name,run)=>{await run();n++;console.log('PASS pending center: '+name);};
 (async()=>{
+ await test('only broken reading destinations from the last health report appear in the library',async()=>{
+  const i=inputs(); const note='wiki/sources/paper.md';
+  i.findings=()=>['orphan-note','missing-wikilink-target'].map(code=>({code,path:note,message:code,severity:'error',category:'links'}));
+  const current=await readPendingCenter(i,signal(),true);assert.equal(current.items.length,1);
+  assert.deepEqual(pendingDestination(current.items[0],current),{kind:'note',path:note});
+ });
  await test('empty read has no writes, recovery or implicit completion claim',async()=>{const result=await readPendingCenter(inputs(),signal());assert.deepEqual(result.items,[]);assert.deepEqual(result.issues,[]);assert.ok(result.scannedAt);});
  await test('metadata and conversion gaps preserve source versions and same-title identities',async()=>{
   const deps=inputs(),a=source('a'),b=source('b'),converted={...source('converted','mineru'),source:{...source('converted','mineru').source,pdfOrigin:{state:'matched',sourceIds:[a.id]}}};

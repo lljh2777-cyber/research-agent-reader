@@ -66,6 +66,7 @@ import type {
 } from "../types/contracts";
 
 interface SettingsPluginHost extends PluginHost {
+	openMaintenanceAction(id: "vault-lint" | "okf-export"): Promise<void>;
 	getAnnotationCliDiscovery(backend: AnnotationCliBackend): AnnotationCliDiscovery | null;
 	refreshAnnotationCliDiscovery(backend: AnnotationCliBackend): Promise<AnnotationCliDiscovery>;
 	resolveWebSearchBackend(profile: ProviderProfile): WebSearchBackendResolution;
@@ -1161,9 +1162,11 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 		this.createProviderSectionHeader(
 			containerEl,
-			"知识库维护范围",
+			"维护与导出",
 			"核心范围由项目契约固定，避免用户设置造成原文包污染或跨目录链接冲突。",
 		);
+		new Setting(containerEl).setName("手动体检").setDesc("检查知识页的链接和属性，完成后查看报告和具体发现。")
+			.addButton(button => button.setButtonText("运行只读体检").onClick(() => this.plugin.openMaintenanceAction("vault-lint")));
 		new Setting(containerEl)
 			.setName("体检范围")
 			.setDesc("内置只读体检检查 wiki/ 与 Vault 顶层 Markdown。papers/、Clippings/ 不参与断链、孤立页、属性和内容检查，仅检查跨根链接边界；papers/、wiki/、Clippings/ 三个主目录之间禁止创建 Obsidian 或 Markdown 链接。核心规则不可关闭。");

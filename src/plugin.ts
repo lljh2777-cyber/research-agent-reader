@@ -753,12 +753,18 @@ export default class AgentDashboardPlugin extends Plugin {
 			drafts: s => this.getKnowledgePages().summaries(s),
 			curation: async s => { const entries: SavedCurationPending[] = []; const summary = await readDashboardCuration(io, row => entries.push(row), s); return { entries, issues: summary.issues }; },
 			tasks: () => this.getTaskRuns(),
+			findings: () => this.getLintStatus().latest?.findings || [],
 		}, signal, true);
 	}
 	async openPendingItem(item: PendingItem, signal: AbortSignal): Promise<void> {
 		const expected = structuredClone(item); signal.throwIfAborted();
 		const target = pendingDestination(expected, await this.inspectPendingCenter(signal)); signal.throwIfAborted();
 		if (target.kind === "library") { await this.activatePaperLibrary(undefined, target.object, signal); return; }
+		if (target.kind === "note") {
+			const file = this.app.vault.getAbstractFileByPath(target.path);
+			if (!(file instanceof TFile)) throw new Error("报告中的笔记已移动，请重新运行体检");
+			await this.app.workspace.getLeaf(false).openFile(file); return;
+		}
 		if (target.kind === "excerpt") { if (this.excerptBrowser) throw new Error("请先完成已打开摘录窗口中的操作"); this.openExcerptBrowser(target.ref); return; }
 		if (target.kind === "answer-excerpt") { if (this.answerExcerptBrowser) throw new Error("请先完成已打开学习摘录窗口中的操作"); this.openAnswerExcerptBrowser(target.path); return; }
 		if (target.kind === "draft") { this.openKnowledgeDrafts(target.id); return; }
@@ -3720,6 +3726,15 @@ export default class AgentDashboardPlugin extends Plugin {
 			return this.directQueryService.isActive(runId);
 		}
 		return this.isVaultActionProcessActive(runId);
+	}
+
+	async openMaintenanceAction(id: "vault-lint" | "okf-export"): Promise<void> {
+		const action = ACTION_BY_ID.get(id);
+		if (!action) return;
+		(this.app as typeof this.app & { setting?: { close(): void } }).setting?.close();
+		await this.activateDashboardView();
+		const view = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0]?.view;
+		if (view instanceof DashboardView) view.openAction(action);
 	}
 
 	async activateDashboardView(): Promise<void> {

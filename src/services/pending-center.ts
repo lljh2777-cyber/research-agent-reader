@@ -5,7 +5,7 @@ import { quoteLabel } from "../annotations/bilingual";
 import type { LibraryReadResult } from "../library/reader";
 import type { LibraryObjectRef } from "../library/types";
 import type { LocalPdfHistory } from "../papers/local-pdf-intake";
-import type { TaskRun } from "../types/contracts";
+import type { LintFinding, TaskRun } from "../types/contracts";
 import type { SavedCurationPending } from "./dashboard-curation";
 import type { AnswerExcerptPendingList } from "../learning/answer-excerpt-pending";
 import type { DraftSummary } from "../curation/draft-store";
@@ -14,7 +14,7 @@ import { objectDigest, identityRelation } from "../papers/identity";
 export const PENDING_CATEGORIES = { metadata: "书目与全文", acquisition: "获取与保存", intake: "入库与转换", excerpt: "摘录待整理", learning: "学习摘录", draft: "知识页草稿", review: "审阅与复查" } as const;
 export type PendingCategory = keyof typeof PENDING_CATEGORIES;
 export type PendingTarget = { kind: "library"; object: LibraryObjectRef } | { kind: "excerpt"; ref: ExcerptRef }
-	| { kind: "answer-excerpt"; path: string }
+	| { kind: "answer-excerpt"; path: string } | { kind: "note"; path: string }
 	| { kind: "acquisition" | "local" | "task" | "review" | "revision" | "draft"; id: string };
 export interface PendingItem { key: string; category: PendingCategory; title: string; detail: string; next: string; location: string; target: PendingTarget; revision: string; }
 export interface PendingResult { items: PendingItem[]; issues: string[]; scannedAt: string; }
@@ -25,6 +25,7 @@ export interface PendingInputs {
 	excerpts(signal: AbortSignal): Promise<ExcerptList>;
 	curation(signal: AbortSignal): Promise<{ entries: SavedCurationPending[]; issues: string[] }>;
 	tasks(): TaskRun[];
+	findings?(): LintFinding[];
 	answerExcerpts?(signal: AbortSignal): Promise<AnswerExcerptPendingList>;
 	drafts?(signal: AbortSignal): Promise<{ entries: DraftSummary[]; issues: string[] }>;
 }
@@ -137,6 +138,11 @@ export async function readPendingCenter(inputs: PendingInputs, signal: AbortSign
 		for (const run of tasks.value.slice(0, 1000)) if (run.actionId === "paper-ingest" && (attentionOnly ? ["failed", "interrupted"] : ["queued", "running", "failed", "interrupted"]).includes(run.status)) {
 			add("task:" + run.id, "intake", run.label || "文献入库", `入库任务${({ queued: "等待执行", running: "记录为进行中", failed: "未完成", interrupted: "已中断" } as Record<string, string>)[run.status]}，请查看进度和已有结果。`, "查看入库任务", run.summary, { kind: "task", id: run.id }, { id: run.id, status: run.status, startedAt: run.startedAt, finishedAt: run.finishedAt, progress: run.ingestProgress || null });
 		}
+	}
+	for (const finding of inputs.findings?.() || []) {
+		if (finding.code !== "missing-wikilink-target" || !finding.path || !finding.message) continue;
+		add("link:" + objectDigest([finding.path, finding.message]), "review", finding.path, finding.message,
+			"打开含断链的笔记", finding.path, { kind: "note", path: finding.path }, finding);
 	}
 	const duplicates = new Set<string>(), seen = new Set<string>();
 	for (const item of result.items) { if (seen.has(item.key)) duplicates.add(item.key); seen.add(item.key); }

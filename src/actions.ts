@@ -122,6 +122,7 @@ export const ACTIONS: readonly DashboardAction[] = [
 	},
 	{
 		id: "vault-lint",
+		showInRail: false,
 		label: "知识库体检",
 		agent: "Research Agent Reader 内置体检",
 		description: "只读体检 wiki 与 Vault 顶层 Markdown：检查属性、断链、孤立页和三主目录链接边界。papers 与 Clippings 不参与常规体检，仅检查是否跨主目录链接；无需 Python 或外部工具链。完成后可选择由 AI 提出方案并修复。",

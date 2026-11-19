@@ -496,10 +496,7 @@ export class DashboardView extends ItemView {
 				value.createEl("small", { text: metric.unit });
 			}
 			card.createEl("p", { cls: "agent-dashboard-metric-detail", text: metric.detail });
-			if (metric.label === "知识库健康" && !/^\d+$/.test(metric.value)) {
-				const check = card.createEl("button", { cls: "agent-dashboard-text-action", text: "运行体检" }); check.type = "button";
-				check.addEventListener("click", () => { const action = ACTION_BY_ID.get("vault-lint"); if (action) this.openAction(action); });
-			}
+
 		});
 	}
 
@@ -646,7 +643,7 @@ export class DashboardView extends ItemView {
 
 	renderKnowledgeGapsList(parent: HTMLElement): void {
 		parent.empty();
-		const visibleGaps = this.currentData.knowledgeGaps.filter((gap) => this.isVisibleKnowledgeGap(gap));
+		const visibleGaps = this.currentData.knowledgeGaps.filter((gap) => !gap.actionId?.startsWith("vault-lint") && this.isVisibleKnowledgeGap(gap));
 		if (visibleGaps.length === 0) {
 			parent.createEl("p", { cls: "agent-dashboard-empty-state", text: "当前筛选条件下没有待处理的知识缺口。" });
 			return;
