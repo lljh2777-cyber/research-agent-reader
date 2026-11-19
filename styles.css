@@ -6689,3 +6689,7 @@ body.agent-dashboard-mineru-resizing {
 [data-color="blue"] { --annotation-swatch: #52a9ec; }
 [data-color="purple"] { --annotation-swatch: #b18ae5; }
 [data-color="red"] { --annotation-swatch: #eb7474; }
+
+.reading-workspace.reading-chat-only .reading-map-area,
+.reading-workspace.reading-chat-only .reading-divider { display: none; }
+.reading-workspace.reading-chat-only .reading-main-chat { flex: 1 1 100% !important; }

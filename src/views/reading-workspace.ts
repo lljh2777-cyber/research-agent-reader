@@ -138,15 +138,19 @@ export class ReadingWorkspaceView extends ItemView {
 		const identity = element(header, "div", "reading-identity"); const mark = element(identity, "div", "reading-brand-mark"); icon(mark, this.getIcon());
 		const names = element(identity, "div", "reading-identity-text");
 		const eyebrow = element(names, "div", "reading-eyebrow"); element(eyebrow, "span", "", this.domain === "code" ? "代码分析" : "论文深读");
-		if (session) element(eyebrow, "span", "reading-source-badge", session.demo ? "交互演示" : session.source.kind === "code" ? "代码 · 静态阅读" : session.source.kind === "pdf" ? "PDF 原文" : session.source.kind === "structured" ? "JATS 原文" : "MinerU 原文");
+		if (session) element(eyebrow, "span", "reading-source-badge", session.demo ? "交互演示" : session.source.kind === "code" ? "代码 · 静态阅读" : session.source.kind === "pdf" ? "PDF 原文" : session.source.kind === "structured" ? "JATS 原文" : session.source.path.startsWith("@paper-clipper/") ? "Paper Clipper 原文" : "MinerU 原文");
 		const select = button(names, session ? readingTitle(session) : "选择或管理阅读会话", () => this.openSessionLibrary(), "选择阅读会话"); select.className = "reading-session-select";
 		icon(names, "chevron-down").classList.add("reading-session-chevron");
 		const actions = element(header, "div", "reading-header-actions");
 		if (session) {
 			const modes = element(actions, "div", "reading-mode-switch"); modes.setAttribute("role", "group"); modes.setAttribute("aria-label", "阅读模式");
 			element(modes, "span", "reading-mode-indicator").setAttribute("aria-hidden", "true");
+			if (session.source.kind !== "code") {
+				const read = actionButton(modes,"book-open","只看带读讲解",()=>this.updateUI(ui=>{ui.mode="split";ui.hideMap=true;}));
+				read.setAttribute("aria-pressed",String(session.ui.mode === "split" && session.ui.hideMap === true));
+			}
 			for (const [mode, name, label] of [["split", "panels-left-bottom", "导图＋对话"], ["map", "git-branch", "仅思维导图"]] as const) {
-				const control = actionButton(modes, name, label, () => this.updateUI((ui) => { ui.mode = mode; })); control.dataset.readingMode = mode; control.setAttribute("aria-pressed", String(session.ui.mode === mode));
+				const control = actionButton(modes, name, label, () => this.updateUI((ui) => { ui.mode = mode; ui.hideMap = false; })); control.dataset.readingMode = mode; control.setAttribute("aria-pressed", String(session.ui.mode === mode && !session.ui.hideMap));
 			}
 			if (session.source.kind === "code") actionButton(actions, "download", "导出代码学习笔记", () => this.openExport(), true);
 			if (session.source.kind === "code") actionButton(actions, "code-xml", "浏览源码", () => { const modal = new CodeSourceModal(this.app, this.service, this.session!, id => { if (this.sessionId === session.id) this.selectNode(id, false, true); }); this.modals.add(modal); const close = modal.onClose.bind(modal); modal.onClose = () => { close(); this.modals.delete(modal); }; modal.open(); }, true);
@@ -209,6 +213,7 @@ export class ReadingWorkspaceView extends ItemView {
 		this.renderer.unload(); this.renderer = new Component(); this.renderer.load();
 		this.contentEl.replaceChildren(); this.contentEl.classList.add("reading-workspace");
 		this.contentEl.dataset.mode = session?.ui.mode || "empty";
+		this.contentEl.classList.toggle("reading-chat-only",session?.ui.mode === "split" && session.ui.hideMap === true);
 		this.renderHeader(session);
 		if (!session) { this.renderEmpty(); return; }
 		const body = element(this.contentEl, "div", "reading-body");

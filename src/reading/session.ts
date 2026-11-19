@@ -12,7 +12,7 @@ export function createReadingSession(source: ReadingSource, backend = "codex-cli
 	const now = new Date().toISOString();
 	return { version: 1, id: newReadingId(), title: source.title, source, createdAt: now, updatedAt: now, purpose: "reading", lastOpenedAt: now,
 		nodes: [], branches: [], mainIds: [], outline: [], mainSummary: "", completed: false, backend, model,
-		ui: { mode: "split", split: 0.5, selectedId: "", zoom: 1, scrollX: 0, scrollY: 0, collapsed: [], drafts: {}, windows: [] } };
+		ui: { mode: "split", ...(source.kind === "code" ? {} : { hideMap: true }), split: 0.5, selectedId: "", zoom: 1, scrollX: 0, scrollY: 0, collapsed: [], drafts: {}, windows: [] } };
 }
 export function readingNode(session: ReadingSession, id: string): ReadingNode {
 	const node = session.nodes.find((item) => item.id === id);

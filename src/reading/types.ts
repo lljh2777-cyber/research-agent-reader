@@ -114,7 +114,7 @@ export interface ReadingSession {
 	lastOpenedAt?: string;
 	ui: {
 		webDrafts?: Record<string, boolean>;
-		mode: "split" | "map"; split: number; selectedId: string;
+		mode: "split" | "map"; hideMap?: boolean; split: number; selectedId: string;
 		mainFocusId?: string; mainScroll?: number; pendingQuote?: ReadingQuote;
 		mainComposerExpanded?: boolean;
 		zoom: number; scrollX: number; scrollY: number;
