@@ -83,7 +83,7 @@ export const ACTIONS: readonly DashboardAction[] = [
 	},
 	{
 		id: "code-analysis",
-		label: "代码分析",
+		label: "阅读配套代码",
 		agent: "code_reader",
 		description: "选择 R/Python 文件或项目，沿主线逐步理解代码，通过支线追问并查看源码依据；一次性代码笔记保留在更多选项中。",
 		placeholder: "例如：<代码项目目录>\n分析入口、脚本关系、数据流，并按关键代码 + 解释输出",

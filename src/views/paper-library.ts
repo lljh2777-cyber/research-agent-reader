@@ -200,11 +200,13 @@ export class PaperLibraryView extends ItemView {
 		if (paper.objects.every(item => item.kind === "record")) detail.createEl("p", { text: manual ? "已保存人工条目，尚无已核验的书目信息或关联原文。" : "已保存书目信息，尚无关联原文、阅读会话或笔记。" });
 	}
 	private renderCodeLinks(parent: HTMLElement, paper: LibraryPaper, data: LibraryReadResult): void {
-		const section = parent.createEl("section", { cls: "rar-library-section rar-library-code-links", attr: { "aria-label": "关联代码笔记" } });
-		section.createEl("h3", { text: "关联代码笔记" });
+		const rows = data.codeLinks?.byPaper[paper.key] || [];
+		const section = parent.createEl("details", { cls: "rar-library-section rar-library-code-links", attr: { "aria-label": "配套代码阅读" } });
+		section.open = rows.length > 0;
+		section.createEl("summary", { text: rows.length ? "配套代码 · " + rows.length + " 条关联笔记" : "配套代码" });
 		section.createEl("p", { text: "依据 Obsidian 链接缓存，与论文笔记直接相连；不代表论文官方实现或代码已运行。", cls: "rar-library-muted" });
 		for (const issue of data.codeLinks?.issues || []) section.createEl("p", { text: issue, cls: "rar-library-warning" });
-		const rows = data.codeLinks?.byPaper[paper.key] || [];
+		this.button(section,"阅读本地源码",()=>{ void this.host.activateLearningSpace({kind:"document",reading:{domain:"code"}}); });
 		if (!rows.length) section.createEl("p", { text: paper.association === "conflict" ? "文献身份存在冲突，暂不展示代码关联。" : !data.codeLinks ? "代码关联尚未读取，请刷新文献库。" : "本次缓存中未找到直接关联。可在代码笔记中链接论文笔记，或在代码学习导出时选择关联笔记，再刷新文献库。", cls: "rar-library-muted" });
 		for (const row of rows.slice(0, 100)) {
 			const card = section.createEl("article", { cls: "rar-library-card" });
