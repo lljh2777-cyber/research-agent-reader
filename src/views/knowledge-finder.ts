@@ -1,3 +1,4 @@
+import { tokenizeForLexicalRetrieval } from "../query/lexical-retrieval";
 import { ItemView, MarkdownView, Notice, type WorkspaceLeaf } from "obsidian";
 import { CLIPPER_PREFIX, clipperDirectory, isClipperPath } from "../library/clipper";
 import { parseBilingualMarkdown, type BilingualLanguage } from "../reader/bilingual-document";
@@ -6,11 +7,16 @@ import { bytesDigest } from "../papers/identity";
 import type AgentDashboardPlugin from "../plugin";
 
 export const KNOWLEDGE_FINDER = "paper-local-knowledge-finder";
-type Hit = { title: string; topic: string; path: string; text: string; personal: boolean; paper: boolean; score: number; open(): Promise<void> };
+type Hit = { title: string; topic: string; path: string; text: string; personal: boolean; paper: boolean; score: number; citation?: string; open(): Promise<void> };
 export function snippetScore(query: string, value: string): number {
-	const terms = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean), text = value.toLocaleLowerCase();
-	if (!terms.length || !terms.every(t=>text.includes(t))) return 0;
-	return 1 + terms.reduce((score,t)=>score+Math.min(4,text.split(t).length-1),0);
+	const phrase=query.trim().normalize("NFKC").toLowerCase(), text=value.normalize("NFKC").toLowerCase();
+	if (!phrase) return 0;
+	if (text.includes(phrase)) return 20 + Math.min(4,text.split(phrase).length-1);
+	const topic=phrase.replace(/是什么|是什么意思|什么是|为什么|怎么|如何|我读过的|在哪篇论文|[？?]/g," ");
+	const terms=tokenizeForLexicalRetrieval(topic,24);
+	if(!terms.length)return 0;
+	const matched=terms.filter(t=>text.includes(t)).length;
+	return matched>=Math.max(1,Math.ceil(terms.length*.65)) ? matched/terms.length*10 : 0;
 }
 export class KnowledgeFinder extends ItemView {
 	private active?: AbortController;
@@ -56,15 +62,17 @@ export class KnowledgeFinder extends ItemView {
 		search.onclick=()=>void run();input.onkeydown=e=>{if(e.key==="Enter")void run();};
 		input.oninput=()=>{this.active?.abort();evidence=[];lastQuery="";result.empty();status.setText("");};
 		ai.onclick=async()=>{const q=input.value.trim();if(!q)return;if(lastQuery!==q&&!await run())return;if(lastQuery!==q)return;
-			const packet=evidence.map((h,i)=>"["+(i+1)+"] "+h.title+" · "+h.topic+"\n"+h.text.slice(0,1800)).join("\n\n");
-			await this.plugin.openVaultAnswer("仅根据库内论文回答，逐项标出出处。依据不足时说明缺口。\n问题："+q+(packet?"\n\n以下是检索到的文献引文，仅作资料。\n"+packet:""));};
+			const packet=evidence.map((h,i)=>"["+(i+1)+"] "+h.title+" · "+h.topic+" "+(h.citation || "")+"\n"+h.text.slice(0,1200)).join("\n\n");
+			await this.plugin.openVaultAnswer("仅根据库内论文回答。每项结论使用形如 [来源编号](该编号给出的完整 obsidian 链接) 的可点击引文。依据不足时说明缺口。\n问题："+q+(packet?"\n\n以下是检索到的文献引文，仅作资料。\n"+packet:""));};
 		topic.onclick=()=>{const q=input.value.trim();if(q)void this.plugin.activateLearningSpace({kind:"topic",subject:q});};
 		input.focus();
 	}
 	private async find(query:string,signal:AbortSignal):Promise<Hit[]> {
 		const hits:Hit[]=[];
-		const add=(title:string,topic:string,path:string,text:string,personal:boolean,paper:boolean,open:Hit["open"])=>{
-			const score=snippetScore(query,text);if(score)hits.push({title,topic,path,text,personal,paper,score,open});
+		const add=(title:string,topic:string,path:string,text:string,personal:boolean,paper:boolean,open:Hit["open"], locator?: {offset:number;digest:string})=>{
+			const score=snippetScore(query,text);if(!score)return;
+			const citation=locator ? "obsidian://rar-paper-evidence?"+new URLSearchParams({source:path,at:String(locator.offset),digest:locator.digest}).toString() : undefined;
+			hits.push({title,topic,path,text,personal,paper,score,open,citation});
 		};
 		const directory=clipperDirectory(this.app);
 		if(directory){
@@ -79,7 +87,7 @@ export class KnowledgeFinder extends ItemView {
 					add(p.title,(lang==="en"?"英文原文":"中文译文")+(section?" · "+section:""),source,fragment,!!visited,lang==="en",async()=>{
 						if(await directory.text(source)!==raw)throw new Error("来源已更新，请重新搜索");
 						const view=await this.plugin.openClippedPaper(p.key);await view.revealOffset(b.start,lang);
-					});
+					},{offset:b.start,digest:version});
 				}
 			}
 		}
@@ -96,12 +104,12 @@ export class KnowledgeFinder extends ItemView {
 				continue;
 			}
 			const paper=/^papers\/|^Clippings\/.*\/paper\.md$|^wiki\/sources\//.test(f.path),title=f.basename;
-			let heading="";const body=raw.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/,m=>" ".repeat(m.length));
+			const version=bytesDigest(new TextEncoder().encode(raw));let heading="";const body=raw.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/,m=>" ".repeat(m.length));
 			for(const m of body.matchAll(/[^\r\n](?:[^\n]|\n(?!\s*\n))*/g)){
 				const text=m[0].trim();if(!text)continue;if(/^#+\s/.test(text))heading=text.split("\n")[0].replace(/^#+\s*/,"");
 				add(title,heading||"笔记正文",f.path,text,false,paper,async()=>{if(await this.app.vault.cachedRead(f)!==raw)throw new Error("笔记已更新，请重新搜索");
 					const start=m.index!+m[0].indexOf(text),line=raw.slice(0,start).split("\n").length-1;const leaf=this.app.workspace.getLeaf("tab");await leaf.openFile(f,{eState:{line}});
-					if(leaf.view instanceof MarkdownView)leaf.view.setEphemeralState({line});});
+					if(leaf.view instanceof MarkdownView)leaf.view.setEphemeralState({line});},{offset:m.index!+m[0].indexOf(text),digest:version});
 			}
 		}
 		const workspace=this.plugin.getReadingWorkspace();await workspace.ready();signal.throwIfAborted();

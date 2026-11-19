@@ -504,6 +504,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationHighlights = this.addChild(new AnnotationHighlights(this.app));
 		this.lastContextFile = this.app.workspace.getActiveFile();
 		await this.loadSettings();
+		this.registerObsidianProtocolHandler("rar-paper-evidence",params=>{ void this.openFinderCitation(params).catch(e=>new Notice(String(e))); });
 		this.registerView(KNOWLEDGE_FINDER, leaf => new KnowledgeFinder(leaf, this));
 		this.registerView(CLIPPER_READER, leaf => new ClipperReaderView(leaf, this));
 		this.registerView(VIEW_TYPE, (leaf) => new DashboardView(leaf, this));
@@ -3835,6 +3836,17 @@ export default class AgentDashboardPlugin extends Plugin {
 			await this.finishTaskRun(run.id, { status: result.exitCode === 0 ? "done" : "failed", output: result.stdout, error: result.stderr, exitCode: result.exitCode });
 			new Notice(action.label + (result.exitCode === 0 ? "已完成，可在控制台查看" : "失败，请查看控制台任务"));
 		} catch (error) { await this.finishTaskRun(run.id, { status: "failed", error: String(error) }); throw error; }
+	}
+	async openFinderCitation(params: Record<string,string>): Promise<void> {
+		const source=params.source, offset=Number(params.at);
+		if (!source || !Number.isSafeInteger(offset) || offset<0 || !/^[a-f0-9]{64}$/.test(params.digest)) throw new Error("引文位置无效");
+		const external=isClipperPath(source);
+		if (!external && (!/^(?:wiki\/sources\/|Clippings\/|papers\/[^/]+\/article\.md$)/.test(source) || !source.endsWith(".md") || /[\\\\:]/.test(source) || source.split("/").some(p=>!p || p==="." || p===".."))) throw new Error("引文不在文献范围内");
+		const file=external?null:this.app.vault.getAbstractFileByPath(source);
+		const text=external?await clipperDirectory(this.app)?.text(source):file instanceof TFile?await this.app.vault.read(file):null;
+		if(!text || offset>=text.length || readingHash(text)!==params.digest) throw new Error("文献版本已变化或来源缺失，请重新查找引文");
+		if(external){const view=await this.openClippedPaper(source.split("/")[1]);await view.revealOffset(offset,source.endsWith("zh-CN.md")?"zh-CN":"en");}
+		else if(file instanceof TFile) await this.app.workspace.getLeaf("tab").openFile(file,{eState:{line:text.slice(0,offset).split("\n").length-1}});
 	}
 	async activateQueryWikiView(initialQuestion = ""): Promise<void> {
 		const existing = this.app.workspace.getLeavesOfType(KNOWLEDGE_FINDER)[0], leaf = existing || this.app.workspace.getLeaf("tab");
