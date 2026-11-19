@@ -158,6 +158,7 @@ export class ReadingWorkspaceView extends ItemView {
 			if (!session.demo && ["pdf", "article", "structured"].includes(session.source.kind)) actionButton(actions, "sparkles", "阅读助手", () => this.plugin.openReadingAssistant(session.id, this.session!.ui.selectedId), true);
 			if (!session.demo && ["pdf", "article", "structured"].includes(session.source.kind)) actionButton(actions, "notebook-pen", "整理进知识库", () => this.plugin.openKnowledgeCuration(session.id, this.session!.ui.selectedId), true);
 		}
+		if (session && !session.demo && ["article","structured"].includes(session.source.kind)) actionButton(actions, "image", "按图号跳转", () => this.handle(this.openFigureIndex()));
 		const create = actionButton(actions, "plus", "新建阅读", () => this.openSource()); create.classList.add("reading-primary");
 		const more = actionButton(actions, "ellipsis", "更多阅读选项", () => {
 			const menu = new Menu();
@@ -494,6 +495,15 @@ export class ReadingWorkspaceView extends ItemView {
 			this.renderCitations(content, node);
 		}).catch(() => { content.textContent = node.content; }); }
 		catch { content.textContent = node.content; }
+		if (this.session?.source.kind !== "code" && node.status === "done") {
+			const cited = new Set(readingCitations(node.content, node.evidence.map(e => e.id)).flatMap(match => match.ids));
+			const evidence = node.evidence.filter(e => e.kind === "paper" && cited.has(e.id));
+			if (evidence.length) {
+				const list = element(article, "div", "reading-answer-evidence");
+				element(list, "strong", "", "本步引用的图表与原文");
+				for (const e of evidence) button(list, e.label, () => this.showEvidence(node.id, e.id));
+			}
+		}
 		const tools = element(article, "div", "reading-answer-tools");
 		let excerptAnswer: AnswerSnapshot | undefined;
 		if (node.status === "done") { try { excerptAnswer = readingAnswerSnapshot(this.session!, node.id); } catch { /* Demo, test or invalid answers cannot become saved learning excerpts. */ } }
@@ -806,6 +816,30 @@ export class ReadingWorkspaceView extends ItemView {
 		const close = modal.onClose.bind(modal); modal.onClose = () => { sourceLocation.dispose(); close(); };
 		const go = button(modal.contentEl, "核对文件并恢复", () => { if (go.disabled) return; go.disabled = true; this.handle(this.service.relocate(session.id, input.value.trim().replace(/^"|"$/g, "")).then(() => { modal.close(); new Notice("原文位置已恢复，历史保留"); }).finally(() => { go.disabled = false; })); }); modal.open();
 	}
+	private async openFigureIndex(): Promise<void> {
+		const doc = await this.service.document(this.sessionId);
+		await doc.verify();
+		const modal = this.modal("按图号跳转");
+		let count = 0;
+		for (const e of doc.evidence) {
+			if (e.kind !== "paper" || e.asset) continue;
+			const caption = /^[ \t#>*_]*(?:Figure|Fig\.?|图)\s*(S?\d+[A-Z]?)(?=[\s.:：、*_]|$)/im.exec(e.text);
+			if (!caption) continue;
+			const go = (label: string, index: number) => button(modal.contentEl, label, () => this.handle(doc.verify().then(async () => {
+				await this.plugin.openReadingEvidence(e.path, e.page, e.structured?.blockId, e.start === undefined ? undefined : e.start + index);
+				modal.close();
+			})));
+			const number = caption[1].toUpperCase();
+			go("图 " + number + " · " + e.text.slice(caption.index + caption[0].length).trim().slice(0,55), caption.index);
+			count++;
+			if (!/[A-Z]$/.test(number)) {
+				for (const part of e.text.slice(caption.index).matchAll(/(?:^|\s)[(（]([A-H])[)）](?=\s)/g)) go("图 " + number + part[1], caption.index + part.index!);
+			}
+		}
+		if (!count) element(modal.contentEl, "p", "", "这份原文没有可定位的图号，可从讲解中的证据引用查看原文。");
+		modal.open();
+	}
+
 	private async openCoverage(): Promise<void> {
 		const sessionId = this.sessionId; const doc = await this.service.document(sessionId); await doc.verify();
 		const session = this.service.repository.get(sessionId); const rows = readingCoverage(session, doc.evidence); const modal = this.modal("证据覆盖");
