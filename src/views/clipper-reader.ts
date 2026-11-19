@@ -72,15 +72,17 @@ export class ClipperReaderView extends ItemView {
 	}
 	private async renderPaper(): Promise<void> {
 		this.stop(); const ctl = this.active = new AbortController(), signal = ctl.signal;
-		const host = this.contentEl; host.empty();
+		const host = this.contentEl; host.empty(); host.removeClass("rar-clip-paired");
 		try {
 			const dir = requireClipper(this.app), paper = await dir.paper(this.key); signal.throwIfAborted(); this.heading = paper.title;
 			const source = CLIPPER_PREFIX + paper.key + "/paper.md", saved = this.plugin.settings.clipperProgress[this.key];
-			host.createEl("h2", { text: paper.title });
-			host.createEl("button", { text: "AI 带读全文" }).onclick = () => void this.plugin.startClippedReading(source).catch(e => new Notice(String(e)));
+			const header = host.createDiv("rar-clip-header");
+			header.createEl("h2", { text: paper.title, attr: { title: paper.title } });
+			header.createEl("button", { text: "AI 带读全文" }).onclick = () => void this.plugin.startClippedReading(source).catch(e => new Notice(String(e)));
 			if (paper.bilingual) {
 				try {
 					const doc = await loadBilingualDocument(dir, source, signal); signal.throwIfAborted();
+					host.addClass("rar-clip-paired");
 					const b = new BilingualReader({ app: this.app, host: host.createDiv(), document: doc, signal, ordinary: () => {}, hideOrdinary: true,
 						annotate: () => this.plugin.openSelectionAnnotation(), outlineLeaf: this.leaf, state: saved?.position, defaultLinked: this.plugin.settings.mineruReaderBilingualLinked,
 						ratio: this.plugin.settings.mineruReaderBilingualSplitRatio, renderMarkdown: renderClip, onState: state => {
@@ -89,7 +91,7 @@ export class ClipperReaderView extends ItemView {
 							this.track(paper.title, paper.englishDigest, state, undefined, h ? file.text.slice(h.start,h.end).replace(/^#+\s*/, "").trim() : "正文");
 						} });
 					this.bilingual = b; this.addChild(b); await b.render(); return;
-				} catch (error) { signal.throwIfAborted(); host.createEl("p", { text: "对照资料暂不可用，已打开英文原文。 " + String(error) }); }
+				} catch (error) { signal.throwIfAborted(); host.removeClass("rar-clip-paired"); host.createEl("p", { text: "对照资料暂不可用，已打开英文原文。 " + String(error) }); }
 			}
 			const text = await dir.text(source); signal.throwIfAborted();
 			const wrapper = host.createDiv("markdown-reading-view"), article = wrapper.createEl("article", { cls: "markdown-rendered" });
