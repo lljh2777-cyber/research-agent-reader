@@ -1,9 +1,8 @@
-import { App, Modal } from "obsidian";
 import { filterPending, PENDING_CATEGORIES, type PendingItem, type PendingResult } from "../services/pending-center";
 import { PendingController } from "../services/pending-controller";
 export interface PendingCenterHost { inspectPendingCenter(signal: AbortSignal): Promise<PendingResult>; openPendingItem(item: PendingItem, signal: AbortSignal): Promise<void>; }
 
-export class PendingCenterModal extends Modal {
+export class LibraryAttentionList {
 	private readonly controller: PendingController;
 	private closed = true;
 	private action?: AbortController;
@@ -16,15 +15,12 @@ export class PendingCenterModal extends Modal {
 	private refresh!: HTMLButtonElement;
 	private cancel!: HTMLButtonElement;
 	private filter!: HTMLSelectElement;
-	constructor(app: App, private readonly host: PendingCenterHost, private readonly didClose?: () => void) {
-		super(app); this.controller = new PendingController(signal => this.host.inspectPendingCenter(signal), () => this.render());
+	constructor(private readonly contentEl: HTMLElement, private readonly host: PendingCenterHost) {
+		this.controller = new PendingController(signal => host.inspectPendingCenter(signal), () => this.render());
 	}
-	onOpen(): void {
-		this.closed = false; this.setTitle("待处理中心"); this.modalEl.addClass("rar-pending-modal");
-		this.contentEl.createEl("p", { text: "汇总本地保存记录中的缺口。刷新只读取记录；回到原功能后，再核对并决定下一步。", cls: "rar-library-muted" });
+	open(): void {
+		this.closed = false;
 		const tools = this.contentEl.createDiv("rar-pending-tools");
-		const search = tools.createEl("input", { type: "search", placeholder: "搜索文献、路径或待处理事项", attr: { "aria-label": "搜索待处理记录", maxlength: "500" } });
-		search.oninput = () => { this.query = search.value; this.limit = 40; this.render(); };
 		this.filter = tools.createEl("select", { attr: { "aria-label": "待处理阶段" } }); this.filter.createEl("option", { value: "all", text: "全部阶段" });
 		for (const [value, text] of Object.entries(PENDING_CATEGORIES)) this.filter.createEl("option", { value, text });
 		this.filter.onchange = () => { this.category = this.filter.value; this.limit = 40; this.render(); };
@@ -34,7 +30,8 @@ export class PendingCenterModal extends Modal {
 		this.list = this.contentEl.createEl("section", { attr: { "aria-label": "待处理记录" } });
 		void this.controller.refresh();
 	}
-	onClose(): void { this.closed = true; this.controller.dispose(); this.action?.abort(); this.contentEl.empty(); this.didClose?.(); }
+	setQuery(query: string): void { this.query = query; this.limit = 40; this.render(); }
+	dispose(): void { this.closed = true; this.controller.dispose(); this.action?.abort(); this.contentEl.empty(); }
 	private button(parent: HTMLElement, text: string, run: () => void): HTMLButtonElement { const button = parent.createEl("button", { text, attr: { type: "button" } }); button.onclick = run; return button; }
 	private render(): void {
 		if (this.closed) return;
@@ -66,7 +63,7 @@ export class PendingCenterModal extends Modal {
 	private async openItem(item: PendingItem): Promise<void> {
 		if (this.closed || this.action || this.controller.busy || this.controller.state.phase !== "ready") return;
 		const controller = this.action = new AbortController(); this.notice = "正在核对所选记录…"; this.render();
-		try { await this.host.openPendingItem(structuredClone(item), controller.signal); if (!this.closed && !controller.signal.aborted) this.close(); }
+		try { await this.host.openPendingItem(structuredClone(item), controller.signal); if (!this.closed && !controller.signal.aborted) await this.controller.refresh(); }
 		catch (error) { if (!this.closed && !controller.signal.aborted) this.notice = error instanceof Error ? error.message : String(error); }
 		finally { if (!this.closed && this.action === controller) { if (controller.signal.aborted) this.notice = "已取消打开"; this.action = undefined; this.render(); } }
 	}

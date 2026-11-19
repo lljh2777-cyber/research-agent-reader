@@ -43,7 +43,7 @@ export async function readPendingAcquisitions(io: PendingInputs["acquisitions"],
 }
 
 /** Parallel read adapters are isolated: one failed area never reports an empty, complete center. */
-export async function readPendingCenter(inputs: PendingInputs, signal: AbortSignal): Promise<PendingResult> {
+export async function readPendingCenter(inputs: PendingInputs, signal: AbortSignal, attentionOnly = false): Promise<PendingResult> {
 	signal.throwIfAborted();
 	const [library, acquisition, local, excerpts, curation, tasks, answers, drafts] = await Promise.allSettled([
 		Promise.resolve().then(() => inputs.library(signal)), readPendingAcquisitions(inputs.acquisitions, signal), Promise.resolve().then(() => inputs.local(signal)), Promise.resolve().then(() => inputs.excerpts(signal)), Promise.resolve().then(() => inputs.curation(signal)), Promise.resolve().then(() => inputs.tasks()),
@@ -71,18 +71,19 @@ export async function readPendingCenter(inputs: PendingInputs, signal: AbortSign
 			const proof = { paperId: paper.paperId || null, association: paper.association, identifiers: paper.identifiers, item };
 			const location = item.source?.path || item.annotationPath || item.reading?.source.path || item.id;
 			if (paper.association === "conflict") { add(key, "review", item.title, "文献关联存在冲突，请在详情中核对。", "查看文献详情", location, target, proof); continue; }
-			if (item.kind === "record" && item.manualBibliography) add(key, "metadata", item.title, "人工书目信息尚未核验。", "查看书目信息", location, target, proof);
-			else if (item.kind === "record" && item.bibliography && data.complete && !paper.objects.some(o => o.source?.saved)) add(key, "metadata", item.title, "本次完整扫描未发现已保存的原文，可补充全文。", "查看书目信息", location, target, proof);
+			if (!attentionOnly && item.kind === "record" && item.manualBibliography) add(key, "metadata", item.title, "人工书目信息尚未核验。", "查看书目信息", location, target, proof);
+			else if (!attentionOnly && item.kind === "record" && item.bibliography && data.complete && !paper.objects.some(o => o.source?.saved)) add(key, "metadata", item.title, "本次完整扫描未发现已保存的原文，可补充全文。", "查看书目信息", location, target, proof);
 			else if (item.source && ["missing", "invalid"].includes(item.source.verification.state)) add(key, "review", item.title, item.source.verification.state === "missing" ? "原文缺失，需要核对来源。" : "原文未通过当前核验，需要复查。", "查看来源详情", location, target, proof);
-			else if (item.source?.format === "pdf" && item.source.saved && item.source.verification.state === "verified" && data.complete
+			else if (!attentionOnly && item.source?.format === "pdf" && item.source.saved && item.source.verification.state === "verified" && data.complete
 				&& !paper.objects.some(o => o.source?.pdfOrigin?.state === "matched" && o.source.pdfOrigin.sourceIds.includes(item.id))) add(key, "intake", item.title, "本次扫描未发现与此 PDF 关联的转换正文，可在原文详情核对处理选项。", "查看原文处理选项", location, target, proof);
-			else if (item.kind === "note" && item.noteReview?.state !== "reviewed") add(key, "review", item.title, item.noteReview?.state === "stale" ? "笔记内容在上次审阅后发生变化。" : "论文笔记尚未标记人工审阅。", "查看笔记详情", location, target, proof);
+			else if (!attentionOnly && item.kind === "note" && item.noteReview?.state !== "reviewed") add(key, "review", item.title, item.noteReview?.state === "stale" ? "笔记内容在上次审阅后发生变化。" : "论文笔记尚未标记人工审阅。", "查看笔记详情", location, target, proof);
 			else if (item.kind !== "annotation" && item.binding && item.binding.state !== "matched") add(key, "review", item.title, item.binding.reason, "查看来源关联", location, target, proof);
 		}
 	}
 	if (acquisition.status === "fulfilled") {
 		result.issues.push(...acquisition.value.issues);
 		for (const job of acquisition.value.jobs) {
+			if (attentionOnly && !["failed", "conflict", "interrupted", "no_match", "needs_configuration", "acquired"].includes(job.phase)) continue;
 			const identity = job.identity?.identifiers || job.confirmedIdentity?.identifiers || { [job.request.input.kind]: job.request.input.value };
 			if (job.phase === "acquired" && job.sourcePackages?.length && job.sourcePackages.every(key => {
 				const matches = knownPackages.filter(o => o.source!.packageKey === key);
@@ -104,6 +105,7 @@ export async function readPendingCenter(inputs: PendingInputs, signal: AbortSign
 			const r = snapshot.record;
 			const binding = bindings.get(r.annotationPath + "#" + r.id);
 			if (r.archiveStatus === "completed" && binding?.state === "matched") continue;
+			if (attentionOnly && (!binding || binding.state === "matched") && r.archiveStatus !== "completed") continue;
 			const unresolvedCompletion = r.archiveStatus === "completed" && binding?.state !== "changed";
 			add("excerpt:" + r.id, binding?.state === "changed" || unresolvedCompletion ? "review" : "excerpt", (r.bilingual ? quoteLabel(r) + " · " : "") + r.selectedText,
 				binding?.state === "changed" ? "原文版本已变化，请核对历史摘录。" : unresolvedCompletion ? "摘录已标记整理完成，但当前原文无法核对，请复查来源。" : "摘录尚未标记整理完成，可回看原句、个人备注与整理历史。",
@@ -114,6 +116,7 @@ export async function readPendingCenter(inputs: PendingInputs, signal: AbortSign
 		result.issues.push(...answers.value.issues);
 		for (const { file, source } of answers.value.entries) {
 			const r = file.record;
+			if (attentionOnly && source.state === "matched") continue;
 			add("answer-excerpt:" + r.id, source.state === "matched" ? "learning" : "review", "学习摘录 · " + r.answer.title,
 				(r.answer.ref.kind === "topic" ? "主题学习" : r.answer.context.kind === "code" ? "代码阅读" : "资料阅读") + " · AI 回答" + (r.humanRevision ? "与人工修订稿" : "") + "。" + (source.state === "matched" ? "尚未标记整理完成，可回看并编辑。" : source.message),
 				"查看学习摘录", r.answer.context.location, { kind: "answer-excerpt", path: file.path }, { digest: file.digest, source });
@@ -121,17 +124,17 @@ export async function readPendingCenter(inputs: PendingInputs, signal: AbortSign
 	}
 	if (drafts.status === "fulfilled") {
 		result.issues.push(...drafts.value.issues);
-		for (const draft of drafts.value.entries) if (!draft.page?.complete || draft.issues.length || draft.pending) add("draft:" + draft.id, "draft", draft.title,
+		for (const draft of drafts.value.entries) if ((!attentionOnly || draft.page) && !draft.page?.complete || draft.issues.length || draft.pending) add("draft:" + draft.id, "draft", draft.title,
 			draft.issues.length ? "草稿历史需复查：" + draft.issues.join("；") : draft.pending ? "草稿有未完成保存，请核对并恢复。" : draft.page ? "建页未完成，请打开草稿中的建页记录并核对恢复：" + draft.page.path : "草稿已保存，正文与材料待审阅；尚未创建正式知识页。",
 			"继续编辑草稿", "knowledge-drafts/" + draft.id, { kind: "draft", id: draft.id }, draft.revision);
 	}
 	if (curation.status === "fulfilled") {
 		result.issues.push(...curation.value.issues);
-		for (const row of curation.value.entries) add(`${row.kind}:${row.id}`, "review", row.path, row.kind === "reviews" ? row.state === "ready" ? "整理建议仍有待审阅项。" : `整理批次标记为“${({ generating: "生成中", failed: "失败", interrupted: "中断", stale: "需复查" } as Record<string, string>)[row.state] || "需核对"}”，请查看保存记录。` : "修订记录标记需复查或恢复。", "查看知识整理记录", row.path, { kind: row.kind === "reviews" ? "review" : "revision", id: row.id }, row.digest);
+		for (const row of curation.value.entries) if (!attentionOnly || !["ready", "generating"].includes(row.state)) add(`${row.kind}:${row.id}`, "review", row.path, row.kind === "reviews" ? row.state === "ready" ? "整理建议仍有待审阅项。" : `整理批次标记为“${({ generating: "生成中", failed: "失败", interrupted: "中断", stale: "需复查" } as Record<string, string>)[row.state] || "需核对"}”，请查看保存记录。` : "修订记录标记需复查或恢复。", "查看知识整理记录", row.path, { kind: row.kind === "reviews" ? "review" : "revision", id: row.id }, row.digest);
 	}
 	if (tasks.status === "fulfilled") {
 		if (tasks.value.length > 1000) result.issues.push("任务超过 1000 条，仅展示前 1000 条记录中的未完成入库任务。");
-		for (const run of tasks.value.slice(0, 1000)) if (run.actionId === "paper-ingest" && ["queued", "running", "failed", "interrupted"].includes(run.status)) {
+		for (const run of tasks.value.slice(0, 1000)) if (run.actionId === "paper-ingest" && (attentionOnly ? ["failed", "interrupted"] : ["queued", "running", "failed", "interrupted"]).includes(run.status)) {
 			add("task:" + run.id, "intake", run.label || "文献入库", `入库任务${({ queued: "等待执行", running: "记录为进行中", failed: "未完成", interrupted: "已中断" } as Record<string, string>)[run.status]}，请查看进度和已有结果。`, "查看入库任务", run.summary, { kind: "task", id: run.id }, { id: run.id, status: run.status, startedAt: run.startedAt, finishedAt: run.finishedAt, progress: run.ingestProgress || null });
 		}
 	}

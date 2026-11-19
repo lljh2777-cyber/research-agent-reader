@@ -179,7 +179,6 @@ import { AnswerExcerptCurationModal } from "./views/answer-excerpt-curation";
 import { excerptHistoryDestination, readExcerptHistory, type ExcerptHistoryEntry } from "./annotations/excerpt-history";
 import { ExcerptLibraryService } from "./annotations/excerpt-library";
 import type { ExcerptRef } from "./annotations/excerpt-library";
-import { PendingCenterModal } from "./views/pending-center";
 import { readPendingCenter, pendingDestination, type PendingItem } from "./services/pending-center";
 import { readLocalPdfHistory } from "./papers/local-pdf-intake";
 import type { SavedCurationPending } from "./services/dashboard-curation";
@@ -388,7 +387,6 @@ export default class AgentDashboardPlugin extends Plugin {
 	private excerptBrowser?: ExcerptBrowser;
 	private answerExcerptService?: AnswerExcerptService;
 	private answerExcerptBrowser?: AnswerExcerptBrowser;
-	private pendingCenter?: PendingCenterModal;
 	private annotationChip: HTMLElement | null = null;
 	private persistence?: DashboardPersistence;
 	private readonly cliModelDiscoveryCache = new Map<
@@ -514,7 +512,6 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.addCommand({ id: "open-paper-library", name: "打开文献库", callback: () => { void this.activatePaperLibrary().catch(error => new Notice(String(error))); } });
 		this.addCommand({ id: "open-excerpts", name: "打开摘录（原句与个人备注）", callback: () => this.openExcerptBrowser() });
 		this.addCommand({ id: "open-answer-excerpts", name: "打开学习回答摘录（AI 内容）", callback: () => this.openAnswerExcerptBrowser() });
-		this.addCommand({ id: "open-pending-center", name: "打开待处理中心", callback: () => this.openPendingCenter() });
 		this.addCommand({ id: "add-paper-metadata", name: "添加文献信息（无需模型）", callback: () => this.openMetadataIntake() });
 		this.addCommand({ id: "add-paper", name: "添加文献（书目信息、全文与本地 PDF）", callback: () => this.openPaperIntake() });
 		this.addCommand({ id: "add-local-pdf", name: "添加本地 PDF（核对、保存与恢复）", callback: () => this.openLocalPdfIntake() });
@@ -638,7 +635,6 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationPopover?.close();
 		await this.annotationService?.dispose();
 		this.excerptBrowser?.dispose();
-		this.pendingCenter?.close();
 		this.hideAnnotationChip();
 		await this.flushScheduledSettingsSave();
 		await this.agentLoopService.shutdown().catch((error) => {
@@ -747,11 +743,6 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationChip = null;
 	}
 
-	openPendingCenter(): void {
-		if (this.pendingCenter) { new Notice("待处理中心已打开"); return; }
-		const modal = new PendingCenterModal(this.app, this, () => { if (this.pendingCenter === modal) this.pendingCenter = undefined; });
-		this.pendingCenter = modal; modal.open();
-	}
 	inspectPendingCenter(signal: AbortSignal) {
 		const directory = this.readingPluginDirectory(), io = new FileSourceStorage(directory);
 		const deviceId = createHash("sha256").update(hostname() + "\n" + path.resolve(directory).toLowerCase()).digest("hex");
@@ -762,7 +753,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			drafts: s => this.getKnowledgePages().summaries(s),
 			curation: async s => { const entries: SavedCurationPending[] = []; const summary = await readDashboardCuration(io, row => entries.push(row), s); return { entries, issues: summary.issues }; },
 			tasks: () => this.getTaskRuns(),
-		}, signal);
+		}, signal, true);
 	}
 	async openPendingItem(item: PendingItem, signal: AbortSignal): Promise<void> {
 		const expected = structuredClone(item); signal.throwIfAborted();

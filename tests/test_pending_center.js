@@ -21,6 +21,8 @@ let n=0;const test=async(name,run)=>{await run();n++;console.log('PASS pending c
   const deps=inputs(),a=source('a'),b=source('b'),converted={...source('converted','mineru'),source:{...source('converted','mineru').source,pdfOrigin:{state:'matched',sourceIds:[a.id]}}};
   const data={...empty(),papers:[paper([record('record-1')],'one'),paper([record('record-2')],'two'),paper([a,b,converted],'versions')]};deps.library=async()=>data;const before=JSON.stringify(data),r=await readPendingCenter(deps,signal());
   assert.equal(r.items.filter(i=>i.category==='metadata').length,2);assert.ok(!r.items.some(i=>i.key==='library:source:'+a.id));assert.ok(r.items.some(i=>i.key==='library:source:'+b.id));assert.equal(JSON.stringify(data),before);
+  const attention=await readPendingCenter(deps,signal(),true);
+  assert.deepEqual(attention.items,[], "available original PDFs and bibliographic-only entries are not reading blockers");
   data.complete=false;data.readIssues=[{area:'sources',path:'papers/b',message:'unreadable'}];const partial=await readPendingCenter(deps,signal());assert.equal(partial.items.length,0);assert.match(partial.issues.join(' '),/不完整/);
  });
  await test('production acquisition journal validates modes and does not equate a download with a saved source',async()=>{
