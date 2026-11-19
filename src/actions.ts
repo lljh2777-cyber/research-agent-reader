@@ -40,6 +40,16 @@ export interface DashboardAction {
 	showInRail?: boolean;
 }
 
+// This internal action accepts one saved annotation; it is not a dashboard writing tool.
+export const ARCHIVE_ANNOTATION_ACTION: DashboardAction = {
+	id: "synthesis",
+	label: "归档本条批注",
+	agent: "research-vault-synthesis",
+	description: "依据这一条批注和原文归档知识点。",
+	placeholder: "", requiresInput: true, writes: true, enabled: true, ai: true,
+	reasoningEffort: "high",
+};
+
 export const ACTIONS: readonly DashboardAction[] = [
 	{
 		id: "fulltext-acquisition", label: "获取全文", agent: "fulltext-acquisition-service",
@@ -96,19 +106,6 @@ export const ACTIONS: readonly DashboardAction[] = [
 		ai: true,
 		reasoningEffort: "medium",
 		queryView: true,
-	},
-	{
-		id: "synthesis",
-		label: "综合分析",
-		agent: "research-vault-synthesis",
-		description: "输入跨文献主题、比较问题或目标页面。该操作可更新 synthesis、MOC、concept、method、dataset 或 project 页面及其索引。",
-		placeholder: "例如：综合已有单细胞文献与代码笔记，更新 Single-cell RNA-seq 方法页并列出证据缺口",
-		requiresInput: true,
-		writes: true,
-		enabled: true,
-		ai: true,
-		model: "gpt-5.6-sol",
-		reasoningEffort: "high",
 	},
 	{
 		id: "annotation-explain",

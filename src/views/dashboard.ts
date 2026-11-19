@@ -54,7 +54,6 @@ const ACTION_ICONS: Record<string, string> = {
 	"pdf-xray": "scan-search",
 	"code-analysis": "code-xml",
 	"vault-retrieval": "search",
-	synthesis: "network",
 	"vault-lint": "shield-check",
 	"okf-export": "package-open",
 };
@@ -665,6 +664,7 @@ export class DashboardView extends ItemView {
 
 	renderKnowledgeGapAction(parent: HTMLElement, gap: KnowledgeGap): void {
 		const action = ACTION_BY_ID.get(gap.actionId);
+		if (!action) return;
 		const button = parent.createEl("button", {
 			cls: "agent-dashboard-gap-action",
 			attr: {

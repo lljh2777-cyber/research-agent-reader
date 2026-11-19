@@ -81,7 +81,7 @@ import { openIngestContinuation } from "./views/ingest-continuation";
 import { IngestRegistrationController } from "./views/ingest-registration";
 import { ingestSteps, normalizeIngestProgress, type IngestProgress } from "./agent/ingest-progress";
 
-import { ACTION_BY_ID, type DashboardAction } from "./actions";
+import { ACTION_BY_ID, ARCHIVE_ANNOTATION_ACTION, type DashboardAction } from "./actions";
 import {
 	DEFAULT_SETTINGS,
 	describeCliExecutable,
@@ -913,17 +913,13 @@ export default class AgentDashboardPlugin extends Plugin {
 	private async archiveAnnotation(record: AnnotationRecord): Promise<void> {
 		if (!this.annotationService) return;
 		if (record.bilingual || isTranslationPath(record.sourcePath)) { new Notice("双语内容请保存摘录后，通过草稿或整理预览核对来源；本入口未归档"); return; }
-		const action = ACTION_BY_ID.get("synthesis");
-		if (!action) {
-			new Notice("综合分析操作未注册");
-			return;
-		}
+		const action = ARCHIVE_ANNOTATION_ACTION;
 		if (this.isActionRunning(action.id)) {
 			await this.annotationService.updateArchiveState(record, {
 				archiveStatus: "failed",
-				archiveError: "综合分析正在运行，请稍后重试",
+				archiveError: "批注归档正在运行，请稍后重试",
 			});
-			new Notice("综合分析正在运行，批注已保留但尚未归档");
+			new Notice("批注归档正在运行，批注已保留但尚未归档");
 			return;
 		}
 		const executionConfig = this.resolveActionExecutionConfig(action);
@@ -937,7 +933,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			archiveRunId: run.id,
 			archiveError: "",
 		});
-		new Notice("批注已保留，正在交给综合分析归档");
+		new Notice("批注已保留，正在归档本条批注");
 		const request = [
 			"处理一条由 Research Agent Reader 批注功能提交的正式知识归档请求。",
 			`批注文档：${record.annotationPath}#^${record.id}`,
@@ -972,7 +968,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				? this.parseAnnotationArchiveTargets(result.stdout)
 				: [];
 			const integrationError = processSucceeded && !archiveTargets.length
-				? "综合分析已完成，但没有返回可关联的知识节点路径"
+				? "批注归档已完成，但没有返回可关联的知识节点路径"
 				: "";
 			const success = processSucceeded && !integrationError;
 			await this.finishTaskRun(run.id, {
@@ -984,7 +980,7 @@ export default class AgentDashboardPlugin extends Plugin {
 					: integrationError || `进程退出码：${result.exitCode}`,
 			});
 			if (!processSucceeded) {
-				throw new Error(result.stderr.trim() || `综合分析退出码：${result.exitCode}`);
+				throw new Error(result.stderr.trim() || `批注归档退出码：${result.exitCode}`);
 			}
 			if (integrationError) throw new Error(integrationError);
 			await this.annotationService.updateArchiveState(record, {
@@ -3682,7 +3678,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			&& ["code-analysis", "synthesis"].includes(action.id);
 		if (action.writes && backendId !== "codex-cli" && !stageWriteAllowed) {
 			return Promise.reject(
-				new Error(`${getCliBackendLabel(backendId)} 当前仅开放“代码分析”和“综合分析”的阶段所有权写入`),
+				new Error(`${getCliBackendLabel(backendId)} 当前仅开放“代码分析”和“批注归档”的阶段所有权写入`),
 			);
 		}
 		const runtime = this.checkRuntime(action, backendId);

@@ -23,10 +23,8 @@ import {
 	type CliBackendId,
 } from "../config";
 import {
-	ActionInputModal,
 	type ExecutionOverrides,
 } from "../modals/action-input";
-import { TaskResultModal } from "../modals/task-result";
 import { VaultImagePickerModal } from "../modals/vault-image-picker";
 import {
 	normalizeQueryCitationValidation,
@@ -472,9 +470,6 @@ export class QueryWikiView extends ItemView {
 			this.pendingImages = [];
 			void this.plugin.createQuerySession().then(() => this.render()).then(() => this.inputEl?.focus());
 		});
-		const save = this.createIconButton(tools, "file-output", "整理为笔记");
-		save.disabled = Boolean(this.activeRunId) || !session.messages.some((message) => message.role === "assistant" && message.status === "done");
-		save.addEventListener("click", () => this.openSynthesisHandoff());
 		const canDeleteSession = this.plugin.getQuerySessions().length > 1;
 		const clear = this.createIconButton(
 			tools,
@@ -1828,87 +1823,6 @@ export class QueryWikiView extends ItemView {
 				progress: "正在停止任务",
 			});
 		}
-	}
-
-	openSynthesisHandoff(): void {
-		const action = ACTION_BY_ID.get("synthesis");
-		if (!action) {
-			new Notice("综合分析操作未注册");
-			return;
-		}
-		const session = this.session;
-		const transcript = session.messages
-			.filter((message) => message.status === "done" && message.content)
-			.slice(-10)
-			.map((message) => `${message.role === "user" ? "用户" : "知识库回答"}：\n${message.content}`)
-			.join("\n\n");
-		const initialInput = [
-			"将以下知识库查询对话整理为合适的 Wiki 页面。",
-			"先重新核验被引用的 vault 页面，不要把对话中的模型表述直接当作证据。",
-			"根据内容选择 synthesis、method、concept、dataset 或 project 页面；优先更新已有页面，写入前遵守 research-vault-synthesis 边界并同步相应索引和日志。",
-			"",
-			`会话标题：${session.title}`,
-			"",
-			transcript,
-		].join("\n").slice(0, 30000);
-		new ActionInputModal(
-			this.app,
-			this.plugin,
-			action,
-			({ input, overrides }) => {
-				void this.executeSynthesisHandoff(action, input, overrides);
-			},
-			{ initialInput },
-		).open();
-	}
-
-	async executeSynthesisHandoff(
-		action: DashboardAction,
-		input: string,
-		overrides: ExecutionOverrides,
-	): Promise<void> {
-		if (this.plugin.isActionRunning(action.id)) {
-			new Notice("综合分析正在运行");
-			return;
-		}
-		const backendId = overrides.backend === "claude-code"
-			? "claude-code"
-			: overrides.backend === "opencode"
-				? "opencode"
-				: "codex-cli";
-		const executionConfig = this.plugin.resolveCliActionExecutionConfig(
-			action,
-			backendId,
-			overrides,
-		);
-		const summary = input.trim().split(/\r?\n/)[0].slice(0, 160) || "整理查询对话";
-		const run = await this.plugin.startTaskRun(action, summary, executionConfig);
-		let completedRun;
-		try {
-			const result = await this.plugin.runVaultAction(run.id, action, input, executionConfig);
-			const output = [
-				result.stdout.trim(),
-				result.stderr.trim() ? `运行日志\n${result.stderr.trim()}` : "",
-			].filter(Boolean).join("\n\n").slice(0, 120000) || "任务未返回文本输出。";
-			const status = result.exitCode === 0 ? "done" : "failed";
-			completedRun = await this.plugin.finishTaskRun(run.id, {
-				status,
-				exitCode: result.exitCode,
-				output,
-				error: status === "failed" ? `进程退出码：${result.exitCode}` : "",
-			});
-			new Notice(status === "done" ? "查询对话已整理为知识任务" : "整理为笔记失败");
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			completedRun = await this.plugin.finishTaskRun(run.id, {
-				status: "failed",
-				exitCode: null,
-				output: "",
-				error: message,
-			});
-			new Notice(`整理为笔记失败：${message}`);
-		}
-		if (completedRun) new TaskResultModal(this.app, this.plugin, completedRun, null).open();
 	}
 
 	displayRetrieverName(value: unknown): string {

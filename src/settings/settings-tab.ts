@@ -347,7 +347,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			[
 				"Agent 任务（Codex CLI）",
 				this.plugin.isCliBackendAvailable("codex-cli"),
-				"完整入库登记、PDF 深读、综合分析等 Agent 化操作",
+				"完整入库登记、PDF 深读、批注归档等 Agent 化操作",
 			],
 		];
 		new Setting(containerEl)
@@ -367,7 +367,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			.setDesc("阅读器、本地批注和只读知识库体检直接使用当前 Vault，不需要项目目录、Python 或 Agent CLI。");
 		new Setting(containerEl)
 			.setName("可选工具包项目目录")
-			.setDesc("仅供文献入库、AI 深读、代码分析、综合分析、修复和 OKF 导出使用；应包含 AGENTS.md、.codex/ 和 tool-library/。留空不会影响核心阅读功能。")
+			.setDesc("仅供文献入库、AI 深读、代码分析、批注归档、修复和 OKF 导出使用；应包含 AGENTS.md、.codex/ 和 tool-library/。留空不会影响核心阅读功能。")
 			.addText((text) =>
 				text
 					.setPlaceholder(process.platform === "win32" ? "D:\\Research\\workspace" : "/Users/name/research-workspace")
@@ -403,7 +403,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.renderCliExecutableSetting(containerEl, {
 			kind: "opencode",
 			name: "OpenCode 可执行文件",
-			description: "用于检索、批注解释，以及代码分析和综合分析的阶段所有权写入。",
+			description: "用于检索、批注解释，以及代码分析和批注归档的阶段所有权写入。",
 			placeholder: "opencode.exe",
 			getValue: () => this.plugin.settings.openCodeExecutable,
 			setValue: (value) => {
@@ -1349,7 +1349,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			);
 		new Setting(containerEl)
 			.setName("默认推理强度")
-			.setDesc("用于 Claude Code 的检索、批注解释、代码分析和综合分析。")
+			.setDesc("用于 Claude Code 的检索、批注解释、代码分析和批注归档。")
 			.addDropdown((dropdown) => {
 				REASONING_OPTIONS.forEach((option) => dropdown.addOption(option.id, option.label));
 				dropdown
@@ -1496,7 +1496,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		this.createProviderSectionHeader(
 			containerEl,
 			"执行边界",
-			"检索只允许读取 Vault；联网模式才开放 websearch/webfetch。代码分析和综合分析可写入阶段目录，并由宿主审计、验证和失败回滚。",
+			"检索只允许读取 Vault；联网模式才开放 websearch/webfetch。代码分析和批注归档可写入阶段目录，并由宿主审计、验证和失败回滚。",
 		);
 		const resultState = this.plugin.providerRuntimeState.get("opencode") || null;
 		new Setting(containerEl)
@@ -1902,7 +1902,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				: this.plugin.settings.annotationCodexReasoningEffort;
 		new Setting(containerEl)
 			.setName("推理强度")
-			.setDesc("仅影响批注解释，不改变查询、深读或综合分析任务。")
+			.setDesc("仅影响批注解释，不改变查询、深读或批注归档任务。")
 			.addDropdown((dropdown) => {
 				REASONING_OPTIONS.forEach((option) => dropdown.addOption(option.id, option.label));
 				dropdown
