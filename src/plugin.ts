@@ -1,3 +1,4 @@
+import { KnowledgeFinder, KNOWLEDGE_FINDER } from "./views/knowledge-finder";
 import { AnnotationHighlights } from "./annotations/annotation-highlights";
 import {
 	FileSystemAdapter,
@@ -503,6 +504,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationHighlights = this.addChild(new AnnotationHighlights(this.app));
 		this.lastContextFile = this.app.workspace.getActiveFile();
 		await this.loadSettings();
+		this.registerView(KNOWLEDGE_FINDER, leaf => new KnowledgeFinder(leaf, this));
 		this.registerView(CLIPPER_READER, leaf => new ClipperReaderView(leaf, this));
 		this.registerView(VIEW_TYPE, (leaf) => new DashboardView(leaf, this));
 		this.registerView(CODE_PRACTICE_VIEW_TYPE, (leaf) => new CodePracticeView(leaf));
@@ -2707,6 +2709,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		const leaf = existing || this.app.workspace.getLeaf("tab");
 		if (!existing) await leaf.setViewState({type: CLIPPER_READER, active: true, state: { key }});
 		await this.app.workspace.revealLeaf(leaf);
+		this.app.workspace.setActiveLeaf(leaf, { focus: true });
 		if (!(leaf.view instanceof ClipperReaderView)) throw new Error("阅读器未就绪");
 		return leaf.view;
 	}
@@ -2832,10 +2835,10 @@ export default class AgentDashboardPlugin extends Plugin {
 	activateLearningSpace(entry: LearningEntry = { kind: "document" }): Promise<void> {
 		if (entry.kind === "topic") {
 			const operation = this.topicOpenings.then(async () => {
-				const existing = this.app.workspace.getLeavesOfType(TOPIC_LEARNING_VIEW_TYPE)[0];
+				const existing = entry.subject ? undefined : this.app.workspace.getLeavesOfType(TOPIC_LEARNING_VIEW_TYPE)[0];
 				if (existing) await existing.loadIfDeferred();
 				const leaf = existing || this.app.workspace.getLeaf("tab");
-				if (!existing) await leaf.setViewState({ type: TOPIC_LEARNING_VIEW_TYPE, active: true });
+				if (!existing) await leaf.setViewState({ type: TOPIC_LEARNING_VIEW_TYPE, active: true, ...(entry.subject ? {state:{draft:{intent:{topic:entry.subject}}}} : {}) });
 				await this.app.workspace.revealLeaf(leaf);
 				if (entry.sessionId && leaf.view instanceof TopicLearningView) await leaf.view.selectSession(entry.sessionId);
 			}); this.topicOpenings = operation.catch(() => undefined); return operation;
@@ -3825,6 +3828,12 @@ export default class AgentDashboardPlugin extends Plugin {
 		} catch (error) { await this.finishTaskRun(run.id, { status: "failed", error: String(error) }); throw error; }
 	}
 	async activateQueryWikiView(initialQuestion = ""): Promise<void> {
+		const existing = this.app.workspace.getLeavesOfType(KNOWLEDGE_FINDER)[0], leaf = existing || this.app.workspace.getLeaf("tab");
+		if (!existing) await leaf.setViewState({type:KNOWLEDGE_FINDER,active:true});
+		await this.app.workspace.revealLeaf(leaf);
+		if (leaf.view instanceof KnowledgeFinder) leaf.view.setQuery(initialQuestion);
+	}
+	async openVaultAnswer(initialQuestion = ""): Promise<void> {
 		const existing = this.app.workspace.getLeavesOfType(QUERY_WIKI_VIEW_TYPE)[0];
 		const leaf = existing || this.app.workspace.getRightLeaf(false) || this.app.workspace.getLeaf(true);
 		if (!existing) {

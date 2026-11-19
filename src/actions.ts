@@ -96,7 +96,7 @@ export const ACTIONS: readonly DashboardAction[] = [
 	},
 	{
 		id: "vault-retrieval",
-		label: "知识库检索",
+		label: "查知识点",
 		agent: "research-vault-retrieval",
 		description: "在独立侧边栏中连续查询当前 vault。每轮都会执行透明检索级联并使用只读沙箱，不写入知识库文件。",
 		placeholder: "例如：当前知识库关于 scRNA-seq 质控阈值有哪些依据和分歧？",

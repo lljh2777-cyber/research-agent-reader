@@ -9,7 +9,7 @@ import { verifyBilingual } from "../annotations/bilingual";
 import { excerptMatches } from "../annotations/excerpt";
 
 export const CLIPPER_READER = "paper-clipper-local-reader";
-export interface ClipProgress { title: string; date: string; position?: BilingualReadingState; top?: number; digest: string; section: string; days: string[]; }
+export interface ClipProgress { title: string; date: string; position?: BilingualReadingState; top?: number; digest: string; section: string; days: string[]; visited?: {lang: "en" | "zh-CN"; digest: string; block: string}[]; }
 interface Host {
 	settings: { clipperProgress: Record<string, ClipProgress>; mineruReaderBilingualLinked: boolean; mineruReaderBilingualSplitRatio: number };
 	saveSettings(): Promise<void>;
@@ -61,10 +61,12 @@ export class ClipperReaderView extends ItemView {
 	async onOpen(): Promise<void> { this.opened = true; if (this.key) await this.renderPaper(); }
 	async onClose(): Promise<void> { this.opened = false; this.stop(); if (this.timer) { window.clearTimeout(this.timer); await this.plugin.saveSettings(); } }
 	private stop(): void { this.active?.abort(); if (this.bilingual) this.removeChild(this.bilingual); this.bilingual = undefined; this.mono = undefined; }
-	private track(title: string, digest: string, state?: BilingualReadingState, top?: number, section = "正文"): void {
+	private track(title: string, digest: string, state?: BilingualReadingState, top?: number, section = "正文", monoBlock?: string): void {
 		const date = new Date(), day = [date.getFullYear(), String(date.getMonth()+1).padStart(2,"0"), String(date.getDate()).padStart(2,"0")].join("-");
 		const history = this.plugin.settings.clipperProgress, old = history[this.key];
-		history[this.key] = { title, digest, date: date.toISOString(), section, days: [...new Set([...(old?.days || []), day])].slice(-45), ...(state ? { position: state } : {}), ...(top !== undefined ? { top } : {}) };
+		const visit = state ? {lang:state.active,digest:state.digests[state.active],block:state.positions[state.active].blockId} : monoBlock ? {lang:"en" as const,digest,block:monoBlock} : undefined;
+		const seen = old?.visited || [], visited = visit ? [...seen.filter(v=>v.lang!==visit.lang || v.digest!==visit.digest || v.block!==visit.block),visit].slice(-500) : seen;
+		history[this.key] = { title, digest, visited, date: date.toISOString(), section, days: [...new Set([...(old?.days || []), day])].slice(-45), ...(state ? { position: state } : {}), ...(top !== undefined ? { top } : {}) };
 		window.clearTimeout(this.timer);
 		this.timer = window.setTimeout(() => { this.timer = undefined; void this.plugin.saveSettings().catch(e => new Notice(String(e))); }, 400);
 	}
@@ -95,16 +97,16 @@ export class ClipperReaderView extends ItemView {
 			await renderClip(this.app, bilingualRenderMarkdown({text,...parseBilingualMarkdown(text)}), article, source, this, signal); signal.throwIfAborted();
 			article.dataset.agentAnnotationSource = source;
 			const top = saved?.digest === paper.englishDigest ? saved.top || 0 : 0; host.scrollTop = top;
-			const remember = () => { const edge=host.getBoundingClientRect().top+60; const headings=Array.from(article.querySelectorAll("h1,h2,h3,h4")).filter(h=>h.getBoundingClientRect().top<=edge); this.track(paper.title,paper.englishDigest,undefined,host.scrollTop,headings.pop()?.textContent || "正文"); };
+			const remember = () => { const edge=host.getBoundingClientRect().top+60; const headings=Array.from(article.querySelectorAll("h1,h2,h3,h4")).filter(h=>h.getBoundingClientRect().top<=edge); this.track(paper.title,paper.englishDigest,undefined,host.scrollTop,headings.pop()?.textContent || "正文",Array.from(article.querySelectorAll<HTMLElement>("[data-bilingual-anchor]")).filter(el=>el.getBoundingClientRect().top<=edge).pop()?.dataset.bilingualAnchor); };
 			host.addEventListener("scroll", remember, { signal, passive: true }); remember();
 		} catch (error) { if (!signal.aborted) host.createEl("p", { text: String(error) }); }
 	}
-	async revealOffset(offset: number): Promise<void> {
-		const source = CLIPPER_PREFIX + this.key + "/paper.md";
+	async revealOffset(offset: number, lang: "en" | "zh-CN" = "en"): Promise<void> {
+		const source = CLIPPER_PREFIX + this.key + (lang === "en" ? "/paper.md" : "/paper.zh-CN.md");
 		const text = await requireClipper(this.app).text(source);
 		const blocks = parseBilingualMarkdown(text).blocks;
 		const block = blocks.find(b => offset >= b.start && offset < b.end);
-		const article = this.mono || this.bilingual?.panes.get("en")?.article;
+		const article = this.mono || this.bilingual?.panes.get(lang)?.article;
 		const el = block && article?.querySelector('[data-bilingual-anchor="' + block.id + '"]');
 		if (!el) throw new Error("不能确认这个证据段落的位置，请刷新后核对");
 		el.scrollIntoView({ block: "center" });
