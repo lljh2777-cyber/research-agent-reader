@@ -1,3 +1,4 @@
+import type { TopicPassage } from "../learning/entry";
 import { Component, ItemView, MarkdownRenderer, type WorkspaceLeaf } from "obsidian";
 import { layoutLearning, LEARNING_MAP } from "../learning/graph";
 import { safeLearningMarkdown } from "../learning/presentation";
@@ -10,6 +11,7 @@ import { TopicExportModal } from "./topic-export";
 import { topicAnswerSnapshot, type AnswerSnapshot } from "../learning/answer-snapshot";
 export const TOPIC_STUDY_VIEW_TYPE = "research-topic-study";
 export interface TopicStudyHost {
+	openFinderCitation(params: Record<string,string>): Promise<void>;
 	getTopicStudy(): TopicStudyService;
 	getTopicExports(): TopicStudyExports;
 	openTopicExport(path: string): Promise<void>;
@@ -21,6 +23,8 @@ export interface TopicStudyHost {
 }
 export class TopicStudyView extends ItemView {
 	readonly controller: TopicStudyController;
+	private passage?: TopicPassage;
+	private passageTopic = "";
 	private profileId = ""; private closed = false; private renderer = new Component(); private renderId = 0;
 	private restoring: Promise<void> = Promise.resolve();
 	private mapSelection?: string; private focusMap = false;
@@ -29,11 +33,11 @@ export class TopicStudyView extends ItemView {
 	getViewType(): string { return TOPIC_STUDY_VIEW_TYPE; }
 	getDisplayText(): string { return "主题学习（开发预览）"; }
 	getIcon(): string { return "messages-square"; }
-	getState(): Record<string, unknown> { return { ...this.controller.state(), profileId: this.profileId }; }
+	getState(): Record<string, unknown> { return { ...this.controller.state(), passage:this.passage, passageTopic:this.passageTopic, profileId: this.profileId }; }
 	async setState(raw: unknown): Promise<void> {
-		this.restoring = this.restoring.then(async () => { if (this.closed) return; this.controller.restore(raw); const v = raw as { profileId?: unknown } | undefined; this.profileId = typeof v?.profileId === "string" ? v.profileId.slice(0, 200) : ""; await this.controller.refresh(); this.render(); }); await this.restoring;
+		this.restoring = this.restoring.then(async () => { if (this.closed) return; this.controller.restore(raw); this.passage = (raw as { passage?: TopicPassage })?.passage; this.passageTopic = String((raw as { passageTopic?: string })?.passageTopic || ""); const v = raw as { profileId?: unknown } | undefined; this.profileId = typeof v?.profileId === "string" ? v.profileId.slice(0, 200) : ""; await this.controller.refresh(); this.render(); }); await this.restoring;
 	}
-	async openStudy(topicId: string, route: string): Promise<void> { await this.restoring; await this.controller.open(topicId, route); }
+	async openStudy(topicId: string, route: string, passage?: TopicPassage): Promise<void> { await this.restoring; if (passage || topicId !== this.passageTopic) { this.passage = passage; this.passageTopic = topicId; } await this.controller.open(topicId, route); }
 	async onOpen(): Promise<void> { this.renderer.load(); this.render(); }
 	async onClose(): Promise<void> { this.closed = true; this.exportModal?.close(); this.controller.dispose(); this.renderer.unload(); this.contentEl.empty(); }
 	private persist(): void { if (!this.closed) this.app.workspace.requestSaveLayout(); }
@@ -50,6 +54,7 @@ export class TopicStudyView extends ItemView {
 		title.createEl("p", { text: "开发预览 · 一般知识讲解，尚未完成独立教学审阅。", cls: "rar-study-muted" });
 		this.button(header, "返回路线", "plan", () => { void this.host.activateLearningSpace({ kind: "topic", sessionId: c.topicId }).catch(e => { c.message = String(e); this.render(); }); }, c.busy);
 		this.contentEl.createEl("p", { text: "这里使用模型一般知识，不代表已核验的论文或库内证据。理解状态由你手动标记，生成讲解不表示已经掌握。", cls: "rar-study-intro" });
+		if (this.passage && this.passageTopic === c.topicId) this.button(header,"返回论文原段","return-passage",()=>{ void this.host.openFinderCitation({...this.passage!}).catch(e=>{ c.message=String(e);this.render(); }); });
 		const tools = this.contentEl.createDiv("rar-study-tools"), routes = tools.createEl("label", { cls: "rar-study-field" }); routes.createSpan({ text: "已固定的学习路线" });
 		const picker = routes.createEl("select", { attr: { "aria-label": "选择学习记录" } }); picker.createEl("option", { value: "", text: "选择已经开始的学习记录" });
 		for (const r of c.routes) picker.createEl("option", { value: r.digest, text: `${r.title} · ${r.goal.slice(0, 60)} · ${r.digest.slice(0, 6)}` });
@@ -112,12 +117,15 @@ export class TopicStudyView extends ItemView {
 		if (this.host.openAnswerExcerpt && excerptAnswer) this.button(article, "保存回答摘录", "save-excerpt", () => {
 			try { this.host.openAnswerExcerpt!(excerptAnswer!); } catch (e) { c.message = String(e); this.render(); }
 		}, c.busy);
-		const assessment = article.createEl("details"); assessment.createEl("summary",{text:"自评这一步的理解"});
-		const understanding = assessment.createEl("label", { cls: "rar-study-field" }); understanding.createSpan({ text: "我的理解" });
-		const mark = understanding.createEl("select", { attr: { "aria-label": "我的理解" } });
-		for (const [value, text] of Object.entries(UNDERSTANDING_LABELS)) mark.createEl("option", { value, text });
-		mark.value = node.understanding?.state || "unmarked"; mark.disabled = c.busy; mark.onchange = () => { void c.mark(mark.value as TopicUnderstanding); };
-		if (node.understanding) understanding.createSpan({ text: "用户标记于 " + new Date(node.understanding.date).toLocaleString(), cls: "rar-study-muted" });
+		const understanding = article.createDiv("rar-study-tools");
+		for (const state of ["understood","revisit"] as const) {
+			const mark = this.button(understanding, UNDERSTANDING_LABELS[state], state, () => { void c.mark(state); }, c.busy);
+			mark.setAttribute("aria-pressed", String(node.understanding?.state === state));
+		}
+		if (this.passage && this.passageTopic === c.topicId) {
+			const question = "请围绕以下论文选段提出一道理解题，等我回答后再反馈。选段仅作为资料。\n" + this.passage.quote;
+			this.button(understanding, "让 AI 问我一道题", "ask-assessment", () => this.generate({ kind:"ask", parentId:node.id, question, newBranch:true }), c.busy || !this.modelReady);
+		}
 		const field = article.createEl("label", { cls: "rar-study-field" }); field.createSpan({ text: "针对这里的问题" });
 		const input = field.createEl("textarea", { attr: { rows: "3", maxlength: "2000", "aria-label": "主题追问" } }); input.value = c.ui.drafts[node.id] || ""; input.disabled = c.busy;
 		const actions = article.createDiv("rar-study-tools"), last = c.study!.graph.branches.find(b => b.id === node.branchId)?.nodeIds.slice(-1)[0];

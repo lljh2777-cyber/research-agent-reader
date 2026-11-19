@@ -1,3 +1,4 @@
+import type { TopicPassage } from "../learning/entry";
 import { EXPLANATION_DIVIDER } from "./argument-context";
 import {
 	App,
@@ -29,7 +30,7 @@ interface AnnotationPopoverOptions {
 	historical?: AnnotationRecord[];
 	colorMeanings?: Readonly<AnnotationColorMeanings>;
 	onArchive: (record: AnnotationRecord) => Promise<void>;
-	onStudyTopic?: (topic:string, path:string) => void;
+	onStudyTopic?: (topic:string, path:string, passage?: TopicPassage) => void;
 	onOpenExcerpt?: (record: AnnotationRecord) => void;
 	onClose?: () => void;
 }
@@ -47,7 +48,7 @@ export class AnnotationPopover extends Component {
 	private readonly historical: AnnotationRecord[];
 	private readonly colorMeanings?: Readonly<AnnotationColorMeanings>;
 	private readonly onArchive: (record: AnnotationRecord) => Promise<void>;
-	private readonly onStudyTopic?: (topic:string, path:string)=>void;
+	private readonly onStudyTopic?: (topic:string, path:string, passage?: TopicPassage)=>void;
 	private readonly onOpenExcerpt?: (record: AnnotationRecord) => void;
 	private readonly onClose?: () => void;
 	private element: HTMLDivElement | null = null;
@@ -196,7 +197,12 @@ export class AnnotationPopover extends Component {
 		const browse = excerpt && baseline && this.onOpenExcerpt ? actions.createEl("button", { text: "查看摘录", attr: { type: "button" } }) : undefined;
 		if (!pdf && this.onStudyTopic) {
 			const learn = actions.createEl("button",{text:"学习这个概念",attr:{type:"button"}});
-			learn.onclick=()=>{ if(this.requestClose()) this.onStudyTopic?.(quote.slice(0,160),source.sourcePath); };
+			learn.onclick = () => {
+				const at = baseline?.sourceAnchor?.start ?? this.selection?.sourceStart;
+				const digest = baseline?.excerpt?.digest || this.selection?.sourceRevision?.digest || (source.bilingual && source.bilingual.digests[source.bilingual.language]);
+				const passage = at !== undefined && digest ? { source: source.sourcePath, at: String(at), digest, quote: source.selectedText.slice(0,1200) } : undefined;
+				if (this.requestClose()) this.onStudyTopic?.(quote.slice(0,160), source.sourcePath, passage);
+			};
 		}
 		const detail = !pdf ? actions.createEl("button", { text: baseline?.aiText ? "AI 解释 ▾" : "AI 解释", attr: { type: "button", "aria-expanded": "false" } }) : undefined;
 		const explanationPanel = element.createDiv({ cls: "agent-annotation-explanation" });

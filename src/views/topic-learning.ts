@@ -1,3 +1,4 @@
+import type { TopicPassage } from "../learning/entry";
 import { ItemView, type WorkspaceLeaf } from "obsidian";
 import type { ReadingBackend } from "../reading/types";
 import type { LearningEntry } from "../learning/entry";
@@ -6,13 +7,14 @@ import { TopicWorkspaceController } from "../topic-learning/workspace";
 
 export const TOPIC_LEARNING_VIEW_TYPE = "research-topic-learning";
 export interface TopicLearningHost {
+	openFinderCitation(params: Record<string,string>): Promise<void>;
 	getTopicLearning(): TopicLearningService;
 	openClippedPaper(key:string):Promise<unknown>;
 	openVaultFile(path:string):void;
 	getTopicModels(): Array<{ id: string; name: string; model: string }>;
 	createTopicBackend(profileId: string): ReadingBackend;
 	activateLearningSpace(entry?: LearningEntry): Promise<void>;
-	activateTopicStudy(topicId: string, confirmedRevision?: string): Promise<void>;
+	activateTopicStudy(topicId: string, confirmedRevision?: string, passage?: TopicPassage): Promise<void>;
 }
 
 /** Route preview only: no teaching nodes, evidence claims or automatic model requests. */
@@ -20,6 +22,7 @@ export class TopicLearningView extends ItemView {
 	readonly controller: TopicWorkspaceController;
 	private profileId = "";
 	private origin = "";
+	private passage?: TopicPassage;
 	private query = "";
 	private closed = false;
 	private restoring: Promise<void> = Promise.resolve();
@@ -29,8 +32,9 @@ export class TopicLearningView extends ItemView {
 	getViewType(): string { return TOPIC_LEARNING_VIEW_TYPE; }
 	getDisplayText(): string { return "主题路线（预览）"; }
 	getIcon(): string { return "route"; }
-	getState(): Record<string, unknown> { return { origin:this.origin, draft: structuredClone(this.controller.draft), profileId: this.profileId, query: this.query }; }
+	getState(): Record<string, unknown> { return { origin:this.origin, passage:this.passage, draft: structuredClone(this.controller.draft), profileId: this.profileId, query: this.query }; }
 	async setState(raw: unknown): Promise<void> {
+		this.passage = (raw as {passage?: TopicPassage})?.passage;
 		const origin=(raw as {origin?: unknown})?.origin; this.origin=typeof origin==="string" ? origin : "";
 		const state = raw as { draft?: unknown; profileId?: unknown; query?: unknown } | undefined;
 		this.restoring = this.restoring.then(async () => {
@@ -91,6 +95,7 @@ export class TopicLearningView extends ItemView {
 		const c = this.controller, header = this.contentEl.createDiv("rar-topic-header"), title = header.createDiv();
 		title.createEl("h1", { text: "主题路线" }); title.createEl("p", { text: "预览 · 先安排想学的内容，再逐步深入。", cls: "rar-topic-muted" });
 		if (this.origin) this.button(header,"返回刚才的论文","return-source",()=>{
+			if (this.passage) { void this.host.openFinderCitation({...this.passage}).catch(e => { c.message = String(e); this.render(); }); return; }
 			if (this.origin.startsWith("@paper-clipper/")) void this.host.openClippedPaper(this.origin.split("/")[1]); else this.host.openVaultFile(this.origin);
 		});
 		this.button(header, "从资料开始", "document", () => { void this.host.activateLearningSpace({ kind: "document" }).catch(e => { c.message = String(e); this.render(); }); }, c.busy);
@@ -182,7 +187,7 @@ export class TopicLearningView extends ItemView {
 		this.button(actions, "添加单元", "add-unit", () => c.addModule(), !c.editable || c.intentDirty || (c.draft.plan?.modules.length || 0) >= 12);
 		this.button(actions, "保存路线", "save-plan", () => { void c.savePlan(); }, !c.editable || c.intentDirty || !c.draft.plan || !c.dirty);
 		this.button(actions, "确认路线", "confirm", () => { void c.confirm(); }, !c.editable || c.dirty || !c.current?.session.plan || Boolean(confirmed));
-		this.button(actions, "打开学习预览", "study", () => { void this.host.activateTopicStudy(c.draft.id, c.current!.digest).catch(e => { c.message = String(e); this.render(); }); }, !c.editable || c.dirty || !confirmed);
+		this.button(actions, "打开学习预览", "study", () => { void this.host.activateTopicStudy(c.draft.id, c.current!.digest, this.passage).catch(e => { c.message = String(e); this.render(); }); }, !c.editable || c.dirty || !confirmed);
 		section.createEl("p", { text: "有未保存修改；表单草稿随当前标签页保留，请保存后确认或切换主题。", cls: "rar-topic-muted", attr: { "data-topic-dirty-hint": "" } }).hidden = !c.dirty;
 	}
 	private renderHistory(parent: HTMLElement): void {

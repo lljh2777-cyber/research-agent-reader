@@ -14,7 +14,7 @@ const open=root=>{const io=new FileSourceStorage(root),topics=new TopicLearningS
  if(process.argv[2]==='probe'){
   const f=open(process.argv[3]),expected=JSON.parse(await fs.readFile(path.join(process.argv[3],'expected.json'),'utf8'));
   const h=await f.store.read(expected.session.id,expected.routeDigest);assert.deepEqual(h.study,expected);assert.equal(h.pending.length,1);assert.deepEqual(h.errors,[]);
-  assert.equal(h.study.nodes[0].understanding.state,'revisit');const exports=new TopicStudyExports(f.service,f.io),review=await exports.review(expected.session.id,expected.routeDigest,expected.head,'session','');assert.equal(review.existing,'same');assert.match(review.text,/待回看/);
+  assert.equal(h.study.nodes[0].understanding.state,'revisit');const exports=new TopicStudyExports(f.service,f.io),review=await exports.review(expected.session.id,expected.routeDigest,expected.head,'session','');assert.equal(review.existing,'same');assert.match(review.text,/还想再看/);
   console.log('STUDY_RESTART_OK');return;
  }
  const root=await fs.mkdtemp(path.join(os.tmpdir(),'rar-topic-study-')),f=open(root);

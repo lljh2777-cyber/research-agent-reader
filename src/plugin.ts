@@ -851,7 +851,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			colorMeanings: this.settings.annotationColorMeanings,
 			...options,
 			onArchive: (record) => this.archiveAnnotation(record),
-			onStudyTopic: (subject,origin) => { void this.activateLearningSpace({kind:"topic",subject,origin}); },
+			onStudyTopic: (subject,origin,passage) => { void this.activateLearningSpace({kind:"topic",subject,origin,passage}); },
 			onOpenExcerpt: (record) => this.openExcerptBrowser(record),
 			onClose: () => {
 				if (this.annotationPopover === popover) this.annotationPopover = null;
@@ -2856,7 +2856,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				const existing = entry.subject ? undefined : this.app.workspace.getLeavesOfType(TOPIC_LEARNING_VIEW_TYPE)[0];
 				if (existing) await existing.loadIfDeferred();
 				const leaf = existing || this.app.workspace.getLeaf("tab");
-				if (!existing) await leaf.setViewState({ type: TOPIC_LEARNING_VIEW_TYPE, active: true, ...(entry.subject ? {state:{draft:{intent:{topic:entry.subject}},origin:entry.origin}} : {}) });
+				if (!existing) await leaf.setViewState({ type: TOPIC_LEARNING_VIEW_TYPE, active: true, ...(entry.subject ? {state:{draft:{intent:{topic:entry.subject}},origin:entry.origin,passage:entry.passage}} : {}) });
 				await this.app.workspace.revealLeaf(leaf);
 				if (entry.sessionId && leaf.view instanceof TopicLearningView) await leaf.view.selectSession(entry.sessionId);
 			}); this.topicOpenings = operation.catch(() => undefined); return operation;
@@ -2871,12 +2871,12 @@ export default class AgentDashboardPlugin extends Plugin {
 		const adapter = this.app.vault.adapter as typeof this.app.vault.adapter & { reconcileInternalFile?(path: string): void | Promise<void> };
 		await adapter.reconcileInternalFile?.(exportPath); await this.app.workspace.openLinkText(exportPath, "", true);
 	}
-	activateTopicStudy(topicId: string, confirmedRevision?: string): Promise<void> {
+	activateTopicStudy(topicId: string, confirmedRevision?: string, passage?: import("./learning/entry").TopicPassage): Promise<void> {
 		const operation = this.topicStudyOpenings.then(async () => {
 			const route = confirmedRevision ? await this.getTopicStudy().start(topicId, confirmedRevision) : "";
 			const existing = this.app.workspace.getLeavesOfType(TOPIC_STUDY_VIEW_TYPE)[0]; if (existing) await existing.loadIfDeferred();
 			const leaf = existing || this.app.workspace.getLeaf("tab"); if (!existing) await leaf.setViewState({ type: TOPIC_STUDY_VIEW_TYPE, active: true });
-			await this.app.workspace.revealLeaf(leaf); if (leaf.view instanceof TopicStudyView) await leaf.view.openStudy(topicId, route);
+			await this.app.workspace.revealLeaf(leaf); if (leaf.view instanceof TopicStudyView) await leaf.view.openStudy(topicId, route, passage);
 		}); this.topicStudyOpenings = operation.catch(() => undefined); return operation;
 	}
 	getTopicModels(): Array<{ id: string; name: string; model: string }> { return this.getVerifiedProviderProfiles().map(({ id, name, model }) => ({ id, name, model })); }

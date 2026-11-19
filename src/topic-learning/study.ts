@@ -7,7 +7,7 @@ import { isTopicTeachingPromptVersion, type TopicTeachingPromptVersion } from ".
 export { STUDY_PROMPT_VERSION } from "./teaching-rules";
 export interface TopicNodeSpec { id: string; parentId: string | null; branchId: string | null; moduleId: string | null; question: string; }
 export interface TopicStudyUsage { input?: number; output?: number; cachedInput?: number; }
-export const UNDERSTANDING_LABELS = { unmarked: "未标记", understood: "已理解", revisit: "待回看", question: "仍有疑问" } as const;
+export const UNDERSTANDING_LABELS = { unmarked: "未标记", understood: "已理解", revisit: "还想再看", question: "仍有疑问" } as const;
 export type TopicUnderstanding = keyof typeof UNDERSTANDING_LABELS;
 export type TopicStudyEvent = { type: "start"; session: TopicSession; revision: string }
 	| { type: "request"; node: TopicNodeSpec; provider: string; model: string; promptVersion: TopicTeachingPromptVersion; contextIds: string[]; omitted: number }
