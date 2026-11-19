@@ -34,6 +34,7 @@ export function serializeActionRequest(
 	mineruExecutable = "",
 	mineruBaseUrl = "",
 ): string {
+	if (action.id === "okf-export") return request.trim();
 	const guardedRequest = withRootIsolationInstruction(action, request);
 	if (action.id !== "paper-ingest" && action.id !== "pdf-xray") {
 		return guardedRequest;
