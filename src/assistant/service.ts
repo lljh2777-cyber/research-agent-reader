@@ -72,14 +72,12 @@ export class ReadingAssistantService {
 			await this.ready(); const linked = await this.actionSerial(async () => {
 			const run = validateAssistantRun(structuredClone(this.runs.get(runId))); const action = run.actions.find(a => a.id === actionId);
 			if (run.state !== "done" || !action) throw new Error("请求未完成或操作不存在");
-			if (action.kind === "export" && action.execution && this.liveExecutions.has(action.execution.id)) throw new Error("此操作已关联执行记录，正在保存，请稍候");
-			if (action.kind === "export" && action.execution?.path && this.deps.resolveAction) action.execution = await this.deps.resolveAction(run.sessionId, action) || action.execution;
-			const retryExport = action.kind === "export" && action.execution && ["failed", "interrupted"].includes(action.execution.state);
-			if (action.execution && !retryExport && (action.execution.state === "running" || action.execution.nodeId || action.execution.reviewId || action.execution.path)) throw new Error("此操作已关联执行记录，请查看结果或从原功能重试");
+			if (action.kind === "export") throw new Error("单篇论文学习记录导出已移除");
+			if (action.execution && (action.execution.state === "running" || action.execution.nodeId || action.execution.reviewId || action.execution.path)) throw new Error("此操作已关联执行记录，请查看结果或从原功能重试");
 			const session = this.deps.workspace.repository.get(run.sessionId);
 			if (session.demo || action.nodeIds.some(id => !session.nodes.some(n => n.id === id && n.status === "done")) || assistantContextHash(session, action.nodeIds, action.scope) !== action.contextHash) throw new Error("阅读内容已变化，请重新准备操作");
 			if (action.kind === "curation" && (!curationTarget(action.target) || action.scope !== "node" || action.nodeIds.some(id => session.nodes.find(n => n.id === id)?.branchId !== session.nodes.find(n => n.id === action.nodeIds[0])?.branchId))) throw new Error("整理目标或范围无效");
-			if (action.kind !== "curation" && action.target || action.kind === "export" && action.scope !== "session" && action.nodeIds.length !== 1) throw new Error("操作范围无效");
+			if (action.kind !== "curation" && action.target) throw new Error("操作范围无效");
 			if (action.kind === "advance" && (action.state === "opened" || action.scope !== "node" || session.completed || action.nodeIds.length !== 1 || action.nodeIds[0] !== session.mainIds[session.mainIds.length - 1])) throw new Error("此主线操作已交接或已经过期，请前往阅读界面查看或重试");
 			await new AssistantTools(this.deps, session, run, new AbortController().signal).verify();
 			if (this.disposed) throw new Error("阅读助手已关闭");

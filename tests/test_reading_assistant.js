@@ -95,10 +95,8 @@ async function toolsFor(f) {
 	await assert.rejects(h.service.dispatch(ar.id, ar.actions[0].id, () => { handoffs++; }), /已交接/); assert.equal(handoffs, 1);
 	const restoredActions = new ReadingAssistantService(h.deps, h.storage); await restoredActions.ready(); await assert.rejects(restoredActions.dispatch(ar.id, ar.actions[0].id, () => {}), /已交接/);
 	h.set(async (request, count) => count === 1 ? step("prepare_action", { kind: "export", nodeIds: [h.n.id], target: "", scope: "session" }) : step("final", { answer: "请查看导出预览", citations: [] }));
-	const er = await h.service.start(h.s.id, h.n.id, "p", "export"); const actionId = er.actions[0].id;
-	await h.service.dispatch(er.id, actionId, a => { assert.equal(a.scope, "session"); handoffs++; }); await h.service.dispatch(er.id, actionId, () => { handoffs++; }); assert.equal(handoffs, 3, "previews can reopen");
-	const newBranch = addReadingBranch(h.s, h.n.id); const newNode = addReadingNode(h.s, newBranch.id, "new content"); newNode.status = "done";
-	await assert.rejects(h.service.dispatch(er.id, actionId, () => { handoffs++; }), /变化/); assert.equal(handoffs, 3);
+	const er = await h.service.start(h.s.id, h.n.id, "p", "export");
+	assert.equal(er.actions.length, 0, "a retired export cannot create an action");
 	await h.service.dispose(); await restoredActions.dispose();
 	const disk = fixture(); disk.set(async () => { disk.storage.fail = true; return step("final", { answer: "response", citations: [] }); });
 	await assert.rejects(disk.service.start(disk.s.id, disk.n.id, "p", "write fails during generation"), /disk full/);

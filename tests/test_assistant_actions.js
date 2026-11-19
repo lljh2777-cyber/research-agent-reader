@@ -43,32 +43,18 @@ const { contentHash } = loadReading("retrieval/chunks.ts");
 	revisions.push({ id: "undo", reviewId: review.id, state: "applied", undoOf: "revision" });
 	assert.match((await resolveAssistantAction(session, curation, deps)).detail, /撤销/);
 	review.context.sessionId = "another session"; assert.equal((await resolveAssistantAction(session, curation, deps)).state, "needs-review");
-	// Persistence, reopening and late callbacks: the old preview cannot write after a newer attempt.
-	let calls = 0; const storage = memoryStorage(); let changed;
-	const serviceDeps = { workspace, backend: () => ({ name: "fake", model: "fake", complete: async () => JSON.stringify({ step: ++calls % 2 ? { tool: "prepare_action", arguments: { kind: "export", nodeIds: [parent.id], target: "", scope: "node" } } : { tool: "final", arguments: { answer: "prepared", citations: [] } } }) }),
-		subscribeActions: callback => { changed = callback; return () => { changed = undefined; }; }, resolveAction: async (id, action) => resolveAssistantAction(repo.get(id), action, deps) };
+	// Previously saved export receipts remain readable across restarts, but cannot run again.
+	const storage = memoryStorage();
+	const serviceDeps = { workspace, backend: () => ({ name: "fake", model: "fake", complete: async () => JSON.stringify({ step: { tool: "final", arguments: { answer: "ok", citations: [] } } }) }),
+		resolveAction: async (id, a) => resolveAssistantAction(repo.get(id), a, deps) };
 	const service = new ReadingAssistantService(serviceDeps, storage);
-	const run = await service.start(session.id, parent.id, "fake", "export"); const id = run.actions[0].id;
-	let first, second; await service.dispatch(run.id, id, a => { first = a.execution.id; }); await service.dispatch(run.id, id, a => { second = a.execution.id; });
-	assert.notEqual(first, second);
-	await assert.rejects(service.recordExecution(run.id, id, first, { state: "running" }), /最新预览/);
-	await service.recordExecution(run.id, id, second, { state: "running", path: "wiki/qa/test.md", hash: contentHash(exported) });
-	await assert.rejects(service.dispatch(run.id, id, () => { throw new Error("must not open"); }), /执行记录/);
-	await service.recordExecution(run.id, id, second, { state: "succeeded", detail: "saved" });
-	await service.refreshActions(); assert.equal(service.runs.get(run.id).actions[0].execution.state, "succeeded");
-	exported += "changed"; changed(); await service.refreshActions(); assert.equal(service.runs.get(run.id).actions[0].execution.state, "needs-review");
-	const restored = new ReadingAssistantService(serviceDeps, storage); await restored.ready(); await restored.refreshActions(); assert.equal(restored.runs.get(run.id).actions[0].execution.path, "wiki/qa/test.md");
-	const corrupt = structuredClone(service.runs.get(run.id)); corrupt.actions[0].execution.state = "forged"; assert.throws(() => validateAssistantRun(corrupt), /执行记录/);
-	// A failed export may reopen only after checking its receipt; a late successful write is reused, never re-executed.
-	deps.readExport = async () => { throw new Error("file not created"); };
-	await service.recordExecution(run.id, id, second, { state: "failed", detail: "write failed" });
-	await service.refreshActions(); assert.equal(service.runs.get(run.id).actions[0].execution.state, "failed");
-	let retry; await service.dispatch(run.id, id, a => { retry = a.execution.id; }); assert.notEqual(retry, second);
-	await assert.rejects(service.recordExecution(run.id, id, second, { state: "succeeded" }), /最新预览/);
-	await service.recordExecution(run.id, id, retry, { state: "failed", path: "wiki/qa/test.md", hash: contentHash(exported) });
-	deps.readExport = async () => exported;
-	await assert.rejects(service.dispatch(run.id, id, () => { throw new Error("must not duplicate written file"); }), /执行记录/);
-	storage.fail = true; exported += "editing"; await assert.rejects(service.refreshActions(), /disk full/); assert.match(service.actionError, /刷新失败/); storage.fail = false; await service.refreshActions(); assert.equal(service.actionError, "");
-	await service.dispose(); await restored.dispose(); assert.equal(changed, undefined);
-	console.log("ASSISTANT_ACTIONS_OK: business receipts, write-before-effect, failures, retries, edits, undo, old callbacks, restart");
+	const original = await service.start(session.id, parent.id, "fake", "history");
+	const legacy = validateAssistantRun({ ...original, actions: [exportAction] });
+	await storage.write(legacy.id, JSON.stringify(legacy));
+	const restored = new ReadingAssistantService(serviceDeps, storage); await restored.ready();
+	assert.equal(restored.runs.get(legacy.id).actions[0].execution.path, "wiki/qa/test.md");
+	await assert.rejects(restored.dispatch(legacy.id, exportAction.id, () => assert.fail("retired export ran")), /已移除/);
+	const corrupt = structuredClone(legacy); corrupt.actions[0].execution.state = "forged"; assert.throws(() => validateAssistantRun(corrupt), /执行记录/);
+	await service.dispose(); await restored.dispose();
+	console.log("ASSISTANT_ACTIONS_OK: business receipts, legacy export readback, retired actions, edits and undo");
 })().catch(error => { console.error(error); process.exitCode = 1; });

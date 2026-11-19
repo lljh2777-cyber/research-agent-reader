@@ -95,15 +95,13 @@ export class AssistantTools {
 			await this.verify(); value = { sources, sourceWarnings: ((await this.deps.workspace.document(this.session.id)).sourceWarnings || []).slice(0, 12).map(s => s.slice(0, 500)), note: "仅提供本轮文字片段，不代表全文或图像已核验；JATS 使用正文块与字符定位，没有 PDF 页码" };
 		} else if (tool === "prepare_action") {
 			const ids = [...new Set(args.nodeIds as string[])]; if (!ids.length || ids.length > 3) throw new Error("请选择一至三个节点"); ids.forEach(id => this.node(id));
-			if (!["curation", "export", "advance"].includes(String(args.kind)) || !["node", "branch", "session"].includes(String(args.scope))) throw new Error("操作类别或范围无效");
+			if (!["curation", "advance"].includes(String(args.kind)) || args.scope !== "node") throw new Error("操作类别或范围无效");
 			const candidate = this.candidates.get(String(args.target)); const target = candidate && "path" in candidate ? candidate.path : String(args.target);
 			if (args.kind === "curation" && (!this.paths.has(target) || !curationTarget(target))) throw new ToolFeedbackError("unknown_target", "整理目标必须使用本轮正式知识检索返回的候选编号或完整路径", { availablePaths: [...this.paths].filter(curationTarget).slice(0, 3), next: "先 search_knowledge，再从结果复制 target；search_learning 不提供正式整理目标。" });
 			if (args.kind !== "curation" && args.target !== "") throw new Error("此操作不接受目标路径");
-			if (args.kind === "export" && args.scope !== "session" && ids.length !== 1) throw new Error("节点或支线导出只能指定一个起点");
-			if (args.kind !== "export" && args.scope !== "node") throw new Error("此操作只接受节点范围");
 			if (args.kind === "advance" && (this.session.completed || ids.length !== 1 || ids[0] !== this.session.mainIds[this.session.mainIds.length - 1])) throw new ToolFeedbackError("invalid_advance", "只能从未完成主线的最新单元继续", { latestMainNodeId: this.session.mainIds[this.session.mainIds.length - 1], completed: this.session.completed });
 			if (args.kind === "curation" && ids.some(id => this.node(id).branchId !== this.node(ids[0]).branchId)) throw new Error("一次整理请选择同一主线或支线中的节点");
-			const action = { id: randomUUID(), kind: args.kind as "curation" | "export" | "advance", nodeIds: ids, target, scope: args.scope as "node" | "branch" | "session", contextHash: assistantContextHash(this.session, ids, String(args.scope)), state: "prepared" as const };
+			const action = { id: randomUUID(), kind: args.kind as "curation" | "advance", nodeIds: ids, target, scope: "node" as const, contextHash: assistantContextHash(this.session, ids, String(args.scope)), state: "prepared" as const };
 			this.run.actions.push(action); value = { ...action, status: "仅准备操作卡，尚未执行。请用户在卡片中继续。" };
 		} else throw new Error("未知助手工具");
 		this.signal.throwIfAborted(); const output = JSON.stringify(value); if (output.length > 19000) throw new Error("工具结果过长，请缩小问题范围"); this.cache.set(key, output); return { output, cached: false };

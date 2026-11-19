@@ -6,6 +6,8 @@ const { exportReading, readingExportContent, safeReadingMarkdown, reviewReadingE
 const { contentHash } = loadReading("retrieval/chunks.ts");
 (async () => {
 	const session = createReadingSession({ kind: "article", path: "papers/a/article.md", fingerprint: "a".repeat(64), title: "学习论文" });
+	await assert.rejects(exportReading(null, session, "session", ""), /已移除/);
+	session.source.kind = "code";
 	const main = addReadingNode(session, null); main.status = "done"; main.content = "主线结论 [text-0-0]。[[papers/a/article]] ![外部图](https://example.com/track.png)";
 	main.evidence = [{ id: "text-0-0", kind: "paper", path: "papers/a/article.md", text: "source", label: "原文", page: 2 }];
 	const branch = addReadingBranch(session, main.id); const node = addReadingNode(session, branch.id, "支线问题"); node.status = "done"; node.content = "支线内容";

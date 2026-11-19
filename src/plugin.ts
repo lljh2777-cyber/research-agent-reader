@@ -130,7 +130,6 @@ import { probeReadingSchema } from "./assistant/probe";
 import { structuredProfileKey, supportsReadingSchema } from "./providers/structured";
 import { FileAssistantStorage } from "./assistant/store";
 import { ReadingAssistantModal } from "./views/reading-assistant";
-import { ReadingExportModal } from "./views/reading-export";
 import { readReadingOutcomes } from "./reading/outcomes";
 import { resolveAssistantAction, safeAssistantExportPath } from "./assistant/action-results";
 import type { AssistantExecution } from "./assistant/types";
@@ -2919,11 +2918,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			if (action.kind === "curation") this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, action.nodeIds[0], undefined, { nodeIds: action.nodeIds, target: action.target }, {
 				prepared: async review => { await report({ state: review.state === "generating" ? "running" : "waiting", reviewId: review.id, path: review.context.target.path, detail: "已关联整理批次，结果随原功能更新" }); }, failed,
 			}));
-			else if (action.kind === "export") this.showCurationModal(new ReadingExportModal(this.app, () => this.getReadingWorkspace().repository.get(sessionId), action.nodeIds[0], (query, options) => this.searchKnowledge(query, options), filename => this.openVaultFile(filename), () => this.openKnowledgeCuration(sessionId, action.nodeIds[0]), action.scope, {
-				prepared: async receipt => { await report({ ...receipt, state: "running", detail: "正在保存学习笔记" }); },
-				finished: async result => { await report({ state: result.warning ? "needs-review" : "succeeded", path: result.path, reused: !!result.reused, warning: result.warning?.slice(0, 1000), detail: result.warning || (result.reused ? "已复用已有学习笔记" : "学习笔记已保存") }).catch(feedbackFailure); }, failed,
-			}));
-			else {
+			else if (action.kind === "advance") {
 				await this.openLearningRecord(sessionId, action.nodeIds[0]);
 				void this.getReadingWorkspace().advance(sessionId, { expectedParentId: action.nodeIds[0], prepared: async nodeId => { await report({ state: "running", nodeId, detail: "正在生成主线讲解" }); } })
 					.catch(async error => { await failed(error); new Notice("主线讲解未完成，请在节点中重试：" + String(error), 8000); })

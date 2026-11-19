@@ -114,6 +114,7 @@ export async function reviewReadingExport(app: App, session: ReadingSession, sco
 }
 let exportQueue: Promise<unknown> = Promise.resolve();
 export function exportReading(app: App, session: ReadingSession, scope: ReadingExportScope, nodeId: string, options: ReadingExportOptions & { expectedHash?: string; relatedHashes?: Record<string, string> } = {}, prepared?: (receipt: { path: string; hash: string; reused: boolean }) => Promise<void>): Promise<{ path: string; warning?: string; reused?: boolean }> {
+	if (session.source.kind !== "code") return Promise.reject(new Error("单篇论文学习记录导出已移除"));
 	const snapshot = structuredClone(session);
 	const chosen = structuredClone(options);
 	const operation = exportQueue.then(async () => {
