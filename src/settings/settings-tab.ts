@@ -1167,6 +1167,8 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		);
 		new Setting(containerEl).setName("手动体检").setDesc("检查知识页的链接和属性，完成后查看报告和具体发现。")
 			.addButton(button => button.setButtonText("运行只读体检").onClick(() => this.plugin.openMaintenanceAction("vault-lint")));
+		new Setting(containerEl).setName("导出 Wiki 知识页").setDesc("将 Wiki 知识页导出为 OKF 包。外部目录中的论文、译文和配图保存在原处。")
+			.addButton(button => button.setButtonText("导出 OKF").onClick(() => this.plugin.openMaintenanceAction("okf-export")));
 		new Setting(containerEl)
 			.setName("体检范围")
 			.setDesc("内置只读体检检查 wiki/ 与 Vault 顶层 Markdown。papers/、Clippings/ 不参与断链、孤立页、属性和内容检查，仅检查跨根链接边界；papers/、wiki/、Clippings/ 三个主目录之间禁止创建 Obsidian 或 Markdown 链接。核心规则不可关闭。");

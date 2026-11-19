@@ -146,6 +146,7 @@ export const ACTIONS: readonly DashboardAction[] = [
 	},
 	{
 		id: "okf-export",
+		showInRail: false,
 		label: "OKF 导出",
 		agent: "okf-export",
 		description: "预检 wiki 后生成 OKF v0.1 时间戳 bundle，转换 wikilink、补齐最低属性并保留旧导出。不会修改源笔记或复制附件。",

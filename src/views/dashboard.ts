@@ -643,7 +643,7 @@ export class DashboardView extends ItemView {
 
 	renderKnowledgeGapsList(parent: HTMLElement): void {
 		parent.empty();
-		const visibleGaps = this.currentData.knowledgeGaps.filter((gap) => !gap.actionId?.startsWith("vault-lint") && this.isVisibleKnowledgeGap(gap));
+		const visibleGaps = this.currentData.knowledgeGaps.filter((gap) => gap.actionId !== "okf-export" && !gap.actionId?.startsWith("vault-lint") && this.isVisibleKnowledgeGap(gap));
 		if (visibleGaps.length === 0) {
 			parent.createEl("p", { cls: "agent-dashboard-empty-state", text: "当前筛选条件下没有待处理的知识缺口。" });
 			return;
