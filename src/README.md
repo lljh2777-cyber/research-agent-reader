@@ -13,7 +13,7 @@ src/config.ts                Stable view IDs, limits, model options, provider de
 src/annotations/             Reading-view selection, annotation Markdown, popover, and archive handoff
 src/agent/                   Bounded light-agent loop, per-phase tool allowlists, phase-gated
                              paper-ingest state machine, receipt contracts, and isolated prompt/input policy
-src/modals/                  Action input, task result, practice-note, and image-picker dialogs
+src/modals/                  Action input, task result, and image-picker dialogs
 src/providers/adapters.ts    Direct API and Codex CLI provider implementations
 src/providers/http-transport.ts
                              Bounded HTTP/SSE/NDJSON transport and error mapping
@@ -37,7 +37,7 @@ src/services/dashboard-data.ts
                              Incremental vault scan and Dashboard metric/gap derivation
 src/settings/settings-tab.ts Obsidian settings UI
 src/types/contracts.ts       Shared PluginHost, task, query-session, and provider contracts
-src/views/                   Dashboard, query, code-practice, and dual-pane document reader ItemViews
+src/views/                   Dashboard, query, and dual-pane document reader ItemViews
 ```
 
 All source modules, including `src/plugin.ts`, use strict TypeScript. The plugin

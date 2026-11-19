@@ -250,8 +250,6 @@ import { knowledgeTrace } from "./retrieval/trace";
 import type { SearchOptions } from "./retrieval/types";
 import type {
 	CliModelDiscoveryResult,
-	CodePracticeRequest,
-	CodePracticeResult,
 	CodexExecutionConfig,
 	DashboardProcessHooks,
 	DashboardProcessResult,
@@ -268,7 +266,6 @@ import type {
 	ProviderHttpStreamOptions,
 	ProviderHttpStreamResponse,
 	ProviderRuntimeEntry,
-	PracticeNotePayload,
 	QueryMessage,
 	QueryMessageStatus,
 	QueryRetrievalMode,
@@ -507,9 +504,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationHighlights = this.addChild(new AnnotationHighlights(this.app));
 		this.lastContextFile = this.app.workspace.getActiveFile();
 		await this.loadSettings();
-		this.recoverInterruptedPracticeRuns();
 		this.registerView(VIEW_TYPE, (leaf) => new DashboardView(leaf, this));
-		this.registerView(CODE_PRACTICE_VIEW_TYPE, (leaf) => new CodePracticeView(leaf, this));
+		this.registerView(CODE_PRACTICE_VIEW_TYPE, (leaf) => new CodePracticeView(leaf));
 		this.registerView(QUERY_WIKI_VIEW_TYPE, (leaf) => new QueryWikiView(leaf, this));
 		this.registerView(READING_VIEW_TYPE, (leaf) => new ReadingWorkspaceView(leaf, this));
 		this.registerView(PAPER_LIBRARY_VIEW_TYPE, (leaf) => new PaperLibraryView(leaf, this));
@@ -589,13 +585,6 @@ export default class AgentDashboardPlugin extends Plugin {
 			name: "打开研究知识库控制台",
 			callback: () => {
 				this.activateDashboardView();
-			},
-		});
-		this.addCommand({
-			id: "open-code-practice",
-			name: "打开代码练习",
-			callback: () => {
-				this.activateCodePracticeView();
 			},
 		});
 		this.addCommand({
@@ -1043,135 +1032,6 @@ export default class AgentDashboardPlugin extends Plugin {
 		} catch {
 			return [];
 		}
-	}
-
-	createPracticeRunId(): string {
-		const now = new Date();
-		const pad = (value: number) => String(value).padStart(2, "0");
-		const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-		return `${stamp}-${Math.random().toString(36).slice(2, 8).padEnd(6, "0")}`;
-	}
-
-	recoverInterruptedPracticeRuns(): void {
-		this.processExecution.recoverInterruptedPracticeRuns(this.settings);
-	}
-
-	runCodePractice(request: CodePracticeRequest): Promise<CodePracticeResult> {
-		return this.processExecution.runCodePractice(this.settings, request);
-	}
-
-	stopCodePractice(runId: string): boolean {
-		return this.processExecution.stopCodePractice(runId);
-	}
-
-	readPracticeFigure(relativePath: string): string {
-		const root = path.resolve(this.settings.toolkitRoot);
-		const outputRoot = path.join(root, "tool-library", "output", "code-practice", "figures");
-		const candidate = path.resolve(root, relativePath);
-		const relative = path.relative(outputRoot, candidate);
-		if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || !fs.existsSync(candidate)) return "";
-		const stat = fs.statSync(candidate);
-		if (!stat.isFile() || stat.size > 10 * 1024 * 1024) return "";
-		const mime = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".svg": "image/svg+xml" }[path.extname(candidate).toLowerCase()];
-		if (!mime) return "";
-		return `data:${mime};base64,${fs.readFileSync(candidate).toString("base64")}`;
-	}
-
-	async savePracticeNote(payload: PracticeNotePayload): Promise<TFile> {
-		const folder = normalizePath("wiki/code/practice");
-		await this.ensureVaultFolder(folder);
-		const cells = Array.isArray(payload.cells) ? payload.cells.filter((cell) => String(cell.code || "").trim() || cell.result) : [];
-		if (!cells.length) throw new Error("没有可保存的练习单元格");
-		const lastResult = [...cells].reverse().find((cell) => cell.result)?.result || null;
-		const now = new Date();
-		const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-		const slugBase = payload.title.normalize("NFKD").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 72);
-		const fallback = `practice-${date.split("-").join("")}-${lastResult?.run_id.slice(-6) || Date.now()}`;
-		let notePath = normalizePath(`${folder}/${slugBase || fallback}.md`);
-		if (this.app.vault.getAbstractFileByPath(notePath)) {
-			notePath = normalizePath(`${folder}/${slugBase || "practice"}-${lastResult?.run_id.slice(-6) || Date.now()}.md`);
-		}
-		if (this.app.vault.getAbstractFileByPath(notePath)) throw new Error(`目标笔记已存在：${notePath}`);
-
-		const languageLabel = payload.language === "r" ? "R" : "Python";
-		const relatedTarget = payload.relatedNotePath ? payload.relatedNotePath.replace(/\.md$/i, "") : "";
-		const relatedLink = relatedTarget ? `[[${relatedTarget}]]` : "";
-		const fence = (value: unknown) => String(value || "").includes("```") ? "````" : "```";
-		const cellSections = cells.flatMap((cell, index) => {
-			const result = cell.result;
-			const codeFence = fence(cell.code);
-			const outputFence = fence(result?.stdout);
-			const errorFence = fence(result?.stderr);
-			const lines = [
-				`### 单元格 ${index + 1}`,
-				"",
-				`执行编号：${cell.executionCount ?? "未运行"}  `,
-				`状态：${result?.status || "未运行"}`,
-				"",
-				`${codeFence}${payload.language === "r" ? "r" : "python"}`,
-				String(cell.code || ""),
-				codeFence,
-			];
-			if (!result) return [...lines, ""];
-			lines.push(
-				"",
-				`运行编号：${result.run_id || "-"}  `,
-				`耗时：${Number(result.duration_ms || 0) / 1000} 秒  `,
-				`退出码：${result.exit_code ?? "-"}`,
-				"",
-				"#### 标准输出",
-				"",
-				`${outputFence}text`,
-				result.stdout || "（无）",
-				outputFence,
-			);
-			if (result.stderr) {
-				const stderrTitle = ["failed", "timeout"].includes(result.status)
-					? "错误与诊断（stderr）"
-					: result.status === "stopped"
-						? "运行消息（stderr）"
-						: "消息与警告（stderr）";
-				lines.push("", `#### ${stderrTitle}`, "", `${errorFence}text`, result.stderr, errorFence);
-			}
-			if (result.figures?.length) {
-				lines.push("", "#### 生成图片", "", ...result.figures.map((value) => `- \`${value}\``));
-			}
-			return [...lines, ""];
-		});
-		const body = [
-			"---",
-			"type: code-practice",
-			`title: ${JSON.stringify(payload.title)}`,
-			`language: ${languageLabel}`,
-			`related_note: ${JSON.stringify(relatedLink)}`,
-			"execution_mode: stateless-replay",
-			`cell_count: ${cells.length}`,
-			`last_run_id: ${lastResult?.run_id || ""}`,
-			`status: ${lastResult?.status || "not-run"}`,
-			`created: ${date}`,
-			`updated: ${date}`,
-			"tags:",
-			"  - code-practice",
-			`  - ${languageLabel}`,
-			"---",
-			"",
-			"## 目标",
-			"",
-			payload.goal || "记录并验证本次代码练习。",
-			"",
-			"## 单元格",
-			"",
-			...cellSections,
-			"## 说明",
-			"",
-			payload.notes || "本页使用无状态累计重放：每次运行都会启动新进程，并在执行目标单元格前重放其前置单元格。",
-			"",
-			"## 关联",
-			"",
-			relatedLink ? `- 相关笔记：${relatedLink}` : "- 相关笔记：未关联",
-			"",
-		].join("\n");
-		return this.app.vault.create(notePath, body);
 	}
 
 	async ensureVaultFolder(folderPath: string): Promise<void> {
@@ -1957,7 +1817,6 @@ export default class AgentDashboardPlugin extends Plugin {
 			describe("Obsidian CLI", "obsidian", this.settings.obsidianCliExecutable),
 			`MinerU 服务: ${this.settings.mineruServiceMode === "private" ? "私有部署" : "官方服务"}`,
 			`Python: ${this.settings.pythonExecutable && fs.existsSync(this.settings.pythonExecutable) ? "可用" : "不可用"}`,
-			`Rscript: ${this.settings.rscriptExecutable && fs.existsSync(this.settings.rscriptExecutable) ? "可用" : "不可用"}`,
 			`Direct API 配置数: ${this.settings.providerProfiles.length}`,
 			"体检范围: wiki/ 与 Vault 顶层 Markdown；排除 papers/、Clippings/（仅检查跨根链接边界）",
 			"凭据、endpoint、正文和对话内容: 已排除",
@@ -2691,7 +2550,6 @@ export default class AgentDashboardPlugin extends Plugin {
 			projectRoot ? path.join(projectRoot, ...segments) : ""
 		);
 		const runner = withinRoot("tool-library", "scripts", "run_vault_action.py");
-		const practiceRunner = withinRoot("tool-library", "scripts", "run_code_practice.py");
 		const exporter = withinRoot("tool-library", "scripts", "export_okf.py");
 		const lintScript = withinRoot("tool-library", "scripts", "lint_vault.py");
 		const checks: Array<[string, boolean]> = [
@@ -2701,8 +2559,6 @@ export default class AgentDashboardPlugin extends Plugin {
 			["Python", Boolean(this.settings.pythonExecutable) && fs.existsSync(this.settings.pythonExecutable)],
 		];
 		if (!action) {
-			checks.push(["Code practice runner", fs.existsSync(practiceRunner)]);
-			checks.push(["Rscript", Boolean(this.settings.rscriptExecutable) && fs.existsSync(this.settings.rscriptExecutable)]);
 			checks.push(["MinerU CLI", Boolean(this.settings.mineruExecutable) && fs.existsSync(this.settings.mineruExecutable)]);
 		}
 		if (!action || action.id === "okf-export") {
@@ -3945,17 +3801,6 @@ export default class AgentDashboardPlugin extends Plugin {
 			new Notice(action.label + (result.exitCode === 0 ? "已完成，可在控制台查看" : "失败，请查看控制台任务"));
 		} catch (error) { await this.finishTaskRun(run.id, { status: "failed", error: String(error) }); throw error; }
 	}
-	async activateCodePracticeView(): Promise<void> {
-		const contextFile = this.app.workspace.getActiveFile() || this.lastContextFile;
-		const existing = this.app.workspace.getLeavesOfType(CODE_PRACTICE_VIEW_TYPE)[0];
-		const leaf = existing || this.app.workspace.getRightLeaf(false) || this.app.workspace.getLeaf(true);
-		if (!existing) {
-			await leaf.setViewState({ type: CODE_PRACTICE_VIEW_TYPE, active: true });
-		}
-		if (leaf.view instanceof CodePracticeView) leaf.view.setRelatedNote(contextFile);
-		await this.app.workspace.revealLeaf(leaf);
-	}
-
 	async activateQueryWikiView(initialQuestion = ""): Promise<void> {
 		const existing = this.app.workspace.getLeavesOfType(QUERY_WIKI_VIEW_TYPE)[0];
 		const leaf = existing || this.app.workspace.getRightLeaf(false) || this.app.workspace.getLeaf(true);

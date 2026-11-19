@@ -6,10 +6,10 @@ const { dashboardActionGroup } = loadReading("services/dashboard-navigation.ts")
 const { ACTIONS } = loadReading("actions.ts");
 const record = (frontmatter = {}, extra = {}) => ({ frontmatter, tags: [], path: "wiki/sources/example.md", name: "example", text: "", ...extra });
 (async () => {
-	assert.deepEqual(ACTIONS.filter(a => a.showInRail !== false && dashboardActionGroup(a.id) === "tools").map(a => a.id), ["code-analysis", "code-practice", "vault-lint", "okf-export"]);
+	assert.deepEqual(ACTIONS.filter(a => a.showInRail !== false && dashboardActionGroup(a.id) === "tools").map(a => a.id), ["code-analysis", "vault-lint", "okf-export"]);
 	for (const id of ["paper-ingest", "pdf-xray", "vault-retrieval", "synthesis", "fulltext-acquisition", "future-action"]) assert.equal(dashboardActionGroup(id), "common");
 	assert.equal(ACTIONS.find(a => a.id === "pdf-xray").label, "文献深读");
-	assert.deepEqual(ACTIONS.map(a => a.id), ["fulltext-acquisition", "paper-ingest", "pdf-xray", "code-analysis", "code-practice", "vault-retrieval", "synthesis", "annotation-explain", "vault-lint", "vault-lint-fix", "okf-export"]);
+	assert.deepEqual(ACTIONS.map(a => a.id), ["fulltext-acquisition", "paper-ingest", "pdf-xray", "code-analysis", "vault-retrieval", "synthesis", "annotation-explain", "vault-lint", "vault-lint-fix", "okf-export"]);
 	const service = new DashboardDataService({}, { getTaskRuns: () => [] });
 	const records = [record({ depth: "abstract-level", status: "ingested" }), record({ analysis_depth: "abstract-level" }), record({ status: "x-ray" }), record({ depth: "metadata-only", status: "x-ray" }), record({ status: "ingested" })];
 	const depth = service.computePaperDepth(records);

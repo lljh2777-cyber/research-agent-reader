@@ -140,47 +140,6 @@ export interface DashboardProcessHooks {
 	onStderr?: (line: string) => void;
 }
 
-export type PracticeLanguage = "python" | "r";
-
-export interface CodePracticeRequest {
-	run_id: string;
-	language: PracticeLanguage;
-	context_code: string;
-	code: string;
-	working_directory: string;
-	timeout_seconds: number;
-}
-
-export interface CodePracticeResult {
-	run_id: string;
-	status: "idle" | "running" | "success" | "failed" | "timeout" | "stopped";
-	language: PracticeLanguage;
-	exit_code: number | null;
-	duration_ms: number;
-	stdout: string;
-	stderr: string;
-	figures: string[];
-	runner_stderr?: string;
-}
-
-export interface PracticeNotePayload {
-	title: string;
-	goal: string;
-	notes: string;
-	language: PracticeLanguage;
-	cells: Array<{
-		code: string;
-		result: CodePracticeResult | null;
-		executionCount: number | null;
-	}>;
-	relatedNotePath: string;
-}
-
-export interface ActivePracticeRun {
-	child: ChildProcessWithoutNullStreams;
-	stopPath: string;
-}
-
 export interface DirectQueryRunToken {
 	cancelled: boolean;
 	abort?: () => void;

@@ -16,8 +16,6 @@ import type { DashboardLifecycleState } from "./lifecycle-state";
 import type {
 	CliDiscoveredModel,
 	CliModelDiscoveryResult,
-	CodePracticeRequest,
-	CodePracticeResult,
 	CodexExecutionConfig,
 	DashboardProcessHooks,
 	DashboardProcessResult,
@@ -511,127 +509,6 @@ export class ProcessExecutionService {
 				finish(fallback("OpenCode 模型目录检测超过 20 秒"));
 			}, 20000);
 		});
-	}
-
-	recoverInterruptedPracticeRuns(settings: DashboardSettings): void {
-		const runsDirectory = path.join(
-			settings.toolkitRoot,
-			"tool-library",
-			"output",
-			"code-practice",
-			"runs",
-		);
-		if (!fs.existsSync(runsDirectory)) return;
-		for (const name of fs.readdirSync(runsDirectory)) {
-			if (!name.endsWith(".json")) continue;
-			const recordPath = path.join(runsDirectory, name);
-			try {
-				const record = JSON.parse(
-					fs.readFileSync(recordPath, "utf8"),
-				) as Record<string, unknown>;
-				if (record.status !== "queued" && record.status !== "running") continue;
-				record.status = "stopped";
-				record.finished_at = new Date().toISOString();
-				record.stderr = `${String(record.stderr || "")}\nExecution interrupted before the plugin restarted.`.trim();
-				fs.writeFileSync(recordPath, JSON.stringify(record, null, 2), "utf8");
-			} catch (error) {
-				console.warn(`Could not recover code-practice record: ${recordPath}`, error);
-			}
-		}
-	}
-
-	runCodePractice(
-		settings: DashboardSettings,
-		request: CodePracticeRequest,
-	): Promise<CodePracticeResult> {
-		const projectRoot = settings.toolkitRoot;
-		const runner = path.join(projectRoot, "tool-library", "scripts", "run_code_practice.py");
-		if (!fs.existsSync(runner)) {
-			return Promise.reject(new Error(`代码练习 runner 不存在：${runner}`));
-		}
-		const interpreter = request.language === "python"
-			? settings.pythonExecutable
-			: settings.rscriptExecutable;
-		if (!interpreter || !fs.existsSync(interpreter)) {
-			return Promise.reject(new Error(
-				`${request.language === "python" ? "Python" : "Rscript"} 解释器不可用：${interpreter || "未配置"}`,
-			));
-		}
-		const stopPath = path.join(
-			projectRoot,
-			"tool-library",
-			"output",
-			"code-practice",
-			"stop",
-			`${request.run_id}.stop`,
-		);
-		const args = [
-			runner,
-			"--project-root",
-			projectRoot,
-			"--python",
-			settings.pythonExecutable,
-			"--rscript",
-			settings.rscriptExecutable,
-		];
-
-		return new Promise((resolve, reject) => {
-			let stdout = "";
-			let stderr = "";
-			let settled = false;
-			const child = spawn(settings.pythonExecutable, args, {
-				cwd: projectRoot,
-				shell: false,
-				windowsHide: true,
-				env: {
-					...process.env,
-					PYTHONUTF8: "1",
-					PYTHONIOENCODING: "utf-8",
-				},
-			});
-			this.state.activePracticeRuns.set(request.run_id, { child, stopPath });
-			child.stdout.on("data", (chunk: Buffer) => {
-				stdout = appendOutput(stdout, chunk, 400000);
-			});
-			child.stderr.on("data", (chunk: Buffer) => {
-				stderr = appendOutput(stderr, chunk, 400000);
-			});
-			child.once("error", (error: Error) => {
-				if (settled) return;
-				settled = true;
-				this.state.activePracticeRuns.delete(request.run_id);
-				reject(error);
-			});
-			child.once("close", () => {
-				if (settled) return;
-				settled = true;
-				this.state.activePracticeRuns.delete(request.run_id);
-				try {
-					const result = JSON.parse(stdout.trim()) as CodePracticeResult;
-					if (stderr.trim()) result.runner_stderr = stderr.trim();
-					resolve(result);
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					reject(new Error(
-						`无法读取代码练习结果：${stderr.trim() || stdout.trim() || message}`,
-					));
-				}
-			});
-			child.stdin.end(JSON.stringify(request), "utf8");
-		});
-	}
-
-	stopCodePractice(runId: string): boolean {
-		const active = this.state.activePracticeRuns.get(runId);
-		if (!active) return false;
-		try {
-			fs.mkdirSync(path.dirname(active.stopPath), { recursive: true });
-			fs.writeFileSync(active.stopPath, "stop\n", "utf8");
-			return true;
-		} catch (error) {
-			console.error("Could not request code-practice stop", error);
-			return false;
-		}
 	}
 
 	runVaultAction(options: VaultActionProcessOptions): Promise<DashboardProcessResult> {
@@ -1384,9 +1261,6 @@ export class ProcessExecutionService {
 	}
 
 	shutdown(): void {
-		for (const runId of this.state.activePracticeRuns.keys()) {
-			this.stopCodePractice(runId);
-		}
 		for (const [runId, child] of this.state.activeProcesses) {
 			const stopRequested = this.requestVaultActionStop(runId);
 			if (!stopRequested && !child.killed) child.kill();

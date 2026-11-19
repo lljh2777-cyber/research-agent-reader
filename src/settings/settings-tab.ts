@@ -342,7 +342,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 				"工具包脚本运行时（Python）",
 				Boolean(this.plugin.settings.pythonExecutable.trim())
 					&& fs.existsSync(this.plugin.settings.pythonExecutable),
-				"运行工具包内的 Python 脚本（统一 runner、MinerU 辅助、代码练习）",
+				"运行工具包内的 Python 脚本（统一 runner、MinerU 辅助）",
 			],
 			[
 				"Agent 任务（Codex CLI）",
@@ -413,7 +413,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		});
 		new Setting(containerEl)
 			.setName("Python 可执行文件")
-			.setDesc("仅用于可选工具包 runner 和 Python 代码练习；内置知识库体检不需要 Python。")
+			.setDesc("仅用于可选工具包 runner；内置知识库体检不需要 Python。")
 			.addText((text) =>
 				text
 					.setPlaceholder(process.platform === "win32" ? "C:\\Python312\\python.exe" : "/usr/bin/python3")
@@ -421,33 +421,6 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.pythonExecutable = value.trim();
 						await this.plugin.saveSettings();
-					})
-			);
-		new Setting(containerEl)
-			.setName("Rscript 可执行文件")
-			.setDesc("用于无状态 R 代码练习；不会自动安装 R 或 R 包。")
-			.addText((text) =>
-				text
-					.setPlaceholder(process.platform === "win32" ? "C:\\Program Files\\R\\R-x.y.z\\bin\\Rscript.exe" : "/usr/local/bin/Rscript")
-					.setValue(this.plugin.settings.rscriptExecutable)
-					.onChange(async (value) => {
-						this.plugin.settings.rscriptExecutable = value.trim();
-						await this.plugin.saveSettings();
-					})
-			);
-		new Setting(containerEl)
-			.setName("代码练习超时（秒）")
-			.setDesc("每次 Python/R 练习的最长运行时间，范围 1-120 秒。")
-			.addText((text) =>
-				text
-					.setPlaceholder("30")
-					.setValue(String(this.plugin.settings.codePracticeTimeoutSeconds))
-					.onChange(async (value) => {
-						const parsed = Number.parseInt(value, 10);
-						if (Number.isFinite(parsed)) {
-							this.plugin.settings.codePracticeTimeoutSeconds = Math.max(1, Math.min(120, parsed));
-							await this.plugin.saveSettings();
-						}
 					})
 			);
 		new Setting(containerEl)

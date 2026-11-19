@@ -341,15 +341,8 @@ assert.ok(
 	!pluginSource.includes("100 - linkReport.broken.length * 2 - missingFrontmatter"),
 	"health metric must not fall back to an estimated default score",
 );
-assert.ok(
-	pluginSource.includes("const scrollTop = this.contentEl.scrollTop;"),
-	"code-practice rendering should preserve the current scroll position",
-);
-assert.ok(
-	pluginSource.includes('this.language === "r"')
-		&& pluginSource.includes('editor.setRangeText("<-", editor.selectionStart, editor.selectionEnd, "end")'),
-	"R code-practice cells should support Alt+- for the assignment operator",
-);
+assert.ok(!pluginSource.includes('id: "open-code-practice"'));
+assert.ok(!pluginSource.includes("runCodePractice("));
 assert.ok(
 	pluginSource.includes('isRunning ? "运行中 · 点击停止"') && pluginSource.includes('this.plugin.stopTaskRun(run.id)'),
 	"running Dashboard actions should expose a manual stop control",

@@ -85,17 +85,6 @@ export const ACTIONS: readonly DashboardAction[] = [
 		reasoningEffort: "medium",
 	},
 	{
-		id: "code-practice",
-		label: "代码练习",
-		agent: "local-runtime",
-		description: "在独立视图中使用 Python/R 单元格。运行至当前单元格时会在新进程中累计重放前置代码，可逐格查看输出、停止任务并显式保存练习笔记。",
-		placeholder: "",
-		requiresInput: false,
-		writes: true,
-		enabled: true,
-		localView: true,
-	},
-	{
 		id: "vault-retrieval",
 		label: "知识库检索",
 		agent: "research-vault-retrieval",
