@@ -218,6 +218,15 @@ export class LLMProvider {
 	}
 }
 
+function responsesInput(messages: readonly ChatMessage[]) {
+	return messages.map(message => typeof message.content === "string" ? message : {
+		role: message.role,
+		content: message.content.map(part => part.type === "image_url"
+			? { type: "input_image", image_url: part.image_url.url }
+			: { type: "input_text", text: part.text }),
+	});
+}
+
 export class OpenAIProvider extends LLMProvider {
 	async headers(): Promise<Record<string, string>> {
 		return {
@@ -240,7 +249,7 @@ export class OpenAIProvider extends LLMProvider {
 			headers: await this.headers(),
 			body: {
 				model: request.model || this.config.model,
-				input: request.messages,
+				input: responsesInput(request.messages),
 				...request.gptAnnotation,
 				max_output_tokens: request.maxTokens || 256,
 				...(request.responseSchema ? { text: { format: { type: "json_schema", strict: true, ...request.responseSchema } } } : {}),
@@ -265,7 +274,7 @@ export class OpenAIProvider extends LLMProvider {
 			headers: await this.headers(),
 			body: {
 				model: request.model || this.config.model,
-				input: request.messages,
+				input: responsesInput(request.messages),
 				max_output_tokens: request.maxTokens || 256,
 				...(request.responseSchema ? { text: { format: { type: "json_schema", strict: true, ...request.responseSchema } } } : {}),
 				store: false,
@@ -294,7 +303,7 @@ export class OpenAIProvider extends LLMProvider {
 			headers: await this.headers(),
 			body: {
 				model: request.model || this.config.model,
-				input: request.messages,
+				input: responsesInput(request.messages),
 				max_output_tokens: request.maxTokens || 16,
 				store: false,
 				stream: true,

@@ -214,6 +214,21 @@ async function main() {
 	}
 	assert.strictEqual(typeof plugin.createLLMProvider("codex-cli").testConnection, "function");
 
+	const visionApi = require("./reading-test-helpers").loadReading("providers/profile.ts");
+	assert.equal(visionApi.profileSupportsQueryImage({type: "openai", capabilities: {vision: true}}), false);
+	assert.equal(visionApi.profileSupportsQueryImage({type: "openai", capabilities: {vision: true, visionConfigured: true}}), true);
+	const imageHost = makePlugin(profile);
+	const native = imageHost.createLLMProvider({ ...profile, type: "openai" });
+	const bodies = [];
+	imageHost.providerHttpRequest = async req => { bodies.push(req.body); return {status: 200, json: {output_text: "ok"}}; };
+	imageHost.providerHttpStream = async req => { bodies.push(req.body); };
+	const url = "data:image/png;base64,AA==";
+	const withImage = {messages: [{role: "user", content: [{type: "text", text: "Read the image"}, {type: "image_url", image_url: {url}}]}]};
+	await native.complete(withImage);
+	await native.stream(withImage, () => {});
+	for (const body of bodies) assert.deepEqual(body.input[0].content, [{type: "input_text", text: "Read the image"}, {type: "input_image", image_url: url}]);
+	assert.equal(bodies.length, 2);
+
 	const webProfile = { ...profile, type: "openai-compatible", baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" };
 	plugin.getTavilySecretValue = () => "test-tavily";
 	assert.equal(plugin.resolveWebSearchBackend({ ...webProfile, webSearch: "auto" }).kind, "native");

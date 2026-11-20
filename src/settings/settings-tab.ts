@@ -31,6 +31,8 @@ import {
 import {
 	makeProviderProfile,
 	modelHasKnownVisionSupport,
+	canConfigureVision,
+	profileSupportsQueryImage,
 	type ProfileWebSearchMode,
 	type ProviderProfile,
 } from "../providers/profile";
@@ -2452,14 +2454,14 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		new Setting(modelForm)
 			.setName("视觉输入")
 			.setDesc(
-				profile.type === "openai-compatible"
-							? `允许查询侧边栏发送最多 ${MAX_QUERY_IMAGE_ATTACHMENTS} 张 Vault 图片，并从问题中的 Obsidian/Wiki 笔记链接发现嵌入图片。`
-							: "视觉输入目前仅由 OpenAI 兼容适配器处理。",
+				canConfigureVision(profile.type)
+					? `允许查询侧边栏发送最多 ${MAX_QUERY_IMAGE_ATTACHMENTS} 张 Vault 图片，并从问题中的 Obsidian/Wiki 笔记链接发现嵌入图片。`
+					: "当前适配器不支持在知识库问答中发送图片。",
 			)
 			.addToggle((toggle) =>
 				toggle
-					.setValue(profile.capabilities.vision === true)
-					.setDisabled(profile.type !== "openai-compatible")
+					.setValue(profileSupportsQueryImage(profile))
+					.setDisabled(!canConfigureVision(profile.type))
 					.onChange(async (value) => {
 						profile.capabilities.vision = value;
 						profile.capabilities.visionConfigured = true;

@@ -24,10 +24,15 @@ export function modelHasKnownVisionSupport(model: unknown): boolean {
 	);
 }
 
+export function canConfigureVision(type: unknown): boolean {
+	return type === "openai" || type === "openai-compatible";
+}
+
 export function profileSupportsQueryImage(profile: unknown): boolean {
 	const source = asRecord(profile);
-	return source.type === "openai-compatible"
-		&& asRecord(source.capabilities).vision === true;
+	const caps = asRecord(source.capabilities);
+	return canConfigureVision(source.type) && caps.vision === true
+		&& (source.type !== "openai" || caps.visionConfigured === true);
 }
 
 export type ProfileWebSearchMode = "auto" | "off" | "native" | "tavily";
