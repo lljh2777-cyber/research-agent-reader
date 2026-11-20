@@ -3,7 +3,7 @@ import { setTimeout, clearTimeout } from "node:timers";
 import type AgentDashboardPlugin from "../plugin";
 import { ActionInputModal } from "../modals/action-input";
 import { ACTION_BY_ID } from "../actions";
-import { READING_VIEW_TYPE, type ReadingNode, type ReadingQuote, type ReadingSession, type ReadingWindow } from "../reading/types";
+import { READING_VIEW_TYPE, type ReadingEvidence, type ReadingNode, type ReadingQuote, type ReadingSession, type ReadingWindow } from "../reading/types";
 import { readingNode } from "../reading/session";
 import { readingCategory, readingSourceKey, readingTitle, recentReading, latestReading, sourceReadingDomain, type ReadingCategory, type ReadingDomain } from "../reading/catalog";
 import { readingEntryDomain } from "../reading/entry";
@@ -501,7 +501,15 @@ export class ReadingWorkspaceView extends ItemView {
 			if (evidence.length) {
 				const list = element(article, "div", "reading-answer-evidence");
 				element(list, "strong", "", "本步引用的图表与原文");
-				for (const e of evidence) button(list, e.label, () => this.showEvidence(node.id, e.id));
+				const supplied = node.providedImageIds?.length || node.evidence.some(item => item.visualInspected);
+				const status = supplied ? "本步已提供图像" : node.providedImageIds ? "本步依据正文和图注" : "旧会话未记录本步图像";
+				element(list, "small", "reading-evidence-location", status);
+				for (const item of evidence) {
+					const quote = item.text.replace(/^#+[^\n]*\n/, "").trim().replace(/\s+/g, " ");
+					const preview = quote.length > 160 ? quote.slice(0, 160) + "…" : quote;
+					const label = preview && preview !== item.label ? item.label + " · " + preview : item.label;
+					button(list, label, () => this.handle(this.openPaperEvidence(item)), "回到原文 · " + label);
+				}
 			}
 		}
 		const tools = element(article, "div", "reading-answer-tools");
@@ -772,6 +780,29 @@ export class ReadingWorkspaceView extends ItemView {
 		};
 		const submit = button(modal.contentEl, "打开并继续阅读", () => open(true)); const preview = button(modal.contentEl, "仅打开来源，不调用模型", () => open(false)); submit.classList.add("mod-cta"); modal.open();
 	}
+	private async openPaperEvidence(item: ReadingEvidence): Promise<void> {
+		const sessionId = this.sessionId;
+		const doc = await this.service.document(sessionId);
+		await doc.verify();
+		const current = doc.evidence.find(e => e.kind === "paper" && e.id === item.id);
+		if (!current) throw new Error("此条依据在当前原文中无法定位");
+		if (sessionId !== this.sessionId) return;
+		if (doc.source.kind === "pdf") {
+			if (!current.page) throw new Error("此条依据没有可定位的 PDF 页码");
+			const image = await doc.image({ ...current, asset: "pdf-page" });
+			if (!image) throw new Error("无法读取原文页");
+			if (sessionId !== this.sessionId) return;
+			const modal = this.modal("原文 · 第 " + current.page + " 页");
+			const page = element(modal.contentEl, "img");
+			page.src = image.dataUrl;
+			page.alt = "PDF 第 " + current.page + " 页";
+			page.style.maxWidth = "100%";
+			modal.open();
+		} else {
+			await this.plugin.openReadingEvidence(current.path, current.page, current.structured?.blockId, current.start);
+		}
+	}
+
 	private showEvidence(nodeId: string, evidenceId: string): void {
 		const sessionId = this.sessionId;
 		const pin = () => this.handle(this.service.repository.transact(sessionId, s => visitReadingEvidence(s, nodeId, evidenceId)));

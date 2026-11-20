@@ -3925,7 +3925,15 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	async openReadingEvidence(articlePath: string, page?: number, blockId?: string, offset?: number): Promise<void> {
 		if (isClipperPath(articlePath)) {
-			const view = await this.openClippedPaper(articlePath.split("/")[1]); if (offset !== undefined) await view.revealOffset(offset); return;
+			const view = await this.openClippedPaper(articlePath.split("/")[1]); if (offset !== undefined) await view.revealOffset(offset, articlePath.endsWith("zh-CN.md") ? "zh-CN" : "en"); return;
+		}
+		if (offset !== undefined && !page && !blockId) {
+			const file = this.app.vault.getAbstractFileByPath(articlePath);
+			if (!(file instanceof TFile) || file.extension !== "md") throw new Error("无法定位 Markdown 原文");
+			const content = await this.app.vault.read(file);
+			if (offset < 0 || offset >= content.length) throw new Error("原文位置已变化");
+			await this.app.workspace.getLeaf("tab").openFile(file, {eState: {line: content.slice(0, offset).split("\n").length - 1}});
+			return;
 		}
 		await this.activateMineruReaderView(articlePath);
 		const view = this.app.workspace.getLeavesOfType(MINERU_READER_VIEW_TYPE)[0]?.view;
