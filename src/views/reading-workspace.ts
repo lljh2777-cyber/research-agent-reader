@@ -750,13 +750,15 @@ export class ReadingWorkspaceView extends ItemView {
 		const kind = element(element(modal.contentEl, "label", "reading-field", "原文类型"), "select"); (code ? [["code", "Python/R 文件或项目目录"]] : [["pdf", "原始 PDF"], ["article", "已验证 MinerU article.md"], ["structured", "已保存 JATS article.md"]]).forEach(([value, label]) => { element(kind, "option", "", label).value = value; }); kind.disabled = code;
 		const sourceLocation = new ReadingSourceLocation(this.app, element(modal.contentEl, "div"), () => kind.value as ReadingSession["source"]["kind"]); const path = sourceLocation.input;
 		const close = modal.onClose.bind(modal); modal.onClose = () => { sourceLocation.dispose(); close(); };
-		const backend = element(element(modal.contentEl, "label", "reading-field", "讲解后端"), "select"); element(backend, "option", "", "Codex CLI").value = "codex-cli";
+		const backendOptions = code ? modal.contentEl : element(modal.contentEl, "details");
+		if (!code) element(backendOptions, "summary", "", "本次带读模型");
+		const backend = element(element(backendOptions, "label", "reading-field", "讲解后端"), "select"); element(backend, "option", "", "Codex CLI").value = "codex-cli";
 		this.plugin.getVerifiedProviderProfiles().forEach((profile) => { element(backend, "option", "", profile.name + " · " + profile.model).value = profile.id; });
-		const model = element(element(modal.contentEl, "label", "reading-field", "Codex 模型（可选）"), "input"); model.placeholder = "留空使用配置中的模型";
+		const model = element(element(backendOptions, "label", "reading-field", "Codex 模型（可选）"), "input"); model.placeholder = "留空使用配置中的模型";
 		backend.onchange = () => { model.parentElement!.hidden = backend.value !== "codex-cli"; };
 		if (entry?.source) { kind.value = entry.source.kind; path.value = entry.source.path; }
 		kind.onchange = () => sourceLocation.refresh(); sourceLocation.refresh();
-		const preferred = entry?.backend || (kind.value !== "code" && (this.plugin.settings.sceneProfiles?.reading || this.plugin.settings.activeProviderId));
+		const preferred = entry?.backend || (kind.value !== "code" && (this.plugin.settings.sceneProfiles?.reading || "codex-cli"));
 		if (preferred && [...backend.options].some(option => option.value === preferred)) backend.value = preferred;
 		model.parentElement!.hidden = backend.value !== "codex-cli";
 		const startNew = element(modal.contentEl, "label", "reading-new-session-option"); const forceNew = element(startNew, "input"); forceNew.type = "checkbox"; element(startNew, "span", "", "为同一原文重新建立会话");

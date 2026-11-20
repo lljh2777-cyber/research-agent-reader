@@ -352,17 +352,20 @@ export class AnnotationPopover extends Component {
 				if (isCurrent()) { generating = false; this.cancelGeneration = null; refresh(); }
 			}
 		};
-		const retryProfile = explanationPanel?.createEl("select", { attr: { "aria-label": "本次批注使用的模型" } });
+		const gptPanel = explanationPanel.createDiv({ cls: "agent-annotation-gpt-options" });
+		const advanced = explanationPanel.createEl("details");
+		advanced.createEl("summary", {text: "更多模型设置"});
+		const retryProfile = advanced.createEl("select", { attr: { "aria-label": "本次批注使用的模型" } });
 		retryProfile?.createEl("option", { value: "", text: "使用批注默认模型" });
 		const profiles = this.service.explanationProfiles?.() || [];
 		for (const profile of profiles) retryProfile?.createEl("option", { value: profile.id, text: profile.name + " · " + profile.model });
-		const gptPanel = explanationPanel.createDiv({ cls: "agent-annotation-gpt-options" });
-		const selectField = (label: string) => {
-			const field = gptPanel.createEl("label");
+		const tuning = advanced.createDiv({ cls: "agent-annotation-gpt-options" });
+		const selectField = (label: string, parent = tuning) => {
+			const field = parent.createEl("label");
 			field.createSpan({ text: label });
 			return field.createEl("select", { attr: { "aria-label": label } });
 		};
-		const model = selectField("GPT 模型"), speed = selectField("处理速度");
+		const model = selectField("GPT 模型", gptPanel), speed = selectField("处理速度");
 		const brief = selectField("简短释义思考强度"), expanded = selectField("展开解释思考强度");
 		const searchLabel = gptPanel.createEl("label");
 		const search = searchLabel.createEl("input", { type: "checkbox" });
@@ -374,7 +377,8 @@ export class AnnotationPopover extends Component {
 		};
 		const syncModel = () => {
 			const active = supportsGptAnnotations(model.value);
-			for (const control of [speed, brief, expanded, search]) control.parentElement!.hidden = !active;
+			tuning.hidden = !active;
+			searchLabel.hidden = !active;
 			const { speeds, efforts } = gptOptions(model.value);
 			fill(speed, speeds, speeds.includes(speed.value) ? speed.value : "default", { default: "标准", fast: "Fast", ultrafast: "Ultrafast" });
 			fill(brief, efforts, efforts.includes(brief.value) ? brief.value : "medium");
@@ -384,6 +388,7 @@ export class AnnotationPopover extends Component {
 			const id = retryProfile?.value || this.service.defaultExplanationProfileId?.();
 			const profile = profiles.find(p => p.id === id);
 			gptPanel.hidden = profile?.type !== "openai";
+			tuning.hidden = gptPanel.hidden;
 			if (!profile || gptPanel.hidden) return;
 			fill(model, [...new Set([profile.model, ...GPT_ANNOTATION_MODELS])], profile.model);
 			syncModel();

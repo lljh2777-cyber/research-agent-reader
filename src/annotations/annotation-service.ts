@@ -829,7 +829,7 @@ export class AnnotationService {
 
 	explanationProfiles() { return this.plugin.getVerifiedProviderProfiles(); }
 
-	defaultExplanationBackend() { return this.plugin.settings.sceneProfiles?.annotation || this.plugin.settings.annotationBackendId || "auto"; }
+	defaultExplanationBackend() { return this.plugin.settings.annotationBackendId || "auto"; }
 	defaultExplanationProfileId() {
 		const backend = this.defaultExplanationBackend();
 		return backend === "auto" ? this.plugin.settings.activeProviderId : backend;

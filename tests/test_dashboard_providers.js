@@ -151,7 +151,8 @@ async function main() {
 	const migrationPlugin = new AgentDashboardPlugin();
 	migrationPlugin.loadData = async () => ({
 		settings: {
-			annotationBackendId: "provider-qwen",
+			annotationBackendId: "claude-code",
+			sceneProfiles: { annotation: "provider-qwen", reading: "codex-cli" },
 			annotationWebSearchEnabled: true,
 			toolkitRoot: path.resolve(__dirname, "../.."),
 			providerProfiles: [{
@@ -169,6 +170,7 @@ async function main() {
 	});
 	migrationPlugin.saveData = async () => {};
 	await migrationPlugin.loadSettings();
+	assert.deepEqual(migrationPlugin.settings.sceneProfiles, { reading: "codex-cli" });
 	assert.equal(migrationPlugin.settings.annotationBackendId, "provider-qwen", "web annotations must preserve an explicitly selected API across reload");
 	assert.equal(migrationPlugin.sanitizeSettingsForStorage().annotationBackendId, "provider-qwen");
 	assert.strictEqual(

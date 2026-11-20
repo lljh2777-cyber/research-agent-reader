@@ -1,3 +1,4 @@
+import { supportsGptAnnotations } from "../annotations/gpt-options";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ROLE_LABELS, type RetrievalMode } from "../retrieval/types";
@@ -1616,37 +1617,33 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			(profile) => profile.lastTest?.ok,
 		);
 		const backendId = this.plugin.settings.annotationBackendId || "auto";
-		new Setting(containerEl)
-			.setName("执行后端")
-			.setDesc(
-				this.plugin.settings.annotationWebSearchEnabled
-					? "Direct API 可使用供应商原生联网或 Tavily；自动模式优先选择已就绪的默认 Direct API，否则使用 Codex CLI。"
-					: "普通解释可自由选择 Agent 或已验证的 Direct API；自动模式优先使用默认 Direct API。",
-			)
-			.addDropdown((dropdown) => {
-				dropdown
-					.addOption("auto", "自动选择")
-					.addOption("codex-cli", "Agent · Codex CLI")
-					.addOption("claude-code", "Agent · Claude Code")
-					.addOption("opencode", "Agent · OpenCode")
-					.addOption("codebuddy", "CLI · CodeBuddy")
-					.addOption("qoderclicn", "CLI · Qoder CLI CN");
-				verifiedProfiles.forEach((profile) => {
-					dropdown.addOption(profile.id, `Direct API · ${profile.name}`);
-				});
-				dropdown
-					.setValue(backendId)
-					.onChange(async (value) => {
-						this.plugin.settings.annotationBackendId = value;
-						await this.plugin.saveSettings();
-						this.display();
-					});
-			});
+		const selectBackend = async (id: string) => {
+			if (!id) return;
+			this.plugin.settings.annotationBackendId = id;
+			await this.plugin.saveSettings();
+			this.display();
+		};
+		const selected = verifiedProfiles.find(profile => profile.id === backendId);
+		new Setting(containerEl).setName("默认批注配置").addDropdown(drop => {
+			if (!selected) drop.addOption(backendId, backendId === "auto" ? "自动选择" : backendId);
+			for (const profile of verifiedProfiles) drop.addOption(profile.id, profile.name + " · " + profile.model);
+			drop.setValue(backendId).onChange(selectBackend);
+		});
+		const advanced = containerEl.createEl("details");
+		advanced.createEl("summary", {text: "高级批注设置"});
+		containerEl = advanced;
+		new Setting(advanced).setName("其他批注后端").addDropdown(drop => {
+			drop.addOption("", "选择其他后端");
+			for (const [id, label] of [["auto", "自动选择"], ["codex-cli", "Codex CLI"], ["claude-code", "Claude Code"], ["opencode", "OpenCode"], ["codebuddy", "CodeBuddy"], ["qoderclicn", "Qoder CLI CN"]]) drop.addOption(id, label);
+			drop.setValue(selected ? "" : backendId).onChange(selectBackend);
+		});
 		if (backendId === "codebuddy" || backendId === "qoderclicn" || (backendId === "opencode" && this.plugin.settings.openCodeConfigSource === "official" && !this.plugin.settings.annotationWebSearchEnabled)) {
 			this.renderNativeAnnotationCliSettings(containerEl, backendId);
 			return;
 		}
-		this.renderAnnotationWebSearchSettings(containerEl, backendId);
+		if (selected?.type === "openai" && supportsGptAnnotations(selected.model)) {
+			new Setting(containerEl).setName("批注联网").setDesc("默认关闭。可在批注弹窗为本次提问开启 GPT 原生搜索。");
+		} else this.renderAnnotationWebSearchSettings(containerEl, backendId);
 
 		if (backendId === "auto") {
 			const activeProfile = verifiedProfiles.find(profile => profile.id === this.plugin.settings.activeProviderId);
@@ -1670,7 +1667,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		if (!profile) {
 			new Setting(containerEl)
 				.setName("配置不可用")
-				.setDesc("所选 Direct API 未通过连接测试，保存后会自动回退到“自动选择”。");
+				.setDesc("所选 Direct API 未通过连接测试，请重新测试或选择其他配置。");
 			return;
 		}
 		this.createProviderSectionHeader(
@@ -2012,13 +2009,13 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			"先选择已有配置或新建配置，再按页面顺序填写供应商、凭据、endpoint 和模型。",
 		);
 		const profiles = this.plugin.settings.providerProfiles;
-		for (const [scene, label] of [["annotation", "批注提问"], ["reading", "全文带读"], ["query", "库内问答"]] as const) {
+		for (const [scene, label] of [["reading", "全文带读"], ["query", "库内问答"]] as const) {
 			new Setting(containerEl).setName(label + "使用的模型").addDropdown(drop => {
-				drop.addOption("", "共用默认模型");
-				for (const profile of profiles.filter(item => item.lastTest?.ok)) drop.addOption(profile.id, profile.name);
-				drop.setValue(this.plugin.settings.sceneProfiles[scene] || "").onChange(async id => {
+				if (scene === "reading") drop.addOption("codex-cli", "Codex CLI");
+				else drop.addOption("", "共用默认模型");
+				for (const profile of profiles.filter(item => item.lastTest?.ok)) drop.addOption(profile.id, profile.name + " · " + profile.model);
+				drop.setValue(this.plugin.settings.sceneProfiles[scene] || (scene === "reading" ? "codex-cli" : "")).onChange(async id => {
 					this.plugin.settings.sceneProfiles[scene] = id;
-					if (scene === "annotation" && !id) this.plugin.settings.annotationBackendId = "auto";
 					await this.plugin.saveSettings();
 				});
 			});

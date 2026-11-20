@@ -16,7 +16,7 @@
 	const setting = name => [...mount.querySelectorAll(".setting-item")].find(el => el.querySelector(".setting-item-name")?.textContent === name);
 	try {
 		tab.display();
-		const dropdown = setting("执行后端").querySelector("select");
+		const dropdown = setting("默认批注配置").querySelector("select");
 		check(dropdown.value === profile.id && ![...dropdown.options].find(o => o.value === profile.id).disabled, "Direct API must be selectable while web is enabled");
 		check(!mount.textContent.includes("启用后仅使用 Agent"), "obsolete CLI-only copy removed");
 		const toggle = setting("浅层联网解释").querySelector(".checkbox-container");
@@ -28,7 +28,7 @@
 		check(setting("联网方式").textContent.includes("Tavily 搜索"), "explicit Tavily choice reflected in UI");
 		shim.getTavilySecretValue = () => ""; tab.display();
 		check(setting("联网方式").textContent.includes("联网未就绪") && settings.annotationBackendId === profile.id, "missing key is explained without switching backend");
-		const select = setting("执行后端").querySelector("select"); select.value = "auto"; select.dispatchEvent(new win.Event("change")); await new Promise(resolve => win.setTimeout(resolve, 10));
+		const select = setting("其他批注后端").querySelector("select"); select.value = "auto"; select.dispatchEvent(new win.Event("change")); await new Promise(resolve => win.setTimeout(resolve, 10));
 		check(setting("自动选择顺序").textContent.includes("当前使用 Codex CLI"), "automatic fallback described accurately");
 		shim.getTavilySecretValue = () => "test-only-placeholder"; tab.display();
 		check(setting("自动选择顺序").textContent.includes("通过Tavily 搜索"), "automatic mode can use Tavily");

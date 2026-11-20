@@ -217,7 +217,7 @@ export interface DashboardSettings {
 	actionExecutionDefaults: Record<string, ActionExecutionDefault>;
 	queryDefaultBackendId: string;
 	queryDefaultRetrievalMode: "vault" | "web";
-	sceneProfiles: Partial<Record<"annotation" | "reading" | "query", string>>;
+	sceneProfiles: Partial<Record<"reading" | "query", string>>;
 	activeProviderId: string;
 	providerProfiles: ProviderProfile[];
 	providerTimeoutSeconds: number;

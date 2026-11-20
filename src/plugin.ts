@@ -1065,7 +1065,9 @@ export default class AgentDashboardPlugin extends Plugin {
 			: [];
 		this.settings.providerProfiles = normalizedProfiles;
 		this.settings.sceneProfiles = {};
-		for (const scene of ["reading", "query", "annotation"] as const) {
+		const previousAnnotation = asRecord(storedSettings.sceneProfiles).annotation;
+		if (typeof previousAnnotation === "string" && previousAnnotation) this.settings.annotationBackendId = previousAnnotation;
+		for (const scene of ["reading", "query"] as const) {
 			const id = asRecord(storedSettings.sceneProfiles)[scene];
 			if (typeof id === "string" && id) this.settings.sceneProfiles[scene] = id;
 		}
@@ -1104,7 +1106,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!this.settings.toolkitRoot) {
 			this.settings.toolkitRoot = this.inferToolkitRoot();
 		}
-		let changed = migratedLegacyKeys;
+		let changed = migratedLegacyKeys || typeof previousAnnotation === "string";
 		// Resume only explicitly journaled cleanup. A canonical sidecar without a
 		// matching marker remains recovery data and is never swept merely because
 		// data.json is temporarily incomplete or restored from an older copy.
@@ -1375,16 +1377,6 @@ export default class AgentDashboardPlugin extends Plugin {
 		}
 		if (!REASONING_OPTIONS.some((option) => option.id === this.settings.openCodeReasoningEffort)) {
 			this.settings.openCodeReasoningEffort = DEFAULT_SETTINGS.openCodeReasoningEffort;
-			changed = true;
-		}
-		const annotationBackendId = String(this.settings.annotationBackendId || "auto");
-		if (
-			!["auto", "codex-cli", "claude-code", "opencode", "codebuddy", "qoderclicn"].includes(annotationBackendId)
-			&& !normalizedProfiles.some(
-				(profile) => profile.id === annotationBackendId && profile.lastTest?.ok,
-			)
-		) {
-			this.settings.annotationBackendId = "auto";
 			changed = true;
 		}
 		if (!REASONING_OPTIONS.some((option) => option.id === this.settings.annotationCodexReasoningEffort)) {
