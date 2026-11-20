@@ -23,6 +23,12 @@ function fixture(backend, settings = {}) {
 const base = { profile, system: "Explain a selected phrase.", user: "Local context", query: "a query", maxTokens: 900, timeoutMs: 1000, registerCancel: () => {} };
 
 (async () => {
+	const { argumentPassages } = loadReading("annotations/argument-context.ts");
+	const sections = ["# Results","Clustering improved (Fig. 3b).", ...Array.from({length: 15}, (_,i) => "Filler paragraph " + i + "."), "**Fig. 30.** Unrelated curve.", "**Fig. 3.** Cluster sizes across samples.", "# Methods", "### Clustering", "We grouped the records using a cosine distance."];
+	const passages = argumentPassages(sections.join("\n\n"), "Clustering improved", undefined).join("\n");
+	assert.match(passages,/Cluster sizes/);
+	assert.match(passages,/cosine distance/);
+	assert.doesNotMatch(passages,/Unrelated curve/);
 	const gpt = fixture();
 	const gptProfile = { ...profile, secretId: "fixture", type: "openai", model: "gpt-6.2-sol", baseUrl: "https://api.openai.com" };
 	const bodies = [];

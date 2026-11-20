@@ -827,6 +827,24 @@ export class AnnotationService {
 		};
 	}
 
+	async openContextQuote(source: Pick<AnnotationSelection, "sourcePath" | "selectedText" | "bilingual">, paragraph: number, quote: string): Promise<void> {
+		const proof = source.bilingual;
+		const doc = await verifyBilingual(this.app, { ...source, sourceAnchor: proof && { ...proof.selection, prefix: "", suffix: "" } });
+		const path = doc?.files.en.path || source.sourcePath;
+		const text = doc?.files.en.text ?? await this.sourceText(path);
+		const block = parseBilingualMarkdown(text).blocks[paragraph - 1];
+		const raw = block && text.slice(block.start, block.end);
+		const at = raw?.indexOf(quote) ?? -1;
+		if (!block || !quote || at < 0 || raw!.indexOf(quote, at + 1) >= 0) throw new Error("当前原文无法唯一核对这句引文，请重新展开解释");
+		const offset = block.start + at;
+		if (isClipperPath(path)) await this.plugin.openReadingEvidence(path, undefined, undefined, offset);
+		else {
+			const file = this.app.vault.getAbstractFileByPath(path);
+			if (!(file instanceof TFile)) throw new Error("原文文件不存在");
+			await this.app.workspace.getLeaf("tab").openFile(file, { eState: { line: text.slice(0, offset).split("\n").length - 1 } });
+		}
+	}
+
 	explanationProfiles() { return this.plugin.getVerifiedProviderProfiles(); }
 
 	defaultExplanationBackend() { return this.plugin.settings.annotationBackendId || "auto"; }
@@ -889,7 +907,7 @@ export class AnnotationService {
 		let passages: string[] = [];
 		if (request.depth === "context") {
 			const original = verified?.files.en.text || await this.sourceText(selection.sourcePath);
-			passages = argumentPassages(original, proof?.english?.text || selection.selectedText, proof?.english?.start ?? selection.sourceStart);
+			passages = argumentPassages(original, proof?.english?.text || selection.selectedText, proof?.english?.start ?? selection.sourceStart, question);
 			if (!passages.length) throw new Error("无法唯一定位所选文字，请回原文重新划选");
 		}
 		const sentences = contextSentences(nativeText ? [] : passages);

@@ -290,7 +290,25 @@ export class AnnotationPopover extends Component {
 				preview.empty();
 				const [brief, ...rest] = ai.value.split(EXPLANATION_DIVIDER);
 				void MarkdownRenderer.render(this.app, brief, preview, source.sourcePath, this);
-				if(rest.length){ const section=preview.createEl("details"); section.open=showContext; section.createEl("summary",{text:"查看上下文解释"}); void MarkdownRenderer.render(this.app,rest.join(EXPLANATION_DIVIDER),section.createDiv(),source.sourcePath,this); }
+				if (rest.length) {
+					const section = preview.createEl("details");
+					section.open = showContext;
+					section.createEl("summary", { text: "查看上下文解释" });
+					const context = rest.join(EXPLANATION_DIVIDER);
+					const divider = "\n\n原文依据\n";
+					const at = context.lastIndexOf(divider);
+					const rows = at < 0 ? [] : context.slice(at + divider.length).split(/\n\n(?=\[段 )/).map(row => /^\[段 (\d+) 句 \d+\] ([\s\S]+)$/.exec(row));
+					const linked = rows.length > 0 && rows.every(row => row);
+					void MarkdownRenderer.render(this.app, linked ? context.slice(0,at) : context, section.createDiv(), source.sourcePath, this);
+					if (linked) {
+						section.createEl("strong", {text: "原文依据"});
+						for (const row of rows) {
+							const quote = row![2].trim();
+							const button = section.createEl("button", {cls:"rar-quote-link",text: row![0], attr:{type:"button",title:"回到引句所在段落"}});
+							button.onclick = () => void this.service.openContextQuote(source, Number(row![1]), quote).catch(error => showMessage(displayError(error)));
+						}
+					}
+				}
 			}
 		};
 		const refresh = () => {
