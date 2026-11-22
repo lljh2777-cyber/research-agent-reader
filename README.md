@@ -2,7 +2,7 @@
 
 Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据为基础的科研文献阅读与知识沉淀：保存可靠来源、逐步理解论文、核对依据，并将有价值的阅读内容整理为可复用笔记。
 
-`0.93.13` 中英对照阅读时可划选原句写批注或开讨论分支。Codex 回答在原段下方展开，支持追问、子分支和重开续读。[发布说明](docs/releases/0.93.13.md)
+`0.93.14` 中英对照页的「本文思路」按原句和实际发起问题的轮次展示讨论。点击原句可高亮选段，点击问题可回到正文继续读这一轮。[发布说明](docs/releases/0.93.14.md)
 
 `0.93.0` 可以在文献库直接阅读 Paper Clipper 目录，按段中英对照，从本周阅读继续，按已读、批注或提问找回知识点。[发布说明](docs/releases/0.93.0.md)
 
@@ -86,9 +86,9 @@ Research Agent Reader 是一个桌面端 Obsidian 插件，面向以原文证据
 
 [R0 工程开发已收尾](docs/r0-closeout.md)：文献聚合、人工决定存储与旧资料兼容成为本次导航基础；3 篇论文、18 题的固定样本和首次回答仍保留。独立人工科学审阅尚未完成，工程检查不代表模型回答质量通过。`pnpm test:r0` 可运行专用回归。
 
-> 受限试用版本：`0.93.13`。安装文件见
-> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.93.13)，
-> 更新范围与验收边界见[发布说明](docs/releases/0.93.13.md)。
+> 受限试用版本：`0.93.14`。安装文件见
+> [GitHub Release](https://github.com/lljh2777-cyber/research-agent-reader/releases/tag/0.93.14)，
+> 更新范围与验收边界见[发布说明](docs/releases/0.93.14.md)。
 > 尚未上架 Obsidian 社区插件目录。
 
 `0.76.0` 新增 [R3.8 学习摘录补充](docs/answer-excerpt-curation-r38.md)：从学习回答摘录分别选择 AI 片段、人工修订与备注，预览后补充到已有概念、方法或综合笔记；保留内容角色，复用修订恢复与撤销。学习文本块排除本插件的正式证据检索，不据此补写论文来源笔记。

@@ -6729,7 +6729,7 @@ body.agent-dashboard-mineru-resizing {
 
 /* Keep discussions in the reading column containing their source, including narrow splits. */
 .rar-inline-thread { margin: .25em 0 1.1em; font: var(--font-ui-small) / 1.55 var(--font-interface); color: var(--text-normal); }
-.rar-inline-thread button, .rar-paper-index button { white-space: normal; height: auto; text-align: start; overflow-wrap: anywhere; }
+.rar-inline-thread button { white-space: normal; height: auto; text-align: start; overflow-wrap: anywhere; }
 .rar-thread-chip,.rar-note-chip { max-width: 100%; margin: 2px 5px 2px 0; }
 .rar-inline-thread .rar-thread-chip { border-inline-start: 3px solid var(--interactive-accent); }
 .rar-discussion,.rar-discussion-form { padding: 12px 15px; margin-block: 8px; border-inline-start: 2px solid var(--interactive-accent); background: var(--background-secondary); border-radius: 0 8px 8px 0; overflow-wrap: anywhere; }
@@ -6739,10 +6739,26 @@ body.agent-dashboard-mineru-resizing {
 .rar-thread-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .rar-discussion-form textarea { display: block; width: 100%; margin-bottom: 8px; resize: vertical; }
 .rar-discussion-form button { margin-inline-end: 6px; }
-.rar-paper-index { position: relative; }
-.rar-paper-index summary { cursor: pointer; }
-.rar-paper-index > div { position: absolute; inset-inline-end: 0; z-index: 8; width: min(340px,70vw); max-height: 48vh; overflow: auto; padding: 10px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 8px; box-shadow: var(--shadow-s); }
-.rar-paper-index button { width: 100%; margin-block: 2px; }
-.rar-paper-index .is-child { margin-inline-start: 1em; width: calc(100% - 1em); }
-
-.rar-paper-index button[aria-current="true"] { color: var(--text-accent); background: var(--background-modifier-hover); }
+/* Beside the two text columns; use an overlay when the reading pane is narrow. */
+.rar-map-stage { flex: 1 1 0; min-height: 0; min-width: 0; display: flex; position: relative; container-type: inline-size; }
+.rar-map-stage > .agent-bilingual-workspace { min-width: 0; }
+.rar-paper-map { flex: 0 0 clamp(248px, 22%, 340px); min-width: 0; overflow: auto; overscroll-behavior: contain; padding: 12px; background: var(--background-primary); border-inline-start: 1px solid var(--background-modifier-border); }
+.rar-paper-map[hidden] { display: none; }
+.rar-map-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.rar-paper-map ul { list-style: none; padding: 0; margin: 0; }
+.rar-paper-map li { list-style: none; margin: 0; }
+.rar-map-node > ul { border-inline-start: 1px solid var(--background-modifier-border); margin-inline-start: 9px; padding-inline-start: 7px; }
+.rar-map-line { position: relative; display: grid; grid-template-columns: 18px minmax(0,1fr); align-items: start; margin-block: 4px; }
+.rar-map-line::before { content: ""; position: absolute; inset-inline-start: -7px; top: 13px; width: 7px; border-top: 1px solid var(--background-modifier-border); }
+.rar-map-tree > li > .rar-map-line::before { display: none; }
+.rar-paper-map .rar-map-arrow, .rar-paper-map .rar-map-target { box-shadow: none; height: auto; border: 0; background: transparent; color: var(--text-normal); }
+.rar-paper-map .rar-map-arrow { padding: 3px 0; width: 18px; color: var(--text-muted); }
+.rar-paper-map .rar-map-target { grid-column: 2; display: grid; justify-items: start; gap: 2px; min-width: 0; width: 100%; padding: 4px 6px; white-space: normal; overflow-wrap: anywhere; text-align: start; line-height: 1.45; }
+.rar-paper-map .rar-map-target:hover { background: var(--background-modifier-hover); }
+.rar-map-target .rar-map-caption, .rar-map-target .rar-map-answer { font-size: var(--font-ui-smaller); color: var(--text-muted); }
+.rar-map-line.is-path .rar-map-caption { color: var(--text-accent); }
+.rar-paper-map .rar-map-target[aria-current] { background: var(--background-secondary); box-shadow: inset 2px 0 var(--interactive-accent); }
+.rar-discussion .is-current-turn { color: var(--text-accent); }
+@container (width < 1040px) {
+	.rar-paper-map { position: absolute; z-index: 5; inset-block: 0; inset-inline-end: 0; width: min(340px, 90%); box-shadow: var(--shadow-s); }
+}

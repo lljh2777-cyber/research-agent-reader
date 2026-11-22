@@ -130,6 +130,7 @@ export interface ReadingSession {
 	lastOpenedAt?: string;
 	ui: {
 		inlineBranchId?: string;
+		inlineFocusId?: string;
 		webDrafts?: Record<string, boolean>;
 		mode: "split" | "map"; hideMap?: boolean; split: number; selectedId: string;
 		mainFocusId?: string; mainScroll?: number; pendingQuote?: ReadingQuote;

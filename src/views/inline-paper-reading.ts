@@ -9,6 +9,8 @@ import type { AnnotationOrigin, ReadingBranch, ReadingSession } from "../reading
 import type { ReadingWorkspaceService } from "../reading/workspace";
 import type { BilingualReader } from "./bilingual-reader";
 
+import { PaperDiscussionMap, type MapPassage } from "./paper-discussion-map";
+
 interface Passage { lang: BilingualLanguage; start: number; end: number; digest: string }
 interface Place { passage: Passage; element: HTMLElement; blockStart: number; blockEnd: number }
 type Composer = { place: Place; selection?: AnnotationSelection; parent?: string; child?: boolean; value: string };
@@ -27,15 +29,20 @@ export class InlinePaperReading {
 	private notes: AnnotationRecord[] = [];
 	private readonly targets = new Map<string, HTMLElement>();
 	private readonly mounts = new Map<HTMLElement, HTMLElement>();
-	private readonly index: HTMLDetailsElement;
-	private readonly links: HTMLElement;
+	private selected = "";
+	private readonly map: PaperDiscussionMap;
+	private readonly origins = new Map<string, Place>();
+	private readonly turns = new Map<string, HTMLElement>();
+	private answerLayouts: Promise<void>[] = [];
 	private renderer = new Component();
 	constructor(readonly reader: BilingualReader, toolbar: HTMLElement, private annotations: AnnotationService,
 		private workspace: ReadingWorkspaceService, private canonical: () => Promise<{ key: string; aliases: string[] }>,
 		private edit: (record: AnnotationRecord, rect: DOMRect) => void) {
-		this.index = toolbar.createEl("details", {cls:"rar-paper-index"});
-		this.index.createEl("summary", {text:"本文思路"});
-		this.links = this.index.createDiv();
+		const body = reader.options.host.querySelector<HTMLElement>(".agent-bilingual-workspace")!;
+		this.map = new PaperDiscussionMap(toolbar, body, (id, kind) => {
+			if (kind === "turn" && this.session) this.reveal(this.session.id, id);
+			if (kind === "passage") this.revealPassage(id);
+		});
 		this.renderer.load();
 		this.indexTargets();
 	}
@@ -58,14 +65,17 @@ export class InlinePaperReading {
 	}
 	async start() {
 		const {app} = this.reader.options;
-		const clean = () => { this.renderer.unload(); for (const mount of this.mounts.values()) mount.remove(); this.index.remove(); };
+		const clean = () => { this.renderer.unload(); for (const mount of this.mounts.values()) mount.remove(); this.map.dispose(); };
 		this.signal.addEventListener("abort",clean,{once:true});
 		const { key, aliases } = await this.canonical();
 		this.key = key;
 		this.paths = [this.doc.files.en.path, this.doc.files["zh-CN"].path, key, key.replace(/\/paper\.md$/, "/paper.zh-CN.md"), ...aliases];
 		await this.workspace.ready();
 		if (this.signal.aborted) return;
-		this.opened = this.session?.ui.inlineBranchId || "";
+		const current = this.session;
+		this.opened = current?.ui.inlineBranchId || "";
+		const branch = current?.branches.find(b => b.id === this.opened);
+		this.selected = current?.ui.inlineFocusId || branch?.nodeIds[branch.nodeIds.length - 1] || current?.ui.selectedId || "";
 		const unsub = this.workspace.repository.subscribe(id => { if (this.session?.id === id) this.render(); });
 		let timer = 0, revision = 0;
 		const loadNotes = async () => {
@@ -100,6 +110,9 @@ export class InlinePaperReading {
 		if (a.englishDigest!==this.doc.files.en.revision.digest) return;
 		if (a.selection) return this.place(a.selection);
 		const lang=a.chinese?"zh-CN":"en", file=this.doc.files[lang];
+		if (!file.text.startsWith(a.selected, a.at) && this.doc.files.en.text.startsWith(a.selected, a.englishStart)) {
+			return this.place({lang:"en",start:a.englishStart,end:a.englishStart+a.selected.length,digest:a.englishDigest});
+		}
 		const end=file.text.startsWith(a.selected,a.at)?a.at+a.selected.length:a.at;
 		return this.place({lang,start:a.at,end,digest:a.digest});
 	}
@@ -123,17 +136,44 @@ export class InlinePaperReading {
 			selection?.removeAllRanges();
 			selection?.addRange(range);
 		}
+		if (select && !range) new Notice("已定位段落，无法唯一高亮原选句");
 		this.reader.focusDiscussion(lang, place.element, range || undefined);
 	}
-	private remember(id:string) {
-		this.opened=id;const s=this.session;
-		if(s && s.ui.inlineBranchId!==id) void this.workspace.repository.transact(s.id,d=>{d.ui.inlineBranchId=id; d.lastOpenedAt=new Date().toISOString();}).catch(e=>new Notice(String(e)));
+	private remember(branchId: string, focusId: string) {
+		this.opened = branchId;
+		this.selected = focusId;
+		const s = this.session;
+		if (!s || (s.ui.inlineBranchId === branchId && s.ui.inlineFocusId === focusId)) return;
+		void this.workspace.repository.transact(s.id, draft => {
+			draft.ui.inlineBranchId = branchId;
+			draft.ui.inlineFocusId = focusId;
+			draft.lastOpenedAt = new Date().toISOString();
+		}).catch(e => new Notice(String(e)));
+	}
+	private revealPassage(id: string) {
+		const place = this.origins.get(id);
+		if (!place || this.reader.stale) { new Notice("原文已变化，请重新打开核对"); return; }
+		this.composer = undefined;
+		this.remember("", id);
+		this.render(true);
+		this.focus(place, true);
 	}
 	reveal(sessionId:string,nodeId:string):boolean {
 		const s=this.session;if (!s || s.id!==sessionId) return false;
 		const b=s.branches.find(b=>b.nodeIds.includes(nodeId)), origin=readingAnnotationOrigin(s,nodeId), place=origin && this.originPlace(origin);
 		if (!b || !place) return false;
-		this.composer=undefined;this.remember(b.id);this.index.open=false;this.render(true);this.focus(place);return true;
+		this.composer = undefined;
+		this.remember(b.id, nodeId);
+		this.render(true);
+		const focusTurn = () => {
+			const turn = this.turns.get(nodeId);
+			if (this.selected !== nodeId || this.reader.stale || !turn?.isConnected) return;
+			this.reader.focusDiscussion(place.passage.lang, turn);
+		};
+		this.turns.get(nodeId)?.focus({preventScroll: true});
+		focusTurn();
+		void Promise.all(this.answerLayouts).then(() => requestAnimationFrame(focusTurn));
+		return true;
 	}
 	async composeSelection() {
 		const selection=await this.annotations.captureSelection(), proof=selection.bilingual;
@@ -152,7 +192,11 @@ export class InlinePaperReading {
 		const signature=JSON.stringify(s?.nodes.map(n=>[n.id,n.status,n.title,n.content.length,n.error]));
 		if(!force && signature===this.signature)return;
 		this.signature=signature || "";this.renderer.unload();this.renderer=new Component();this.renderer.load();
-		for(const m of this.mounts.values())m.remove();this.mounts.clear();this.links.empty();
+		for(const m of this.mounts.values())m.remove();this.mounts.clear();
+		this.origins.clear();
+		this.turns.clear();
+		this.answerLayouts = [];
+		const passages: MapPassage[] = [];
 		const indexed=new Set<string>();
 		for(const branch of s?.branches || []) {
 			const first=s!.nodes.find(n=>n.id===branch.nodeIds[0]);if(!first)continue;
@@ -161,12 +205,18 @@ export class InlinePaperReading {
 			indexed.add(origin.id);
 			const label=first.question||first.title;
 			const open=()=>this.reveal(s!.id,branch.nodeIds[branch.nodeIds.length-1]);
-			const link=button(this.links,label,open);if(!branch.annotation)link.classList.add("is-child");
-			if (this.opened === branch.id) link.setAttribute("aria-current", "true");
-			if(branch.annotation)button(this.mount(place),label+" · "+branch.nodeIds.length+" 轮",open,"rar-thread-chip");
+			if (branch.annotation) {
+				this.origins.set(origin.id, place);
+				const file = this.doc.files[place.passage.lang];
+				const block = file.blocks.find(b => b.start === place.blockStart);
+				const heading = block && file.blocks.find(b => b.kind === "heading" && b.chapter === block.chapter);
+				const chapter = heading ? annotationDisplayText(file.text.slice(heading.start, heading.end)).replace(/^#+\s*/, "").trim() : "";
+				passages.push({id: origin.id, quote: annotationDisplayText(origin.selected), chapter: chapter || "正文", order: origin.englishStart});
+				button(this.mount(place),label+" · "+branch.nodeIds.length+" 轮",open,"rar-thread-chip");
+			}
 			if(this.opened===branch.id)this.renderThread(this.mount(place),place,s!,branch,origin);
 		}
-		if(!this.links.children.length)this.links.createSpan({text:"本篇还没有讨论分支"});
+		this.map.update(s, passages, this.selected);
 		for(const r of this.notes) {
 			const place=this.notePlace(r);if(!place || indexed.has(r.id) && !r.manualText && !r.aiText)continue;
 			const b=button(this.mount(place),"批注 · "+annotationDisplayText(r.selectedText).slice(0,22),()=>this.edit(r,b.getBoundingClientRect()),"rar-note-chip");
@@ -177,9 +227,15 @@ export class InlinePaperReading {
 		const body=m.createDiv({cls:"rar-discussion"}); body.dataset.branchId=b.id;
 		body.createEl("blockquote",{text:annotationDisplayText(origin.selected)});
 		for(const id of b.nodeIds){
-			const n=s.nodes.find(n=>n.id===id)!;body.createEl("strong",{text:n.question});
+			const n=s.nodes.find(n=>n.id===id)!;
+			const heading = body.createEl("strong",{text:n.question});
+			heading.dataset.turnId = id;
+			heading.tabIndex = -1;
+			if (this.selected === id) heading.classList.add("is-current-turn");
+			this.turns.set(id, heading);
 			if(n.status==="done") {
-				void MarkdownRenderer.render(this.reader.options.app,safeReadingMarkdown(n.content,n.evidence.map(e=>e.id)),body.createDiv(),s.source.path,this.renderer);
+				this.answerLayouts.push(MarkdownRenderer.render(this.reader.options.app, safeReadingMarkdown(n.content,n.evidence.map(e=>e.id)), body.createDiv(), s.source.path, this.renderer)
+					.catch(error => { if (!this.signal.aborted) new Notice(String(error)); }));
 				if(n.evidence.length){const d=body.createEl("details");d.createEl("summary",{text:"原文依据 · "+n.evidence.length});for(const e of n.evidence)d.createEl("p",{text:e.label+" · "+e.text});}
 				button(body,"另开子分支",()=>this.composeTurn(place,n.id,true),"rar-thread-action");
 			} else {
@@ -192,7 +248,7 @@ export class InlinePaperReading {
 		if(s.nodes.find(n=>n.id===tail)?.status==="done")button(actions,"继续追问",()=>this.composeTurn(place,tail,false));
 		if(b.parentNodeId && s.branches.some(x=>x.nodeIds.includes(b.parentNodeId!)))button(actions,"上一级讨论",()=>this.reveal(s.id,b.parentNodeId!));
 		for(const child of s.branches.filter(x=>x.parentNodeId && b.nodeIds.includes(x.parentNodeId)))button(actions,"↳ "+s.nodes.find(n=>n.id===child.nodeIds[0])!.question,()=>this.reveal(s.id,child.nodeIds[child.nodeIds.length-1]));
-		button(actions,"收起，回原句",()=>{this.composer=undefined;this.remember("");this.render(true);this.focus(place,true);});
+		button(actions,"收起，回原句",()=>this.revealPassage(origin.id));
 	}
 	private composeTurn(place:Place,parent:string,child:boolean) {
 		this.composer={place,parent,child,value:""};this.render(true);this.mount(place).querySelector("textarea")?.focus();
