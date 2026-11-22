@@ -1,5 +1,7 @@
 import type { ReadingSession } from "../reading/types";
 
+import { conclusionTitle, MAIN_GUIDE, type GuideTarget } from "../reading/inline-guide";
+
 export interface MapPassage {
 	id: string;
 	quote: string;
@@ -11,7 +13,8 @@ interface MapNode {
 	id: string;
 	label: string;
 	caption: string;
-	kind: "passage" | "turn";
+	kind: "passage" | "turn" | "guide";
+	links?: GuideTarget[];
 	answer?: string;
 	parent?: MapNode;
 	children: MapNode[];
@@ -25,7 +28,7 @@ function excerpt(text: string, limit: number): string {
 }
 
 /** Parent IDs are saved when a question is asked, independently of display order. */
-export function paperMapTree(session: ReadingSession, passages: MapPassage[]) {
+export function paperMapTree(session: ReadingSession, passages: MapPassage[], evidence = new Map<string, GuideTarget[]>()) {
 	const roots: MapNode[] = [];
 	const nodes = new Map<string, MapNode>();
 	for (const p of [...passages].sort((a, b) => a.order - b.order)) {
@@ -35,6 +38,18 @@ export function paperMapTree(session: ReadingSession, passages: MapPassage[]) {
 	}
 	const saved = new Map(session.nodes.map(n => [n.id, n]));
 	const parents = new Map<string, string>();
+	if (session.mainIds?.length) {
+		const main: MapNode = {id: MAIN_GUIDE, kind:"guide", label:"全文带读", caption:"主线", turns:0, forks:0, children:[]};
+		roots.unshift(main);
+		nodes.set(main.id, main);
+		for (const [i,id] of session.mainIds.entries()) {
+			const n = saved.get(id);
+			if (!n) continue;
+			nodes.set(id, {id, kind:"turn", caption:"结论 · 第 " + (i+1) + " 轮", label:conclusionTitle(n),
+				children:[], turns:1, forks:0, links:evidence.get(id)});
+			parents.set(id, MAIN_GUIDE);
+		}
+	}
 	for (const branch of session.branches) {
 		branch.nodeIds.forEach((id, i) => {
 			const n = saved.get(id);
@@ -84,7 +99,7 @@ export class PaperDiscussionMap {
 	private expanded = new Set<string>();
 
 	constructor(toolbar: HTMLElement, private workspace: HTMLElement,
-		private jump: (id: string, kind: MapNode["kind"]) => void) {
+		private jump: (id: string, kind: MapNode["kind"], link?: GuideTarget) => void) {
 		this.toggle = toolbar.createEl("button", { text: "本文思路", attr: { type: "button", "aria-expanded": "false" } });
 		this.stage = document.createElement("div");
 		this.stage.className = "rar-map-stage";
@@ -115,8 +130,8 @@ export class PaperDiscussionMap {
 		for (let n = this.tree.nodes.get(this.selected); n; n = n.parent) this.expanded.add(n.id);
 	}
 
-	update(session: ReadingSession | undefined, passages: MapPassage[], selected: string) {
-		this.tree = session ? paperMapTree(session, passages) : { roots: [], nodes: new Map() };
+	update(session: ReadingSession | undefined, passages: MapPassage[], selected: string, evidence: Map<string, GuideTarget[]>) {
+		this.tree = session ? paperMapTree(session, passages, evidence) : { roots: [], nodes: new Map() };
 		if (selected !== this.selected) {
 			this.selected = selected;
 			this.expandPath();
@@ -126,7 +141,10 @@ export class PaperDiscussionMap {
 
 	private draw() {
 		this.list.empty();
-		if (!this.tree.roots.length) this.list.createEl("li", {text:"本篇还没有可定位的讨论分支。"});
+		if (!this.tree.nodes.has(MAIN_GUIDE)) {
+			const start = this.list.createEl("li").createEl("button", {text:"开始全文带读", attr:{type:"button"}});
+			start.onclick = () => { if (this.stage.clientWidth < 1040) this.setOpen(false); this.jump(MAIN_GUIDE, "guide"); };
+		}
 		const path = new Set<string>();
 		for (let n = this.tree.nodes.get(this.selected); n; n = n.parent) path.add(n.id);
 		const row = (list: HTMLElement, node: MapNode) => {
@@ -135,7 +153,7 @@ export class PaperDiscussionMap {
 			const line = item.createDiv({cls:"rar-map-line"});
 			if (path.has(node.id)) line.classList.add("is-path");
 			const open = this.expanded.has(node.id);
-			if (node.children.length) {
+			if (node.children.length || node.links?.length) {
 				const arrow = line.createEl("button", {cls:"rar-map-arrow", text:open ? "▾" : "▸", attr:{type:"button",
 					"aria-label": (open ? "折叠 " : "展开 ") + node.label, "aria-expanded":String(open)}});
 				arrow.onclick = () => {
@@ -155,8 +173,13 @@ export class PaperDiscussionMap {
 				if (this.stage.clientWidth < 1040) this.setOpen(false);
 				this.jump(node.id, node.kind);
 			};
-			if (open && node.children.length) {
+			if (open && (node.children.length || node.links?.length)) {
 				const children = item.createEl("ul");
+				for (const link of node.links || []) {
+					const kind = link.kind === "text" ? "原文" : link.kind === "figure" ? "图" : "表";
+					const b = children.createEl("li").createEl("button",{cls:"rar-guide-link",text:kind+" · "+excerpt(link.label,64),attr:{type:"button",title:link.label}});
+					b.onclick = () => { if (this.stage.clientWidth < 1040) this.setOpen(false); this.jump(node.id, "turn", link); };
+				}
 				for (const child of node.children) row(children, child);
 			}
 		};

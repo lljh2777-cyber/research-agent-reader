@@ -6762,3 +6762,11 @@ body.agent-dashboard-mineru-resizing {
 @container (width < 1040px) {
 	.rar-paper-map { position: absolute; z-index: 5; inset-block: 0; inset-inline-end: 0; width: min(340px, 90%); box-shadow: var(--shadow-s); }
 }
+
+.rar-guide-fallback:empty { display: none; }
+.rar-guide-fallback { max-height: 38%; overflow: auto; }
+.rar-guide-link { display: block; max-width: 100%; margin-block: 4px; }
+.rar-paper-map .rar-guide-link, .rar-discussion .rar-guide-link { height: auto; white-space: normal; text-align: start; overflow-wrap: anywhere; }
+.rar-guide-highlight { outline: 2px solid var(--interactive-accent); outline-offset: 3px; }
+
+.rar-evidence-actions { padding: 5px 12px; align-items: center; }

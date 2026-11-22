@@ -2769,6 +2769,14 @@ export default class AgentDashboardPlugin extends Plugin {
 		return true;
 	}
 	async startClippedReading(path: string): Promise<void> {
+		if (await this.openPaperBody(path)) {
+			for (const [pane, ready] of this.inlineReaders) {
+				if (pane.reader.options.outlineLeaf !== this.app.workspace.activeLeaf || pane.doc.files.en.path !== path) continue;
+				await ready;
+				await pane.openGuide();
+				return;
+			}
+		}
 		const workspace = this.getReadingWorkspace();
 		const { id, created } = await workspace.open("article", path, this.settings.sceneProfiles?.reading || "codex-cli", "");
 		await this.activateReadingWorkspace({ sessionId: id });
@@ -3096,7 +3104,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	async openLearningRecord(sessionId: string, nodeId: string): Promise<void> {
 		const session = this.getReadingWorkspace().repository.get(sessionId);
 		const branch = session.branches.find(b=>b.nodeIds.includes(nodeId));
-		if (branch && session.source.kind === "article") {
+		if ((branch || session.mainIds.includes(nodeId)) && session.source.kind === "article") {
 			const reveal = async () => {
 				for (const [pane,ready] of this.inlineReaders) {
 					if (pane.reader.options.outlineLeaf !== this.app.workspace.activeLeaf) continue;
