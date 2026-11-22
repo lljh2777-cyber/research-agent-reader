@@ -69,6 +69,7 @@ import type {
 } from "../types/contracts";
 
 interface SettingsPluginHost extends PluginHost {
+	paperProfileId(id?: string, annotation?: boolean): string;
 	configureClipper(root: string): Promise<void>;
 	openMaintenanceAction(id: "vault-lint" | "okf-export"): Promise<void>;
 	getAnnotationCliDiscovery(backend: AnnotationCliBackend): AnnotationCliDiscovery | null;
@@ -1623,47 +1624,16 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			await this.plugin.saveSettings();
 			this.display();
 		};
-		const selected = verifiedProfiles.find(profile => profile.id === backendId);
+		const defaultId = this.plugin.paperProfileId(backendId,true);
+		const profile = verifiedProfiles.find(p=>p.id===defaultId);
 		new Setting(containerEl).setName("默认批注配置").addDropdown(drop => {
-			if (!selected) drop.addOption(backendId, backendId === "auto" ? "自动选择" : backendId);
-			for (const profile of verifiedProfiles) drop.addOption(profile.id, profile.name + " · " + profile.model);
-			drop.setValue(backendId).onChange(selectBackend);
+			drop.addOption("auto","共用默认 API");
+			for (const item of verifiedProfiles) drop.addOption(item.id,item.name+" · "+item.model);
+			drop.setValue(verifiedProfiles.some(p=>p.id===backendId) ? backendId : "auto").onChange(selectBackend);
 		});
-		const advanced = containerEl.createEl("details");
-		advanced.createEl("summary", {text: "高级批注设置"});
-		containerEl = advanced;
-		new Setting(advanced).setName("其他批注后端").addDropdown(drop => {
-			drop.addOption("", "选择其他后端");
-			for (const [id, label] of [["auto", "自动选择"], ["codex-cli", "Codex CLI"], ["claude-code", "Claude Code"], ["opencode", "OpenCode"], ["codebuddy", "CodeBuddy"], ["qoderclicn", "Qoder CLI CN"]]) drop.addOption(id, label);
-			drop.setValue(selected ? "" : backendId).onChange(selectBackend);
-		});
-		if (backendId === "codebuddy" || backendId === "qoderclicn" || (backendId === "opencode" && this.plugin.settings.openCodeConfigSource === "official" && !this.plugin.settings.annotationWebSearchEnabled)) {
-			this.renderNativeAnnotationCliSettings(containerEl, backendId);
-			return;
-		}
-		if (selected?.type === "openai" && supportsGptAnnotations(selected.model)) {
-			new Setting(containerEl).setName("批注联网").setDesc("默认关闭。可在批注弹窗为本次提问开启 GPT 原生搜索。");
-		} else this.renderAnnotationWebSearchSettings(containerEl, backendId);
-
-		if (backendId === "auto") {
-			const activeProfile = verifiedProfiles.find(profile => profile.id === this.plugin.settings.activeProviderId);
-			const webBackend = activeProfile && this.plugin.settings.annotationWebSearchEnabled
-				? this.plugin.resolveWebSearchBackend(activeProfile) : undefined;
-			const useDirect = Boolean(activeProfile) && webBackend?.kind !== "unavailable";
-			new Setting(containerEl).setName("自动选择顺序").setDesc(useDirect
-				? `当前使用 Direct API“${activeProfile!.name}”（${activeProfile!.model}）${webBackend ? `，通过${webBackend.kind === "native" ? "供应商原生联网" : "Tavily 搜索"}` : ""}。请求失败时提示重试，不自动切换后端。`
-				: `当前使用 Codex CLI。${webBackend?.kind === "unavailable" ? `默认 Direct API 联网未就绪：${webBackend.reason}` : "没有启用且已验证的默认 Direct API。"}`);
-			this.renderAnnotationCliSettings(containerEl, "codex-cli", true);
-			this.renderAnnotationTokenSetting(containerEl, useDirect);
-			return;
-		}
-
-		if (backendId === "codex-cli" || backendId === "claude-code" || backendId === "opencode") {
-			this.renderAnnotationCliSettings(containerEl, backendId);
-			return;
-		}
-
-		const profile = verifiedProfiles.find((item) => item.id === backendId);
+		if (profile?.type === "openai" && supportsGptAnnotations(profile.model)) {
+			new Setting(containerEl).setName("批注联网").setDesc("可在批注弹窗为本次提问开启 GPT 原生搜索。");
+		} else this.renderAnnotationWebSearchSettings(containerEl,defaultId);
 		if (!profile) {
 			new Setting(containerEl)
 				.setName("配置不可用")
@@ -2011,10 +1981,10 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 		const profiles = this.plugin.settings.providerProfiles;
 		for (const [scene, label] of [["reading", "全文带读"], ["query", "库内问答"]] as const) {
 			new Setting(containerEl).setName(label + "使用的模型").addDropdown(drop => {
-				if (scene === "reading") drop.addOption("codex-cli", "Codex CLI");
+				if (scene === "reading") drop.addOption("", "共用批注 API");
 				else drop.addOption("", "共用默认模型");
 				for (const profile of profiles.filter(item => item.lastTest?.ok)) drop.addOption(profile.id, profile.name + " · " + profile.model);
-				drop.setValue(this.plugin.settings.sceneProfiles[scene] || (scene === "reading" ? "codex-cli" : "")).onChange(async id => {
+				drop.setValue((scene === "reading" && this.plugin.settings.sceneProfiles.reading === "codex-cli" ? "" : this.plugin.settings.sceneProfiles[scene]) || "").onChange(async id => {
 					this.plugin.settings.sceneProfiles[scene] = id;
 					await this.plugin.saveSettings();
 				});

@@ -20,6 +20,7 @@ export function conclusionTitle(node: ReadingNode): string {
 /** Resolve only saved paper evidence against the exact English text currently displayed. */
 export class GuideEvidenceIndex {
 	private images = new Map<string, BilingualBlock | null>();
+	private captionImages = new Map<string,BilingualBlock>();
 	private captions = new Map<string, BilingualBlock | null>();
 	constructor(private file: BilingualFile) {
 		for (const b of file.blocks.filter(b => b.kind === "image")) {
@@ -39,6 +40,12 @@ export class GuideEvidenceIndex {
 			const target = b.kind !== kind && adjacentMatches ? adjacent : b;
 			if (!this.captions.has(key)) this.captions.set(key,target);
 			else if (this.captions.get(key)?.id !== target.id) this.captions.set(key,null);
+		}
+		for (const [i,b] of file.blocks.entries()) {
+			const title = file.blocks[i-1], image = file.blocks[i-2];
+			if (image?.kind !== "image" || !title || !/^\s*\*\*[a-z]\*\*[,.:]/i.test(file.text.slice(b.start,b.end))) continue;
+			const alt = markdownImagePattern().exec(file.text.slice(image.start,image.end))?.[1]?.trim();
+			if (alt && alt === file.text.slice(title.start,title.end).trim()) this.captionImages.set(b.id,image);
 		}
 	}
 	private captionKey(prefix: string, number: string) {
@@ -76,6 +83,8 @@ export class GuideEvidenceIndex {
 					add("figure", b, b.start, b.end, label);
 					continue;
 				}
+				const captionImage = this.captionImages.get(b.id);
+				if (captionImage) add("figure",captionImage,captionImage.start,captionImage.end,e.label);
 				const chunk = text.slice(chunkStart, Math.min(limit, b.end));
 				const start = chunkStart + chunk.length - chunk.trimStart().length;
 				const exact = b.kind === "paragraph" ? quoted.filter(q => chunk.includes(q) && chunk.indexOf(q) === chunk.lastIndexOf(q)) : [];

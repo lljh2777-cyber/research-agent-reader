@@ -21,7 +21,7 @@ async function make(enPath = "Research/English original.md", zhPath = "Notes/中
 		createFolder: async p => files.set(p, { file: { path: p } }), create: async (p, text) => { assert.ok(!files.has(p)); const file = new TFile(p); files.set(p, { file, text }); writes.push(p); return file; }, process: async (f, fn) => { files.get(f.path).text = fn(files.get(f.path).text); writes.push(f.path); } } };
 	const profile = { id: "mock", name: "Mock", model: "mock", timeoutSeconds: 1, lastTest: { ok: true } };
 	const plugin = { settings: { annotationBackendId: "mock", annotationWebSearchEnabled: false, annotationMaxTokens: 600 }, getProviderProfile: () => profile, createLLMProvider: () => ({ complete: async request => { calls.push(request); return { text: "英文依据：author-reported. 一般知识／解释性推断：background.", model: "mock" }; } }) };
-	fixture = { files, writes, calls, en, zh, enPath, zhPath, app, service: new api.AnnotationService(app, plugin) };
+	fixture = { files, writes, calls, en, zh, enPath, zhPath, app, service: new api.AnnotationService(app, require("./reading-test-helpers").paperPlugin(plugin)) };
 	fixture.doc = await api.loadSelectedBilingualDocument(new FileSourceStorage(), { en: enPath, zh: zhPath }); return fixture;
 }
 function selection(f, language) {

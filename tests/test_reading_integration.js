@@ -10,10 +10,10 @@ const { readingCatalog } = loadReading("reading/document.ts");
 	const a = create(); const b = create(); await repo.add(a); await repo.add(b);
 	const evidence = [{ id: "text-1-0", kind: "paper", path: "a.pdf", label: "Intro", text: "Evidence" }];
 	let changed = false; let answerCalls = 0;
-	const document = { evidence, catalog: readingCatalog(evidence), verify: async () => { if (changed) throw new Error("source changed"); }, image: async () => null };
+	const document = { source:a.source, evidence, catalog: readingCatalog(evidence), verify: async () => { if (changed) throw new Error("source changed"); }, image: async () => null };
 	const backend = { images: false, name: "mock", model: "test", complete: async (r) => {
 		const input = JSON.parse(r.prompt);
-		if (input.catalog) return JSON.stringify({ ids: ["text-1-0"], needsVisual: false });
+		if (input.materials) return JSON.stringify({ action:"ready" });
 		answerCalls++; if (input.context === "change") changed = true;
 		return JSON.stringify({ title: "unit", content: "Evidence [text-1-0]", evidenceIds: ["text-1-0"], outline: ["Intro"], mainSummary: "completed", completed: true });
 	} };

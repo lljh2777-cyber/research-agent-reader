@@ -8,7 +8,7 @@ import type { ReadingBranch, ReadingNode, ReadingQuote, ReadingSession, ReadingS
 import { validateStructuredEvidence, validateStructuredSource } from "./structured-source";
 
 export const newReadingId = (): string => "r-" + randomUUID();
-export function createReadingSession(source: ReadingSource, backend = "codex-cli", model = ""): ReadingSession {
+export function createReadingSession(source: ReadingSource, backend = source.kind === "code" ? "codex-cli" : "", model = ""): ReadingSession {
 	const now = new Date().toISOString();
 	return { version: 1, id: newReadingId(), title: source.title, source, createdAt: now, updatedAt: now, purpose: "reading", lastOpenedAt: now,
 		nodes: [], branches: [], mainIds: [], outline: [], mainSummary: "", completed: false, backend, model,

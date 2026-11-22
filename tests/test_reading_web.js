@@ -26,7 +26,7 @@ const { DirectReadingBackend } = loadReading("reading/backend.ts");
 	const workspace = { repository, document: async () => ({ source, catalog: "text-1", evidence, verify: async () => { events.push("read-paper"); }, image: async () => null }) };
 	const backend = { name: "mock", model: "mock", images: false, webSearch: () => ({ ...tavily, search: async (...args) => { events.push("search"); return tavily.search(...args); } }),
 		complete: async request => {
-			if (request.system.includes("证据选择器")) return JSON.stringify({ ids: ["text-1"], query: "query", needsVisual: false, vaultQuery: null });
+			if (JSON.parse(request.prompt).materials) return JSON.stringify({ action:"ready" });
 			const prompt = JSON.parse(request.prompt); assert.equal(prompt.webEvidence.sources[0].content, "Actual excerpt"); assert.match(prompt.validationFeedback, /上次正文引用/); events.push("answer");
 			return JSON.stringify({ title: "Answer", content: "Paper [text-1]. Web [网络 W1].", evidenceIds: ["text-1"] });
 		} };

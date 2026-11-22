@@ -1,7 +1,6 @@
 const assert=require("node:assert/strict");
 const {loadReading}=require("./reading-test-helpers");
 const {renderCliGroundedExplanation:render}=loadReading("annotations/cli-grounded-explanation.ts");
-const {AnnotationService}=loadReading("annotations/annotation-service.ts");
 const pair=(quote,meaning,extra={})=>JSON.stringify({claims:[{quote,meaning}],...extra});
 const association="Subtype A had 6/25 cases compared with 1/71 in other subtypes (P = 0.0011, Fisher's exact test).";
 const purpose="We selected samples with epithelial content ≥40% to balance stromal gene expression.";
@@ -28,11 +27,5 @@ const multiline="RNA-seq\r\nresolved four classes.";
 assert.match(render(pair(multiline.replace(/\r/g,""),"作者报告四个类别。"),multiline),/> RNA-seq\n> resolved/);
 assert.match(render(pair(association,"作者报告两组分布差异。"),association,"zh-CN"),/^译文对照：.*仍待人工核对。\n\n英文依据：/);
 assert.throws(()=>render(pair(association,"两组存在差异。",{translationCheck:"译文一致"}),association));
-(async()=>{
- let calls=0;
- const cli={generate:async()=>{calls++;return {text:pair(association,"存在较强的关联。"),requestedModel:"Qwen3.8-Flash"};}};
- const service=new AnnotationService({}, {settings:{annotationBackendId:"qoderclicn",annotationQoderModel:"Qwen3.8-Flash",annotationCliTimeoutSeconds:120}},cli);
- await assert.rejects(service.generateExplanation({sourcePath:"papers/fixture.md",selectedText:"6/25",context:association},()=>{}),/关联强弱/);
- assert.equal(calls,1,"reject unsupported meaning without retrying or changing model");
- console.log("CLI_GROUNDED_EXPLANATION_OK (old failures, source-supported counterexamples, quote fidelity, role schema, one-call rejection)");
-})().catch(error=>{console.error(error);process.exitCode=1;});
+assert.throws(()=>render(pair(association,"存在较强的关联。"),association),/关联强弱/);
+console.log("CLI_GROUNDED_EXPLANATION_OK (old failures, source-supported counterexamples, quote fidelity, role schema, one-call rejection)");

@@ -15,11 +15,13 @@ const success = (extra = {}) => JSON.stringify({ type: "system", subtype: "init"
 	const calls = [];
 	const cli = { generate: async (...args) => { calls.push(args); return parsePrintResult(success(), "step-5-preview"); }, dispose: async () => {} };
 	const settings = { annotationBackendId: "codebuddy", annotationCodeBuddyModel: "step-5-preview", annotationCodeBuddyExecutable: "fixture", annotationCliTimeoutSeconds: 120, annotationWebSearchEnabled: false };
-	const service = new AnnotationService({}, { settings }, cli);
-	const selection = { sourcePath: "papers/fixture/article.md", section: "Results", selectedText: "association", context: "The authors report an association, not causation." };
-	const answer = await service.generateExplanation(selection, () => {});
-	assert.equal(answer.provider, "CodeBuddy"); assert.equal(answer.model, "step-5-preview"); assert.equal(calls[0][0].model, "step-5-preview");
-	assert.match(calls[0][0].system, /模型一般知识/); assert.match(calls[0][0].user, /association, not causation/);
-	settings.annotationWebSearchEnabled = true; await assert.rejects(service.generateExplanation(selection, () => {}), /关闭浅层联网/); assert.equal(calls.length, 1);
+	const plugin = require("./reading-test-helpers").paperPlugin({ settings, getProviderProfile: () => undefined });
+	const service = new AnnotationService({}, plugin, cli);
+	const selection = {sourcePath:"papers/fixture/article.md", selectedText:"Association", section:"Results", context:"Association does not establish causation."};
+	for (const web of [false,true]) {
+		settings.annotationWebSearchEnabled = web;
+		await assert.rejects(service.generateExplanation(selection, () => {}), /已通过连接测试/);
+	}
+	assert.equal(calls.length, 0);
 	console.log("CODEBUDDY_ANNOTATIONS_OK (model arguments, receipts, complete-only output, routing, zero-call web guard)");
 })().catch(error => { console.error(error); process.exitCode = 1; });

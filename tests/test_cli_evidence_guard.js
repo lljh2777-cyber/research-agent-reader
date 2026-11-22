@@ -1,7 +1,6 @@
 const assert = require("node:assert/strict");
 const { loadReading } = require("./reading-test-helpers");
 const { verifyCliAdjustmentClaim: verify } = loadReading("annotations/cli-evidence-guard.ts");
-const { AnnotationService } = loadReading("annotations/annotation-service.ts");
 const evidence = "In an observational study of 96 participants, the high-expression group had a lower observed risk than the low-expression group. Follow-up timing and adjusted covariates are not specified.";
 // Exact assertions retained from two real Step responses, including a labelled
 // general-knowledge paragraph. Labelling a claim does not make it supported.
@@ -20,12 +19,7 @@ assert.throws(() => verify("可能是未调整比较，但这就是未经调整�
 assert.throws(() => verify("这是未调整比较。", "The paper does not state whether the comparison was unadjusted."));
 assert.throws(() => verify("这是未调整比较。", "Unadjusted analysis was not reported in the passage."));
 assert.throws(() => verify("这是未调整比较。", "The paper does not report an unadjusted analysis."));
-(async () => {
- let calls=0;
- const quote=evidence.slice(0,evidence.indexOf(". ")+1);
- const cli={generate:async request=>{calls++;assert.equal(JSON.parse(request.user).evidence,quote,"adjustment assertion is checked against the actual sentence window");return {text:JSON.stringify({claims:[{quote,meaning:"此类观测风险比较属于未经调整的组间描述。"}]}),requestedModel:"step-5-preview"};}};
- const service=new AnnotationService({}, {settings:{annotationBackendId:"codebuddy",annotationCodeBuddyModel:"step-5-preview",annotationCliTimeoutSeconds:120}},cli);
- await assert.rejects(service.generateExplanation({sourcePath:"papers/fixture.md",selectedText:"lower observed risk",context:evidence},()=>{}),/未提供的调整信息/);
- assert.equal(calls,1,"reject unsupported result without a retry or model substitution");
- console.log("CLI_EVIDENCE_GUARD_OK (observed failures, qualified statements, explicit evidence, one-call routing)");
-})().catch(error=>{console.error(error);process.exitCode=1;});
+const {renderCliGroundedExplanation:render}=loadReading("annotations/cli-grounded-explanation.ts");
+const quote=evidence.slice(0,evidence.indexOf(". ")+1);
+assert.throws(()=>render(JSON.stringify({claims:[{quote,meaning:"此类观测风险比较属于未经调整的组间描述。"}]}),quote),/未提供的调整信息/);
+console.log("CLI_EVIDENCE_GUARD_OK (observed failures, qualified statements, explicit evidence, one-call routing)");

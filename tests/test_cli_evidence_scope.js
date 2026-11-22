@@ -1,7 +1,6 @@
 const assert=require("node:assert/strict"),{loadReading}=require("./reading-test-helpers");
 const {evidenceSentences,selectedEvidenceWindow,parseEvidenceSelection}=loadReading("annotations/cli-evidence-scope.ts");
 const {renderCliGroundedExplanation:render}=loadReading("annotations/cli-grounded-explanation.ts");
-const {AnnotationService}=loadReading("annotations/annotation-service.ts");
 const intro="Here we introduce DeepMet, a chemical language model trained on known metabolites (Fig. 1a).";
 const classifier="This classifier performed only marginally better than random guessing (Fig. 1c and Extended Data Fig. 1a–c).";
 const background="Previous work studied drug discovery. We trained a random forest. ";
@@ -40,10 +39,7 @@ const explicit="Figure 1 shows the measured curves for the random forest.";
 assert.doesNotThrow(()=>render(pair(explicit,"作者在文字中称图1展示了随机森林的测量曲线；这里没有核对图像。"),explicit));
 const drug="The model was developed for drug discovery.";
 assert.doesNotThrow(()=>render(pair(drug,"作者说明模型用于药物发现。"),drug));
-(async()=>{
- const requests=[],cli={generate:async request=>{requests.push(request);return{text:pair(intro,"作者介绍 DeepMet 化学语言模型，并引用图1a。"),requestedModel:"step-5-preview"}}};
- const service=new AnnotationService({}, {settings:{annotationBackendId:"codebuddy",annotationCodeBuddyModel:"step-5-preview",annotationCliTimeoutSeconds:120}},cli);
- await service.generateExplanation({sourcePath:"Clippings/example.md",selectedText:intro,context:background+intro,section:"Unrelated drug discovery"},()=>{});
- assert.equal(JSON.parse(requests[0].user).evidence,intro);assert.ok(!requests[0].user.includes("drug discovery")&&!requests[0].user.includes("random forest"));assert.equal(requests.length,1);
- console.log("CLI_EVIDENCE_SCOPE_OK (minimal windows, candidate bounds, reproduced extensions, figure references, explicit-source counterexamples)");
-})().catch(e=>{console.error(e);process.exitCode=1});
+const scoped=selectedEvidenceWindow(intro,background+intro);
+assert.equal(scoped,intro);assert.ok(!scoped.includes("drug discovery"));
+assert.ok(render(pair(intro,"作者介绍 DeepMet 化学语言模型，并引用图1a。"),scoped).includes(intro));
+console.log("CLI_EVIDENCE_SCOPE_OK (minimal windows, candidate bounds, reproduced extensions, figure references, explicit-source counterexamples)");

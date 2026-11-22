@@ -42,7 +42,7 @@ async function fixture() {
 	const backend = { name: "fixture", model: "test", images: true, complete: async request => {
 		const p = JSON.parse(request.prompt); requests.push(p);
 		if (p.action === "规划全文路线") return JSON.stringify({ modules: [{ title: "研究问题", question: "问题", evidenceIds: [text.id] }, { title: "图像证据", question: "图像", evidenceIds: [image.id] }] });
-		if (p.catalog) return JSON.stringify({ ids: [visual ? image.id : text.id], query: "Figure 1", needsVisual: visual });
+		if (p.materials) return JSON.stringify(visual && !p.images.includes(image.id) ? {action:"read",ids:[image.id]} : {action:"ready"});
 		assert.ok(request.system.includes("没有 PDF 页码")); assert.ok(p.evidence.every(e => e.kind !== "paper" || e.structured));
 		const id = visual ? image.id : text.id;
 		return JSON.stringify({ title: "合成测试", content: `仅为模拟回答：${p.currentUnit || p.question}。[${id}]`, evidenceIds: [id], mainSummary: "模拟主线记忆" });
@@ -50,7 +50,7 @@ async function fixture() {
 	const workspace = { repository, document: async () => doc }, engine = new ReadingEngine(workspace, () => backend);
 	await engine.generate(session.id, main.id);
 	assert.equal(repository.get(session.id).nodes[0].status, "done"); assert.equal(repository.get(session.id).nodes[0].evidence[0].visualInspected, true);
-	assert.deepEqual(repository.get(session.id).nodes[0].providedImageIds, [image.id]); assert.equal(requests.length, 3);
+	assert.deepEqual(repository.get(session.id).nodes[0].providedImageIds, [image.id]); assert.equal(requests.length, 4);
 	let branchId; await repository.transact(session.id, s => { const branch = addReadingBranch(s, main.id); branchId = addReadingNode(s, branch.id, "图像是什么意思？").id; });
 	await engine.generate(session.id, branchId); assert.equal(repository.get(session.id).nodes[1].status, "done");
 	assert.ok(requests.at(-1).context.includes("模拟主线记忆"));

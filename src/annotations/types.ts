@@ -1,3 +1,4 @@
+import type { PaperTrace } from "../reading/paper-agent";
 import type { ExcerptReceipt, ExcerptRevision } from "./excerpt";
 import type { PdfExcerptReceipt } from "./pdf-excerpt";
 import type { BilingualReceipt } from "./bilingual";
@@ -37,6 +38,7 @@ export interface AnnotationSelection {
 }
 
 export interface AnnotationRecord {
+	paperTraces?: PaperTrace[];
 	color?: AnnotationColor;
 	id: string;
 	annotationPath: string;
@@ -65,6 +67,7 @@ export interface AnnotationRecord {
 }
 
 export interface AnnotationExplanation {
+	trace?: PaperTrace;
 	text: string;
 	provider: string;
 	model: string;
@@ -72,6 +75,7 @@ export interface AnnotationExplanation {
 }
 
 export interface AnnotationDraft {
+	paperTraces?: PaperTrace[];
 	excerptListed?: boolean;
 	aiEdited?: boolean;
 	color?: AnnotationColorChoice;

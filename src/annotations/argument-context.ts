@@ -77,6 +77,16 @@ export function contextSentences(passages: string[]): Map<string, string> {
 }
 
 export function attachContextQuotes(text: string, sentences: Map<string, string>): string {
+	// Chinese punctuation and contiguous ranges represent the same supplied sentence IDs.
+	text = text.replace(/[［【\[]\s*段\s*(\d+)\s*句\s*(\d+)(?:\s*[-–—至]\s*(\d+))?\s*[］】\]]/gu,
+		(_match, paragraph: string, first: string, last?: string) => {
+			const start = Number(first), end = Number(last || first);
+			if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 1 || end < start || end-start > 16) throw new Error("段句引用范围无效，请重试");
+			const ids = Array.from({length:end-start+1},(_,i)=>"[段 "+paragraph+" 句 "+(start+i)+"]");
+			if (ids.some(id=>!sentences.has(id))) throw new Error("上下文解释引用了未知段句，请重试");
+			return ids.join("");
+		});
+	if (/[［【]\s*段/u.test(text)) throw new Error("上下文解释包含无法核对的段句引用，请重试");
 	const refs = [...new Set(text.match(/\[段[^\]\n]*\]/g))];
 	if (!refs.length || refs.some(ref => !sentences.has(ref))) throw new Error("上下文解释引用了未知段句，或缺少原文引用，请重试");
 	const quotes = refs.map(ref => sentences.get(ref)!);

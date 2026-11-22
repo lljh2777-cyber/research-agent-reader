@@ -15,7 +15,7 @@ import { conclusionTitle, guideParent, GuideEvidenceIndex, MAIN_GUIDE, type Guid
 
 interface Passage { lang: BilingualLanguage; start: number; end: number; digest: string }
 interface Place { passage: Passage; element: HTMLElement; blockStart: number; blockEnd: number }
-type Composer = { place?: Place; selection?: AnnotationSelection; parent?: string; child?: boolean; evidenceLabel?: string; value: string };
+type Composer = { place?: Place; selection?: AnnotationSelection; parent?: string; child?: boolean; evidenceLabel?: string; target?: ReadingNode["paperTarget"]; value: string };
 function button(host: HTMLElement, label: string, run: () => void, cls = "") {
 	const b = host.createEl("button", { text: label, cls, attr: { type: "button" } }); b.onclick = run; return b;
 }
@@ -32,6 +32,7 @@ export class InlinePaperReading {
 	private readonly targets = new Map<string, HTMLElement>();
 	private readonly mounts = new Map<HTMLElement, HTMLElement>();
 	private selected = "";
+	private readonly profileSelect: HTMLSelectElement;
 	private readonly guideIndex: GuideEvidenceIndex;
 	private readonly guideFallback: HTMLElement;
 	private guideLinks = new Map<string, GuideTarget[]>();
@@ -44,7 +45,13 @@ export class InlinePaperReading {
 	private renderer = new Component();
 	constructor(readonly reader: BilingualReader, toolbar: HTMLElement, private annotations: AnnotationService,
 		private workspace: ReadingWorkspaceService, private canonical: () => Promise<{ key: string; aliases: string[] }>,
-		private edit: (record: AnnotationRecord, rect: DOMRect) => void) {
+		private edit: (record: AnnotationRecord, rect: DOMRect) => void,
+		private models: { profiles(): {id:string;name:string;model:string}[]; resolve(id?:string):string }) {
+		this.profileSelect = toolbar.createEl("select",{attr:{"aria-label":"本篇论文的阅读模型",title:"本篇论文后续回答使用的 API"}});
+		this.profileSelect.createEl("option",{value:"",text:"选择阅读模型"});
+		for (const profile of models.profiles()) this.profileSelect.createEl("option",{value:profile.id,text:profile.name+" · "+profile.model});
+		this.profileSelect.onchange = () => { void this.changeModel().catch(e=>new Notice(String(e))); };
+
 		const body = reader.options.host.querySelector<HTMLElement>(".agent-bilingual-workspace")!;
 		this.guideIndex = new GuideEvidenceIndex(this.doc.files.en);
 		this.guideFallback = document.createElement("div");
@@ -58,6 +65,14 @@ export class InlinePaperReading {
 		});
 		this.renderer.load();
 		this.indexTargets();
+	}
+	private async changeModel() {
+		const profileId = this.profileSelect.value;
+		if (!profileId || !this.key || this.reader.stale) return;
+		const {id} = this.session || await this.workspace.open("article",this.key,profileId,"");
+		await (await this.workspace.document(id)).verify();
+		if (this.session?.id !== id) throw new Error("论文版本已变化，请重新核对正文");
+		await this.workspace.repository.transact(id,draft=>{draft.backend=profileId; draft.model="";});
 	}
 	get doc() { return this.reader.options.document; }
 	private get signal() { return this.reader.options.signal; }
@@ -78,7 +93,7 @@ export class InlinePaperReading {
 	}
 	async start() {
 		const {app} = this.reader.options;
-		const clean = () => { this.renderer.unload(); for (const mount of this.mounts.values()) mount.remove(); this.map.dispose(); this.guideFallback.remove(); };
+		const clean = () => { this.renderer.unload(); this.profileSelect.remove(); for (const mount of this.mounts.values()) mount.remove(); this.map.dispose(); this.guideFallback.remove(); };
 		this.signal.addEventListener("abort",clean,{once:true});
 		const { key, aliases } = await this.canonical();
 		this.key = key;
@@ -86,6 +101,7 @@ export class InlinePaperReading {
 		await this.workspace.ready();
 		if (this.signal.aborted) return;
 		const current = this.session;
+		this.profileSelect.value = this.models.resolve(current?.backend);
 		this.opened = current?.ui.inlineBranchId || "";
 		const branch = current?.branches.find(b => b.id === this.opened);
 		this.selected = current?.ui.inlineFocusId || branch?.nodeIds[branch.nodeIds.length - 1] || current?.ui.selectedId || "";
@@ -196,7 +212,7 @@ export class InlinePaperReading {
 		if (this.guideStarting || this.reader.stale) return;
 		this.guideStarting = true;
 		try {
-			const {id} = await this.workspace.open("article", this.key, "codex-cli", "");
+			const {id} = await this.workspace.open("article", this.key, this.profileSelect.value, "");
 			if (this.session?.id !== id) throw new Error("论文版本已变化，请核对正文后继续");
 			let started = "";
 			await this.workspace.advance(id, {expectedParentId:previous, prepared:async nodeId => {
@@ -210,7 +226,7 @@ export class InlinePaperReading {
 		const place = this.evidencePlace(link);
 		if (!place) { new Notice("无法核对这条原文位置"); return; }
 		this.composer = undefined;
-		this.remember("",nodeId);
+		this.remember(this.session?.nodes.find(n=>n.id===nodeId)?.branchId || "",nodeId);
 		this.inspecting = {nodeId,link};
 		this.render(true);
 		const target = place.element;
@@ -329,14 +345,14 @@ export class InlinePaperReading {
 			if(n.status==="done") {
 				this.answerLayouts.push(MarkdownRenderer.render(this.reader.options.app, safeReadingMarkdown(n.content,n.evidence.map(e=>e.id)), body.createDiv(), s.source.path, this.renderer)
 					.catch(error => { if (!this.signal.aborted) new Notice(String(error)); }));
-				if (!b) {
-					const links = this.guideLinks.get(id) || [];
+				{
+					const links = this.guideLinks.get(id) || this.guideIndex.forTurn(n,this.paths).filter(link=>this.evidencePlace(link));
 					if (!links.length) body.createEl("p",{text:"本轮没有可核对的正文位置。"});
 					for (const link of links) button(body,(link.kind === "text" ? "原文" : link.kind === "figure" ? "图" : "表")+" · "+link.label.slice(0,70),()=>this.showEvidence(id,link),"rar-guide-link");
-				} else if(n.evidence.length){const d=body.createEl("details");d.createEl("summary",{text:"原文依据 · "+n.evidence.length});for(const e of n.evidence)d.createEl("p",{text:e.label+" · "+e.text});}
+				}
 				button(body,b ? "另开子分支" : "从这轮提问",()=>this.composeTurn(place,n.id,true),"rar-thread-action");
 			} else {
-				body.createEl("p",{text:n.error || "Codex 正在阅读原文…",attr:{role:"status"}});
+				body.createEl("p",{text:n.error || "正在读取本文证据…",attr:{role:"status"}});
 				if(n.status==="failed" || n.status==="interrupted")button(body,"重试",()=>void this.workspace.generate(s.id,n.id).catch(e=>new Notice(String(e))));
 				else button(body,"停止",()=>this.workspace.stop(s.id,n.id));
 			}
@@ -361,7 +377,8 @@ export class InlinePaperReading {
 	}
 	private composeTurn(place:Place | undefined,parent:string,child:boolean,link?: GuideTarget) {
 		const evidenceLabel = link && ((link.kind === "figure" ? "图 · " : link.kind === "table" ? "表 · " : "原文 · ") + link.label.slice(0,100));
-		this.composer={place,parent,child,evidenceLabel,value:""};this.render(true);this.mount(place).querySelector("textarea")?.focus();
+		const cited = link && this.session?.nodes.find(n=>n.id===parent)?.evidence.find(e=>e.start!==undefined && e.end!==undefined && e.start <= link.start && link.end <= e.end && (!!e.asset === (link.kind==="figure")));
+		this.composer={place,parent,child,evidenceLabel,target:link ? {id:cited?.id || "",kind:link.kind,start:link.start,end:link.end,label:link.label}:undefined,value:""};this.render(true);this.mount(place).querySelector("textarea")?.focus();
 	}
 	private renderForm(m:HTMLElement,f:Composer) {
 		const form=m.createEl("form",{cls:"rar-discussion-form"});
@@ -381,11 +398,11 @@ export class InlinePaperReading {
 			if(f.selection){
 				const record=await this.annotations.findAnnotationForSelection(f.selection) || await this.annotations.saveSelectionAnnotation(f.selection,{manualText:""},true);
 				this.signal.throwIfAborted();
-				target=await this.annotations.attachForReading(record,f.value,record.aiText,this.signal,record.manualText);
+				target=await this.annotations.attachForReading(record,f.value,record.aiText,this.signal,record.manualText,this.profileSelect.value);
 			}else{
 				const s=this.session!;const parent=s.nodes.find(n=>n.id===f.parent)!;
 				const question = f.evidenceLabel ? f.evidenceLabel + "\n" + f.value : f.value;
-				target={sessionId:s.id,nodeId:await this.workspace.ask(s.id,parent.id,question,f.child?undefined:parent.branchId!)};
+				target={sessionId:s.id,nodeId:await this.workspace.ask(s.id,parent.id,question,f.child?undefined:parent.branchId!,undefined,false,f.target)};
 			}
 			if(!this.signal.aborted)this.reveal(target.sessionId,target.nodeId);
 		}catch(e){if(!this.signal.aborted)new Notice(String(e));}finally{this.busy=false;if(!this.signal.aborted)this.render(true);}

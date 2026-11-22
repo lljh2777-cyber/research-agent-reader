@@ -16,9 +16,13 @@ const { AnnotationService } = loadReading("annotations/annotation-service.ts");
 	let request, calls = 0;
 	const cli = { generate: async (r, a) => { calls++; request = r; assert.equal(a.label, "Qoder CLI CN"); return parsed; } };
 	const settings = { annotationBackendId: "qoderclicn", annotationQoderExecutable: "native", annotationQoderModel: "Qwen3.8-Flash", annotationCliTimeoutSeconds: 120 };
-	const service = new AnnotationService({}, { settings }, cli);
-	const selection = { sourcePath: "papers/fixture/article.md", selectedText: "Association", section: "Results", context: "Association does not establish causation." };
-	assert.equal((await service.generateExplanation(selection, () => {})).provider, "Qoder CLI CN"); assert.equal(request.model, "Qwen3.8-Flash");
-	settings.annotationWebSearchEnabled = true; await assert.rejects(service.generateExplanation(selection, () => {}), /关闭浅层联网/); assert.equal(calls, 1);
+	const plugin = require("./reading-test-helpers").paperPlugin({ settings, getProviderProfile: () => undefined });
+	const service = new AnnotationService({}, plugin, cli);
+	const selection = {sourcePath:"papers/fixture/article.md", selectedText:"Association", section:"Results", context:"Association does not establish causation."};
+	for (const web of [false,true]) {
+		settings.annotationWebSearchEnabled = web;
+		await assert.rejects(service.generateExplanation(selection, () => {}), /已通过连接测试/);
+	}
+	assert.equal(calls, 0);
 	console.log("QODER_ANNOTATIONS_OK (installed arguments, exact model, no retry, metadata, routing)");
 })().catch(error => { console.error(error); process.exitCode = 1; });

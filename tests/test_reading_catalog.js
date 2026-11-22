@@ -34,6 +34,10 @@ const { ReadingWorkspaceService } = loadReading("reading/workspace.ts");
 	const explicit = await service.open("pdf", "paper.pdf", "codex-cli", "", true); assert.equal(explicit.id, first.id);
 	fingerprint = "c".repeat(64); const concurrent = await Promise.all([service.open("pdf", "paper.pdf", "codex-cli", ""), service.open("pdf", "paper.pdf", "codex-cli", "")]);
 	assert.equal(concurrent[0].id, concurrent[1].id); assert.equal(concurrent[0].id, first.id); assert.equal(concurrent[1].created, false); assert.equal(destroyed, 4);
+	// A second real session at the same path now matches the current bytes exactly.
+	const currentVersion=createReadingSession({...source,fingerprint},"api","model");
+	await service.repository.add(currentVersion);
+	assert.equal((await service.open("pdf","paper.pdf","api","")).id,currentVersion.id);
 	const paper = { kind: "article", path: "paper.md", fingerprint, title: "Paper" };
 	service.loader = { open: async () => ({ source: paper, verify: async () => {}, destroy: async () => {} }) };
 	let runs = 0; service.generate = async () => { runs++; };

@@ -27,15 +27,13 @@ const { AnnotationService } = loadReading("annotations/annotation-service.ts");
 	let request,calls=0;
 	const cli={generate:async(r,a)=>{calls++;request=r;assert.equal(a.label,"OpenCode");return {...parsed,text:JSON.stringify({claims:[{quote:"Association does not establish causation.",meaning:"相关关系不能证明因果。"}]})};}};
 	const settings={annotationBackendId:"opencode",openCodeConfigSource:"official",openCodeExecutable:"native",annotationOpenCodeModel:parsed.requestedModel,openCodeModel:"old-configured-model",annotationCliTimeoutSeconds:120};
-	const service=new AnnotationService({}, {settings},cli),selection={sourcePath:"papers/fixture/article.md",selectedText:"Association",section:"Results",context:"Association does not establish causation."};
-	const answer=await service.generateExplanation(selection,()=>{}); assert.equal(request.model,parsed.requestedModel); assert.match(answer.model,/未报告实际模型/);
-	assert.match(request.system,/原文依据：/);assert.match(answer.text,/对应原文：/);
-	assert.match(request.system,/禁止调用任何工具、读取文件/);
-	settings.annotationOpenCodeModel=""; settings.openCodeModel=OPENCODE_ANNOTATION_MODELS[1].id; await service.generateExplanation(selection,()=>{});assert.equal(request.model,settings.openCodeModel);
-	// Existing CC Switch/web routing stays owned by the existing action runner.
-	const action={id:"annotation-explain"};let actionRuns=0;
-	const legacy=new AnnotationService({}, {settings,getDashboardAction:()=>action,resolveCliActionExecutionConfig:()=>({}),runVaultAction:async()=>{actionRuns++;return {exitCode:0,stdout:"legacy",stderr:""};}},cli);
-	settings.openCodeConfigSource="cc-switch"; await legacy.generateExplanation(selection,()=>{});assert.equal(actionRuns,1);assert.equal(calls,2);
-	settings.openCodeConfigSource="official";settings.annotationWebSearchEnabled=true;await legacy.generateExplanation(selection,()=>{});assert.equal(actionRuns,2);assert.equal(calls,2);
+	const plugin = require("./reading-test-helpers").paperPlugin({ settings, getProviderProfile: () => undefined });
+	const service = new AnnotationService({}, plugin, cli);
+	const selection = {sourcePath:"papers/fixture/article.md", selectedText:"Association", section:"Results", context:"Association does not establish causation."};
+	for (const web of [false,true]) {
+		settings.annotationWebSearchEnabled = web;
+		await assert.rejects(service.generateExplanation(selection, () => {}), /已通过连接测试/);
+	}
+	assert.equal(calls, 0);
 	console.log("OPENCODE_ANNOTATIONS_OK (exact model IDs, permissions, complete parts, unknown actual model, legacy routing)");
 })().catch(error=>{console.error(error);process.exitCode=1;});

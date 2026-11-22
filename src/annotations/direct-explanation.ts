@@ -6,6 +6,7 @@ import type { WebSearchResult } from "../types/contracts";
 import type { AnnotationExplanation } from "./types";
 
 interface DirectExplanationOptions {
+	images?: import("../reading/types").ReadingImage[];
 	gptAnnotation?: import("../types/contracts").ProviderChatRequest["gptAnnotation"];
 	profile: ProviderProfile;
 	provider: LLMProvider;
@@ -72,11 +73,12 @@ export async function generateDirectExplanation(options: DirectExplanationOption
 			} else if (backend?.kind === "native") {
 				instructions += "\n请调用供应商联网搜索，在引用处附上实际获得的 Markdown 网页链接；若未获得来源，明确说明无法核验，不编造链接。";
 			}
+			const prompt = options.user + (sources.length ? "\\n\\n网络参考摘录：\\n" + buildWebEvidenceContext(sources, {totalChars:4500}) : "");
 			const result = await provider.complete({
 				model: profile.model,
 				messages: [
 					{ role: "system", content: instructions },
-					{ role: "user", content: options.user + (sources.length ? `\n\n网络参考摘录：\n${buildWebEvidenceContext(sources, { totalChars: 4500 })}` : "") },
+					{ role: "user", content: options.images?.length ? [...options.images.map(i=>({ type:"image_url" as const, image_url:{url:i.dataUrl} })), {type:"text" as const,text:prompt}] : prompt },
 				],
 				maxTokens: options.maxTokens,
 				...(options.gptAnnotation ? { gptAnnotation: options.gptAnnotation } : {}),

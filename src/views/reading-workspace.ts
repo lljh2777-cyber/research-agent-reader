@@ -649,7 +649,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const targetLabel = quoted ? "新建子支线 · 引用：" + quoted.text.slice(0, 80) : branchId ? "继续当前支线 · 从最后一轮续问" : "新建支线 · " + (target ? "主线 " + String(session.mainIds.indexOf(target) + 1).padStart(2, "0") + "：" + readingNode(session, target).title : "请先开始主线");
 		const context = element(box, "div", "reading-composer-context"); icon(context, quoted ? "quote" : "corner-down-right"); element(context, "small", "", targetLabel).title = targetLabel;
 		const webLabel = element(context, "label", "reading-web-option"); const web = element(webLabel, "input"); web.type = "checkbox";
-		web.disabled = session.source.kind === "code" || session.backend === "codex-cli" || session.demo === true || Boolean(target && readingAnnotationOrigin(session, target));
+		web.disabled = session.source.kind === "code" || session.demo === true || Boolean(target && readingAnnotationOrigin(session, target));
 		web.checked = !web.disabled && session.ui.webDrafts?.[key] === true;
 		if (session.source.kind === "code") webLabel.hidden = true;
 		element(webLabel, "span", "", "联网补充"); webLabel.title = web.disabled ? "联网支线需选择 Direct API 阅读模型" : "仅本次追问使用供应商联网配置；先读取本文，再补充网页";
@@ -763,13 +763,15 @@ export class ReadingWorkspaceView extends ItemView {
 		const close = modal.onClose.bind(modal); modal.onClose = () => { sourceLocation.dispose(); close(); };
 		const backendOptions = code ? modal.contentEl : element(modal.contentEl, "details");
 		if (!code) element(backendOptions, "summary", "", "本次带读模型");
-		const backend = element(element(backendOptions, "label", "reading-field", "讲解后端"), "select"); element(backend, "option", "", "Codex CLI").value = "codex-cli";
+		const backend = element(element(backendOptions, "label", "reading-field", "讲解后端"), "select"); if (code) element(backend, "option", "", "Codex CLI").value = "codex-cli"; else element(backend,"option","","共用论文 API").value = "";
 		this.plugin.getVerifiedProviderProfiles().forEach((profile) => { element(backend, "option", "", profile.name + " · " + profile.model).value = profile.id; });
 		const model = element(element(backendOptions, "label", "reading-field", "Codex 模型（可选）"), "input"); model.placeholder = "留空使用配置中的模型";
 		backend.onchange = () => { model.parentElement!.hidden = backend.value !== "codex-cli"; };
 		if (entry?.source) { kind.value = entry.source.kind; path.value = entry.source.path; }
 		kind.onchange = () => sourceLocation.refresh(); sourceLocation.refresh();
-		const preferred = entry?.backend || (kind.value !== "code" && (this.plugin.settings.sceneProfiles?.reading || "codex-cli"));
+		const preferred = entry?.backend || (kind.value !== "code" && this.plugin.paperProfileId());
+		let changedBackend = Boolean(entry?.backend);
+		backend.addEventListener("change", () => { changedBackend = true; });
 		if (preferred && [...backend.options].some(option => option.value === preferred)) backend.value = preferred;
 		model.parentElement!.hidden = backend.value !== "codex-cli";
 		const forceNew = code ? element(element(modal.contentEl, "label", "reading-new-session-option"), "input") : undefined;
@@ -780,7 +782,10 @@ export class ReadingWorkspaceView extends ItemView {
 			submit.disabled = true;
 			preview.disabled = true;
 			this.handle(this.service.open(kind.value as ReadingSession["source"]["kind"], path.value.trim().replace(/^"|"$/g, ""), backend.value, model.value.trim(), Boolean(forceNew?.checked))
-				.then(({ id }) => { modal.close(); this.selectSession(id); if (generate && !this.service.repository.get(id).mainIds.length) return this.service.advance(id); }).finally(() => { submit.disabled = false; preview.disabled = false; }));
+				.then(async ({ id }) => { if (!code && changedBackend) {
+					await (await this.service.document(id)).verify();
+					await this.service.repository.transact(id,draft=>{draft.backend=backend.value; draft.model="";});
+				} modal.close(); this.selectSession(id); if (generate && !this.service.repository.get(id).mainIds.length) return this.service.advance(id); }).finally(() => { submit.disabled = false; preview.disabled = false; }));
 		};
 		const submit = button(modal.contentEl, "打开并继续阅读", () => open(true)); const preview = button(modal.contentEl, "仅打开来源，不调用模型", () => open(false)); submit.classList.add("mod-cta"); modal.open();
 	}
@@ -893,8 +898,8 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	private openModel(): void {
 		const session = this.session!; const modal = this.modal("阅读模型");
-		const backend = element(element(modal.contentEl, "label", "reading-field", "讲解后端"), "select"); element(backend, "option", "", "Codex CLI").value = "codex-cli";
-		this.plugin.getVerifiedProviderProfiles().forEach((profile) => { element(backend, "option", "", profile.name + " · " + profile.model).value = profile.id; }); backend.value = session.backend;
+		const backend = element(element(modal.contentEl, "label", "reading-field", "讲解后端"), "select"); if (session.source.kind === "code") element(backend, "option", "", "Codex CLI").value = "codex-cli"; else element(backend,"option","","共用论文 API").value = "";
+		this.plugin.getVerifiedProviderProfiles().forEach((profile) => { element(backend, "option", "", profile.name + " · " + profile.model).value = profile.id; }); backend.value = session.source.kind === "code" ? session.backend : this.plugin.paperProfileId(session.backend);
 		const model = element(element(modal.contentEl, "label", "reading-field", "Codex 模型（可选）"), "input"); model.value = session.model; model.placeholder = "留空使用配置中的模型";
 		const style = element(element(modal.contentEl, "label", "reading-field", "后续讲解重点"), "select");
 		for (const [value, label] of Object.entries(TEACHING_STYLES)) element(style, "option", "", label).value = value;

@@ -44,6 +44,8 @@ export interface ReadingEvidence {
 export interface ReadingQuote { nodeId: string; text: string; start: number; end: number }
 export interface ReadingCodeQuote { evidenceId: string; path: string; sourceHash: string; text: string; start: number; end: number; startLine: number; endLine: number }
 export interface ReadingNode {
+	paperTrace?: import("./paper-agent").PaperTrace;
+	paperTarget?: { kind?: "figure" | "table" | "text"; id: string; start: number; end: number; label: string };
 	requestWeb?: boolean;
 	web?: { mode: "native" | "tavily"; query: string; sources: { url: string; title: string; content?: string }[]; warning: string; };
 	correction?: { of: string; originalHash: string; reason: string };
@@ -156,6 +158,7 @@ export interface ReadingBackendRequest {
 	onUsage?: (usage: { input?: number; output?: number; cachedInput?: number }) => void;
 }
 export interface ReadingBackend {
+	profileId?: string;
 	webSearch?: () => import("../services/web-search").WebSearchBackendResolution;
 	name: string; model: string; images: boolean;
 	complete(request: ReadingBackendRequest): Promise<string>;

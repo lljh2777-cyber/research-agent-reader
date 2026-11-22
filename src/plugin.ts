@@ -1,3 +1,5 @@
+import { resolvePaperProfileId } from "./reading/paper-agent";
+import { gptAnnotationRequest, supportsGptAnnotations } from "./annotations/gpt-options";
 import { KnowledgeFinder, KNOWLEDGE_FINDER } from "./views/knowledge-finder";
 import { AnnotationHighlights } from "./annotations/annotation-highlights";
 import {
@@ -697,7 +699,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				}
 			}
 			return { key, aliases };
-		}, (record,anchorRect)=>this.openAnnotationPopover({record,anchorRect}));
+		}, (record,anchorRect)=>this.openAnnotationPopover({record,anchorRect}), { profiles:()=>this.getVerifiedProviderProfiles(), resolve:id=>this.paperProfileId(id) });
 		this.inlineReaders.set(pane,pane.start().catch(e=>{ if(!reader.stale)new Notice(String(e)); }));
 		reader.options.signal.addEventListener("abort",()=>this.inlineReaders.delete(pane),{once:true});
 	}
@@ -2778,7 +2780,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			}
 		}
 		const workspace = this.getReadingWorkspace();
-		const { id, created } = await workspace.open("article", path, this.settings.sceneProfiles?.reading || "codex-cli", "");
+		const { id, created } = await workspace.open("article", path, this.paperProfileId(), "");
 		await this.activateReadingWorkspace({ sessionId: id });
 		if (created) await workspace.advance(id);
 	}
@@ -3885,7 +3887,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const adapter = this.app.vault.adapter;
 			if (!(adapter instanceof FileSystemAdapter)) throw new Error("交互深读需要桌面文件系统");
 			this.readingWorkspace = new ReadingWorkspaceService(this.app, adapter.getBasePath(), path.join(adapter.getBasePath(), this.manifest.dir || ".obsidian/plugins/research-agent-reader"));
-			this.readingEngine = new ReadingEngine(this.readingWorkspace, session => this.createReadingBackend(session), async (query, context) => {
+			this.readingEngine = new ReadingEngine(this.readingWorkspace, session => session.source.kind === "code" ? this.createReadingBackend(session) : this.createPaperBackend(session.backend), async (query, context) => {
 				const prefixes = ["sources", "concepts", "methods", "datasets", "synthesis", "mocs", "projects", "entities", "code", "r", "linux"].map((folder) => "wiki/" + folder);
 				let paperPaths: string[] | undefined;
 				if (context && /本文|这篇|本研究|作者/.test(context.question) && !/比较|对比|跨论文|相比/.test(context.question)) {
@@ -3904,6 +3906,15 @@ export default class AgentDashboardPlugin extends Plugin {
 		return this.readingWorkspace;
 	}
 	getReadingEngine(): ReadingEngine { this.getReadingWorkspace(); return this.readingEngine!; }
+	paperProfileId(id?: string, annotation = false): string { return resolvePaperProfileId(this.settings, id, annotation); }
+	createPaperBackend(id?: string, options?: { model?: string; gpt?: import("./types/contracts").ProviderChatRequest["gptAnnotation"]; annotation?: boolean }): DirectReadingBackend {
+		const profile = this.getProviderProfile(this.paperProfileId(id, options?.annotation));
+		if (!profile?.lastTest?.ok) throw new Error("请选择已通过连接测试的论文阅读 API。历史回答已保留。");
+		const model = options?.model || profile.model;
+		const config = { ...profile, model };
+		const gpt = options?.gpt || (config.type === "openai" && supportsGptAnnotations(model) ? gptAnnotationRequest(model, "context") : undefined);
+		return new DirectReadingBackend(this.createLLMProvider(config), profile.name, model, profile.lastTest.streamingVerified === true, supportsReadingSchema(config), () => this.resolveWebSearchBackend(config), profile.id, gpt);
+	}
 	createReadingBackend(session: Pick<ReadingSession, "backend" | "model">, streaming = true): ReadingBackend {
 		if (session.backend === "codex-cli") return new CodexReadingBackend(this.settings.codexExecutable, session.model || this.settings.codexModel, this.readingPluginDirectory());
 		const profile = this.getProviderProfile(session.backend); if (!profile || profile.lastTest?.ok !== true) throw new Error("请选择已通过连接测试的模型接口");

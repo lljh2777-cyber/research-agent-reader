@@ -17,7 +17,7 @@ async function fixture(kind = "pdf") {
 	const storage = memoryStorage(), repo = new ReadingRepository(storage);
 	const s = createReadingSession({ kind, title: "paper", path: kind === "pdf" ? "a.pdf" : "papers/a/article.md", fingerprint: "a".repeat(64) });
 	const n = addReadingNode(s, null); await repo.add(s);
-	const document = { evidence, catalog: readingCatalog(evidence), verify: async () => {}, image: async () => null };
+	const document = { source:s.source, evidence, catalog: readingCatalog(evidence), verify: async () => {}, image: async () => null };
 	const workspace = { repository: repo, document: async () => document };
 	const requests = [];
 	const backend = { name: "mock", model: "test", images: false, complete: async request => {
@@ -26,13 +26,13 @@ async function fixture(kind = "pdf") {
 			assert(input.catalog.includes("Limitations")); assert(input.catalog.includes("Methods"));
 			return JSON.stringify(kind === "article" ? { output: { modules } } : { modules });
 		}
-		if (input.catalog) {
+		if (input.materials) {
 			assert(repo.get(s.id).modulePlan, "plan must be durably saved before selection");
-			return JSON.stringify({ ids: [input.currentModule?.evidenceIds[0] || evidence[0].id], query: input.currentUnit || "question", needsVisual: false });
+			assert.ok(input.materials.length); return JSON.stringify({ action:"ready" });
 		}
 		assert(!("outline" in input.output)); assert(!("completed" in input.output));
 		const index = input.currentModule?.number || 0;
-		return JSON.stringify({ title: "model title", content: `Unit ${index} [text-1-0]`, evidenceIds: ["text-1-0"], mainSummary: `summary ${index}`, outline: ["forged"], completed: true });
+		return JSON.stringify({ title: "model title", content: `Unit ${index} [${input.evidence[0].id}]`, evidenceIds: [input.evidence[0].id], mainSummary: `summary ${index}`, outline: ["forged"], completed: true });
 	} };
 	return { storage, repo, s, n, document, workspace, requests, backend, engine: new ReadingEngine(workspace, () => backend) };
 }
@@ -80,7 +80,7 @@ async function fixture(kind = "pdf") {
 		await assert.rejects(f.engine.generate(f.s.id, f.n.id));
 		assert.equal(calls, 1); assert.equal(f.repo.get(f.s.id).modulePlan, undefined); assert.equal(f.repo.get(f.s.id).outline.length, 0); assert.equal(f.repo.get(f.s.id).mainIds.length, 1);
 	}
-	// Missing inline citations fail visibly; an explicit retry reuses the saved plan/selection.
+	// Missing inline citations fail visibly; an explicit retry reuses the saved plan and rechecks evidence.
 	{
 		const f = await fixture(); const complete = f.backend.complete; let attempts = 0;
 		f.backend.complete = async r => {
@@ -93,7 +93,7 @@ async function fixture(kind = "pdf") {
 		assert.equal(f.repo.get(f.s.id).nodes[0].status, "failed"); assert.equal(f.repo.get(f.s.id).completed, false); assert.equal(f.repo.get(f.s.id).mainSummary, "");
 		await f.engine.generate(f.s.id, f.n.id);
 		assert.equal(f.requests.filter(r => r.input.action === "规划全文路线").length, 1);
-		assert.equal(f.requests.filter(r => r.input.catalog && r.input.action !== "规划全文路线").length, 1);
+		assert.equal(f.requests.filter(r => r.input.materials).length, 2);
 		assert.equal(f.repo.get(f.s.id).nodes[0].status, "done");
 	}
 	// Fully scanned sources require actual image input; never plan from page labels alone.

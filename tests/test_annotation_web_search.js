@@ -18,12 +18,17 @@ function fixture(backend, settings = {}) {
 		getDashboardAction: () => ({ id: "annotation-explain" }), resolveCliActionExecutionConfig: () => ({ model: "cli-model" }),
 		runVaultAction: async (...args) => { cli.push(args); return { exitCode: 0, stdout: "CLI explanation", stderr: "" }; }, requestVaultActionStop: () => {},
 	};
-	return { service: new AnnotationService({}, plugin), plugin, calls, cli, searches };
+	const service = new AnnotationService({}, require("./reading-test-helpers").paperPlugin(plugin));
+	service.sourceText = async () => selection.selectedText + " in this paragraph.";
+	return { service, plugin, calls, cli, searches };
 }
 const base = { profile, system: "Explain a selected phrase.", user: "Local context", query: "a query", maxTokens: 900, timeoutMs: 1000, registerCancel: () => {} };
 
 (async () => {
-	const { argumentPassages } = loadReading("annotations/argument-context.ts");
+	const { argumentPassages, attachContextQuotes } = loadReading("annotations/argument-context.ts");
+	const two = new Map([["[段 8 句 1]","Original one."],["[段 8 句 2]","Original two."]]);
+	assert.match(attachContextQuotes("所选依据［段 8 句 1–2］。",two),/Original one\.[\s\S]*Original two\./);
+	assert.throws(()=>attachContextQuotes("所选依据［段 8 句 1–3］。",two),/未知段句/);
 	const sections = ["# Results","Clustering improved (Fig. 3b).", ...Array.from({length: 15}, (_,i) => "Filler paragraph " + i + "."), "**Fig. 30.** Unrelated curve.", "**Fig. 3.** Cluster sizes across samples.", "# Methods", "### Clustering", "We grouped the records using a cosine distance."];
 	const passages = argumentPassages(sections.join("\n\n"), "Clustering improved", undefined).join("\n");
 	assert.match(passages,/Cluster sizes/);
@@ -34,19 +39,26 @@ const base = { profile, system: "Explain a selected phrase.", user: "Local conte
 	const bodies = [];
 	gpt.plugin.getProviderProfile = () => gptProfile;
 	gpt.plugin.resolveWebSearchBackend = () => { throw Error("GPT must use Responses search"); };
-	gpt.plugin.createLLMProvider = () => new OpenAIProvider({
+	gpt.plugin.createLLMProvider = config => new OpenAIProvider({
 		app: { secretStorage: { getSecret: () => "fixture-key" } },
 		providerHttpRequest: async ({ url, body }) => {
 			assert.equal(url, "https://api.openai.com/v1/responses");
 			bodies.push(body);
+			const input = JSON.parse(body.input[1].content);
+			const decision = input.locations && JSON.stringify(input.materials.some(e=>e.id==="outcome") ? {action:"ready"} : {action:"read",ids:["outcome"]});
 			const ref = body.input[1].content.match(/\[段 \d+ 句 \d+\]/)?.[0];
 			return { status: 200, json: { output: [{ type: "message", content: [{ type: "output_text",
-				text: "释义。" + (ref || ""), annotations: [{ type: "url_citation", title: "Source", url: "https://example.org/ref" }] }] }] } };
+				text: decision || ("释义。" + (ref || "")), annotations: [{ type: "url_citation", title: "Source", url: "https://example.org/ref" }] }] }] } };
 		},
-	}, gptProfile);
+	}, config);
 	const article = "The introduction.\n\nThe selected phrase belongs here.\n\nThe outcome was recorded.";
 	const excerpt = { ...selection, context: article, selectedText: "selected phrase", sourceStart: article.indexOf("selected phrase") };
 	gpt.service.sourceText = async () => article;
+	const outcome = article.indexOf("The outcome");
+	gpt.plugin.getReadingWorkspace = () => ({loader:{open:async()=>({
+		source:{path:selection.sourcePath,fingerprint:"a".repeat(64)}, verify:async()=>{}, destroy:async()=>{},
+		evidence:[{id:"outcome",kind:"paper",path:selection.sourcePath,label:"Results",start:outcome,end:article.length,text:article.slice(outcome)}]
+	})}});
 	for (const model of ["gpt-6.2-sol", "gpt-6.1-terra", "gpt-6-luna", "gpt-6.1-sol"]) {
 		const answer = await gpt.service.generateExplanation(excerpt, () => {}, { gpt: { model } });
 		const briefBody = bodies.at(-1);
@@ -95,11 +107,11 @@ const base = { profile, system: "Explain a selected phrase.", user: "Local conte
 	await assert.rejects(() => explicit.service.generateExplanation(selection, () => {}), /未配置 Tavily/);
 	assert.equal(explicit.calls.length + explicit.cli.length, 0, "explicit API failures must not silently switch provider");
 	const fallback = fixture(unavailable, { annotationBackendId: "auto" });
-	await fallback.service.generateExplanation(selection, () => {}); assert.equal(fallback.cli.length, 1); assert.equal(fallback.cli[0][3].retrievalMode, "web");
+	await assert.rejects(fallback.service.generateExplanation(selection, () => {}), /未配置 Tavily/); assert.equal(fallback.cli.length, 0); assert.equal(fallback.calls.length, 0);
 	const missing = fixture(undefined, { annotationBackendId: "removed-profile" });
-	await assert.rejects(() => missing.service.generateExplanation(selection, () => {}), /配置不存在/); assert.equal(missing.cli.length, 0);
+	await assert.rejects(() => missing.service.generateExplanation(selection, () => {}), /已通过连接测试/); assert.equal(missing.cli.length, 0);
 	const forcedCli = fixture(undefined, { annotationBackendId: "claude-code" });
-	await forcedCli.service.generateExplanation(selection, () => {}); assert.equal(forcedCli.cli.length, 1); assert.equal(forcedCli.calls.length, 0);
+	await forcedCli.service.generateExplanation(selection, () => {}); assert.equal(forcedCli.cli.length, 0); assert.equal(forcedCli.calls.length, 1);
 	const native = fixture({ kind: "native", protocol: "qwen" });
 	const nativeText = await native.service.generateExplanation(selection, () => {});
 	assert.deepEqual(native.calls[0].request.webSearch, { protocol: "qwen", maxResults: 3 });

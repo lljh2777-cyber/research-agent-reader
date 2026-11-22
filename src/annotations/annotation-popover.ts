@@ -238,7 +238,7 @@ export class AnnotationPopover extends Component {
 				const record = this.record && element.dataset.dirty !== "true" ? this.record : await persistDraft(true);
 				this.record = record;
 				controller.signal.throwIfAborted();
-				await this.service.guideFromAnnotation(record, question?.value || "", ai?.value || "", controller.signal, note.value);
+				await this.service.guideFromAnnotation(record, question?.value || "", ai?.value || "", controller.signal, note.value, retryProfile.value || this.service.defaultExplanationProfileId());
 				this.close();
 			} catch (error) {
 				if (!controller.signal.aborted) showMessage(displayError(error));
@@ -369,6 +369,7 @@ export class AnnotationPopover extends Component {
 			refreshExplanation();
 			this.position();
 		});
+		let traces = [...(baseline?.paperTraces || [])];
 		const explain = async (deep: boolean) => {
 			if (!ai) return;
 			if (generating) { this.stopGeneration(); generating = false; showMessage("已停止生成"); refresh(); return; }
@@ -381,6 +382,7 @@ export class AnnotationPopover extends Component {
 				if (!isCurrent()) return;
 				const explanation = await this.service.generateExplanation(context, cancel => { if (isCurrent()) this.cancelGeneration = cancel; else cancel(); },{profileId:retryProfile?.value,question:question?.value,depth:deep?"context":"brief",gpt:readGptChoices(deep)});
 				if (!isCurrent()) return;
+				if (explanation.trace) traces = [...traces, explanation.trace];
 				generated = explanation;
 				const asked = question?.value.trim();
 				const answer = (asked ? "**提问** " + asked + "\n\n" : "") + explanation.text;
@@ -452,7 +454,7 @@ export class AnnotationPopover extends Component {
 				draft.color = color;
 				if (canList && (!baseline || excerpt !== listedExcerpt(baseline))) draft.excerptListed = excerpt;
 				if (generated || (ai?.value || "") !== (baseline?.aiText || "")) draft.aiText = ai?.value || "";
-				if (generated) Object.assign(draft, { aiProvider: generated.provider, aiModel: generated.model, aiCli: generated.cli, aiEdited: draft.aiText !== generated.text });
+				if (generated) Object.assign(draft, { paperTraces: traces, aiProvider: generated.provider, aiModel: generated.model, aiCli: generated.cli, aiEdited: draft.aiText !== generated.text });
 			}
 			return this.record ? this.service.updateAnnotation(this.record, draft, this.selection) : this.service.saveSelectionAnnotation(this.selection!, draft, forGuide);
 		};

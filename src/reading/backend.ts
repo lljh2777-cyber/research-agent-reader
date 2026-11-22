@@ -19,7 +19,8 @@ export function readingUsage(raw: unknown): { input?: number; output?: number; c
 export class DirectReadingBackend implements ReadingBackend {
 	readonly images: boolean;
 	constructor(private provider: LLMProvider, readonly name: string, readonly model: string, private streaming: boolean, private structuredOutput = false,
-		readonly webSearch?: () => import("../services/web-search").WebSearchBackendResolution) { this.images = provider.capabilities.vision; }
+		readonly webSearch?: () => import("../services/web-search").WebSearchBackendResolution, readonly profileId?: string,
+		private gptOptions?: import("../types/contracts").ProviderChatRequest["gptAnnotation"]) { this.images = provider.capabilities.vision; }
 	async complete(request: ReadingBackendRequest): Promise<string> {
 		request.signal.throwIfAborted();
 		if (request.images.length && !this.images) throw new Error("当前模型未启用图像能力");
@@ -30,8 +31,8 @@ export class DirectReadingBackend implements ReadingBackend {
 		const abort = (): void => cancel?.(); request.signal.addEventListener("abort", abort, { once: true });
 		try {
 			const options = { timeoutMs: 120_000, registerCancel: (callback: () => void) => { cancel = callback; if (request.signal.aborted) callback(); } };
-			const payload = { model: this.model, messages, maxTokens: request.maxTokens ?? 6000, ...(request.webSearch ? { webSearch: { protocol: request.webSearch, maxResults: 3 } } : {}), ...(request.disableReasoning ? { disableReasoning: true } : {}), ...(this.structuredOutput && request.schema ? { responseSchema: { name: "reading_result", schema: request.schema } } : {}) };
-			const result = this.streaming ? await this.provider.stream(payload, (delta) => request.onDelta?.(delta), options) : await this.provider.complete(payload, options);
+			const payload = { model: this.model, messages, ...(this.gptOptions ? {gptAnnotation:this.gptOptions} : {}), maxTokens: request.maxTokens ?? 6000, ...(request.webSearch ? { webSearch: { protocol: request.webSearch, maxResults: 3 } } : {}), ...(request.disableReasoning ? { disableReasoning: true } : {}), ...(this.structuredOutput && request.schema ? { responseSchema: { name: "reading_result", schema: request.schema } } : {}) };
+			const result = this.streaming && !this.gptOptions ? await this.provider.stream(payload, (delta) => request.onDelta?.(delta), options) : await this.provider.complete(payload, options);
 			request.signal.throwIfAborted();
 			const usage = readingUsage(result.raw?.usage); if (usage) request.onUsage?.(usage);
 			if (!result.text?.trim()) throw new Error("模型返回空结果"); return result.text;

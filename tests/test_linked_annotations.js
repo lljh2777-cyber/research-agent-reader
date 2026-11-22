@@ -123,17 +123,16 @@ let count = 0; const check = async (name, fn) => { await fn(); count++; console.
   assert.throws(() => prepareExcerpt({ ...s, selectedText: "x".repeat(601) }, content), /位置/);
   const huge = "[short](https://example.invalid/" + "x".repeat(2500) + ")"; assert.throws(() => prepareExcerpt({ ...s, selectedText: huge }, content), /位置/);
  });
- await check("native CLI sees and verifies identical visible prose; hidden URLs and altered claims cannot become evidence", async () => {
-  const raw = "The classifier performed only marginally better than random guessing (Fig. [1a](https://example.invalid/hidden-strong-association)).", visible = "The classifier performed only marginally better than random guessing (Fig. 1a).", f = memory(raw);
-  const settings = { annotationBackendId: "qoderclicn", annotationQoderModel: "Qwen3.8-Flash", annotationCliTimeoutSeconds: 120 }, requests = [];
-  let quote = visible; const cli = { generate: async request => { requests.push(request); return { text: JSON.stringify({ claims: [{ quote, meaning: "作者报告该分类器的表现仅略优于随机猜测。" }] }), requestedModel: settings.annotationQoderModel }; } };
-  const service = new AnnotationService(f.app, { settings }, cli), selection = { sourcePath: "Clippings/linked.md", selectedText: raw, context: raw, section: "" };
-  const answer = await service.generateExplanation(selection, () => {}); assert.ok(answer.text.includes(visible)); assert.ok(requests[0].user.includes(visible)); assert.ok(!requests[0].user.includes("https://")); assert.equal(selection.selectedText, raw);
-  quote = visible.replace("marginally better", "much better"); await assert.rejects(service.generateExplanation(selection, () => {}), /引句不在/);
-  quote = "hidden-strong-association"; await assert.rejects(service.generateExplanation(selection, () => {}), /引句不在/);
-  const referenced = "Read [the paper][ref].", content = referenced + "\n\n[ref]: https://example.invalid/hidden\n"; f.files.get(selection.sourcePath).text = content; quote = "Read the paper.";
-  await service.generateExplanation({ ...selection, selectedText: referenced, context: referenced }, () => {}); assert.ok(requests.at(-1).user.includes(quote)); assert.ok(!requests.at(-1).user.includes("[ref]"));
-  assert.equal(requests.length, 4, "each accepted or rejected result consumes exactly one mock call");
+ const {renderCliGroundedExplanation} = loadReading("annotations/cli-grounded-explanation.ts");
+ const reviewQuote = (quote,evidence) => renderCliGroundedExplanation(JSON.stringify({claims:[{quote,meaning:"作者报告了这项结果。"}]}),evidence);
+ await check("historical verified quotes exclude hidden URLs and altered claims", async () => {
+  const raw = "The classifier performed only marginally better than random guessing (Fig. [1a](https://example.invalid/hidden-strong-association)).";
+  const visible = "The classifier performed only marginally better than random guessing (Fig. 1a).";
+  const evidence = annotationEvidenceText(raw);
+  assert.equal(evidence,visible);
+  assert.ok(reviewQuote(visible,evidence).includes(visible));
+  for(const forged of ["hidden-strong-association",visible.replace("marginally better","much better")]) assert.throws(()=>reviewQuote(forged,evidence),/引句不在/);
+  assert.equal(annotationEvidenceText("Read [the paper][ref].","[ref]: https://example.invalid/hidden"),"Read the paper.");
  });
  await check("superscripts and subscripts survive CLI evidence without changing DOM anchors or old receipts", async () => {
   const raw = "Xenium<sup>5</sup>, inference<sup>17</sup>, 10<sup>2</sup> and H<sub>2</sub>O.", visible = "Xenium5, inference17, 102 and H2O.", d = dom([visible]), f = memory(raw);
@@ -145,14 +144,9 @@ let count = 0; const check = async (name, fn) => { await fn(); count++; console.
   assert.equal(revealMarkdownRange(d.block, raw, 0, raw.length, captured.start, captured.end).toString(), visible);
   live(d.range()); const selection = await f.service.captureSelection();
   const record = await f.service.createAnnotation(selection, { aiText: 'Historical Xenium5 quote.', aiProvider: 'original' });
-  const settings = { annotationBackendId: 'qoderclicn', annotationQoderModel: 'Qwen3.8-Flash', annotationCliTimeoutSeconds: 120 }, requests = [];
-  let quote = raw;
-  const cli = { generate: async request => { requests.push(request); return { text: JSON.stringify({ claims: [{ quote, meaning: '保留原文上下标。' }] }), requestedModel: settings.annotationQoderModel }; } };
-  const service = new AnnotationService(f.app, { settings }, cli);
-  const answer = await service.generateExplanation(selection, () => {});
-  assert.equal(JSON.parse(requests[0].user).evidence, raw); assert.ok(answer.text.includes(raw));
-  quote = visible; await assert.rejects(service.generateExplanation(selection, () => {}), /引句不在/);
-  assert.deepEqual(await service.loadAnnotation(record.annotationPath, record.id), JSON.parse(JSON.stringify(record)));
+  assert.ok(reviewQuote(raw,annotationEvidenceText(raw)).includes(raw));
+  assert.throws(()=>reviewQuote(visible,annotationEvidenceText(raw)),/引句不在/);
+  assert.deepEqual(await f.service.loadAnnotation(record.annotationPath,record.id),JSON.parse(JSON.stringify(record)));
   assert.equal(f.files.get(selection.sourcePath).text, raw);
  });
  console.log(`LINKED_ANNOTATIONS_OK (${count} groups; memory DOM/Vault only)`);
