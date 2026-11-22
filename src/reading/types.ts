@@ -70,10 +70,24 @@ export interface ReadingNode {
 	model?: string;
 	retrieval?: { query: string; paths: string[]; error?: string; label?: string; warnings?: string[] };
 }
+export interface AnnotationOrigin {
+	id: string;
+	path: string;
+	digest: string;
+	at: number;
+	chinese: boolean;
+	selected: string;
+	englishStart: number;
+	englishDigest: string;
+	question: string;
+	note: string;
+	quotes: string[];
+}
 export interface ReadingBranch {
+	annotation?: AnnotationOrigin;
 	parentContext?: string;
 	id: string;
-	parentNodeId: string;
+	parentNodeId: string | null;
 	mainSnapshot: string;
 	mainHeadId: string | null;
 	ancestorContext: string;
@@ -90,6 +104,7 @@ export interface ReadingWindow {
 export interface ReadingModule { title: string; question: string; evidenceIds: string[]; }
 export interface ReadingModulePlan { version: 1; modules: ReadingModule[]; }
 export interface ReadingSession {
+	paperSpace?: boolean;
 	sourceRelocations?: { from: string; to: string; date: string; fingerprint: string }[];
 	modulePlan?: ReadingModulePlan;
 	teachingStyle?: ReadingTeachingStyle;

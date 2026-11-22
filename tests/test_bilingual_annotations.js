@@ -156,17 +156,17 @@ let count=0; async function check(name,fn){fixture=make();await fn(fixture);coun
  await check("Codex handoff verifies quotes and returns to the exact Chinese occurrence",async f=>{
   const selected=selection(f), record=await f.service.createExcerpt(selected), signal=new AbortController().signal;
   const saved="**提问** 这里指什么？\n\n解释\n\n### 上下文解释\n\n解释\n\n原文依据\n[段 3 句 1] Repeated selected words.";
-  let calls=0, target;
+  let calls=0, target, origin;
   const guide=new api.AnnotationService(f.app,{
-   createReadingBackend: ({backend})=>{assert.equal(backend,"codex-cli");return {complete:async req=>{
-    calls++;const input=JSON.parse(req.prompt);assert.equal(input.问题,"这里指什么？");assert.equal(input.选句,selected.selectedText);
-    assert.deepEqual(input.已核对引句,["Repeated selected words."]);return "依据 [段 3 句 1]";}};},
-   openReadingEvidence:async(...args)=>{target=args;}
+   getReadingWorkspace:()=>({attachAnnotation:async(path,a)=>{
+    calls++;assert.equal(path,f.root+"/paper.md");assert.equal(a.question,"这里指什么？");assert.equal(a.selected,selected.selectedText);
+    assert.deepEqual(a.quotes,["Repeated selected words."]);origin=a;return {sessionId:"test",nodeId:"node"};
+   }}),openLearningRecord:async()=>{},openReadingEvidence:async(...args)=>{target=args;}
   });
-  const run=await guide.guideFromAnnotation(record,"",saved,signal);
-  await run.returnToPassage();assert.deepEqual(target,[selected.sourcePath,undefined,undefined,selected.sourceStart]);assert.equal(run.chinese,true);
+  await guide.guideFromAnnotation(record,"",saved,signal);
+  await guide.returnToAnnotation(origin);assert.deepEqual(target,[selected.sourcePath,undefined,undefined,selected.sourceStart]);assert.equal(origin.chinese,true);
   await assert.rejects(guide.guideFromAnnotation(record,"",saved.replace("Repeated","Altered"),signal),/核对/);
-  f.files.get(selected.sourcePath).text+="changed";await assert.rejects(run.returnToPassage(),/变化/);assert.equal(calls,1);
+  f.files.get(selected.sourcePath).text+="changed";await assert.rejects(guide.returnToAnnotation(origin),/变化/);assert.equal(calls,1);
  });
  console.log(`Bilingual annotations: ${count} groups passed`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -67,6 +67,16 @@ export class ClipperDirectory {
 		const files = await this.storage.list(folder);
 		return { key, folder, title, doi, englishDigest, bilingual: !!manifest && files.some(f => !f.directory && f.name === "paper.zh-CN.md") };
 	}
+	async sourceForFile(filename: string): Promise<string | undefined> {
+		const relative = path.relative(this.root, filename);
+		const parts = relative.split(path.sep);
+		if (parts.length !== 2 || parts[0].startsWith(".") || parts[1] !== "paper.md") return;
+		const paper = await this.inspect(parts[0]);
+		if (!paper) return;
+		const current = await this.paper(paper.key);
+		if (current.folder !== parts[0]) throw new Error("文献目录有相同来源，请核对文件夹");
+		return CLIPPER_PREFIX + paper.key + "/paper.md";
+	}
 	async paper(key: string): Promise<ClippedPaper> {
 		const cached = this.entries.get(key);
 		if (cached) { const current = await this.inspect(cached.folder); if (current?.key === key) return current; }

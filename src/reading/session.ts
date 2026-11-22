@@ -25,9 +25,9 @@ export function completedMainContext(session: ReadingSession): string {
 	const corrections = main.filter(n => n.acceptedCorrectionId).map(n => n.title + "\n" + effectiveReadingContent(session, n));
 	return base + (corrections.length ? "\n\n用户选择的后续核对版本，涉及差异时优先于上方旧摘要；事实仍依赖本轮证据：\n" + corrections.join("\n\n") : "");
 }
-export function addReadingBranch(session: ReadingSession, parentId: string): ReadingBranch {
-	const parent = readingNode(session, parentId);
-	if (parent.status !== "done") throw new Error("请等待起点回答完成");
+export function addReadingBranch(session: ReadingSession, parentId: string | null, annotation?: ReadingBranch["annotation"]): ReadingBranch {
+	const parent = parentId ? readingNode(session, parentId) : undefined;
+	if (!parent && !annotation || parent && parent.status !== "done") throw new Error("请等待起点回答完成");
 	const ancestors: string[] = [];
 	let current: ReadingNode | undefined = parent;
 	const seen = new Set<string>();
@@ -37,7 +37,8 @@ export function addReadingBranch(session: ReadingSession, parentId: string): Rea
 		current = session.nodes.find((item) => item.id === current!.parentId);
 	}
 	const branch: ReadingBranch = { id: newReadingId(), parentNodeId: parentId,
-		parentContext: effectiveReadingContent(session, parent),
+		...(annotation ? { annotation } : {}),
+		parentContext: parent ? effectiveReadingContent(session, parent) : "",
 		mainSnapshot: completedMainContext(session),
 		mainHeadId: session.mainIds.filter((id) => readingNode(session, id).status === "done").slice(-1)[0] || null,
 		ancestorContext: ancestors.join("\n\n"), nodeIds: [], summary: "", summarizedCount: 0 };
@@ -104,8 +105,13 @@ export function validateReadingSession(value: unknown): ReadingSession {
 	checkChain(session.mainIds, null, null);
 	const branches = new Set<string>();
 	for (const branch of session.branches) {
-		if (branches.has(branch.id) || !nodes.has(branch.parentNodeId) || !Array.isArray(branch.nodeIds)
+		if (branches.has(branch.id) || (branch.parentNodeId === null ? !branch.annotation : !nodes.has(branch.parentNodeId)) || !Array.isArray(branch.nodeIds)
 			|| typeof branch.mainSnapshot !== "string" || typeof branch.ancestorContext !== "string") throw new Error("阅读支线无效");
+		const a = branch.annotation;
+		if (a && (session.source.kind === "code" || !a.id || typeof a.selected !== "string" || typeof a.question !== "string" || typeof a.note !== "string"
+			|| typeof a.path !== "string" || !a.path.endsWith(".md") || /[:\\\\]/.test(a.path) || a.path.split("/").some(part => !part || part === "." || part === "..")
+			|| ![a.at, a.englishStart].every(n => Number.isSafeInteger(n) && n >= 0) || typeof a.chinese !== "boolean"
+			|| ![a.digest, a.englishDigest].every(d => /^[a-f0-9]{64}$/.test(d)) || !Array.isArray(a.quotes) || a.quotes.some(q => typeof q !== "string"))) throw new Error("批注分支来源无效");
 		branches.add(branch.id); checkChain(branch.nodeIds, branch.id, branch.parentNodeId);
 	}
 	if (attached.size !== nodes.size) throw new Error("阅读会话包含孤立节点");

@@ -1,9 +1,9 @@
 import type { App } from "obsidian";
 import { ReadingDocumentLoader, type ReadingDocument } from "./document";
 import { FileReadingStorage, ReadingRepository, RoutedReadingStorage } from "./store";
-import { matchingReading } from "./catalog";
+import { matchingReading, readingCategory } from "./catalog";
 import { addReadingBranch, addReadingNode, createReadingSession, readingNode } from "./session";
-import type { ReadingNode, ReadingQuote, ReadingSession, ReadingSource } from "./types";
+import type { AnnotationOrigin, ReadingNode, ReadingQuote, ReadingSession, ReadingSource } from "./types";
 import { answerHash } from "./quality";
 import { codeQuote } from "../code-reading/quote";
 
@@ -31,9 +31,17 @@ export class ReadingWorkspaceService {
 	open(kind: ReadingSource["kind"], filename: string, backend: string, model: string, forceNew = false): Promise<{ id: string; created: boolean }> {
 		const operation = this.openings.then(async () => {
 			await this.ready(); const document = await this.loader.open(kind, filename);
-			const existing = !forceNew && matchingReading(this.repository.sessions.values(), document.source);
-			if (existing) { await document.destroy(); return { id: existing.id, created: false }; }
+			const sessions = [...this.repository.sessions.values()];
+			const samePaper = kind === "code" ? [] : sessions.filter(s => !s.demo && readingCategory(s) === "reading" &&
+				s.source.kind === document.source.kind && s.source.path === document.source.path);
+			const existing = samePaper.find(s => s.paperSpace) || (!forceNew || kind !== "code" ? matchingReading(sessions, document.source) : undefined) || samePaper[0];
+			if (existing) {
+				await document.destroy();
+				if (kind !== "code" && (!existing.paperSpace || existing.archived)) await this.repository.transact(existing.id, s => { s.paperSpace = true; s.archived = false; });
+				return { id: existing.id, created: false };
+			}
 			const session = createReadingSession(document.source, backend, model);
+			if (kind !== "code") session.paperSpace = true;
 			try { await this.repository.add(session); this.documents.set(session.id, document); return { id: session.id, created: true }; }
 			catch (error) { await document.destroy(); throw error; }
 		}); this.openings = operation.catch(() => undefined); return operation;
@@ -44,7 +52,7 @@ export class ReadingWorkspaceService {
 		let loaded = this.documents.get(sessionId);
 		if (!loaded) {
 			loaded = await this.loader.open(session.source.kind, session.source.path);
-			if (loaded.source.fingerprint !== session.source.fingerprint) { await loaded.destroy(); throw new Error("来源已变化，请重新选择来源创建会话"); }
+			if (loaded.source.fingerprint !== session.source.fingerprint) { await loaded.destroy(); throw new Error("来源版本已变化，历史回答已保留；请核对原文版本后继续"); }
 			this.documents.set(sessionId, loaded);
 		}
 		return loaded;
@@ -97,6 +105,31 @@ export class ReadingWorkspaceService {
 		try { await tracking?.prepared(id); }
 		catch (error) { await this.repository.transact(sessionId, session => { const node = readingNode(session, id); node.status = "failed"; node.error = "助手执行关联保存失败，尚未调用模型，可在此节点重试：" + String(error); }); throw error; }
 		await this.generate(sessionId, id);
+	}
+	async attachAnnotation(path: string, origin: AnnotationOrigin, signal: AbortSignal) {
+		const kind = /^papers\/[^/]+--jats--[^/]+\/article\.md$/.test(path) ? "structured" : "article";
+		const { id } = await this.open(kind, path, "codex-cli", "");
+		const doc = await this.document(id);
+		await doc.verify();
+		// For validated MinerU packages the fingerprint also includes the package manifest.
+		if (!/^papers\/[^/]+\/article\.md$/.test(path) && doc.source.fingerprint !== origin.englishDigest) throw new Error("批注英文来源已变化，请重新核对");
+		let nodeId = "", created = false;
+		await this.repository.transact(id, session => {
+			signal.throwIfAborted();
+			const existing = session.branches.find(b => b.annotation?.id === origin.id);
+			if (existing) nodeId = existing.nodeIds[existing.nodeIds.length - 1];
+			else {
+				const parent = session.mainIds.map(n => readingNode(session, n)).reverse().find(n => n.status === "done" &&
+					n.evidence.some(e => e.kind === "paper" && e.start !== undefined && e.end !== undefined && e.start <= origin.englishStart && origin.englishStart < e.end));
+				const branch = addReadingBranch(session, parent?.id ?? null, origin);
+				nodeId = addReadingNode(session, branch.id, origin.question || origin.note || "如何理解这段话？").id;
+				created = true;
+			}
+			session.ui.hideMap = false;
+			session.ui.selectedId = nodeId;
+		});
+		if (created) void this.generate(id, nodeId).catch(() => undefined);
+		return { sessionId: id, nodeId };
 	}
 	async ask(sessionId: string, parentId: string, question: string, branchId?: string, quote?: ReadingQuote, requestWeb = false): Promise<string> {
 		if (!question.trim()) throw new Error("请输入问题");

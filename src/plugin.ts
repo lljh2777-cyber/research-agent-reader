@@ -2724,7 +2724,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		return leaf.view;
 	}
 	async startClippedReading(path: string): Promise<void> {
-		await this.activateLearningSpace({kind:"document",reading:{source:{kind:"article",path}}});
+		const workspace = this.getReadingWorkspace();
+		const { id, created } = await workspace.open("article", path, this.settings.sceneProfiles?.reading || "codex-cli", "");
+		await this.activateReadingWorkspace({ sessionId: id });
+		if (created) await workspace.advance(id);
 	}
 	async inspectPaperLibrary(signal?: AbortSignal, verifyMineruPath?: string) {
 		const result = await readPaperLibrary(new FileSourceStorage(this.getActiveVaultRoot()), new FileSourceStorage(this.readingPluginDirectory()), {
@@ -3025,6 +3028,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (this.getReadingWorkspace().repository.get(sessionId).source.kind === "code") { new Notice("代码学习可导出独立笔记并关联已有笔记，暂不自动整理正式代码页"); return; }
 		try { const session = this.getReadingWorkspace().repository.get(sessionId); if (session.demo || !session.nodes.some(node => node.id === nodeId && node.status === "done")) throw new Error("请选择已完成的正式阅读节点"); this.showCurationModal(new KnowledgeCurationModal(this.app, this, sessionId, nodeId, review)); }
 		catch (error) { new Notice(String(error)); }
+	}
+	async returnToReadingAnnotation(origin: import("./reading/types").AnnotationOrigin) {
+		if (!this.annotationService) throw new Error("批注服务尚未就绪");
+		await this.annotationService.returnToAnnotation(origin);
 	}
 	async openLearningRecord(sessionId: string, nodeId: string): Promise<void> {
 		await this.activateReadingWorkspace({ sessionId }); const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE).map(leaf => leaf.view).find(v => v instanceof ReadingWorkspaceView && v.getState().sessionId === sessionId);
@@ -3938,6 +3945,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			const leaf = current && matches(current) ? current : workspace.getLeavesOfType("markdown").find(matches) || workspace.getLeaf("tab");
 			await leaf.openFile(file, { eState: { line: content.slice(0, offset).split("\n").length - 1 } });
 			await workspace.revealLeaf(leaf);
+			workspace.setActiveLeaf(leaf, { focus: true });
 			return;
 		}
 		await this.activateMineruReaderView(articlePath);

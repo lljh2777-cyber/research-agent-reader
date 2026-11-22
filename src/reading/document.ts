@@ -1,4 +1,4 @@
-import { requireClipper, isClipperPath } from "../library/clipper";
+import { clipperDirectory, requireClipper, isClipperPath } from "../library/clipper";
 import { imagePath, parseBilingualMarkdown } from "../reader/bilingual-document";
 import { markdownImagePattern } from "../reader/markdown-images";
 import { TFile, loadPdfJs, type App } from "obsidian";
@@ -92,7 +92,22 @@ export function selectReadingEvidence(document: ReadingDocument, query: string, 
 export class ReadingDocumentLoader {
 	constructor(private readonly app: App, private readonly vaultRoot: string) {}
 	async open(kind: ReadingSource["kind"], rawPath: string): Promise<ReadingDocument> {
-		if (kind === "article" && isClipperPath(rawPath)) return this.clippedArticle(rawPath);
+		if (kind === "article") {
+			if (isClipperPath(rawPath)) return this.clippedArticle(rawPath.replace(/\/paper\.zh-CN\.md$/, "/paper.md"));
+			const plain = !/^papers\/[^/]+\/article\.md$/.test(rawPath) && !/(^|\/)article\.md$/.test(rawPath);
+			if (plain && /\.md$/i.test(rawPath) && !/[:\\]/.test(rawPath) && rawPath.split("/").every(part => part && !part.startsWith("."))) {
+				const file = this.app.vault.getAbstractFileByPath(rawPath);
+				if (!(file instanceof TFile)) throw new Error("批注论文 Markdown 不存在");
+				const linked = await clipperDirectory(this.app)?.sourceForFile(path.resolve(this.vaultRoot, rawPath));
+				if (linked) return this.clippedArticle(linked);
+				const text = await this.app.vault.read(file), fingerprint = readingHash(text);
+				const evidence = textEvidence(text, rawPath);
+				const title = /^title:\s*["']?(.+?)["']?\s*$/m.exec(text)?.[1] || /^# (.+)$/m.exec(text)?.[1] || file.basename;
+				return { source: { kind, path: rawPath, title, fingerprint }, evidence, catalog: readingCatalog(evidence),
+					verify: async () => { if (this.app.vault.getAbstractFileByPath(rawPath) !== file || readingHash(await this.app.vault.read(file)) !== fingerprint) throw new Error("原文已更新，请重新核对"); },
+					image: async () => null, destroy: async () => {} };
+			}
+		}
 		if (kind === "structured") return openStructuredDocument(this.vaultRoot, rawPath);
 		if (kind === "code") { if (!rawPath.trim()) throw new Error("请输入 Python/R 文件或项目目录"); return openCodeProject(path.isAbsolute(rawPath) ? rawPath : path.resolve(this.vaultRoot, rawPath)); }
 		return kind === "pdf" ? this.pdf(rawPath) : this.article(rawPath.replace(/\\/g, "/"));

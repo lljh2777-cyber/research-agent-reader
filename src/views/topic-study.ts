@@ -88,7 +88,7 @@ export class TopicStudyView extends ItemView {
 			const selected = c.selected, ids = selected.branchId ? s.graph.branches.find(b => b.id === selected.branchId)!.nodeIds : s.graph.mainIds;
 			const timeline = conversation.createDiv("rar-study-timeline");
 			for (const id of ids) { const node = s.nodes.find(n => n.id === id)!; const b = this.button(timeline, node.title, "select-turn", () => c.select(id), c.busy); b.dataset.studyNode = id; b.setAttribute("aria-pressed", String(id === selected.id)); }
-			if (selected.branchId) { const branch = s.graph.branches.find(b => b.id === selected.branchId)!; this.button(conversation, "回到支线起点", "branch-origin", () => c.select(branch.parentNodeId), c.busy); }
+			if (selected.branchId) { const branch = s.graph.branches.find(b => b.id === selected.branchId)!; const parent = branch.parentNodeId; if (parent) this.button(conversation, "回到支线起点", "branch-origin", () => c.select(parent), c.busy); }
 			this.renderAnswer(conversation, selected);
 		}
 		this.renderMap(map); this.contentEl.scrollTop = scroll;

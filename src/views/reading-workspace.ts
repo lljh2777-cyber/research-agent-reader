@@ -8,7 +8,7 @@ import { readingNode } from "../reading/session";
 import { readingCategory, readingSourceKey, readingTitle, recentReading, latestReading, sourceReadingDomain, type ReadingCategory, type ReadingDomain } from "../reading/catalog";
 import { readingEntryDomain } from "../reading/entry";
 import { layoutReading, READING_MAP } from "../reading/layout";
-import { fitReadingZoom, readingTrail, revealReadingPath, searchReadingNodes } from "../reading/navigation";
+import { fitReadingZoom, readingAnnotationOrigin, readingTrail, revealReadingPath, searchReadingNodes } from "../reading/navigation";
 import { resolveReadingQuote } from "../reading/selection";
 import { readingAnswerSnapshot, type AnswerSnapshot } from "../learning/answer-snapshot";
 import { readingCitations, readingSelectionText } from "../reading/presentation";
@@ -429,6 +429,8 @@ export class ReadingWorkspaceView extends ItemView {
 		if (state.minimized) return;
 		if (node.branchId) {
 			const trail = readingTrail(session, node.id); const path = element(floating, "nav", "reading-breadcrumb"); path.setAttribute("aria-label", "问题来源");
+			const annotation = readingAnnotationOrigin(session, node.id);
+			if (annotation) button(path, annotation.chinese ? "返回中文原段" : "返回原段", () => this.handle(this.plugin.returnToReadingAnnotation(annotation)));
 			const origin = trail[trail.length - 2];
 			if (origin) actionButton(path, "corner-up-left", "返回问题起点", () => this.selectNode(origin.id, true), true);
 			const crumbs = element(path, "div", "reading-breadcrumb-path"); crumbs.title = trail.map((item) => item.title).join(" → ");
@@ -647,7 +649,8 @@ export class ReadingWorkspaceView extends ItemView {
 		const targetLabel = quoted ? "新建子支线 · 引用：" + quoted.text.slice(0, 80) : branchId ? "继续当前支线 · 从最后一轮续问" : "新建支线 · " + (target ? "主线 " + String(session.mainIds.indexOf(target) + 1).padStart(2, "0") + "：" + readingNode(session, target).title : "请先开始主线");
 		const context = element(box, "div", "reading-composer-context"); icon(context, quoted ? "quote" : "corner-down-right"); element(context, "small", "", targetLabel).title = targetLabel;
 		const webLabel = element(context, "label", "reading-web-option"); const web = element(webLabel, "input"); web.type = "checkbox";
-		web.checked = session.source.kind !== "code" && session.backend !== "codex-cli" && session.ui.webDrafts?.[key] === true; web.disabled = session.source.kind === "code" || session.backend === "codex-cli" || session.demo === true;
+		web.disabled = session.source.kind === "code" || session.backend === "codex-cli" || session.demo === true || Boolean(target && readingAnnotationOrigin(session, target));
+		web.checked = !web.disabled && session.ui.webDrafts?.[key] === true;
 		if (session.source.kind === "code") webLabel.hidden = true;
 		element(webLabel, "span", "", "联网补充"); webLabel.title = web.disabled ? "联网支线需选择 Direct API 阅读模型" : "仅本次追问使用供应商联网配置；先读取本文，再补充网页";
 		web.onchange = () => this.updateUI(ui => { (ui.webDrafts ||= {})[key] = web.checked; });
@@ -769,13 +772,14 @@ export class ReadingWorkspaceView extends ItemView {
 		const preferred = entry?.backend || (kind.value !== "code" && (this.plugin.settings.sceneProfiles?.reading || "codex-cli"));
 		if (preferred && [...backend.options].some(option => option.value === preferred)) backend.value = preferred;
 		model.parentElement!.hidden = backend.value !== "codex-cli";
-		const startNew = element(modal.contentEl, "label", "reading-new-session-option"); const forceNew = element(startNew, "input"); forceNew.type = "checkbox"; element(startNew, "span", "", "为同一原文重新建立会话");
-		element(modal.contentEl, "p", "reading-modal-intro", "默认继续相同原文的已有会话，并沿用该会话的模型。原文变化时会创建新会话。");
+		const forceNew = code ? element(element(modal.contentEl, "label", "reading-new-session-option"), "input") : undefined;
+		if (forceNew) { forceNew.type = "checkbox"; forceNew.parentElement!.appendText("为同一代码来源重新建立会话"); }
+		element(modal.contentEl, "p", "reading-modal-intro", "相同论文会打开已有阅读空间；原文版本变化时，历史回答保留并提示核对。");
 		element(modal.contentEl, "p", "reading-modal-intro", code ? "开始讲解会将所选代码交给模型，只做静态阅读，不运行程序。也可先打开来源预览，不调用模型。" : "开始讲解会将所选原文交给模型。也可先打开来源预览，不调用模型。");
 		const open = (generate: boolean) => {
 			submit.disabled = true;
 			preview.disabled = true;
-			this.handle(this.service.open(kind.value as ReadingSession["source"]["kind"], path.value.trim().replace(/^"|"$/g, ""), backend.value, model.value.trim(), forceNew.checked)
+			this.handle(this.service.open(kind.value as ReadingSession["source"]["kind"], path.value.trim().replace(/^"|"$/g, ""), backend.value, model.value.trim(), Boolean(forceNew?.checked))
 				.then(({ id }) => { modal.close(); this.selectSession(id); if (generate && !this.service.repository.get(id).mainIds.length) return this.service.advance(id); }).finally(() => { submit.disabled = false; preview.disabled = false; }));
 		};
 		const submit = button(modal.contentEl, "打开并继续阅读", () => open(true)); const preview = button(modal.contentEl, "仅打开来源，不调用模型", () => open(false)); submit.classList.add("mod-cta"); modal.open();

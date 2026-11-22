@@ -229,38 +229,22 @@ export class AnnotationPopover extends Component {
 			generate = aiActions.createEl("button", { text: ai.value ? "重新生成" : "生成解释", attr: { type: "button" } });
 		}
 		const guide = !pdf ? actions.createEl("button", { text: "从这条批注开始带读", attr: { type: "button" } }) : undefined;
-		const guidePanel = element.createDiv({ cls: "rar-annotation-guide" });
-		guidePanel.hidden = true;
 		const startGuide = async () => {
-			if (this.guideController) { this.guideController.abort(); return; }
-			const controller = new AbortController();
-			this.guideController = controller;
-			guidePanel.hidden = false;
-			guidePanel.empty();
-			const status = guidePanel.createDiv({ text: "Codex 正在阅读选句和原文…", attr: { role: "status" } });
+			if (this.guideController) return;
+			const controller = this.guideController = new AbortController();
 			refresh();
-			this.position();
+			showMessage("正在打开这篇论文的批注分支…");
 			try {
-				const result = await this.service.guideFromAnnotation(source, question?.value || "", ai?.value || "", controller.signal, note.value);
-				if (controller.signal.aborted) return;
-				status.setText("Codex 带读");
-				const back = guidePanel.createEl("button", { text: result.chinese ? "返回中文原段" : "返回原段", attr: { type: "button" } });
-				back.onclick = async () => {
-					try {
-						await result.returnToPassage();
-						if (element.dataset.dirty === "true" || question?.value) guidePanel.hidden = true;
-						else this.close();
-					} catch (error) { status.setText(displayError(error)); }
-				};
-				guidePanel.createDiv({ cls: "rar-annotation-guide-answer", text: result.text });
+				const record = this.record && element.dataset.dirty !== "true" ? this.record : await persistDraft(true);
+				this.record = record;
+				controller.signal.throwIfAborted();
+				await this.service.guideFromAnnotation(record, question?.value || "", ai?.value || "", controller.signal, note.value);
+				this.close();
 			} catch (error) {
-				status.setText(controller.signal.aborted ? "带读已停止" : displayError(error));
+				if (!controller.signal.aborted) showMessage(displayError(error));
 			} finally {
-				if (this.guideController === controller && !this.closed) {
-					this.guideController = undefined;
-					refresh();
-					this.position();
-				}
+				if (this.guideController === controller) this.guideController = undefined;
+				if (!this.closed) refresh();
 			}
 		};
 		guide?.addEventListener("click", () => void startGuide());
@@ -357,8 +341,8 @@ export class AnnotationPopover extends Component {
 			element.dataset.dirty = String(hasChanges && (Boolean(baseline) || !pdf || Boolean(note.value)));
 			const guiding = Boolean(this.guideController);
 			if (guide) {
-				guide.disabled = Boolean(this.saving || generating || pending);
-				guide.setText(guiding ? "停止带读" : "从这条批注开始带读");
+				guide.disabled = Boolean(this.saving || generating || guiding || pending);
+				guide.setText(guiding ? "正在打开分支…" : "从这条批注开始带读");
 			}
 			const locked = this.saving || pending || guiding;
 			note.disabled = Boolean(locked);
@@ -462,9 +446,7 @@ export class AnnotationPopover extends Component {
 		const readGptChoices = (deep: boolean): GptChoices | undefined => gptPanel.hidden || !supportsGptAnnotations(model.value)
 			? undefined : { model: model.value, speed: speed.value, effort: deep ? expanded.value : brief.value, search: search.checked };
 		generate?.addEventListener("click",()=>void explain(false)); expand?.addEventListener("click",()=>void explain(true));
-		const submit = async () => {
-			if (this.closed || this.saving || save.disabled) return;
-			this.saving = true; refresh();
+		const persistDraft = (forGuide = false) => {
 			const draft: AnnotationDraft = { manualText: note.value };
 			if (!pdf) {
 				draft.color = color;
@@ -472,8 +454,13 @@ export class AnnotationPopover extends Component {
 				if (generated || (ai?.value || "") !== (baseline?.aiText || "")) draft.aiText = ai?.value || "";
 				if (generated) Object.assign(draft, { aiProvider: generated.provider, aiModel: generated.model, aiCli: generated.cli, aiEdited: draft.aiText !== generated.text });
 			}
+			return this.record ? this.service.updateAnnotation(this.record, draft, this.selection) : this.service.saveSelectionAnnotation(this.selection!, draft, forGuide);
+		};
+		const submit = async () => {
+			if (this.closed || this.saving || save.disabled) return;
+			this.saving = true; refresh();
 			try {
-				const record = baseline ? await this.service.updateAnnotation(baseline, draft, this.selection) : await this.service.saveSelectionAnnotation(this.selection!, draft);
+				const record = await persistDraft();
 				if (this.closed) return;
 				this.record = record;
 				const historyIndex = this.historical.findIndex(item => item.id === record.id && item.annotationPath === record.annotationPath);

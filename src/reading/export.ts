@@ -55,9 +55,10 @@ function exportBody(session: ReadingSession, scope: ReadingExportScope, nodeId: 
 		while (current.branchId) {
 			const branch = session.branches.find((b) => b.id === current.branchId)!;
 			trail.unshift("支线 " + (session.branches.indexOf(branch) + 1) + " 第 " + (branch.nodeIds.indexOf(current.id) + 1) + " 轮");
+			if (!branch.parentNodeId) { trail.unshift("论文批注"); break; }
 			current = session.nodes.find((n) => n.id === branch.parentNodeId)!;
 		}
-		trail.unshift("主线第 " + (session.mainIds.indexOf(current.id) + 1) + " 单元");
+		if (!current.branchId) trail.unshift("主线第 " + (session.mainIds.indexOf(current.id) + 1) + " 单元");
 		body.push("学习位置：" + trail.join(" → "), "");
 		if (node.question) body.push("问题：" + safeReadingMarkdown(node.question), "");
 		if (node.quote) body.push("引用：" + safeReadingMarkdown(node.quote.text), "");

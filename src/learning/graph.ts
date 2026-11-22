@@ -1,4 +1,4 @@
-export interface LearningGraph { mainIds: string[]; branches: { id: string; parentNodeId: string; nodeIds: string[] }[]; collapsed: string[]; }
+export interface LearningGraph { mainIds: string[]; branches: { id: string; parentNodeId: string | null; nodeIds: string[] }[]; collapsed: string[]; }
 export interface LearningPosition { id: string; x: number; y: number; hiddenCount: number; }
 export const LEARNING_MAP = { width: 224, height: 108, lane: 296, row: 164, inset: 44 };
 /** Source-independent geometry, shared by document reading and topic study. */
@@ -10,7 +10,7 @@ export function layoutLearning(graph: LearningGraph): { nodes: LearningPosition[
 	};
 	graph.mainIds.forEach((id, row) => add(id, 0, row));
 	for (const branch of graph.branches) {
-		const parent = positions.get(branch.parentNodeId); if (!parent || !branch.nodeIds.length) continue;
+		const parent = branch.parentNodeId === null ? { x: LEARNING_MAP.inset, y: LEARNING_MAP.inset } : positions.get(branch.parentNodeId); if (!parent || !branch.nodeIds.length) continue;
 		const collapsed = graph.collapsed.includes(branch.id), ids = collapsed ? branch.nodeIds.slice(0, 1) : branch.nodeIds;
 		const row = Math.round((parent.y - LEARNING_MAP.inset) / LEARNING_MAP.row);
 		let lane = Math.round((parent.x - LEARNING_MAP.inset) / LEARNING_MAP.lane) + 1;

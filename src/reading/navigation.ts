@@ -12,6 +12,14 @@ export function readingTrail(session: ReadingSession, id: string): ReadingNode[]
 	return trail;
 }
 
+export function readingAnnotationOrigin(session: ReadingSession, nodeId: string) {
+	const branches = new Map(session.branches.map(b => [b.id, b]));
+	for (const n of readingTrail(session, nodeId).reverse()) {
+		const origin = n.branchId && branches.get(n.branchId)?.annotation;
+		if (origin) return origin;
+	}
+}
+
 export function revealReadingPath(session: ReadingSession, id: string): void {
 	const branches = new Set(readingTrail(session, id).map((node) => node.branchId));
 	session.ui.collapsed = session.ui.collapsed.filter((branch) => !branches.has(branch));
