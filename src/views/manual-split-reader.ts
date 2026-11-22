@@ -7,7 +7,7 @@ import { readPdfBytes } from "../annotations/native-pdf-excerpt";
 import { bindDetachedMarkdownSource } from "../annotations/manual-source";
 import { verifyBilingual } from "../annotations/bilingual";
 import type { AnnotationRecord } from "../annotations/types";
-import { BilingualReader } from "./bilingual-reader";
+import { type PaperDiscussionHost, BilingualReader } from "./bilingual-reader";
 import { SplitPdfPane } from "./split-pdf-pane";
 import { chooseReadingFile } from "./reading-mode-picker";
 import { applySplitLayout, sourceSplitRatio } from "./split-layout";
@@ -15,7 +15,7 @@ import { renderReadingNoteProperties } from "./reading-note-properties";
 import { bindSplitOutline, createSplitOutlineButton, scrollWithinReadingPane, splitOutlineHeadings, type SplitOutlineSource } from "./split-outline";
 
 export const MANUAL_SPLIT_VIEW_TYPE = "research-agent-reader-split";
-interface SplitHost {
+interface SplitHost extends PaperDiscussionHost {
 	app: App; openSelectionAnnotation(): Promise<void>;
 	chooseSplitReading(path: string, leaf?: WorkspaceLeaf): void;
 	openSplitSource(path: string, leaf: WorkspaceLeaf): Promise<void>;
@@ -99,7 +99,7 @@ export class ManualSplitReaderView extends ItemView {
 			if (state.mode === "bilingual") {
 				const adapter = this.app.vault.adapter as { getBasePath?: () => string }; if (!adapter.getBasePath) throw new Error("双栏阅读需要桌面本地知识库");
 				const doc = await loadSelectedBilingualDocument(new FileSourceStorage(adapter.getBasePath()), { en: state.left, zh: state.right }, signal); signal.throwIfAborted();
-				this.bilingual = new BilingualReader({ app: this.app, host: workspace, document: doc, signal, outlineLeaf: this.leaf, ordinary: () => void this.host.openSplitSource(state.entry, this.leaf), hideOrdinary: true, annotate: () => this.host.openSelectionAnnotation(), ratio: state.ratio, reversed: state.reversed, defaultLinked: state.linked, defaultPropertiesLanguage: state.entry === state.right ? "zh-CN" : "en", state: state.bilingualState, onRatio: ratio => { state.ratio = ratio; this.save(); }, onState: snapshot => { state.bilingualState = snapshot; state.linked = snapshot.linked; this.save(); } });
+				this.bilingual = new BilingualReader({ discussions: this.host, app: this.app, host: workspace, document: doc, signal, outlineLeaf: this.leaf, ordinary: () => void this.host.openSplitSource(state.entry, this.leaf), hideOrdinary: true, annotate: () => this.host.openSelectionAnnotation(), ratio: state.ratio, reversed: state.reversed, defaultLinked: state.linked, defaultPropertiesLanguage: state.entry === state.right ? "zh-CN" : "en", state: state.bilingualState, onRatio: ratio => { state.ratio = ratio; this.save(); }, onState: snapshot => { state.bilingualState = snapshot; state.linked = snapshot.linked; this.save(); } });
 				this.bilingual.load(); await this.bilingual.render();
 			} else await this.renderMarkdownPdf(workspace, message, state, signal);
 			if (signal.aborted) return;

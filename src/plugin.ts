@@ -65,7 +65,7 @@ import { FileSourceStorage } from "./sources/storage";
 import { readDashboardCuration, type CurationNavigation } from "./services/dashboard-curation";
 import { libraryCodeLinks, codeLinkStillPresent, type LibraryCodeLink } from "./library/code-links";
 import { openSourceSave } from "./papers/source-save-modal";
-import { isTranslationPath } from "./annotations/bilingual";
+import { readStandaloneBilingual, isTranslationPath } from "./annotations/bilingual";
 import { normalizeAnnotationColorMeanings } from "./annotations/colors";
 import { JatsIntakeService } from "./jats/intake";
 import { openJatsSave } from "./jats/modal";
@@ -155,6 +155,9 @@ import { ReadingEngine } from "./reading/engine";
 import { readingHash } from "./reading/document";
 import { DirectReadingBackend, CodexReadingBackend } from "./reading/backend";
 import { READING_VIEW_TYPE, type ReadingBackend, type ReadingSession } from "./reading/types";
+import { latestReading } from "./reading/catalog";
+import { InlinePaperReading } from "./views/inline-paper-reading";
+import type { BilingualReader } from "./views/bilingual-reader";
 import { readingEntryDomain } from "./reading/entry";
 import { LearningLibrary } from "./curation/learning";
 import { CurationService } from "./curation/service";
@@ -391,6 +394,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private excerptBrowser?: ExcerptBrowser;
 	private answerExcerptService?: AnswerExcerptService;
 	private answerExcerptBrowser?: AnswerExcerptBrowser;
+	private readonly inlineReaders = new Map<InlinePaperReading, Promise<void>>();
 	private annotationChip: HTMLElement | null = null;
 	private persistence?: DashboardPersistence;
 	private readonly cliModelDiscoveryCache = new Map<
@@ -676,18 +680,42 @@ export default class AgentDashboardPlugin extends Plugin {
 	 * selections have no native DOM selection, so their anchor rectangle comes
 	 * from the editor coordinates.
 	 */
+	mountPaperDiscussions(reader: BilingualReader, toolbar: HTMLElement): void {
+		if (!this.annotationService) return;
+		const pane = new InlinePaperReading(reader, toolbar, this.annotationService, this.getReadingWorkspace(), async () => {
+			const source = reader.options.document.files.en.path;
+			const dir = clipperDirectory(this.app);
+			const root = this.getActiveVaultRoot();
+			const key = isClipperPath(source) ? source : await dir?.sourceForFile(path.resolve(root, source)) || source;
+			const aliases: string[] = [];
+			if (dir && isClipperPath(key)) {
+				const paper = await dir.paper(key.split("/")[1]);
+				const relative = path.relative(root, path.join(dir.root, paper.folder));
+				if (relative && relative.split(path.sep)[0] !== ".." && !path.isAbsolute(relative)) {
+					const folder = relative.split(path.sep).join("/");
+					aliases.push(folder + "/paper.md", folder + "/paper.zh-CN.md");
+				}
+			}
+			return { key, aliases };
+		}, (record,anchorRect)=>this.openAnnotationPopover({record,anchorRect}));
+		this.inlineReaders.set(pane,pane.start().catch(e=>{ if(!reader.stale)new Notice(String(e)); }));
+		reader.options.signal.addEventListener("abort",()=>this.inlineReaders.delete(pane),{once:true});
+	}
+
 	private showAnnotationChip(): void {
 		this.hideAnnotationChip();
 		if (!this.annotationService?.canCaptureSelection()) return;
 		const selection = window.getSelection();
 		let rect: DOMRect | null = null;
+		let inline: InlinePaperReading | undefined;
 		if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
 			const range = selection.getRangeAt(0);
 			const anchorElement = range.startContainer instanceof Element
 				? range.startContainer
 				: range.startContainer.parentElement;
 			if (!anchorElement?.closest(".markdown-source-view, .markdown-reading-view, .pdf-viewer-container .textLayer")) return;
-			if (anchorElement.closest(".agent-annotation-popover, input, textarea, button, pre, code")) {
+			inline = [...this.inlineReaders.keys()].find(reader=>reader.contains(anchorElement));
+			if (anchorElement.closest(".rar-inline-thread, .agent-annotation-popover, input, textarea, button, pre, code")) {
 				return;
 			}
 			rect = range.getBoundingClientRect();
@@ -698,10 +726,15 @@ export default class AgentDashboardPlugin extends Plugin {
 		const chip = document.body.createDiv({ cls: "agent-dashboard-mineru-annotate-chip" });
 		const button = chip.createEl("button", {
 			cls: "agent-dashboard-mineru-annotate-chip-button",
-			text: "批注",
+			text: inline ? "写批注" : "批注",
 			attr: { type: "button", title: "批注所选文字" },
 		});
-		const left = Math.min(Math.max(8, rect.right + 8), Math.max(8, window.innerWidth - 72));
+		if (inline) {
+			const branch = chip.createEl("button",{cls:"agent-dashboard-mineru-annotate-chip-button",text:"开分支",attr:{type:"button"}});
+			branch.onmousedown=e=>e.preventDefault();
+			branch.onclick=e=>{e.stopPropagation();this.hideAnnotationChip();void inline!.composeSelection().catch(error=>new Notice(String(error)));};
+		}
+		const left = Math.min(Math.max(8, rect.right + 8), Math.max(8, window.innerWidth - chip.offsetWidth - 8));
 		const top = Math.min(rect.bottom + 6, Math.max(8, window.innerHeight - 44));
 		chip.style.left = `${left}px`;
 		chip.style.top = `${top}px`;
@@ -2723,6 +2756,18 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!(leaf.view instanceof ClipperReaderView)) throw new Error("阅读器未就绪");
 		return leaf.view;
 	}
+	private async openPaperBody(source: string): Promise<boolean> {
+		if (isClipperPath(source)) {
+			const paper = await clipperDirectory(this.app)?.paper(source.split("/")[1]);
+			if (!paper?.bilingual) return false;
+			await this.openClippedPaper(paper.key); return true;
+		}
+		const doc = await readStandaloneBilingual(this.app,source) || (source.endsWith("/paper.md") ? await readStandaloneBilingual(this.app,source.replace(/paper\.md$/,"paper.zh-CN.md")) : undefined);
+		if (!doc) return false;
+		await this.openManualSplit({mode:"bilingual",left:doc.files.en.path,right:doc.files["zh-CN"].path,entry:doc.files["zh-CN"].path,
+			linked:this.settings.mineruReaderBilingualLinked,ratio:this.settings.mineruReaderBilingualSplitRatio,markdownProgress:0,pdfPage:1,pdfProgress:0});
+		return true;
+	}
 	async startClippedReading(path: string): Promise<void> {
 		const workspace = this.getReadingWorkspace();
 		const { id, created } = await workspace.open("article", path, this.settings.sceneProfiles?.reading || "codex-cli", "");
@@ -2856,7 +2901,22 @@ export default class AgentDashboardPlugin extends Plugin {
 				if (entry.sessionId && leaf.view instanceof TopicLearningView) await leaf.view.selectSession(entry.sessionId);
 			}); this.topicOpenings = operation.catch(() => undefined); return operation;
 		}
-		return this.activateReadingWorkspace(documentLearningEntry(entry));
+		const target = documentLearningEntry(entry) || {};
+		if (target.domain === "code") return this.activateReadingWorkspace(target);
+		return (async () => {
+			const ws = this.getReadingWorkspace(); await ws.ready();
+			const saved = target.sessionId ? ws.repository.get(target.sessionId) : !target.source ? latestReading(ws.repository.sessions.values(),"paper") : undefined;
+			const source = target.source || saved?.source;
+			if (source?.kind === "article" && await this.openPaperBody(source.path)) return;
+			if (!source) {
+				const recent = Object.entries(this.settings.clipperProgress).sort((a,b)=>b[1].date.localeCompare(a[1].date))[0];
+				if (recent && await this.openPaperBody("@paper-clipper/"+recent[0]+"/paper.md")) return;
+				const last = this.app.workspace.getLastOpenFiles().find(p=>/(^|\/)paper(?:\.zh-CN)?\.md$/.test(p));
+				if (last && await this.openPaperBody(last)) return;
+				await this.activatePaperLibrary(); return;
+			}
+			await this.activateReadingWorkspace(target);
+		})();
 	}
 	getTopicLearning(): TopicLearningService { return this.topicLearning ||= new TopicLearningService(new TopicSessionStore(new FileSourceStorage(this.readingPluginDirectory()))); }
 	getTopicStudy(): TopicStudyService { return this.topicStudy ||= new TopicStudyService(new TopicStudyStore(new FileSourceStorage(this.readingPluginDirectory())), this.getTopicLearning()); }
@@ -3034,6 +3094,19 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.annotationService.returnToAnnotation(origin);
 	}
 	async openLearningRecord(sessionId: string, nodeId: string): Promise<void> {
+		const session = this.getReadingWorkspace().repository.get(sessionId);
+		const branch = session.branches.find(b=>b.nodeIds.includes(nodeId));
+		if (branch && session.source.kind === "article") {
+			const reveal = async () => {
+				for (const [pane,ready] of this.inlineReaders) {
+					if (pane.reader.options.outlineLeaf !== this.app.workspace.activeLeaf) continue;
+					await ready;
+					if(pane.reveal(sessionId,nodeId))return true;
+				}
+				return false;
+			};
+			if (await reveal() || await this.openPaperBody(session.source.path) && await reveal()) return;
+		}
 		await this.activateReadingWorkspace({ sessionId }); const view = this.app.workspace.getLeavesOfType(READING_VIEW_TYPE).map(leaf => leaf.view).find(v => v instanceof ReadingWorkspaceView && v.getState().sessionId === sessionId);
 		if (view instanceof ReadingWorkspaceView) view.revealLearningNode(nodeId);
 	}

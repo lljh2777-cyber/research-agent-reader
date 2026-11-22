@@ -20,7 +20,8 @@ export function bilingualRenderMarkdown(file: Pick<BilingualFile, "bodyStart" | 
 	return result + file.text.slice(cursor);
 }
 export interface BilingualPane { language: BilingualLanguage; scroller: HTMLElement; article: HTMLElement; anchors: Map<string, HTMLElement>; }
-export interface BilingualReaderOptions { app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; hideOrdinary?: boolean; annotate?(): Promise<void>; ratio?: number; reversed?: boolean; onRatio?(ratio: number): void; defaultLinked?: boolean; defaultPropertiesLanguage?: BilingualLanguage; state?: unknown; renderMarkdown?(app: App, markdown: string, article: HTMLElement, source: string, owner: Component, signal: AbortSignal): Promise<void>; onState?(state: BilingualReadingState): void; outlineLeaf?: WorkspaceLeaf; }
+export interface PaperDiscussionHost { mountPaperDiscussions?(reader: BilingualReader, toolbar: HTMLElement): void; }
+export interface BilingualReaderOptions { discussions?: PaperDiscussionHost; app: App; host: HTMLElement; document: BilingualDocument; signal: AbortSignal; ordinary(): void; hideOrdinary?: boolean; annotate?(): Promise<void>; ratio?: number; reversed?: boolean; onRatio?(ratio: number): void; defaultLinked?: boolean; defaultPropertiesLanguage?: BilingualLanguage; state?: unknown; renderMarkdown?(app: App, markdown: string, article: HTMLElement, source: string, owner: Component, signal: AbortSignal): Promise<void>; onState?(state: BilingualReadingState): void; outlineLeaf?: WorkspaceLeaf; }
 const STATUS: Record<string, string> = { "not-started": "尚未翻译", "in-progress": "翻译中", "needs-review": "译文待复核", reviewed: "记录标为已审阅", failed: "翻译记录失败", unknown: "译文状态未确认" };
 
 export class BilingualReader extends Component {
@@ -91,7 +92,7 @@ export class BilingualReader extends Component {
 			// Discard offsets supplied by rendering transformed Markdown; bind the raw source below.
 			article.querySelectorAll("[data-agent-annotation-source]").forEach(el => el.removeAttribute("data-agent-annotation-source"));
 			article.dataset.agentAnnotationSource = file.path;
-			bindBilingualSelection(article, element => { if (this.invalidated || signal.aborted) throw new Error("双语资料已变化或关闭，请重新打开划选"); const block = this.blockForElement(language, element); if (!block) throw new Error("无法确定本栏选区段落"); return { document: doc, language, block }; });
+			bindBilingualSelection(article, element => { if (element.closest(".rar-inline-thread")) throw new Error("请选择论文原句"); if (this.invalidated || signal.aborted) throw new Error("双语资料已变化或关闭，请重新打开划选"); const block = this.blockForElement(language, element); if (!block) throw new Error("无法确定本栏选区段落"); return { document: doc, language, block }; });
 			const anchors = this.bindAnchors(article, file); this.scopeLinks(article, language);
 			if (outlineLeaf) {
 				const headingAnchors = new Map<HTMLElement, string>();
@@ -145,6 +146,7 @@ export class BilingualReader extends Component {
 		} else hoverLabel.title = "需要有效的双语段落配对";
 		applyRatio();
 		for (const language of ["en", "zh-CN"] as const) this.restore(language);
+		this.options.discussions?.mountPaperDiscussions?.(this, toolbar);
 		const resize = new ResizeObserver(() => {
 			this.paragraphHover?.clear();
 			if (this.resizeFrame) cancelAnimationFrame(this.resizeFrame);
@@ -192,6 +194,17 @@ export class BilingualReader extends Component {
 		this.registerEvent(app.vault.on("delete", file => changed(file.path)));
 		this.registerEvent(app.vault.on("rename", (file, old) => { changed(file.path); changed(old); }));
 	}
+	focusDiscussion(language: BilingualLanguage, element: HTMLElement, range?: Range): void {
+		const pane = this.panes.get(language);
+		if (!pane || !pane.article.contains(element)) return;
+		this.activate(language);
+		this.programmatic.add(language);
+		scrollWithinReadingPane(pane.scroller, range || element, "center");
+		this.capture(language);
+		if (this.state.linked) this.synchronize(language);
+		else this.publish();
+	}
+	get stale(): boolean { return this.invalidated || this.options.signal.aborted; }
 	private activate(language: BilingualLanguage): void {
 		const changed = this.state.active !== language;
 		this.state.active = language;

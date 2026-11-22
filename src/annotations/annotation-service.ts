@@ -835,7 +835,7 @@ export class AnnotationService {
 		await this.plugin.openReadingEvidence(path, undefined, undefined, quoteOffset(text, paragraph, quote));
 	}
 
-	async guideFromAnnotation(source: AnnotationSelection | AnnotationRecord, question: string, explanation: string, signal: AbortSignal, note = "") {
+	async attachForReading(source: AnnotationSelection | AnnotationRecord, question: string, explanation: string, signal: AbortSignal, note = "") {
 		this.requireExplanationProof(source);
 		const proof = source.bilingual;
 		const anchor = "sourceStart" in source ? { start: source.sourceStart, end: source.sourceEnd, prefix: source.prefix, suffix: source.suffix } : source.sourceAnchor;
@@ -860,10 +860,14 @@ export class AnnotationService {
 		const at = proof?.language === "zh-CN" ? proof.selection.start : zh?.start ?? start;
 		const digest = excerptRevision(chinese ? doc!.files["zh-CN"].text : original).digest;
 		const paperPath = doc?.files.en.path || source.sourcePath;
-		const origin = { id: "id" in source ? source.id : objectDigest([source.sourcePath, start, source.selectedText]),
+		const origin = { ...(proof ? { selection: { lang: proof.language, ...proof.selection, digest: doc!.files[proof.language].revision.digest } } : {}), id: "id" in source ? source.id : objectDigest([source.sourcePath, start, source.selectedText]),
 			path, at, digest, chinese, englishStart: start, englishDigest: excerptRevision(original).digest,
 			selected: source.selectedText, question: asked, note, quotes };
-		const target = await this.plugin.getReadingWorkspace().attachAnnotation(paperPath, origin, signal);
+		return this.plugin.getReadingWorkspace().attachAnnotation(paperPath, origin, signal);
+	}
+
+	async guideFromAnnotation(source: AnnotationSelection | AnnotationRecord, question: string, explanation: string, signal: AbortSignal, note = "") {
+		const target = await this.attachForReading(source, question, explanation, signal, note);
 		await this.plugin.openLearningRecord(target.sessionId, target.nodeId);
 	}
 

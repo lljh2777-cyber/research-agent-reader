@@ -6726,3 +6726,23 @@ body.agent-dashboard-mineru-resizing {
 .rar-clip-paired > .agent-bilingual-shell { display: flex; flex-direction: column; flex: 1 1 0; min-width: 0; min-height: 0; overflow: hidden; }
 
 .rar-quote-link, .reading-answer-evidence button { display: block; white-space: normal; height: auto; text-align: start; overflow-wrap: anywhere; }
+
+/* Keep discussions in the reading column containing their source, including narrow splits. */
+.rar-inline-thread { margin: .25em 0 1.1em; font: var(--font-ui-small) / 1.55 var(--font-interface); color: var(--text-normal); }
+.rar-inline-thread button, .rar-paper-index button { white-space: normal; height: auto; text-align: start; overflow-wrap: anywhere; }
+.rar-thread-chip,.rar-note-chip { max-width: 100%; margin: 2px 5px 2px 0; }
+.rar-inline-thread .rar-thread-chip { border-inline-start: 3px solid var(--interactive-accent); }
+.rar-discussion,.rar-discussion-form { padding: 12px 15px; margin-block: 8px; border-inline-start: 2px solid var(--interactive-accent); background: var(--background-secondary); border-radius: 0 8px 8px 0; overflow-wrap: anywhere; }
+.rar-discussion > strong { display: block; margin-top: 12px; }
+.rar-inline-thread blockquote { margin: 0 0 9px; color: var(--text-muted); font-size: .95em; }
+.rar-discussion .rar-thread-action { margin: 5px 0 12px; color: var(--text-muted); }
+.rar-thread-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.rar-discussion-form textarea { display: block; width: 100%; margin-bottom: 8px; resize: vertical; }
+.rar-discussion-form button { margin-inline-end: 6px; }
+.rar-paper-index { position: relative; }
+.rar-paper-index summary { cursor: pointer; }
+.rar-paper-index > div { position: absolute; inset-inline-end: 0; z-index: 8; width: min(340px,70vw); max-height: 48vh; overflow: auto; padding: 10px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 8px; box-shadow: var(--shadow-s); }
+.rar-paper-index button { width: 100%; margin-block: 2px; }
+.rar-paper-index .is-child { margin-inline-start: 1em; width: calc(100% - 1em); }
+
+.rar-paper-index button[aria-current="true"] { color: var(--text-accent); background: var(--background-modifier-hover); }

@@ -71,6 +71,7 @@ export interface ReadingNode {
 	retrieval?: { query: string; paths: string[]; error?: string; label?: string; warnings?: string[] };
 }
 export interface AnnotationOrigin {
+	selection?: { lang: "en" | "zh-CN"; start: number; end: number; digest: string };
 	id: string;
 	path: string;
 	digest: string;
@@ -128,6 +129,7 @@ export interface ReadingSession {
 	pinned?: boolean;
 	lastOpenedAt?: string;
 	ui: {
+		inlineBranchId?: string;
 		webDrafts?: Record<string, boolean>;
 		mode: "split" | "map"; hideMap?: boolean; split: number; selectedId: string;
 		mainFocusId?: string; mainScroll?: number; pendingQuote?: ReadingQuote;

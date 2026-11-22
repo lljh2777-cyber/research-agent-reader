@@ -39,7 +39,7 @@ export function splitOutlineHeadings(article: HTMLElement, headingAnchors?: Read
 	return headings;
 }
 
-export function scrollWithinReadingPane(scroller: HTMLElement, target: HTMLElement, align: "start" | "center" = "start"): void {
+export function scrollWithinReadingPane(scroller: HTMLElement, target: HTMLElement | Range, align: "start" | "center" = "start"): void {
 	const bounds = target.getBoundingClientRect();
 	const top = scroller.scrollTop + bounds.top - scroller.getBoundingClientRect().top - scroller.clientTop;
 	const offset = align === "center" ? (scroller.clientHeight - bounds.height) / 2 : 0;

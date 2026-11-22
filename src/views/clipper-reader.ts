@@ -2,7 +2,7 @@ import { ItemView, MarkdownRenderer, Notice, type Component, type App, type View
 import { CLIPPER_PREFIX, requireClipper } from "../library/clipper";
 import { loadBilingualDocument, parseBilingualMarkdown, imagePath } from "../reader/bilingual-document";
 import { markdownImagePattern } from "../reader/markdown-images";
-import { BilingualReader, bilingualRenderMarkdown } from "./bilingual-reader";
+import { type PaperDiscussionHost, BilingualReader, bilingualRenderMarkdown } from "./bilingual-reader";
 import type { BilingualReadingState } from "../reader/bilingual-position";
 import type { AnnotationRecord } from "../annotations/types";
 import { verifyBilingual } from "../annotations/bilingual";
@@ -10,7 +10,7 @@ import { excerptMatches } from "../annotations/excerpt";
 
 export const CLIPPER_READER = "paper-clipper-local-reader";
 export interface ClipProgress { title: string; date: string; position?: BilingualReadingState; top?: number; digest: string; section: string; days: string[]; visited?: {lang: "en" | "zh-CN"; digest: string; block: string}[]; }
-interface Host {
+interface Host extends PaperDiscussionHost {
 	settings: { clipperProgress: Record<string, ClipProgress>; mineruReaderBilingualLinked: boolean; mineruReaderBilingualSplitRatio: number };
 	saveSettings(): Promise<void>;
 	openSelectionAnnotation(): Promise<void>;
@@ -84,7 +84,7 @@ export class ClipperReaderView extends ItemView {
 				try {
 					const doc = await loadBilingualDocument(dir, source, signal); signal.throwIfAborted();
 					host.addClass("rar-clip-paired");
-					const b = new BilingualReader({ app: this.app, host: pairedHost, document: doc, signal, ordinary: () => {}, hideOrdinary: true,
+					const b = new BilingualReader({ discussions: this.plugin, app: this.app, host: pairedHost, document: doc, signal, ordinary: () => {}, hideOrdinary: true,
 						annotate: () => this.plugin.openSelectionAnnotation(), outlineLeaf: this.leaf, state: saved?.position, defaultLinked: this.plugin.settings.mineruReaderBilingualLinked,
 						ratio: this.plugin.settings.mineruReaderBilingualSplitRatio, renderMarkdown: renderClip, onState: state => {
 							const file = doc.files[state.active], block = file.blocks.find(x => x.id === state.positions[state.active].blockId);
