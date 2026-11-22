@@ -153,5 +153,20 @@ let count=0; async function check(name,fn){fixture=make();await fn(fixture);coun
    try{await assert.rejects(new api.AnnotationService(f.app,{settings},cli).generateExplanation(selection(f),stop=>{cancel=stop;}),mode==="uncertain"?/依据不足/:mode==="cancel"?/取消/:mode==="timeout"?/超时/:/变化/);assert.equal(calls,1,"no second model call after "+mode);assert.equal(f.writes.length,0);}finally{Date.now=originalNow;f.files.get(f.root+"/paper.md").text=f.en;}
   }
  });
+ await check("Codex handoff verifies quotes and returns to the exact Chinese occurrence",async f=>{
+  const selected=selection(f), record=await f.service.createExcerpt(selected), signal=new AbortController().signal;
+  const saved="**提问** 这里指什么？\n\n解释\n\n### 上下文解释\n\n解释\n\n原文依据\n[段 3 句 1] Repeated selected words.";
+  let calls=0, target;
+  const guide=new api.AnnotationService(f.app,{
+   createReadingBackend: ({backend})=>{assert.equal(backend,"codex-cli");return {complete:async req=>{
+    calls++;const input=JSON.parse(req.prompt);assert.equal(input.问题,"这里指什么？");assert.equal(input.选句,selected.selectedText);
+    assert.deepEqual(input.已核对引句,["Repeated selected words."]);return "依据 [段 3 句 1]";}};},
+   openReadingEvidence:async(...args)=>{target=args;}
+  });
+  const run=await guide.guideFromAnnotation(record,"",saved,signal);
+  await run.returnToPassage();assert.deepEqual(target,[selected.sourcePath,undefined,undefined,selected.sourceStart]);assert.equal(run.chinese,true);
+  await assert.rejects(guide.guideFromAnnotation(record,"",saved.replace("Repeated","Altered"),signal),/核对/);
+  f.files.get(selected.sourcePath).text+="changed";await assert.rejects(run.returnToPassage(),/变化/);assert.equal(calls,1);
+ });
  console.log(`Bilingual annotations: ${count} groups passed`);
 })().catch(error=>{console.error(error);process.exitCode=1;});

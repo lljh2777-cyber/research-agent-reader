@@ -3932,7 +3932,12 @@ export default class AgentDashboardPlugin extends Plugin {
 			if (!(file instanceof TFile) || file.extension !== "md") throw new Error("无法定位 Markdown 原文");
 			const content = await this.app.vault.read(file);
 			if (offset < 0 || offset >= content.length) throw new Error("原文位置已变化");
-			await this.app.workspace.getLeaf("tab").openFile(file, {eState: {line: content.slice(0, offset).split("\n").length - 1}});
+			const workspace = this.app.workspace;
+			const current = workspace.activeLeaf;
+			const matches = (leaf: WorkspaceLeaf | null) => leaf?.view instanceof MarkdownView && leaf.view.file?.path === articlePath;
+			const leaf = current && matches(current) ? current : workspace.getLeavesOfType("markdown").find(matches) || workspace.getLeaf("tab");
+			await leaf.openFile(file, { eState: { line: content.slice(0, offset).split("\n").length - 1 } });
+			await workspace.revealLeaf(leaf);
 			return;
 		}
 		await this.activateMineruReaderView(articlePath);

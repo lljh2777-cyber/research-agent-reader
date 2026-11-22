@@ -55,6 +55,7 @@ export class AnnotationPopover extends Component {
 	private element: HTMLDivElement | null = null;
 	private cancelGeneration: (() => void) | null = null;
 	private generationVersion = 0;
+	private guideController?: AbortController;
 	private closed = true;
 	private saving = false;
 	private outsideListener: ((event: PointerEvent) => void) | null = null;
@@ -112,6 +113,7 @@ export class AnnotationPopover extends Component {
 	}
 
 	close(): void {
+		this.guideController?.abort();
 		this.clearSaveScope();
 		this.generationVersion += 1;
 		if (this.cancelGeneration) {
@@ -154,6 +156,8 @@ export class AnnotationPopover extends Component {
 	}
 
 	private renderForm(): void {
+		this.guideController?.abort();
+		this.guideController = undefined;
 		const element = this.reset();
 		const baseline = this.record, source = baseline || this.selection;
 		if (!source) return;
@@ -224,6 +228,42 @@ export class AnnotationPopover extends Component {
 			expand = aiActions.createEl("button",{text:"展开上下文解释",attr:{type:"button"}});
 			generate = aiActions.createEl("button", { text: ai.value ? "重新生成" : "生成解释", attr: { type: "button" } });
 		}
+		const guide = !pdf ? actions.createEl("button", { text: "从这条批注开始带读", attr: { type: "button" } }) : undefined;
+		const guidePanel = element.createDiv({ cls: "rar-annotation-guide" });
+		guidePanel.hidden = true;
+		const startGuide = async () => {
+			if (this.guideController) { this.guideController.abort(); return; }
+			const controller = new AbortController();
+			this.guideController = controller;
+			guidePanel.hidden = false;
+			guidePanel.empty();
+			const status = guidePanel.createDiv({ text: "Codex 正在阅读选句和原文…", attr: { role: "status" } });
+			refresh();
+			this.position();
+			try {
+				const result = await this.service.guideFromAnnotation(source, question?.value || "", ai?.value || "", controller.signal, note.value);
+				if (controller.signal.aborted) return;
+				status.setText("Codex 带读");
+				const back = guidePanel.createEl("button", { text: result.chinese ? "返回中文原段" : "返回原段", attr: { type: "button" } });
+				back.onclick = async () => {
+					try {
+						await result.returnToPassage();
+						if (element.dataset.dirty === "true" || question?.value) guidePanel.hidden = true;
+						else this.close();
+					} catch (error) { status.setText(displayError(error)); }
+				};
+				guidePanel.createDiv({ cls: "rar-annotation-guide-answer", text: result.text });
+			} catch (error) {
+				status.setText(controller.signal.aborted ? "带读已停止" : displayError(error));
+			} finally {
+				if (this.guideController === controller && !this.closed) {
+					this.guideController = undefined;
+					refresh();
+					this.position();
+				}
+			}
+		};
+		guide?.addEventListener("click", () => void startGuide());
 		const info = element.createDiv({ cls: "agent-annotation-caption", attr: { role: "status" } });
 		info.hidden = true;
 		const showMessage = (message: string) => { info.hidden = !message; info.setText(message); this.position(); };
@@ -315,7 +355,12 @@ export class AnnotationPopover extends Component {
 			const hasChanges = note.value !== (baseline?.manualText || "") || (ai?.value || "") !== (baseline?.aiText || "")
 				|| generated !== undefined || color !== (baseline?.color || "none") || excerpt !== (baseline ? listedExcerpt(baseline) : false);
 			element.dataset.dirty = String(hasChanges && (Boolean(baseline) || !pdf || Boolean(note.value)));
-			const locked = this.saving || pending;
+			const guiding = Boolean(this.guideController);
+			if (guide) {
+				guide.disabled = Boolean(this.saving || generating || pending);
+				guide.setText(guiding ? "停止带读" : "从这条批注开始带读");
+			}
+			const locked = this.saving || pending || guiding;
 			note.disabled = Boolean(locked);
 			if (ai) ai.disabled = Boolean(locked || generating || (!generated && !baseline?.aiText));
 			if (expand) { expand.hidden = !ai?.value || ai.value.includes(EXPLANATION_DIVIDER); expand.disabled = Boolean(locked || generating); }

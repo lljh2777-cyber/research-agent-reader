@@ -43,7 +43,7 @@ export function argumentPassages(text: string, selected: string, offset?: number
 		if (references.some(key => keys.has(key))) {
 			const caption = /^[#\s>*_]*(fig(?:ure)?s?\.?|table|图|表)\s*[*_[]*S?\d/i.test(line);
 			score = Math.max(score, caption ? 80 : 55);
-			captionBody = caption && block.kind === "heading";
+			captionBody = caption && (block.kind === "heading" || line.length < 240);
 		}
 		if (block.kind === "paragraph") {
 			if (headings.some(h => /methods?|procedures?|experimental|方法|实验流程/i.test(h))) {
@@ -88,3 +88,39 @@ export function attachContextQuotes(text: string, sentences: Map<string, string>
 	return text + "\n\n原文依据\n" + refs.map((ref, i) => ref + " " + quotes[i]).join("\n\n");
 }
 export const EXPLANATION_DIVIDER="\n\n### 上下文解释\n\n";
+
+export function quoteOffset(text: string, paragraph: number, quote: string): number {
+	const block = parseBilingualMarkdown(text).blocks[paragraph - 1];
+	const raw = block && text.slice(block.start, block.end);
+	const at = raw?.indexOf(quote) ?? -1;
+	if (!block || !quote || at < 0 || raw!.indexOf(quote, at + 1) >= 0)
+		throw new Error("当前原文无法唯一核对这句引文，请重新展开解释");
+	return block.start + at;
+}
+
+export function annotationEvidence(explanation: string, original: string, currentBlock: string): string[] {
+	const quotes = new Set<string>();
+	for (const part of explanation.split(EXPLANATION_DIVIDER)) {
+		const footer = "\n\n原文依据\n", at = part.lastIndexOf(footer);
+		if (at >= 0) {
+			for (const row of part.slice(at + footer.length).trim().split(/\n\n(?=\[段 )/)) {
+				const match = /^\[段 (\d+) 句 \d+\] ([\s\S]+)$/.exec(row);
+				if (!match) throw new Error("批注引句格式已变化，请重新展开解释");
+				const quote = match[2].trim();
+				quoteOffset(original, Number(match[1]), quote);
+				quotes.add(quote);
+			}
+		}
+		const marker = "\n\n对应原文：\n", start = part.lastIndexOf(marker);
+		if (start >= 0) {
+			for (const block of part.slice(start + marker.length, at >= 0 ? at : undefined).trim().split(/\n\n(?=> )/)) {
+				const lines = block.split("\n");
+				const quote = lines.map(line => line.replace(/^> /, "")).join("\n");
+				if (lines.some(line => !line.startsWith("> ")) || !quote || !currentBlock.includes(quote))
+					throw new Error("批注中的对应引句与当前原文不符，请重新核对");
+				quotes.add(quote);
+			}
+		}
+	}
+	return [...quotes];
+}
