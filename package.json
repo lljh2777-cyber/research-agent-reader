@@ -48,7 +48,7 @@
 		"test:annotations": "node tests/test_annotation_web_search.js && node tests/test_annotation_source_integrity.js && node tests/test_linked_annotations.js && node tests/test_dashboard_annotations.js",
 		"test:cli-models": "node tests/test_annotation_cli_discovery.js",
 		"test:bilingual": "node tests/test_reader_preferences.js && node tests/test_bilingual_document.js && node tests/test_bilingual_rendering.js && node tests/test_bilingual_navigation.js && node tests/test_bilingual_position.js && node tests/test_bilingual_sentences.js && node tests/test_bilingual_paragraph_hover.js && node tests/test_reading_note_properties.js && node tests/test_bilingual_annotations.js",
-		"test:split-reading": "node tests/test_split_swap.js && node tests/test_reading_file_tree.js && node tests/test_manual_split_reading.js && node tests/test_pdf_excerpts.js",
+		"test:split-reading": "node tests/test_split_swap.js && node tests/test_reading_file_tree.js && node tests/test_manual_split_reading.js && node tests/test_pdf_excerpts.js && node tests/test_split_pdf_pane.js",
 		"test:sources": "node tests/test_source_intake.js && node tests/test_source_storage.js && node tests/test_source_agent.js",
 		"test:library": "node tests/test_library_projection.js && node tests/test_library_reader.js && node tests/test_paper_records.js && node tests/test_paper_record_storage.js && node tests/test_library_compatibility.js",
 		"benchmark:library": "node --expose-gc tests/benchmark_library.js 100 && node --expose-gc tests/benchmark_library.js 500 && node --expose-gc tests/benchmark_library.js 1000",
