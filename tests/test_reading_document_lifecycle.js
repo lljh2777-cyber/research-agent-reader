@@ -17,7 +17,7 @@ function gate() {
 	return { promise, release };
 }
 
-async function fixture() {
+async function fixture(secondRelease) {
 	const workspace = new ReadingWorkspaceService({}, ".", ".");
 	workspace.repository = new ReadingRepository(memoryStorage());
 	const sessions = ["a.pdf", "b.pdf"].map(path => createReadingSession({
@@ -30,6 +30,7 @@ async function fixture() {
 		count.opens++;
 		started.release();
 		if (path === "a.pdf") await release.promise;
+		if (path === "b.pdf" && secondRelease) await secondRelease.promise;
 		count.created++;
 		return { source: sessions.find(s => s.source.path === path).source, verify: async () => {},
 			destroy: async () => { count.destroyed++; } };
@@ -107,6 +108,147 @@ test("a closed workspace rejects loading without opening a PDF", async () => {
 	assert.equal(count.opens, 0);
 });
 
+function unloadClock(t) {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const warning = t.mock.method(console, "warn", () => {});
+	let returned = false;
+	return {
+		dispose: workspace => workspace.dispose().then(() => { returned = true; }),
+		returned: () => returned,
+		warnings: () => warning.mock.calls.map(call => call.arguments.join(" ")),
+		async tick(ms) {
+			t.mock.timers.tick(ms);
+			await new Promise(resolve => setImmediate(resolve));
+		},
+	};
+}
+
+test("unload returns at five seconds even if the PDF never opens", async t => {
+	const { workspace, sessions: [s], started, count } = await fixture();
+	void workspace.document(s.id);
+	await started.promise;
+	const clock = unloadClock(t);
+	const disposal = clock.dispose(workspace);
+	await clock.tick(4999);
+	assert.equal(clock.returned(), false);
+	assert.deepEqual(clock.warnings(), []);
+	await clock.tick(1);
+	assert.equal(clock.returned(), true, "dispose still pending at 5000 ms");
+	await disposal;
+	assert.equal(count.created, 0);
+	assert.equal(clock.warnings().length, 1);
+	assert.ok(clock.warnings()[0].includes(s.id));
+});
+
+test("a PDF opening after unload returns is destroyed exactly once", async t => {
+	const { workspace, sessions: [s], release, count } = await fixture();
+	const loading = assert.rejects(workspace.document(s.id), /已关闭/);
+	const clock = unloadClock(t);
+	const disposal = clock.dispose(workspace);
+	await clock.tick(5000);
+	const returnedBeforeOpen = clock.returned();
+	assert.equal(count.created, 0);
+	release.release();
+	await Promise.all([loading, disposal]);
+	assert.deepEqual(count, { opens: 1, created: 1, destroyed: 1 });
+	assert.equal(returnedBeforeOpen, true, "dispose waited for the late PDF");
+});
+
+test("a PDF settling within the deadline completes cleanup without a warning", async t => {
+	const { workspace, sessions: [s], release, count } = await fixture();
+	const loading = assert.rejects(workspace.document(s.id), /已关闭/);
+	const clock = unloadClock(t);
+	const disposal = clock.dispose(workspace);
+	await clock.tick(4999);
+	assert.equal(clock.returned(), false);
+	release.release();
+	await Promise.all([loading, disposal]);
+	assert.equal(count.destroyed, 1);
+	await clock.tick(1);
+	assert.deepEqual(clock.warnings(), []);
+});
+
+test("only the still-opening session is reported and the other PDF is cleaned up", async t => {
+	const finishFast = gate();
+	const { workspace, sessions: [slow, fast], release, count } = await fixture(finishFast);
+	const loading = assert.rejects(workspace.document(slow.id), /已关闭/);
+	const fastLoad = assert.rejects(workspace.document(fast.id), /已关闭/);
+	const clock = unloadClock(t);
+	const disposal = clock.dispose(workspace);
+	await clock.tick(4000);
+	finishFast.release();
+	await fastLoad;
+	assert.equal(count.destroyed, 1);
+	assert.deepEqual(clock.warnings(), []);
+	await clock.tick(1000);
+	const returned = clock.returned(), destroyed = count.destroyed;
+	release.release();
+	await Promise.all([loading, disposal]);
+	assert.equal(returned, true, "the slow session blocked cleanup of the other PDF");
+	assert.equal(destroyed, 1);
+	assert.equal(count.created, 2);
+	assert.equal(count.destroyed, 2);
+	assert.equal(clock.warnings().length, 1);
+	assert.ok(clock.warnings()[0].includes(slow.id));
+	assert.ok(!clock.warnings()[0].includes(fast.id));
+});
+
+test("one timeout warning identifies concurrent cold, relocate, create and queued opens", async t => {
+	const { workspace, sessions: [a, b], release, count } = await fixture();
+	const loads = [
+		workspace.document(a.id), workspace.relocate(b.id, "a.pdf"),
+		workspace.create("pdf", "a.pdf", "", ""), workspace.open("pdf", "a.pdf", "", ""),
+	].map(task => assert.rejects(task, /已关闭/));
+	await new Promise(resolve => setImmediate(resolve));
+	assert.equal(count.opens, 4);
+	const clock = unloadClock(t);
+	const disposal = clock.dispose(workspace);
+	await clock.tick(5000);
+	const returned = clock.returned();
+	release.release();
+	await Promise.all([...loads, disposal]);
+	assert.equal(returned, true);
+	assert.equal(clock.warnings().length, 1);
+	for (const source of [a.id, b.id, "a.pdf"]) assert.ok(clock.warnings()[0].includes(source));
+	assert.deepEqual(count, { opens: 4, created: 4, destroyed: 4 });
+});
+
+test("a loader error after the unload deadline still reaches its caller", async t => {
+	const { workspace, sessions: [s], release } = await fixture();
+	const failure = new Error("late PDF read failed");
+	workspace.loader.open = async () => { await release.promise; throw failure; };
+	const loading = assert.rejects(workspace.document(s.id), error => error === failure);
+	const clock = unloadClock(t);
+	const disposal = clock.dispose(workspace);
+	await clock.tick(5000);
+	const returned = clock.returned();
+	release.release();
+	await Promise.all([loading, disposal]);
+	assert.equal(returned, true, "dispose waited for the late read error");
+});
+
+test("the PDF deadline still drains an unrelated generation before disposing its document", async t => {
+	const { workspace, sessions: [a, b], release, count } = await fixture();
+	await workspace.document(b.id);
+	const finishGeneration = gate();
+	workspace.generateHandler = () => finishGeneration.promise;
+	const generation = workspace.generate(b.id, "node");
+	const loading = assert.rejects(workspace.document(a.id), /已关闭/);
+	const clock = unloadClock(t);
+	const disposal = clock.dispose(workspace);
+	await clock.tick(5000);
+	assert.equal(clock.returned(), false);
+	assert.equal(count.destroyed, 0);
+	finishGeneration.release();
+	await generation;
+	await clock.tick(0);
+	const returned = clock.returned();
+	release.release();
+	await Promise.all([loading, disposal]);
+	assert.equal(returned, true, "unload kept waiting for the expired PDF open");
+	assert.equal(count.destroyed, 2);
+});
+
 test("plugin unload seals reading before another service finishes", async () => {
 	const { workspace, sessions: [s], count, release } = await fixture();
 	const plugin = new Plugin(), blocker = gate();
@@ -144,6 +286,25 @@ test("an already accepted generation interrupted during its cold load keeps its 
 	await workspace.dispose();
 	assert.equal(count.destroyed, 1);
 	assert.equal(requests, 0);
+});
+
+test("a generation waiting for a late PDF settles as interrupted when its open finishes", async t => {
+	const clock = unloadClock(t);
+	const { workspace, sessions: [s], started, release, count } = await fixture();
+	const id = await workspace.repository.transact(s.id, draft => addReadingNode(draft, null).id);
+	const complete = t.mock.fn();
+	new ReadingEngine(workspace, () => ({ complete }));
+	const generation = assert.rejects(workspace.generate(s.id, id), /已关闭/);
+	await started.promise;
+	const disposal = clock.dispose(workspace);
+	await clock.tick(5000);
+	const returnedBeforeOpen = clock.returned();
+	release.release();
+	await Promise.all([generation, disposal]);
+	assert.equal(returnedBeforeOpen, true);
+	assert.equal(workspace.repository.get(s.id).nodes[0].status, "interrupted");
+	assert.equal(complete.mock.callCount(), 0);
+	assert.deepEqual(count, { opens: 1, created: 1, destroyed: 1 });
 });
 
 test("unload also seals a workspace that was never opened", async () => {

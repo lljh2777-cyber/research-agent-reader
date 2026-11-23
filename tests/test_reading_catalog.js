@@ -26,7 +26,7 @@ const { ReadingWorkspaceService } = loadReading("reading/workspace.ts");
 	tests.fail = true; await assert.rejects(repo.transact(fixture.id, s => { s.title = "failed"; }), /disk full/); assert.equal(repo.get(fixture.id).title, "Paper"); tests.fail = false;
 	const reloaded = new ReadingRepository(new RoutedReadingStorage(regular, tests)); await reloaded.load(); assert.equal(reloaded.sessions.size, 2);
 	// Reopening identical sources reuses the session, including concurrent open requests.
-	const service = Object.create(ReadingWorkspaceService.prototype); service.repository = new ReadingRepository(memoryStorage()); service.documents = new Map(); service.openings = Promise.resolve(); service.ready = async () => {};
+	const service = new ReadingWorkspaceService({}, ".", "."); service.repository = new ReadingRepository(memoryStorage());
 	let destroyed = 0; let fingerprint = source.fingerprint;
 	service.loader = { open: async () => ({ source: { ...source, fingerprint }, destroy: async () => { destroyed++; } }) };
 	const first = await service.open("pdf", "paper.pdf", "codex-cli", ""); const second = await service.open("pdf", "paper.pdf", "other", "ignored");

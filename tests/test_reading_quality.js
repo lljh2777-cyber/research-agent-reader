@@ -9,9 +9,9 @@ const { acceptReadingCorrection, readingCoverage } = loadReading("reading/qualit
 	const session = createReadingSession(source); const original = addReadingNode(session, null); original.status = "done"; original.content = "Original explanation";
 	session.mainSummary = "Old summary"; const oldBranch = addReadingBranch(session, original.id);
 	const storage = memoryStorage(), repository = new ReadingRepository(storage); await repository.add(session);
-	const service = Object.create(ReadingWorkspaceService.prototype); Object.assign(service, { repository, documents: new Map(), tasks: new Set() });
+	const service = new ReadingWorkspaceService({}, ".", "."); service.repository = repository;
 	service.generateHandler = async (sid, id) => repository.transact(sid, s => { const n = s.nodes.find(n => n.id === id); n.content = "Corrected explanation"; n.status = "done"; });
-	const correctionId = await service.correct(session.id, original.id, "Check denominators"); await Promise.all([...service.tasks]);
+	const correctionId = await service.correct(session.id, original.id, "Check denominators"); await Promise.all(service.tasks.keys());
 	await repository.transact(session.id, s => acceptReadingCorrection(s, correctionId));
 	let saved = repository.get(session.id);
 	assert.equal(saved.mainIds.length, 1); assert.equal(saved.nodes[0].content, "Original explanation");

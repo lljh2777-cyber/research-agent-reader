@@ -68,10 +68,10 @@ async function productionEntries() {
  assert.equal(planningResponses,2);assert.equal(session.nodes.length,1);
  assert.equal(session.mainIds.length,1);assert.equal(session.nodes[0].status,"done");
  const anchor={id:"fixture-note",path:source.path,digest:source.fingerprint,at:0,chinese:false,selected:design.text,englishStart:0,englishDigest:source.fingerprint,question:"Design?",note:"",quotes:[]};
- const annotation=await workspace.attachAnnotation(source.path,anchor,new AbortController().signal,"B");await Promise.all([...workspace.tasks]);
+ const annotation=await workspace.attachAnnotation(source.path,anchor,new AbortController().signal,"B");await Promise.all(workspace.tasks.keys());
  assert.equal(workspace.repository.get(session.id).nodes.find(n=>n.id===annotation.nodeId).model,"B-model");
  await workspace.repository.transact(session.id,s=>{s.backend="codex-cli";});
- timeout=true;const child=await workspace.ask(session.id,annotation.nodeId,"Details?");await Promise.allSettled([...workspace.tasks]);
+ timeout=true;const child=await workspace.ask(session.id,annotation.nodeId,"Details?");await Promise.allSettled(workspace.tasks.keys());
  const count=workspace.repository.get(session.id).nodes.length;
  assert.equal(workspace.repository.get(session.id).nodes.at(-1).status,"failed");
  await workspace.repository.transact(session.id,s=>{s.backend="missing";});

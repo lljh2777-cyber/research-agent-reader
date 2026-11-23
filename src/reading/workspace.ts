@@ -7,15 +7,19 @@ import type { AnnotationOrigin, ReadingNode, ReadingQuote, ReadingSession, Readi
 import { answerHash } from "./quality";
 import { codeQuote } from "../code-reading/quote";
 
+const DOCUMENT_OPEN_DISPOSE_TIMEOUT_MS = 5_000;
+const QUEUED_OPEN = Symbol("queued document open");
+
 export class ReadingWorkspaceService {
 	readonly repository: ReadingRepository;
 	readonly loader: ReadingDocumentLoader;
 	private documents = new Map<string, ReadingDocument>();
 	private readonly loadingDocuments = new Map<string, Promise<ReadingDocument>>();
+	private readonly pendingOpens = new Map<string | symbol, string>();
 	private closingError?: Error;
 	get closeReason(): Error | undefined { return this.closingError; }
 	private initialization: Promise<void> | null = null;
-	private tasks = new Set<Promise<unknown>>();
+	private tasks = new Map<Promise<unknown>, string | symbol>();
 	private openings: Promise<unknown> = Promise.resolve();
 	generateHandler?: (sessionId: string, nodeId: string) => Promise<void>;
 	stopHandler?: (sessionId: string, nodeId: string) => void;
@@ -28,14 +32,17 @@ export class ReadingWorkspaceService {
 	private assertOpen(): void {
 		if (this.closingError) throw this.closingError;
 	}
-	private async track<T>(operation: Promise<T>): Promise<T> {
-		this.tasks.add(operation);
+	private async track<T>(operation: Promise<T>, openKey: string | symbol): Promise<T> {
+		this.tasks.set(operation, openKey);
 		try { return await operation; }
 		finally { this.tasks.delete(operation); }
 	}
-	private async openDocument(kind: ReadingSource["kind"], filename: string): Promise<ReadingDocument> {
+	private async openDocument(kind: ReadingSource["kind"], filename: string, openKey: string | symbol, sessionId?: string): Promise<ReadingDocument> {
 		this.assertOpen();
-		const document = await this.loader.open(kind, filename);
+		this.pendingOpens.set(openKey, sessionId ?? filename);
+		let document: ReadingDocument;
+		try { document = await this.loader.open(kind, filename); }
+		finally { this.pendingOpens.delete(openKey); }
 		if (this.closingError) {
 			await document.destroy();
 			throw this.closingError;
@@ -45,8 +52,9 @@ export class ReadingWorkspaceService {
 	async create(kind: ReadingSource["kind"], filename: string, backend: string, model: string): Promise<string> {
 		this.assertOpen();
 		await this.ready();
-		return this.track(this.openDocument(kind, filename).then(document =>
-			this.saveNewSession(document, createReadingSession(document.source, backend, model))));
+		const openKey = Symbol(filename);
+		return this.track(this.openDocument(kind, filename, openKey).then(document =>
+			this.saveNewSession(document, createReadingSession(document.source, backend, model))), openKey);
 	}
 	private async saveNewSession(document: ReadingDocument, session: ReadingSession): Promise<string> {
 		try {
@@ -60,7 +68,7 @@ export class ReadingWorkspaceService {
 	async open(kind: ReadingSource["kind"], filename: string, backend: string, model: string, forceNew = false): Promise<{ id: string; created: boolean }> {
 		this.assertOpen();
 		const operation = this.openings.then(async () => {
-			await this.ready(); const document = await this.openDocument(kind, filename);
+			await this.ready(); const document = await this.openDocument(kind, filename, QUEUED_OPEN);
 			const sessions = [...this.repository.sessions.values()];
 			const samePaper = kind === "code" ? [] : sessions.filter(s => !s.demo && readingCategory(s) === "reading" &&
 				s.source.kind === document.source.kind && s.source.path === document.source.path);
@@ -96,7 +104,7 @@ export class ReadingWorkspaceService {
 	}
 	private async loadSessionDocument(session: ReadingSession): Promise<ReadingDocument> {
 		const { source } = session;
-		const loaded = await this.openDocument(source.kind, source.path);
+		const loaded = await this.openDocument(source.kind, source.path, session.id, session.id);
 		try {
 			this.assertOpen();
 			if (loaded.source.fingerprint !== source.fingerprint) throw new Error("来源版本已变化，历史回答已保留；请核对原文版本后继续");
@@ -108,11 +116,12 @@ export class ReadingWorkspaceService {
 		this.assertOpen();
 		const original = structuredClone(this.repository.get(sessionId));
 		if (original.demo) throw new Error("演示会话无需重新定位原文");
-		return this.track(this.relocateDocument(original, filename));
+		const openKey = Symbol(original.id);
+		return this.track(this.relocateDocument(original, filename, openKey), openKey);
 	}
-	private async relocateDocument(original: ReadingSession, filename: string): Promise<void> {
+	private async relocateDocument(original: ReadingSession, filename: string, openKey: symbol): Promise<void> {
 		const sessionId = original.id;
-		const document = await this.openDocument(original.source.kind, filename);
+		const document = await this.openDocument(original.source.kind, filename, openKey, sessionId);
 		try {
 			if (document.source.fingerprint !== original.source.fingerprint) throw new Error("文件内容不同，请创建新会话，旧证据不能重新绑定");
 			await document.verify();
@@ -214,7 +223,7 @@ export class ReadingWorkspaceService {
 		this.assertOpen();
 		const generation = this.runGeneration(sessionId, id);
 		const reported = delivery === "background" ? generation.catch(error => this.repository.reportGenerationError(sessionId, id, error)) : generation;
-		return this.track(reported);
+		return this.track(reported, sessionId);
 	}
 	/** start/end are relative to the catalog block. The host binds the immutable quote. */
 	async askCode(sessionId: string, parentId: string, evidenceId: string, start: number, end: number, question: string): Promise<string> {
@@ -249,7 +258,24 @@ export class ReadingWorkspaceService {
 	async dispose(): Promise<void> {
 		this.close();
 		this.disposeHandler?.();
-		await Promise.allSettled([this.openings, ...this.loadingDocuments.values(), ...this.tasks]);
+		const tasks = new Map(this.tasks);
+		tasks.set(this.openings, QUEUED_OPEN);
+		for (const [sessionId, loading] of this.loadingDocuments) tasks.set(loading, sessionId);
+		const settled = Promise.allSettled(tasks.keys());
+		if (this.pendingOpens.size) {
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			const deadline = new Promise<void>(resolve => { timer = setTimeout(resolve, DOCUMENT_OPEN_DISPOSE_TIMEOUT_MS); });
+			try { await Promise.race([settled, deadline]); }
+			finally { clearTimeout(timer); }
+		}
+		if (this.pendingOpens.size) {
+			console.warn("阅读工作区卸载等待文档打开超时，仍在加载：" + [...new Set(this.pendingOpens.values())].join("、"));
+			// Tasks using an already open document must finish before the cache is destroyed.
+			const remaining = [...tasks].filter(([, openKey]) => !this.pendingOpens.has(openKey));
+			await Promise.allSettled(remaining.map(([task]) => task));
+		} else {
+			await settled;
+		}
 		await this.repository.flush();
 		await Promise.allSettled([...this.documents.values()].map((document) => document.destroy())); this.documents.clear();
 	}
