@@ -120,6 +120,7 @@ interface QueryViewHost extends PluginHost {
 	lightAgentMineruReady(): boolean;
 	getActiveDirectProviderSummary(): { name: string; model: string } | null;
 	querySessions: QuerySession[];
+	querySubmissionActive: boolean;
 	isQueryExecutionActive(runId: string, backendId?: string): boolean;
 	appendQueryMessages(
 		sessionId: string,
@@ -1494,7 +1495,16 @@ export class QueryWikiView extends ItemView {
 	}
 
 	async submitQuestion(question: string): Promise<void> {
-		if (!question || this.activeRunId || this.plugin.isActionRunning("vault-retrieval")) return;
+		if (!question || this.activeRunId || this.plugin.querySubmissionActive || this.plugin.isActionRunning("vault-retrieval")) return;
+		this.plugin.querySubmissionActive = true;
+		try {
+			await this.runSubmittedQuestion(question);
+		} finally {
+			this.plugin.querySubmissionActive = false;
+		}
+	}
+
+	private async runSubmittedQuestion(question: string): Promise<void> {
 		const action = ACTION_BY_ID.get("vault-retrieval");
 		if (!action) {
 			new Notice("知识库检索操作未注册");
@@ -1526,9 +1536,10 @@ export class QueryWikiView extends ItemView {
 				linkedImageResult = await this.plugin.resolveQuestionImageAttachments(question, selectedImages);
 			} catch (error) {
 				new Notice(
-					`未能解析链接笔记中的图片，将继续使用手动附件：${error instanceof Error ? error.message : String(error)}`,
+					`问题未发送，无法解析链接笔记中的图片：${error instanceof Error ? error.message : String(error)}`,
 					8000,
 				);
+				return;
 			}
 		}
 		const attachments = normalizeVaultImageAttachments([
@@ -1595,9 +1606,6 @@ export class QueryWikiView extends ItemView {
 					: ""
 			),
 		};
-		this.activeRunId = "starting";
-		this.activeMessageId = assistantMessage.id;
-		this.stopRequested = false;
 		const executionConfig: ExecutionConfig = directProfile
 			? this.plugin.resolveDirectQueryExecutionConfig(directProfile)
 			: backendId === "claude-code"
@@ -1630,6 +1638,9 @@ export class QueryWikiView extends ItemView {
 		let completedRun = null;
 		let restoreQuestion = false;
 		try {
+			this.activeRunId = "starting";
+			this.activeMessageId = assistantMessage.id;
+			this.stopRequested = false;
 			await this.plugin.appendQueryMessages(session.id, [userMessage, assistantMessage], question);
 			this.queryDrafts.delete(session.id);
 			if (this.inputEl?.isConnected) this.inputEl.value = "";

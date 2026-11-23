@@ -327,6 +327,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	taskRuns: TaskRun[] = [];
 	querySessions: QuerySession[] = [];
 	activeQuerySessionId = "";
+	querySubmissionActive = false;
 	latestLintReport: LintReport | null = null;
 	lastContextFile: TFile | null = null;
 
