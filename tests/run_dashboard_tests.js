@@ -30,6 +30,7 @@ const commands = [
 	[process.execPath, ["tests/test_bilingual_annotations.js"]],
 	[process.execPath, ["tests/test_release_metadata.js"]],
 	[process.execPath, ["tests/test_dashboard_providers.js"]],
+	[process.execPath, ["tests/test_provider_stream_results.js"]],
 	[process.execPath, ["tests/test_dashboard_direct_api_boundary.js"]],
 	[process.execPath, ["tests/test_vault_context.js"]],
 	[process.execPath, ["tests/test_dashboard_query_view.js"]],

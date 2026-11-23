@@ -223,7 +223,10 @@ async function main() {
 	const native = imageHost.createLLMProvider({ ...profile, type: "openai" });
 	const bodies = [];
 	imageHost.providerHttpRequest = async req => { bodies.push(req.body); return {status: 200, json: {output_text: "ok"}}; };
-	imageHost.providerHttpStream = async req => { bodies.push(req.body); };
+	imageHost.providerHttpStream = async req => {
+		bodies.push(req.body);
+		req.onEvent(JSON.stringify({ type: "response.completed", response: { status: "completed" } }));
+	};
 	const url = "data:image/png;base64,AA==";
 	const withImage = {messages: [{role: "user", content: [{type: "text", text: "Read the image"}, {type: "image_url", image_url: {url}}]}]};
 	await native.complete(withImage);
@@ -256,14 +259,7 @@ async function main() {
 				headers: {},
 			};
 		}
-		const body = JSON.parse(options.body);
-		if (body.stream) {
-			return {
-				status: 200,
-				text: "data: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\ndata: [DONE]",
-				headers: { "content-type": "text/event-stream" },
-			};
-		}
+		assert.notEqual(JSON.parse(options.body).stream, true);
 		return {
 			status: 200,
 			text: JSON.stringify({ output_text: "OK" }),
@@ -272,6 +268,12 @@ async function main() {
 	};
 
 	const provider = plugin.createLLMProvider("provider-openai");
+	const realStream = plugin.providerHttpStream;
+	plugin.providerHttpStream = async options => {
+		calls.push(options);
+		options.onEvent(JSON.stringify({ type: "response.output_text.delta", delta: "OK" }));
+		options.onEvent(JSON.stringify({ type: "response.completed", response: { status: "completed" } }));
+	};
 	assert.strictEqual(typeof provider.listModels, "function");
 	assert.strictEqual(typeof provider.complete, "function");
 	assert.strictEqual(typeof provider.probeStreaming, "function");
@@ -292,6 +294,12 @@ async function main() {
 	assert.strictEqual(profile.lastTest.streamingVerified, true);
 	assert.strictEqual(plugin.settings.activeProviderId, "provider-openai");
 	assert.strictEqual(plugin.sanitizeSettingsForStorage().activeProviderId, "provider-openai");
+	plugin.providerHttpStream = async () => ({ status: 200 });
+	const noStream = await provider.testConnection();
+	assert.equal(noStream.ok, true);
+	assert.equal(noStream.streaming.verified, false);
+	assert.ok(noStream.streaming.error);
+	plugin.providerHttpStream = realStream;
 
 	requestHandler = async () => ({
 		status: 401,

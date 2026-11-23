@@ -12,7 +12,11 @@ const { READING_MEMORY_SCHEMA, READING_SELECTION_SCHEMA, readingAnswerSchema, re
 (async () => {
 	const p = normalizeProviderProfile({ id: "p", type: "openai-compatible", baseUrl: "https://example.test/v1", model: "m", secretId: "test" });
 	let captured;
-	const host = { app: { secretStorage: { getSecret: () => "test-placeholder" } }, providerHttpRequest: async request => { captured = request; return { json: { choices: [{ message: { content: "{}" } }] } }; }, providerHttpStream: async request => { captured = request; request.onEvent(JSON.stringify({ type: "response.output_text.delta", delta: "{}" })); } };
+	const host = { app: { secretStorage: { getSecret: () => "test-placeholder" } }, providerHttpRequest: async request => { captured = request; return { json: { choices: [{ message: { content: "{}" } }] } }; }, providerHttpStream: async request => {
+		captured = request;
+		request.onEvent(JSON.stringify({ type: "response.output_text.delta", delta: "{}" }));
+		request.onEvent(JSON.stringify({ type: "response.completed", response: { status: "completed" } }));
+	} };
 	const chat = new OpenAICompatibleProvider(host, p);
 	const request = { messages: [{ role: "user", content: "JSON" }], responseSchema: { name: "reading", schema: ASSISTANT_SCHEMA } };
 	await chat.complete(request); assert.deepEqual(captured.body.response_format, { type: "json_schema", json_schema: { ...request.responseSchema, strict: true } }); assert.equal(captured.body.enable_search, undefined);

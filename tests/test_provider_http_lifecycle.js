@@ -39,6 +39,25 @@ async function rejectsWithin(promise, type, label, deadlineMs = 1500) {
 }
 
 async function testProviderHttpLifecycle(transport) {
+	const { OpenAIProvider, OpenAICompatibleProvider } = require("./reading-test-helpers").loadReading("providers/adapters.ts");
+	for (const [Adapter, type, body] of [
+		[OpenAIProvider, "openai", { object: "response", status: "completed", output_text: "ordinary" }],
+		[OpenAICompatibleProvider, "openai-compatible", { object: "chat.completion", choices: [{ message: { content: "ordinary" }, finish_reason: "stop" }] }],
+	]) {
+		for (const text of ["", JSON.stringify(body)]) {
+			await withServer((_request, response) => {
+				response.writeHead(200, { "Content-Type": "application/json" });
+				response.end(text);
+			}, async url => {
+				const host = { app: { secretStorage: { getSecret: () => "test" } }, providerHttpStream: options => transport.providerHttpStream(options),
+					providerHttpRequest: options => transport.providerHttpRequest(options) };
+				const provider = new Adapter(host, { type, baseUrl: url, model: "model", secretId: "test", timeoutSeconds: 3 });
+				const request = { messages: [{ role: "user", content: "test" }] };
+				await assert.rejects(provider.stream(request, () => {}), error => error.type === "protocol");
+				await assert.rejects(provider.probeStreaming(request), error => error.type === "protocol");
+			});
+		}
+	}
 	await withServer((_request, response) => {
 		response.writeHead(200, { "Content-Type": "application/json" });
 		response.end('{"ok":true}');
@@ -55,6 +74,38 @@ async function testProviderHttpLifecycle(transport) {
 		await transport.providerHttpStream({ url, format: "sse", onEvent: (event) => events.push(event) });
 		assert.deepEqual(events, ['{"delta":"complete"}', "[DONE]"]);
 	});
+
+	let firstEventReceived;
+	const firstEvent = new Promise(resolve => { firstEventReceived = resolve; });
+	await withServer(async (_request, response) => {
+		response.writeHead(200, { "Content-Type": "text/event-stream" });
+		response.write("data: one\r\n\r\ndata: two\r\n\r");
+		await firstEvent;
+		response.end("\ndata: three\r\n\r\n");
+	}, async url => {
+		const events = [];
+		await transport.providerHttpStream({ url, format: "sse", onEvent: data => {
+			events.push(data);
+			firstEventReceived();
+		} });
+		assert.deepEqual(events, ["one", "two", "three"]);
+	});
+
+	// Exercise both data callbacks and the final buffered frame.
+	for (const frame of ["data: failed\n\ndata: later\n\n", "data: failed"]) {
+		await withServer((_request, response) => {
+			response.writeHead(200, { "Content-Type": "text/event-stream" });
+			response.end(frame);
+		}, async (url) => {
+			const rejected = new Error("model failure in frame");
+			const seen = [];
+			await assert.rejects(transport.providerHttpStream({ url, format: "sse", onEvent: data => {
+				seen.push(data);
+				throw rejected;
+			} }), error => error === rejected);
+			assert.deepEqual(seen, ["failed"]);
+		});
+	}
 
 	// Send headers and body first, so the failure belongs to IncomingMessage,
 	// not to ClientRequest's pre-response error path. The deadline is shorter

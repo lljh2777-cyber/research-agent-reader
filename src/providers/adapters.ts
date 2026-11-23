@@ -12,6 +12,7 @@ import type {
 	ProviderCompletion,
 	ProviderConnectionTestResult,
 	ProviderHttpRequestOptions,
+	ProviderHttpStreamOptions,
 	ProviderRequestOptions,
 	ProviderRuntimeConfig,
 } from "../types/contracts";
@@ -23,6 +24,7 @@ import {
 	extractOpenAIText,
 	normalizeProviderModelList,
 	parseProviderJson,
+	providerErrorMessage,
 	type ProviderModel,
 	type UnknownRecord,
 } from "./shared";
@@ -227,6 +229,56 @@ function responsesInput(messages: readonly ChatMessage[]) {
 	});
 }
 
+function streamEvent(data: string): UnknownRecord {
+	const payload = parseProviderJson(data);
+	if (!payload || Array.isArray(payload)) throw new ProviderConnectionError("protocol", "流事件不是有效的 JSON 对象");
+	return payload;
+}
+
+function streamFailure(payload: UnknownRecord, eventName: string): ProviderConnectionError {
+	const code = asRecord(payload.error).code ?? payload.code;
+	const detail = typeof payload.error === "string" ? payload.error : typeof code === "string" ? code : eventName;
+	return new ProviderConnectionError("server", providerErrorMessage(payload, detail));
+}
+
+async function streamResponses(
+	host: PluginHost, options: Omit<ProviderHttpStreamOptions, "format" | "onEvent">, onDelta: ProviderDeltaHandler,
+): Promise<ProviderCompletion> {
+	let text = "";
+	let terminal: UnknownRecord | undefined;
+	await host.providerHttpStream({ ...options, format: "sse", onEvent: data => {
+		if (data === "[DONE]") return;
+		const event = streamEvent(data);
+		if (event.type === "error" || event.error) throw streamFailure(event, "Responses 返回错误事件");
+		if (typeof event.type !== "string") throw new ProviderConnectionError("protocol", providerErrorMessage(event, "Responses 流事件缺少类型"));
+		switch (event.type) {
+			case "response.failed":
+				throw streamFailure(asRecord(event.response), "Responses 生成失败");
+			case "response.output_text.delta":
+				if (typeof event.delta !== "string") throw new ProviderConnectionError("protocol", "Responses 正文增量缺少文本");
+				text += emitProviderDelta(onDelta, event.delta);
+				break;
+			case "response.completed":
+			case "response.incomplete": {
+				const response = asRecord(event.response);
+				const status = event.type === "response.completed" ? "completed" : "incomplete";
+				if (!event.response || typeof event.response !== "object" || Array.isArray(event.response)) {
+					throw new ProviderConnectionError("protocol", "Responses 终态事件缺少响应对象");
+				}
+				if (response.status !== undefined && response.status !== status) throw new ProviderConnectionError("protocol", "Responses 终态事件与响应状态不一致");
+				if (status === "incomplete") {
+					const reason = asRecord(response.incomplete_details).reason;
+					if (typeof reason !== "string" || !reason.trim()) throw new ProviderConnectionError("protocol", "Responses 未提供生成中止原因");
+				}
+				terminal = { ...response, status };
+				break;
+			}
+		}
+	} });
+	if (!terminal) throw new ProviderConnectionError("protocol", "Responses 流结束前未收到终态事件");
+	return { text: extractOpenAIText(terminal) || text, raw: terminal };
+}
+
 export class OpenAIProvider extends LLMProvider {
 	async headers(): Promise<Record<string, string>> {
 		return {
@@ -267,8 +319,7 @@ export class OpenAIProvider extends LLMProvider {
 		onDelta: ProviderDeltaHandler,
 		options: ProviderRequestOptions = {},
 	): Promise<ProviderCompletion> {
-		let text = "";
-		await this.plugin.providerHttpStream({
+		return streamResponses(this.plugin, {
 			url: buildProviderUrl(this.config.baseUrl, "v1/responses"),
 			method: "POST",
 			headers: await this.headers(),
@@ -281,34 +332,12 @@ export class OpenAIProvider extends LLMProvider {
 				stream: true,
 			},
 			timeoutMs: this.config.timeoutSeconds * 1000,
-			format: "sse",
 			registerCancel: options.registerCancel,
-			onEvent: (data) => {
-				if (data === "[DONE]") return;
-				const payload = parseProviderJson(data);
-				const choices = Array.isArray(payload?.choices) ? payload.choices : [];
-				const firstChoice = asRecord(choices[0]);
-				const delta = payload?.type === "response.output_text.delta"
-					? payload.delta
-					: asRecord(firstChoice.delta).content;
-				text += emitProviderDelta(onDelta, delta);
-			},
-		});
-		return { text };
+		}, onDelta);
 	}
 
 	async probeStreaming(request: ProviderChatRequest): Promise<boolean> {
-		await this.request("v1/responses", {
-			method: "POST",
-			headers: await this.headers(),
-			body: {
-				model: request.model || this.config.model,
-				input: responsesInput(request.messages),
-				max_output_tokens: request.maxTokens || 16,
-				store: false,
-				stream: true,
-			},
-		});
+		await this.stream({ ...request, maxTokens: request.maxTokens ?? 16 }, () => {});
 		return true;
 	}
 }
@@ -420,6 +449,7 @@ export class OpenAICompatibleProvider extends LLMProvider {
 			messages: request.messages,
 			max_tokens: request.maxTokens || 256,
 			stream,
+			...(stream ? { stream_options: { include_usage: true } } : {}),
 			...(request.responseSchema ? { response_format: { type: "json_schema", json_schema: { ...request.responseSchema, strict: true } } } : {}),
 			...(request.disableReasoning && supportsFastCoordination(this.config.baseUrl, request.model || this.config.model) ? { enable_thinking: false } : {}),
 		};
@@ -492,27 +522,18 @@ export class OpenAICompatibleProvider extends LLMProvider {
 		onDelta: ProviderDeltaHandler,
 		options: ProviderRequestOptions = {},
 	): Promise<ProviderCompletion> {
-		let text = "";
 		if (this.usesResponsesApi(request)) {
-			await this.plugin.providerHttpStream({
+			return streamResponses(this.plugin, {
 				url: buildProviderUrl(this.config.baseUrl, "responses"),
 				method: "POST",
 				headers: await this.headers(),
 				body: this.responsesBody(request, true),
 				timeoutMs: (options.timeoutMs || this.config.timeoutSeconds * 1000),
-				format: "sse",
 				registerCancel: options.registerCancel,
-				onEvent: (data) => {
-					if (data === "[DONE]") return;
-					const payload = parseProviderJson(data);
-					const delta = payload?.type === "response.output_text.delta"
-						? payload.delta
-						: undefined;
-					text += emitProviderDelta(onDelta, delta);
-				},
-			});
-			return { text };
+			}, onDelta);
 		}
+		let text = "";
+		let terminal: UnknownRecord | undefined, usage: unknown;
 		await this.plugin.providerHttpStream({
 			url: buildProviderUrl(this.config.baseUrl, "v1/chat/completions"),
 			method: "POST",
@@ -523,21 +544,37 @@ export class OpenAICompatibleProvider extends LLMProvider {
 			registerCancel: options.registerCancel,
 			onEvent: (data) => {
 				if (data === "[DONE]") return;
-				const payload = parseProviderJson(data);
-				const choices = Array.isArray(payload?.choices) ? payload.choices : [];
-				const firstChoice = asRecord(choices[0]);
-				text += emitProviderDelta(onDelta, asRecord(firstChoice.delta).content);
+				const payload = streamEvent(data);
+				if (payload.error || payload.type === "error") {
+					throw streamFailure(payload, "Chat Completions 生成失败");
+				}
+				if (!Array.isArray(payload.choices) || (payload.object !== undefined && payload.object !== "chat.completion.chunk")) {
+					throw new ProviderConnectionError("protocol", providerErrorMessage(payload, "未收到有效的 Chat Completions 流事件"));
+				}
+				// With include_usage the final chunk has usage and an empty choices array.
+				if (payload.usage != null) usage = payload.usage;
+				if (!payload.choices.length) return;
+				const choice = asRecord(payload.choices[0]);
+				if (choice.message !== undefined) throw new ProviderConnectionError("protocol", "收到了非流式 Chat Completions 响应");
+				const content = asRecord(choice.delta).content;
+				if (content != null) {
+					if (typeof content !== "string") throw new ProviderConnectionError("protocol", "Chat Completions 正文增量不是文本");
+					text += emitProviderDelta(onDelta, content);
+				}
+				if (choice.finish_reason != null) {
+					if (typeof choice.finish_reason !== "string" || !["stop", "length", "content_filter", "tool_calls", "function_call"].includes(choice.finish_reason)) {
+						throw new ProviderConnectionError("protocol", providerErrorMessage(choice, "未知的 Chat Completions 停止原因：" + choice.finish_reason));
+					}
+					terminal = payload;
+				}
 			},
 		});
-		return { text };
+		if (!terminal) throw new ProviderConnectionError("protocol", "Chat Completions 流结束前未收到 finish_reason");
+		return { text, raw: { ...terminal, ...(usage == null ? {} : { usage }) } };
 	}
 
 	async probeStreaming(request: ProviderChatRequest): Promise<boolean> {
-		await this.request("v1/chat/completions", {
-			method: "POST",
-			headers: await this.headers(),
-			body: this.chatBody(request, true),
-		});
+		await this.stream(request, () => {});
 		return true;
 	}
 }

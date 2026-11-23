@@ -278,6 +278,16 @@ export class ProviderHttpTransport {
 				finish(() => reject(normalized));
 				request.destroy(normalized);
 			};
+			const deliver = (data: string): void => {
+				if (settled) return;
+				try {
+					options.onEvent(data);
+				} catch (error) {
+					// A consumer error belongs to the stream promise, outside Node's event callback.
+					finish(() => reject(error));
+					request.destroy();
+				}
+			};
 			const request = transport.request(endpoint, {
 				method: options.method || "POST",
 				headers,
@@ -298,22 +308,22 @@ export class ProviderHttpTransport {
 					}
 					responseText = `${responseText}${chunk}`.slice(-200000);
 					if (status < 200 || status >= 300) return;
-					buffer += chunk.replace(/\r\n/g, "\n");
+					buffer += chunk;
 					if (options.format === "ndjson") {
 						const lines = buffer.split("\n");
 						buffer = lines.pop() || "";
-						lines.map((line) => line.trim()).filter(Boolean).forEach(options.onEvent);
+						lines.map((line) => line.trim()).filter(Boolean).forEach(deliver);
 						return;
 					}
-					const events = buffer.split("\n\n");
+					const events = buffer.split(/\r?\n\r?\n/);
 					buffer = events.pop() || "";
 					for (const event of events) {
 						const data = event
-							.split("\n")
+							.split(/\r?\n/)
 							.filter((line) => line.startsWith("data:"))
 							.map((line) => line.slice(5).trimStart())
 							.join("\n");
-						if (data) options.onEvent(data);
+						if (data) deliver(data);
 					}
 				});
 				response.on("end", () => {
@@ -335,14 +345,14 @@ export class ProviderHttpTransport {
 					const tail = buffer.trim();
 					if (tail) {
 						if (options.format === "ndjson") {
-							options.onEvent(tail);
+							deliver(tail);
 						} else {
 							const data = tail
-								.split("\n")
+								.split(/\r?\n/)
 								.filter((line) => line.startsWith("data:"))
 								.map((line) => line.slice(5).trimStart())
 								.join("\n");
-							if (data) options.onEvent(data);
+							if (data) deliver(data);
 						}
 					}
 					finish(() => resolve({
