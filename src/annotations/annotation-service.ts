@@ -134,6 +134,73 @@ function normalizeArchiveTarget(value: unknown): string {
 		.replace(/^\/+/, "");
 }
 
+type ArchiveUpdate = Partial<Pick<AnnotationRecord, "archiveStatus" | "archiveTargets" | "archiveRunId" | "archiveError">>;
+
+const archiveStatusLabels = { none: "未归档", pending: "归档中", completed: "已归档", failed: "归档失败" };
+
+function archiveTargetLinks(targets: string[]): string {
+	return targets.map(target => `[[${normalizeArchiveTarget(target)}]]`).join("、") || "无";
+}
+
+function patchArchiveMetadata(json: string, updates: ArchiveUpdate): string {
+	const replacements = new Map(Object.entries(updates).map(([key, value]) =>
+		[key, JSON.stringify(value).replace(/</g, "\\u003c").replace(/>/g, "\\u003e")] as const));
+	const missing = new Set(replacements.keys());
+	const members: string[] = [];
+	let depth = 0, start = 1;
+	// Split only at top-level delimiters so other JSON values keep their original spelling.
+	for (const match of json.matchAll(/"(?:\\.|[^"\\])*"|[{}\[\],]/g)) {
+		const token = match[0], at = match.index!;
+		if (depth === 1 && (token === "," || token === "}")) {
+			const member = json.slice(start, at);
+			const prefix = /^(\s*("(?:\\.|[^"\\])*")\s*:\s*)/.exec(member)!;
+			const key = JSON.parse(prefix[2]) as string;
+			const replacement = replacements.get(key);
+			members.push(replacement === undefined ? member : prefix[1] + replacement + member.slice(member.trimEnd().length));
+			missing.delete(key);
+			start = at + 1;
+		}
+		if (token === "{" || token === "[") depth++;
+		if (token === "}" || token === "]") depth--;
+	}
+	for (const key of missing) members.push(JSON.stringify(key) + ":" + replacements.get(key));
+	return "{" + members.join(",") + "}";
+}
+
+function patchArchiveDisplay(block: string, latest: AnnotationRecord, updates: ArchiveUpdate): string {
+	const afterBody = block.indexOf(AI_END) + AI_END.length;
+	const heading = /^### 归档[ \t]*(\r?\n)/m.exec(block.slice(afterBody));
+	if (!heading) throw new Error("找不到批注归档分区，未写入");
+	const start = afterBody + heading.index + heading[0].length, eol = heading[1];
+	let tail = block.slice(start);
+	const endOfSection = new RegExp("^#{1,3}[ \\t]|^\\^" + escapeRegExp(latest.id) + "\\r?$|^<!-- agent-dashboard:annotation-end ", "m");
+	const patchField = (pattern: RegExp, replace: (line: string) => string, previous?: string) => {
+		const end = tail.search(endOfSection);
+		const matches = Array.from(tail.matchAll(pattern)).filter(match => match.index! < end);
+		const candidates = matches.length > 1 ? matches.filter(match => match[0] === previous) : matches;
+		if (candidates.length !== 1) throw new Error("无法定位批注归档字段，未写入");
+		const match = candidates[0], at = match.index!;
+		tail = tail.slice(0, at) + replace(match[0]) + tail.slice(at + match[0].length);
+	};
+	if (updates.archiveStatus !== undefined) {
+		const status = "- 状态：" + archiveStatusLabels[updates.archiveStatus];
+		patchField(/^- 状态：[^\r\n]*/gm, () => status, "- 状态：" + archiveStatusLabels[latest.archiveStatus]);
+	}
+	const message = updates.archiveError?.replace(/\r?\n/g, eol);
+	const addError = message && !latest.archiveError;
+	if (updates.archiveTargets !== undefined || addError) {
+		const targets = updates.archiveTargets && "- 知识节点：" + archiveTargetLinks(updates.archiveTargets);
+		patchField(/^- 知识节点：[^\r\n]*/gm, line => (targets ?? line) + (addError ? eol + "- 说明：" + message : ""),
+			"- 知识节点：" + archiveTargetLinks(latest.archiveTargets));
+	}
+	if (latest.archiveError && message !== undefined && updates.archiveError !== latest.archiveError) {
+		const old = latest.archiveError.split(/\r?\n/).map(escapeRegExp).join("\\r?\\n");
+		patchField(new RegExp("^- 说明：" + old + "\\r?\\n", "gm"),
+			line => message ? "- 说明：" + message + (line.endsWith("\r\n") ? "\r\n" : "\n") : "");
+	}
+	return block.slice(0, start) + tail;
+}
+
 function countOccurrences(content: string, value: string): number[] {
 	const offsets: number[] = [];
 	let cursor = 0;
@@ -774,26 +841,28 @@ export class AnnotationService {
 		};
 	}
 
-	async updateArchiveState(
-		record: AnnotationRecord,
-		updates: Partial<
-			Pick<
-				AnnotationRecord,
-				"archiveStatus" | "archiveTargets" | "archiveRunId" | "archiveError"
-			>
-		>,
-	): Promise<AnnotationRecord> {
-		const latest = await this.loadAnnotation(record.annotationPath, record.id);
-		if (!latest) throw new Error("批注记录不存在");
-		const updated = {
-			...latest,
-			...updates,
-			archiveTargets: updates.archiveTargets
-				? updates.archiveTargets.map(normalizeArchiveTarget).filter(Boolean)
-				: latest.archiveTargets,
-			updatedAt: new Date().toISOString(),
-		};
-		await this.writeRecord(updated);
+	async updateArchiveState(record: AnnotationRecord, updates: ArchiveUpdate): Promise<AnnotationRecord> {
+		const vault = this.app.vault, { annotationPath, id } = record;
+		const file = vault.getAbstractFileByPath(annotationPath);
+		const conflict = "批注归档冲突：记录或文件已被删除或移动";
+		if (!(file instanceof TFile)) throw new Error(conflict);
+		if (updates.archiveTargets) updates = { ...updates, archiveTargets: updates.archiveTargets.map(normalizeArchiveTarget).filter(Boolean) };
+		let updated!: AnnotationRecord;
+		try {
+			await vault.process(file, content => {
+				const block = this.findRecordBlock(content, id);
+				if (!block || vault.getAbstractFileByPath(annotationPath) !== file) throw new Error(conflict);
+				const [latest] = readAnnotationRecords(block, annotationPath).records;
+				if (!latest) throw new Error("批注记录格式已损坏，未写入归档状态");
+				updated = { ...latest, ...updates };
+				const patched = block.replace(/<!-- agent-dashboard:annotation-meta (\{[^\r\n]*\}) -->/,
+					(_line, json: string) => META_PREFIX + patchArchiveMetadata(json, updates) + " -->");
+				return content.replace(block, () => patchArchiveDisplay(patched, latest, updates));
+			});
+		} catch (error) {
+			if (vault.getAbstractFileByPath(annotationPath) !== file) throw new Error(conflict);
+			throw error;
+		}
 		return updated;
 	}
 
@@ -1128,15 +1197,8 @@ export class AnnotationService {
 		};
 		const displayText = record.pdfExcerpt ? record.selectedText : annotationDisplayText(record.selectedText);
 		const title = record.pdfExcerpt ? `PDF 第 ${record.pdfExcerpt.page} 页摘录` : displayText.slice(0, 90).replace(/[#\r\n\[\]<>]/g, "");
-		const targets = record.archiveTargets.length
-			? record.archiveTargets.map((target) => `[[${normalizeArchiveTarget(target)}]]`).join("、")
-			: "无";
-		const statusLabel = {
-			none: "未归档",
-			pending: "归档中",
-			completed: "已归档",
-			failed: "归档失败",
-		}[record.archiveStatus];
+		const targets = archiveTargetLinks(record.archiveTargets);
+		const statusLabel = archiveStatusLabels[record.archiveStatus];
 		// Source context can contain HTML comments or annotation marker text.
 		// JSON escapes preserve the exact anchor without terminating this comment.
 		const serializedMeta = JSON.stringify(meta).replace(/</g, "\\u003c").replace(/>/g, "\\u003e");

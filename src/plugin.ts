@@ -959,97 +959,79 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (!this.annotationService) return;
 		if (record.bilingual || isTranslationPath(record.sourcePath)) { new Notice("双语内容请保存摘录后，通过草稿或整理预览核对来源；本入口未归档"); return; }
 		const action = ARCHIVE_ANNOTATION_ACTION;
-		if (this.isActionRunning(action.id)) {
-			await this.annotationService.updateArchiveState(record, {
-				archiveStatus: "failed",
-				archiveError: "批注归档正在运行，请稍后重试",
-			});
-			new Notice("批注归档正在运行，批注已保留但尚未归档");
-			return;
-		}
-		const executionConfig = this.resolveActionExecutionConfig(action);
-		const run = await this.startTaskRun(
-			action,
-			`归档批注：${record.selectedText.slice(0, 80)}`,
-			executionConfig,
-		);
-		record = await this.annotationService.updateArchiveState(record, {
-			archiveStatus: "pending",
-			archiveRunId: run.id,
-			archiveError: "",
-		});
-		new Notice("批注已保留，正在归档本条批注");
-		const request = [
-			"处理一条由 Research Agent Reader 批注功能提交的正式知识归档请求。",
-			`批注文档：${record.annotationPath}#^${record.id}`,
-			`来源文档：${record.sourcePath}`,
-			record.section ? `所在章节：${record.section}` : "",
-			`选中文字：${record.selectedText}`,
-			"",
-			"初步解释：",
-			record.aiText,
-			"",
-			"请检查来源文档、现有 source note、method、concept、dataset、entity、代码笔记和索引。",
-			"判断该内容适合归入哪类正式知识节点；优先更新已有规范节点，只有不存在合适节点时才创建新节点。",
-			"区分来源文档证据、一般背景和未解决问题，并按 research-vault-synthesis 的规则更新拥有的索引与日志。",
-			"不要修改批注文档，Dashboard 会在任务完成后写回关联。",
-			"",
-			"最终回答最后一行必须严格使用以下格式，列出本次创建或更新的知识节点路径（相对 Obsidian vault 根目录、不带 .md）：",
-			'ANNOTATION_ARCHIVE_TARGETS: ["wiki/methods/example"]',
-		].filter(Boolean).join("\n");
+		let run: TaskRun | undefined;
+		let exitCode: number | null = null, output = "";
 		try {
-			const result = await this.runVaultAction(
-				run.id,
+			if (this.isActionRunning(action.id)) {
+				await this.annotationService.updateArchiveState(record, {
+					archiveStatus: "failed",
+					archiveError: "批注归档正在运行，请稍后重试",
+				});
+				new Notice("批注归档正在运行，批注已保留但尚未归档");
+				return;
+			}
+			const executionConfig = this.resolveActionExecutionConfig(action);
+			run = await this.startTaskRun(
 				action,
-				request,
+				`归档批注：${record.selectedText.slice(0, 80)}`,
 				executionConfig,
 			);
-			const output = [
-				result.stdout.trim(),
-				result.stderr.trim() ? `运行日志\n${result.stderr.trim()}` : "",
-			].filter(Boolean).join("\n\n").slice(0, 120000);
-			const processSucceeded = result.exitCode === 0;
-			const archiveTargets = processSucceeded
-				? this.parseAnnotationArchiveTargets(result.stdout)
-				: [];
-			const integrationError = processSucceeded && !archiveTargets.length
-				? "批注归档已完成，但没有返回可关联的知识节点路径"
-				: "";
-			const success = processSucceeded && !integrationError;
-			await this.finishTaskRun(run.id, {
-				status: success ? "done" : result.exitCode === 130 ? "interrupted" : "failed",
-				exitCode: result.exitCode,
-				output,
-				error: success
-					? ""
-					: integrationError || `进程退出码：${result.exitCode}`,
-			});
-			if (!processSucceeded) {
-				throw new Error(result.stderr.trim() || `批注归档退出码：${result.exitCode}`);
-			}
-			if (integrationError) throw new Error(integrationError);
-			await this.annotationService.updateArchiveState(record, {
-				archiveStatus: "completed",
-				archiveTargets,
+			record = await this.annotationService.updateArchiveState(record, {
+				archiveStatus: "pending",
+				archiveRunId: run.id,
 				archiveError: "",
 			});
-			new Notice(`批注归档完成，已关联 ${archiveTargets.length} 个知识节点`);
+			new Notice("批注已保留，正在归档本条批注");
+			const request = [
+				"处理一条由 Research Agent Reader 批注功能提交的正式知识归档请求。",
+				`批注文档：${record.annotationPath}#^${record.id}`,
+				`来源文档：${record.sourcePath}`,
+				record.section ? `所在章节：${record.section}` : "",
+				`选中文字：${record.selectedText}`,
+				"",
+				"初步解释：",
+				record.aiText,
+				"",
+				"请检查来源文档、现有 source note、method、concept、dataset、entity、代码笔记和索引。",
+				"判断该内容适合归入哪类正式知识节点；优先更新已有规范节点，只有不存在合适节点时才创建新节点。",
+				"区分来源文档证据、一般背景和未解决问题，并按 research-vault-synthesis 的规则更新拥有的索引与日志。",
+				"不要修改批注文档，Dashboard 会在任务完成后写回关联。",
+				"",
+				"最终回答最后一行必须严格使用以下格式，列出本次创建或更新的知识节点路径（相对 Obsidian vault 根目录、不带 .md）：",
+				'ANNOTATION_ARCHIVE_TARGETS: ["wiki/methods/example"]',
+			].filter(Boolean).join("\n");
+			let archiveTargets: string[] = [], failure = "";
+			try {
+				const result = await this.runVaultAction(run.id, action, request, executionConfig);
+				exitCode = result.exitCode;
+				output = [
+					result.stdout.trim(),
+					result.stderr.trim() ? `运行日志\n${result.stderr.trim()}` : "",
+				].filter(Boolean).join("\n\n").slice(0, 120000);
+				if (exitCode === 0) {
+					archiveTargets = this.parseAnnotationArchiveTargets(result.stdout);
+					if (!archiveTargets.length) failure = "批注归档已完成，但没有返回可关联的知识节点路径";
+				} else {
+					failure = result.stderr.trim() || `批注归档退出码：${exitCode}`;
+				}
+			} catch (error) {
+				failure = error instanceof Error ? error.message : String(error);
+			}
+			const success = archiveTargets.length > 0;
+			await this.annotationService.updateArchiveState(record, success
+				? { archiveStatus: "completed", archiveTargets, archiveError: "" }
+				: { archiveStatus: "failed", archiveError: failure.slice(0, 500) });
+			await this.finishTaskRun(run.id, {
+				status: success ? "done" : exitCode === 130 ? "interrupted" : "failed",
+				exitCode, output, error: exitCode ? `进程退出码：${exitCode}` : failure,
+			});
+			new Notice(success ? `批注归档完成，已关联 ${archiveTargets.length} 个知识节点` : `批注已保留，但归档失败：${failure}`);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			const task = this.getTaskRun(run.id);
-			if (task?.status === "running") {
-				await this.finishTaskRun(run.id, {
-					status: "failed",
-					exitCode: null,
-					output: "",
-					error: message,
-				});
+			new Notice(message);
+			if (run && this.getTaskRun(run.id)?.status === "running") {
+				await this.finishTaskRun(run.id, { status: "failed", exitCode, output, error: message });
 			}
-			await this.annotationService.updateArchiveState(record, {
-				archiveStatus: "failed",
-				archiveError: message.slice(0, 500),
-			});
-			new Notice(`批注已保留，但归档失败：${message}`);
 		}
 	}
 

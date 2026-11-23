@@ -33,8 +33,92 @@ function memory(content, sourcePath = "Clippings/linked.md") {
  return { files, writes, app, service: new AnnotationService(app, {}) };
 }
 function live(range) { globalThis.window = { getSelection: () => ({ isCollapsed: false, rangeCount: 1, getRangeAt: () => range, toString: () => range.toString() }) }; }
+async function archiveFixture() {
+ const selectedText = "A passage", sourcePath = "Clippings/archive.md", f = memory(selectedText, sourcePath);
+ const selection = { sourcePath, selectedText, sourceStart: 0, sourceEnd: selectedText.length, prefix: "", suffix: "", context: selectedText, section: "", anchorRect: {} };
+ const record = await f.service.createAnnotation(selection, { manualText: "Original memo", aiText: "Original explanation" });
+ return { ...f, record, note: f.files.get(record.annotationPath) };
+}
 let count = 0; const check = async (name, fn) => { await fn(); count++; console.log("OK linked annotations: " + name); };
 (async () => {
+ await check("archiving keeps the manual edit made while the write was waiting", async () => {
+  const { service, record, note, app } = await archiveFixture();
+  const process = app.vault.process;
+  app.vault.process = (file, transform) => {
+   note.text = note.text.replace("Original memo", "Edited while waiting");
+   return process(file, transform);
+  };
+  const updated = await service.updateArchiveState(record, { archiveStatus: "pending" });
+  assert.equal((await service.loadAnnotation(record.annotationPath, record.id)).manualText, "Edited while waiting");
+  assert.equal(updated.manualText, "Edited while waiting");
+ });
+ await check("archiving changes only the requested fields and their display lines", async () => {
+  const { service, record, note } = await archiveFixture();
+  const extraMeta = String.raw` "extension" : { "archiveStatus":"nested", "values":[1.00, "\u0041", "}"] }, `;
+  const before = note.text
+   .replace('{"id":', () => "{" + extraMeta + '"id":')
+   .replace(/^(<!-- agent-dashboard:annotation-meta .* -->)$/m, line => "  " + line + "  ")
+   .replace("Original memo", () => "Original memo $& $1 $$\n### 归档\n- 状态：个人记录")
+   .replace("- 状态：未归档", "- 状态：我的阅读进度\n- 状态：未归档")
+   .replace("- 知识节点：无", () => "我的补充段落  \n\n- 知识节点：无")
+   .replaceAll("\n", "\r\n") + "块外备注\r\n";
+  note.text = before;
+  const updated = await service.updateArchiveState(record, { archiveStatus: "completed", archiveTargets: ["[[wiki/methods/test]]"] });
+  const expected = before.replace('"archiveStatus":"none"', '"archiveStatus":"completed"')
+   .replace('"archiveTargets":[]', '"archiveTargets":["wiki/methods/test"]')
+   .replace("- 状态：未归档", "- 状态：已归档").replace("- 知识节点：无", "- 知识节点：[[wiki/methods/test]]");
+  assert.equal(note.text, expected);
+  assert.equal(updated.updatedAt, record.updatedAt);
+  assert.deepEqual(updated.archiveTargets, ["wiki/methods/test"]);
+  const message = "运行失败 $& $1\n### 详细日志\n第二行";
+  await service.updateArchiveState(record, { archiveStatus: "failed", archiveError: message, archiveRunId: "run-1" });
+  assert.ok(note.text.includes("- 说明：" + message.replaceAll("\n", "\r\n") + "\r\n"));
+  const retry = await service.updateArchiveState(record, { archiveStatus: "pending", archiveError: "" });
+  assert.equal(retry.archiveRunId, "run-1");
+  assert.equal(note.text, expected.replace('"archiveStatus":"completed"', '"archiveStatus":"pending"')
+   .replace('"archiveRunId":""', '"archiveRunId":"run-1"').replace("- 状态：已归档", "- 状态：归档中"));
+ });
+ await check("removing a queued record or its file reports a conflict without recreating it", async () => {
+  const { service, record, note, app, files } = await archiveFixture();
+  const process = app.vault.process;
+  app.vault.process = (file, transform) => {
+   note.text = "仅保留用户段落\r\n";
+   return process(file, transform);
+  };
+  const archive = () => service.updateArchiveState(record, { archiveStatus: "completed" });
+  await assert.rejects(archive, /归档冲突/);
+  assert.equal(note.text, "仅保留用户段落\r\n");
+  files.delete(record.annotationPath);
+  await assert.rejects(archive, /归档冲突/);
+  assert.equal(files.has(record.annotationPath), false);
+ });
+ await check("archive entry shows the deletion conflict during busy, pending, completed and failed writes", async () => {
+  const notices = [];
+  class Base {}
+  const obsidian = { ...mocks.obsidian, Plugin: Base, PluginSettingTab: Base, Component: Base, ItemView: Base, Modal: Base, FileSystemAdapter: Base, Notice: class { constructor(message) { notices.push(message); } } };
+  const Plugin = loadReading("plugin.ts", { obsidian, electron: {} }).default;
+  for (const stage of ["busy", "pending", "completed", "failed"]) {
+   const { service, record, note } = await archiveFixture();
+   const plugin = new Plugin(), run = { id: "run", status: "running" };
+   notices.length = 0;
+   plugin.annotationService = service;
+   plugin.isActionRunning = () => stage === "busy";
+   plugin.resolveActionExecutionConfig = () => ({});
+   plugin.startTaskRun = async () => run;
+   plugin.getTaskRun = () => run;
+   plugin.finishTaskRun = async (_id, result) => Object.assign(run, result);
+   plugin.runVaultAction = async () => {
+    assert.ok(stage === "completed" || stage === "failed");
+    note.text = "用户已移除批注\n";
+    return { stdout: 'ANNOTATION_ARCHIVE_TARGETS: ["wiki/methods/test"]', stderr: "", exitCode: stage === "completed" ? 0 : 1 };
+   };
+   if (stage === "busy" || stage === "pending") note.text = "用户已移除批注\n";
+   await plugin.archiveAnnotation(record);
+   assert.match(notices.at(-1), /归档冲突/);
+   assert.equal(note.text, "用户已移除批注\n");
+   if (stage !== "busy") assert.equal(run.status, "failed");
+  }
+ });
  await check("color-only records round-trip, update without losing text or receipts, and leave ordinary sources unchanged", async () => {
   const content = "# Notes\n\nRepeated words and a [linked label](https://example.invalid) with X<sup>2</sup>.", sourcePath = "notes/ordinary.md";
   const f = memory(content, sourcePath), selectedText = "Repeated words", start = content.indexOf(selectedText);
