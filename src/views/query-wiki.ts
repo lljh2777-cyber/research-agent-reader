@@ -974,6 +974,7 @@ export class QueryWikiView extends ItemView {
 		const submit = () => {
 			if (send.disabled) return;
 			void this.submitQuestion(input.value.trim()).catch(error => new Notice(`知识库查询失败：${String(error)}`));
+			if (this.activeRunId) send.disabled = true;
 		};
 		input.addEventListener("input", () => {
 			this.queryDrafts.set(sessionId, input.value);

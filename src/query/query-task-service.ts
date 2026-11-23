@@ -95,6 +95,7 @@ type QueryListener = (sessionId: string, change: QueryTaskChange) => void;
 export class QueryTaskService {
 	private active: ActiveQuery | null = null;
 	private pending: Promise<void> | null = null;
+	private saveFailureNotified = false;
 	private readonly lifetime = new AbortController();
 	private readonly listeners = new Set<QueryListener>();
 
@@ -144,7 +145,7 @@ export class QueryTaskService {
 		}
 		const text = "正在停止任务";
 		this.publish(task.sessionId, { type: "progress", text });
-		await this.plugin.updateQueryMessage(task.sessionId, task.messageId, { status: "stopping", progress: text });
+		await this.saveMessageUpdate(task.sessionId, task.messageId, { status: "stopping", progress: text });
 	}
 
 	shutdown(): Promise<void> | null {
@@ -274,11 +275,12 @@ export class QueryTaskService {
 			task.messageId = assistantMessage.id;
 			task.backendId = backendId;
 			await this.plugin.appendQueryMessages(session.id, [userMessage, assistantMessage], question);
+			this.saveFailureNotified = false;
 			this.publish(session.id, { type: "accepted", composer });
 			this.shutdownSignal.throwIfAborted();
 			run = await this.plugin.startTaskRun(action, question.slice(0, 160), executionConfig);
 			task.runId = run.id;
-			await this.plugin.updateQueryMessage(session.id, assistantMessage.id, { runId: run.id });
+			await this.saveMessageUpdate(session.id, assistantMessage.id, { runId: run.id });
 			this.shutdownSignal.throwIfAborted();
 			this.publish(session.id, { type: "refresh" });
 			const hooks: DashboardProcessHooks = {
@@ -318,7 +320,7 @@ export class QueryTaskService {
 					? "已停止本轮查询。"
 					: result.stderr.trim() || `查询进程退出码：${result.exitCode}`;
 			const traceEvent = [...(result.events || [])].reverse().find((event) => event.type === "retrieval-preflight");
-			await this.plugin.updateQueryMessage(session.id, assistantMessage.id, {
+			await this.saveMessageUpdate(session.id, assistantMessage.id, {
 				status,
 				content: response || (status === "done" ? "本轮查询未返回文本。" : ""),
 				error,
@@ -357,7 +359,7 @@ export class QueryTaskService {
 			const message = error instanceof Error ? error.message : String(error);
 			const interrupted = this.shutdownSignal.aborted || task.stopping || /cancelled|canceled|已停止|正在停止/i.test(message);
 			restoreQuestion = !interrupted;
-			await this.plugin.updateQueryMessage(session.id, assistantMessage.id, {
+			await this.saveMessageUpdate(session.id, assistantMessage.id, {
 				status: interrupted ? "interrupted" : "failed",
 				error: interrupted ? "已停止本轮查询。" : message,
 				progress: "",
@@ -379,6 +381,24 @@ export class QueryTaskService {
 
 	private vaultSources(value: unknown) {
 		return normalizeQueryVaultSources(value, { resolveVaultPath: makeVaultSourcePathResolver(this.plugin.app) });
+	}
+
+	private async saveMessageUpdate(
+		sessionId: string,
+		messageId: string,
+		patch: Partial<PersistedQueryMessage>,
+		saveMode: "debounced" | "immediate" = "immediate",
+	): Promise<void> {
+		try {
+			const saved = await this.plugin.updateQueryMessage(sessionId, messageId, patch, saveMode);
+			if (saved) this.saveFailureNotified = false;
+		} catch (error) {
+			// Several progress events can receive the rejection from the same disk write.
+			if (!this.saveFailureNotified) {
+				this.saveFailureNotified = true;
+				new Notice(`查询记录保存失败：${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
 	}
 
 	private handleRunnerEvent(sessionId: string, messageId: string, event: DashboardProcessEvent): void {
@@ -420,8 +440,7 @@ export class QueryTaskService {
 			change = { type: "progress", text: event.label };
 		} else return;
 
-		const save = this.plugin.updateQueryMessage(sessionId, messageId, patch, saveMode);
+		void this.saveMessageUpdate(sessionId, messageId, patch, saveMode);
 		this.publish(sessionId, change);
-		void save.catch(error => new Notice(`查询进度保存失败：${error instanceof Error ? error.message : String(error)}`));
 	}
 }

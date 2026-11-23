@@ -1,6 +1,7 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { createHash } = require("node:crypto");
 const { test } = require("node:test");
 const { loadReading } = require("./reading-test-helpers");
 
@@ -101,7 +102,7 @@ test("attachment failure shows the cause, preserves the draft and attachments, a
 	assert.deepEqual(f.session.messages[0].attachments, [image]);
 });
 
-test("clicking Send while attachment resolution is pending starts one task", async t => {
+test("Send is disabled synchronously while resolving attachments and starts one task", async t => {
 	const f = fixture();
 	const release = pauseImageResolution(f.host);
 	const fields = new Map();
@@ -128,11 +129,14 @@ test("clicking Send while attachment resolution is pending starts one task", asy
 	}
 	const submit = t.mock.method(f.view, "submitQuestion");
 	const send = fields.get("发送问题");
+	assert.equal(send.disabled, false);
 	send.dispatchEvent(new Event("click"));
+	const disabledWhileResolving = send.disabled;
 	await Promise.resolve();
 	send.dispatchEvent(new Event("click"));
 	release();
 	await Promise.all(submit.mock.calls.map(call => call.result));
+	assert.equal(disabledWhileResolving, true);
 	assert.deepEqual(counts(f), oneTurn);
 });
 
@@ -371,3 +375,123 @@ for (const phase of ["keywords", "evidence"]) {
 		assert.equal(f.snapshots.at(-1).querySessions[0].messages[1].status, "interrupted");
 	});
 }
+
+function useTaskHistory(f) {
+	f.host.startTaskRun = Plugin.prototype.startTaskRun;
+	f.host.finishTaskRun = Plugin.prototype.finishTaskRun;
+	f.host.persistTaskRunOutput = async () => "";
+}
+
+async function runningQueryWithSaveFailure(t) {
+	const f = lifecycleFixture(t);
+	useTaskHistory(f);
+	const task = f.view.submitQuestion("inspect");
+	const hooks = await f.started;
+	const before = notices.length;
+	const error = "test disk read-only";
+	const disk = { writable: false, attempts: 0 };
+	const save = f.host.saveData;
+	f.host.saveData = async snapshot => {
+		disk.attempts++;
+		if (!disk.writable) throw new Error(error);
+		await save(snapshot);
+	};
+	return {
+		...f, task, hooks, disk,
+		saveNotices: () => notices.slice(before).filter(message => message.includes(error)),
+		async writeProgress(count = 1) {
+			for (let i = 0; i < count; i++) hooks.onEvent({ type: "status", label: "retrieving " + i });
+			await f.host.flushScheduledSettingsSave();
+			await tick();
+		},
+	};
+}
+
+test("one failed write for three progress events shows one Notice", async t => {
+	const f = await runningQueryWithSaveFailure(t);
+	for (let i = 0; i < 12; i++) f.hooks.onEvent({ type: "assistant-delta", delta: "x" });
+	assert.equal(f.disk.attempts, 0);
+	assert.equal(f.saveNotices().length, 0);
+	await f.writeProgress(3);
+	assert.equal(f.disk.attempts, 1);
+	const noticeCount = f.saveNotices().length;
+	f.disk.writable = true;
+	await f.writeProgress();
+	f.answer.resolve(result);
+	await f.task;
+	assert.equal(noticeCount, 1);
+});
+
+test("only a successful write resets the save failure Notice", async t => {
+	const f = await runningQueryWithSaveFailure(t);
+	const counts = [];
+	for (const writable of [false, false, true, false]) {
+		f.disk.writable = writable;
+		await f.writeProgress();
+		counts.push(f.saveNotices().length);
+	}
+	assert.equal(f.disk.attempts, 4);
+	f.disk.writable = true;
+	await f.writeProgress();
+	f.answer.resolve(result);
+	await f.task;
+	assert.deepEqual(counts, [1, 1, 1, 2]);
+});
+
+test("persistent write failures preserve a completed answer and release the task", async t => {
+	const f = await runningQueryWithSaveFailure(t);
+	await f.writeProgress();
+	f.answer.resolve(result);
+	await assert.doesNotReject(f.task);
+	assert.equal(f.session.messages[1].content, result.stdout);
+	assert.equal(f.session.messages[1].status, "done");
+	assert.equal(f.host.taskRuns[0].status, "done");
+	assert.equal(f.host.queryTasks.forSession(f.session.id), null);
+	assert.equal(f.saveNotices().length, 1);
+	assert.equal(f.snapshots.at(-1).querySessions[0].messages[1].status, "pending");
+});
+
+// Exact desktop data.json bytes from the same running queries on commit 2a70baa.
+for (const [backend, expectedHash] of [
+	["vision", "6df0257c390080636f8f1114cbeb5326b827cbd94eb2cd9d6fb2ebdfa5eebe30"],
+	["codex-cli", "5d09a7aa93d6ce2ac5c3bbaf45c8daf7a5b7948257aa23fbe662fb2cf41cc09d"],
+]) test("running history bytes remain compatible for " + backend, async t => {
+	t.mock.timers.enable({ apis: ["Date"], now: 1760000000000 });
+	t.mock.method(Math, "random", () => 0.4123456);
+	const f = lifecycleFixture(t, backend === "codex-cli");
+	// Keep machine-specific plugin settings out of the byte baseline.
+	f.host.settings = { providerProfiles: [], activeProviderId: "" };
+	f.host.activeQuerySessionId = f.session.id;
+	f.host.resolveActionExecutionConfig = () => ({ model: "test" });
+	useTaskHistory(f);
+	let bytes;
+	const { desktopSettingsFile } = loadReading("runtime/persistence.ts", { "node:fs/promises": {
+		readFile: async () => "{}",
+		open: async () => ({
+			writeFile: async (text, encoding) => { bytes = Buffer.from(text, encoding); },
+			sync: async () => {}, close: async () => {},
+		}),
+		rename: async () => {},
+	} });
+	const file = desktopSettingsFile("memory");
+	await file.load();
+	f.host.saveData = file.save;
+	const task = f.view.submitQuestion("inspect");
+	const hooks = await f.started;
+	try {
+		hooks.onEvent({ type: "assistant-delta", delta: "partial text" });
+		hooks.onEvent({ type: "status", label: "retrieving" });
+		await f.host.flushScheduledSettingsSave();
+		const saved = JSON.parse(bytes);
+		const reply = saved.querySessions[0].messages[1];
+		assert.equal(saved.taskRuns[0].status, "running");
+		assert.equal(reply.status, "pending");
+		assert.equal(reply.runId, saved.taskRuns[0].id);
+		assert.equal(reply.content, "partial text");
+		assert.equal(reply.progress, "retrieving");
+		assert.equal(createHash("sha256").update(bytes).digest("hex"), expectedHash);
+	} finally {
+		f.answer.resolve(result);
+		await task;
+	}
+});
