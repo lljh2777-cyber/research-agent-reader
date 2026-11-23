@@ -104,7 +104,8 @@ export class ReadingWorkspaceView extends ItemView {
 		this.selectionCleanup = () => { document.removeEventListener("pointerdown", dismissSelection); document.removeEventListener("keydown", dismissOnEscape); this.contentEl.removeEventListener("scroll", dismissOnScroll, true); };
 		this.render(true);
 		this.scheduleOutcomes();
-		if (this.service.repository.errors.length) new Notice("部分阅读会话无法加载，文件已保留：" + this.service.repository.errors.join("；"), 10000);
+		const errors = this.service.repository.errors;
+		if (errors.length) new Notice(errors.join("\n") + "\n详情见阅读会话库。", 10000);
 	}
 	async onClose(): Promise<void> {
 		this.outcomeSequence++; clearTimeout(this.outcomeTimer); this.outcomeUnsubscribe?.(); this.outcomeEvents.forEach(ref => this.app.vault.offref(ref));
@@ -714,6 +715,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const modal = this.modal(this.domain === "code" ? "代码阅读会话" : "论文阅读会话"); modal.modalEl.classList.add("reading-library-modal");
 		const search = element(modal.contentEl, "input", "reading-library-search"); search.type = "search"; search.placeholder = this.domain === "code" ? "搜索项目、脚本或来源路径" : "搜索论文标题或来源路径"; search.setAttribute("aria-label", "搜索阅读会话");
 		const tabs = element(modal.contentEl, "div", "reading-library-tabs"); const list = element(modal.contentEl, "div", "reading-library-list");
+		const repository = this.service.repository;
 		let scope: ReadingCategory | "archived" = "reading";
 		const render = (): void => {
 			tabs.replaceChildren(); list.replaceChildren();
@@ -722,11 +724,13 @@ export class ReadingWorkspaceView extends ItemView {
 				const tab = button(tabs, label, () => { scope = value; render(); }); tab.setAttribute("aria-pressed", String(scope === value));
 			}
 			const query = search.value.trim().toLocaleLowerCase();
-			const sessions = recentReading(this.service.repository.sessions.values(), scope === "archived" ? "reading" : scope, scope === "archived", this.domain)
+			const sessions = recentReading(repository.sessions.values(), scope === "archived" ? "reading" : scope, scope === "archived", this.domain)
 				.filter((s) => (readingTitle(s) + " " + s.source.path).toLocaleLowerCase().includes(query));
+			const unreadable = Array.from(repository.loadIssues).filter(([id, issue]) => issue.kind === "unreadable" &&
+				(id + ".json " + issue.reason).toLocaleLowerCase().includes(query));
 			const groups = new Map<string, ReadingSession[]>();
 			for (const session of sessions) { const key = readingSourceKey(session.source); const group = groups.get(key) || []; group.push(session); groups.set(key, group); }
-			if (!sessions.length) element(list, "p", "reading-library-empty", query ? "没有找到匹配的会话" : "这里还没有会话");
+			if (!sessions.length && !unreadable.length) element(list, "p", "reading-library-empty", query ? "没有找到匹配的会话" : "这里还没有会话");
 			for (const group of groups.values()) {
 				const section = element(list, "section", "reading-library-group");
 				if (group.length > 1) element(section, "p", "reading-library-group-label", (group[0].source.kind === "code" ? "代码" : group[0].source.kind === "pdf" ? "PDF" : group[0].source.kind === "structured" ? "JATS" : "MinerU") + " · 同一来源的 " + group.length + " 个会话");
@@ -738,6 +742,8 @@ export class ReadingWorkspaceView extends ItemView {
 					const timestamp = session.lastOpenedAt || session.updatedAt; const date = Number.isFinite(Date.parse(timestamp)) ? new Date(timestamp).toLocaleString() : "时间未记录";
 					element(open, "small", "", (session.source.kind === "code" ? "代码" : session.source.kind === "pdf" ? "PDF" : session.source.kind === "structured" ? "JATS" : "MinerU") + " · " + completed + " 个主线单元 · " + date);
 					element(open, "small", "reading-library-path", session.source.path).title = session.source.path;
+					const issue = repository.loadIssues.get(session.id);
+					if (issue?.kind === "interruption-save") element(open, "small", "reading-error", issue.reason);
 					const actions = element(row, "div", "reading-library-actions");
 					actionButton(actions, session.pinned ? "pin-off" : "pin", session.pinned ? "取消置顶" : "置顶", () => this.handle(this.service.repository.transact(session.id, (s) => { s.pinned = !s.pinned; })), true);
 					actionButton(actions, "pencil", "重命名", () => {
@@ -750,8 +756,18 @@ export class ReadingWorkspaceView extends ItemView {
 					})), true);
 				}
 			}
+			if (unreadable.length) {
+				const section = element(list, "section", "reading-library-group");
+				element(section, "h3", "reading-library-group-label", "无法加载的会话文件（所有来源，原文件已保留）");
+				for (const [id, issue] of unreadable) {
+					const row = element(section, "div", "reading-library-row");
+					const file = element(row, "div");
+					element(file, "strong", "", id + ".json");
+					element(file, "p", "reading-error", issue.reason);
+				}
+			}
 		};
-		search.oninput = render; const unsubscribe = this.service.repository.subscribe(render); const close = modal.onClose.bind(modal); modal.onClose = () => { unsubscribe(); close(); };
+		search.oninput = render; const unsubscribe = repository.subscribe(render); const close = modal.onClose.bind(modal); modal.onClose = () => { unsubscribe(); close(); };
 		render(); modal.open(); search.focus();
 	}
 	openSource(entry?: import("../reading/entry").ReadingEntry): void {

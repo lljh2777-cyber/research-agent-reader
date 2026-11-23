@@ -110,7 +110,9 @@ export function addReadingNode(session: ReadingSession, branchId: string | null,
 }
 export function validateReadingSession(value: unknown): ReadingSession {
 	const session = value as ReadingSession;
-	if (!session || session.version !== 1 || !/^r-[a-f0-9-]{36}$/.test(session.id)
+	if (typeof session?.version !== "number") throw new Error("阅读会话版本号无效");
+	if (session.version !== 1) throw new Error("不支持的阅读会话版本 " + session.version);
+	if (!/^r-[a-f0-9-]{36}$/.test(session.id)
 		|| !["pdf", "article", "structured", "code"].includes(session.source?.kind) || typeof session.source.path !== "string"
 		|| !/^[a-f0-9]{64}$/.test(session.source.fingerprint) || !Array.isArray(session.nodes)
 		|| !Array.isArray(session.branches) || !Array.isArray(session.mainIds) || !session.ui) throw new Error("阅读会话格式无效");
