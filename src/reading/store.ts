@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { decodeReadingSession, validateReadingSession } from "./session";
+import { decodeReadingSession, readingNode, validateReadingSession } from "./session";
 import type { ReadingSession } from "./types";
 
 export interface ReadingStorage {
@@ -73,15 +73,28 @@ function serializeReadingSession(session: ReadingSession): string {
 	return JSON.stringify({ ...session, nodes });
 }
 
+type GenerationFailure = { nodeId: string; error: unknown };
+type ReadingChangeListener = (sessionId: string, failure?: GenerationFailure) => void;
+
 export class ReadingRepository {
 	readonly sessions = new Map<string, ReadingSession>();
 	readonly loadIssues = new Map<string, { kind: "unreadable" | "interruption-save"; reason: string }>();
 	get errors(): string[] { return Array.from(this.loadIssues, ([id, issue]) => id + ".json：" + issue.reason); }
 	private queue: Promise<unknown> = Promise.resolve();
-	private listeners = new Set<(id: string) => void>();
+	readonly unsavedGenerationErrors = new WeakMap<ReadingSession, Map<string, string>>();
+	private listeners = new Set<ReadingChangeListener>();
 	constructor(private readonly storage: ReadingStorage) {}
-	subscribe(listener: (id: string) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
-	private emit(id: string): void { this.listeners.forEach((listener) => { try { listener(id); } catch (error) { console.error("Reading view update failed", error); } }); }
+	subscribe(listener: ReadingChangeListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
+	private emit(id: string, failure?: GenerationFailure): void { this.listeners.forEach((listener) => { try { listener(id, failure); } catch (error) { console.error("Reading view update failed", error); } }); }
+	async reportGenerationError(id: string, nodeId: string, error: unknown): Promise<void> {
+		const { status } = readingNode(this.get(id), nodeId);
+		if (status === "interrupted") return;
+		if (status === "pending" || status === "running") {
+			try { await this.saveGenerationFailure(id, nodeId, false, error); }
+			catch (saveError) { error = saveError; }
+		}
+		this.emit(id, { nodeId, error });
+	}
 	async load(): Promise<void> {
 		for (const id of await this.storage.list()) {
 			try {
@@ -113,11 +126,32 @@ export class ReadingRepository {
 			this.sessions.set(session.id, structuredClone(session)); this.emit(session.id);
 		});
 	}
-	async transact<T>(id: string, edit: (session: ReadingSession) => T): Promise<T> {
+	saveGenerationFailure(id: string, nodeId: string, interrupted: boolean, error: unknown): Promise<void> {
+		const message = error instanceof Error ? error.message : String(error);
+		const reason = interrupted ? "生成已停止或超时，可重试。" + message : message;
+		return this.editSession(id, draft => {
+			const node = readingNode(draft, nodeId);
+			node.status = interrupted ? "interrupted" : "failed";
+			node.error = reason;
+		}, (draft, saveError) => {
+			const warning = "节点终态尚未保存：" + String(saveError);
+			const warnings = this.unsavedGenerationErrors.get(this.get(id)) ?? new Map<string, string>();
+			warnings.set(nodeId, warning);
+			this.unsavedGenerationErrors.set(draft, warnings);
+			this.sessions.set(id, draft); this.emit(id);
+			throw Object.assign(new Error(reason + "\n" + warning), { cause: error, saveError });
+		});
+	}
+	transact<T>(id: string, edit: (session: ReadingSession) => T): Promise<T> {
+		return this.editSession(id, edit);
+	}
+	private editSession<T>(id: string, edit: (session: ReadingSession) => T, writeFailed?: (draft: ReadingSession, error: unknown) => never): Promise<T> {
 		return this.serial(async () => {
 			const draft = structuredClone(this.get(id));
 			const result = edit(draft); draft.updatedAt = new Date().toISOString(); validateReadingSession(draft);
-			await this.storage.write(id, serializeReadingSession(draft));
+			const text = serializeReadingSession(draft);
+			try { await this.storage.write(id, text); }
+			catch (error) { writeFailed?.(draft, error); throw error; }
 			this.loadIssues.delete(id);
 			this.sessions.set(id, draft); this.emit(id); return result;
 		});

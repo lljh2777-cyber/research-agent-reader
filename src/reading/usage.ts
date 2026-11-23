@@ -6,11 +6,25 @@ export const readingTokenEstimate = (text: string): number => Math.ceil(Buffer.b
 export async function measuredReadingCall(repository: ReadingRepository, sessionId: string, nodeId: string, stage: ReadingUsageEntry["stage"], backend: ReadingBackend, request: ReadingBackendRequest): Promise<string> {
 	const entry: ReadingUsageEntry = { id: randomUUID(), stage, model: backend.name + " · " + backend.model, started: new Date().toISOString(), state: "running", estimatedInput: readingTokenEstimate(request.system + request.prompt) };
 	await repository.transact(sessionId, s => { (s.nodes.find(n => n.id === nodeId)!.usage ||= []).push({ ...entry }); });
+	const saveUsage = () => repository.transact(sessionId, s => {
+		const current = s.nodes.find(n => n.id === nodeId)!.usage!.find(e => e.id === entry.id)!;
+		Object.assign(current, entry);
+	});
+	let result: string;
 	try {
-		const result = await backend.complete({ ...request, onUsage: usage => { for (const key of ["input", "output", "cachedInput"] as const) if (Number.isFinite(usage[key]) && usage[key]! >= 0) entry[key] = usage[key]; request.onUsage?.(usage); } });
-		entry.state = request.signal.aborted ? "interrupted" : "done"; entry.estimatedOutput = readingTokenEstimate(result); return result;
-	} catch (error) { entry.state = request.signal.aborted ? "interrupted" : "failed"; throw error; }
-	finally { await repository.transact(sessionId, s => { const current = s.nodes.find(n => n.id === nodeId)!.usage!.find(e => e.id === entry.id)!; Object.assign(current, entry); }); }
+		result = await backend.complete({ ...request, onUsage: usage => { for (const key of ["input", "output", "cachedInput"] as const) if (Number.isFinite(usage[key]) && usage[key]! >= 0) entry[key] = usage[key]; request.onUsage?.(usage); } });
+	} catch (error) {
+		entry.state = request.signal.aborted ? "interrupted" : "failed";
+		try { await saveUsage(); }
+		catch (saveError) {
+			throw Object.assign(new Error(String(error) + "\n用量保存失败：" + String(saveError)), { cause: error, saveError });
+		}
+		throw error;
+	}
+	entry.state = request.signal.aborted ? "interrupted" : "done";
+	entry.estimatedOutput = readingTokenEstimate(result);
+	await saveUsage();
+	return result;
 }
 export function readingUsageTotals(nodes: ReadingNode[]) {
 	const entries = nodes.flatMap(n => n.usage || []); const calls = entries.filter(e => e.state !== "cached");

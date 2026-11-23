@@ -277,10 +277,9 @@ export class ReadingEngine {
 				target.web = webResult;
 				target.providedEvidenceIds = evidence.map(e => e.id); target.providedImageIds = images.map(i => i.evidenceId);
 				if (!node.branchId) { draft.outline = result.outline!; draft.mainSummary = result.mainSummary!; draft.completed = result.completed!; }
-			});
+			}).catch(error => { throw Object.assign(new Error("生成结果保存失败：" + String(error)), { cause: error }); });
 		} catch (error) {
-			await repository.transact(sessionId, (session) => { const node = readingNode(session, nodeId); node.status = controller.signal.aborted ? "interrupted" : "failed";
-				node.error = controller.signal.aborted ? "生成已停止或超时，可重试" : error instanceof Error ? error.message : String(error); }).catch(() => undefined);
+			await repository.saveGenerationFailure(sessionId, nodeId, controller.signal.aborted, error);
 			throw error;
 		} finally { clearTimeout(timer); this.active.delete(key); this.live.delete(key); }
 	}
