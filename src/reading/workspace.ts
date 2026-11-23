@@ -15,7 +15,7 @@ export class ReadingWorkspaceService {
 	private tasks = new Set<Promise<void>>();
 	private openings: Promise<unknown> = Promise.resolve();
 	generateHandler?: (sessionId: string, nodeId: string) => Promise<void>;
-	stopHandler?: (sessionId: string, nodeId: string) => void;
+	stopHandler?: (sessionId: string, nodeId?: string) => void;
 	disposeHandler?: () => void;
 	constructor(app: App, vaultRoot: string, pluginDirectory: string) {
 		this.repository = new ReadingRepository(new RoutedReadingStorage(new FileReadingStorage(pluginDirectory), new FileReadingStorage(pluginDirectory, "reading-test-sessions"), new FileReadingStorage(pluginDirectory, "code-reading-sessions")));
@@ -86,7 +86,7 @@ export class ReadingWorkspaceService {
 			const node = addReadingNode(session, branch.id, "核对并重新解释：" + reason.trim(), quote);
 			node.correction = { of: originalId, originalHash: answerHash(original.content), reason: reason.trim() }; id = node.id;
 		});
-		void this.generate(sessionId, id).catch(() => undefined); return id;
+		void this.generate(sessionId, id, "background"); return id;
 	}
 	async demo(purpose: "demo" | "test" = "demo"): Promise<string> {
 		await this.ready();
@@ -130,7 +130,7 @@ export class ReadingWorkspaceService {
 			session.ui.hideMap = false;
 			session.ui.selectedId = nodeId;
 		});
-		if (created) void this.generate(id, nodeId).catch(() => undefined);
+		if (created) void this.generate(id, nodeId, "background");
 		return { sessionId: id, nodeId };
 	}
 	async ask(sessionId: string, parentId: string, question: string, branchId?: string, quote?: ReadingQuote, requestWeb = false, target?: ReadingNode["paperTarget"]): Promise<string> {
@@ -144,12 +144,14 @@ export class ReadingWorkspaceService {
 			if (target) readingNode(session, id).paperTarget = target;
 			if (requestWeb) readingNode(session, id).requestWeb = true;
 		});
-		void this.generate(sessionId, id).catch(() => undefined);
+		void this.generate(sessionId, id, "background");
 		return id;
 	}
-	generate(sessionId: string, id: string): Promise<void> {
-		const task = this.runGeneration(sessionId, id); this.tasks.add(task);
-		void task.finally(() => this.tasks.delete(task)).catch(() => undefined);
+	generate(sessionId: string, id: string, delivery: "foreground" | "background" = "foreground"): Promise<void> {
+		const generation = this.runGeneration(sessionId, id);
+		const reported = delivery === "background" ? generation.catch(error => this.repository.reportGenerationError(sessionId, id, error)) : generation;
+		const task = reported.finally(() => this.tasks.delete(task));
+		this.tasks.add(task);
 		return task;
 	}
 	/** start/end are relative to the catalog block. The host binds the immutable quote. */
@@ -164,7 +166,7 @@ export class ReadingWorkspaceService {
 			const node = addReadingNode(session, addReadingBranch(session, parentId).id, question.trim());
 			node.codeQuote = quote; node.evidence = [structuredClone(evidence)]; id = node.id;
 		});
-		void this.generate(sessionId, id).catch(() => undefined); return id;
+		void this.generate(sessionId, id, "background"); return id;
 	}
 	private async runGeneration(sessionId: string, id: string): Promise<void> {
 		if (this.repository.get(sessionId).demo) {
@@ -178,7 +180,7 @@ export class ReadingWorkspaceService {
 		}
 		await this.generateHandler(sessionId, id);
 	}
-	stop(sessionId: string, id: string): void { this.stopHandler?.(sessionId, id); }
+	stop(sessionId: string, id?: string): void { this.stopHandler?.(sessionId, id); }
 	async dispose(): Promise<void> {
 		this.disposeHandler?.(); await Promise.allSettled([...this.tasks]); await this.repository.flush();
 		await Promise.allSettled([...this.documents.values()].map((document) => document.destroy())); this.documents.clear();

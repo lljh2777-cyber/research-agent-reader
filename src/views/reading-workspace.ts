@@ -42,6 +42,7 @@ function actionButton(parent: HTMLElement, name: string, label: string, action: 
 export class ReadingWorkspaceView extends ItemView {
 	private service!: ReadingWorkspaceService;
 	private sessionId = "";
+	private closing = false;
 	private domain: ReadingDomain = "paper";
 	private tabTitle = "";
 	private unsubscribe?: () => void;
@@ -79,6 +80,7 @@ export class ReadingWorkspaceView extends ItemView {
 		if (changed) this.selectSession(id); else this.render(true);
 	}
 	async onOpen(): Promise<void> {
+		this.closing = false;
 		this.service = this.plugin.getReadingWorkspace(); await this.service.ready();
 		this.evidencePanel = new ReadingEvidencePanel(this.app, this.service, this.plugin);
 		this.outcomeUnsubscribe = this.plugin.getCurationService().subscribe(() => this.scheduleOutcomes());
@@ -88,7 +90,11 @@ export class ReadingWorkspaceView extends ItemView {
 		const restored = this.service.repository.sessions.get(this.sessionId);
 		if (restored) this.domain = sourceReadingDomain(restored.source);
 		if (!restored || restored.archived || readingCategory(restored) !== "reading") this.sessionId = latestReading(this.service.repository.sessions.values(), this.domain)?.id || "";
-		this.renderer.load(); this.unsubscribe = this.service.repository.subscribe((id) => { if (id === this.sessionId) { this.render(); this.evidencePanel?.sync(this.session, this.contentEl); } });
+		this.renderer.load(); this.unsubscribe = this.service.repository.subscribe((id, failure) => {
+			if (id !== this.sessionId) return;
+			this.render(); this.evidencePanel?.sync(this.session, this.contentEl);
+			if (failure) new Notice(readingNode(this.service.repository.get(id), failure.nodeId).title + " · 讲解失败：" + String(failure.error));
+		});
 		this.unsubscribeStream = this.plugin.getReadingEngine().subscribe((id, nodeId, text) => {
 			if (id !== this.sessionId) return;
 			this.contentEl.querySelectorAll<HTMLElement>("[data-answer-id]").forEach((answer) => {
@@ -108,6 +114,11 @@ export class ReadingWorkspaceView extends ItemView {
 		if (errors.length) new Notice(errors.join("\n") + "\n详情见阅读会话库。", 10000);
 	}
 	async onClose(): Promise<void> {
+		this.closing = true;
+		if (this.sessionId && !this.app.workspace.getLeavesOfType(READING_VIEW_TYPE).some(({ view }) =>
+			view instanceof ReadingWorkspaceView && !view.closing && view.sessionId === this.sessionId)) {
+			this.service.stop(this.sessionId);
+		}
 		this.outcomeSequence++; clearTimeout(this.outcomeTimer); this.outcomeUnsubscribe?.(); this.outcomeEvents.forEach(ref => this.app.vault.offref(ref));
 		this.evidencePanel?.dispose();
 		this.modeMotion.stop();
@@ -191,7 +202,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const session = this.session;
 		const contentSignature = JSON.stringify(session ? [session.id, session.title, session.archived, session.pinned, session.nodes, session.outline, session.completed, session.backend, session.model,
 			session.ui.split, session.ui.pendingQuote, session.ui.mainComposerExpanded, session.ui.zoom,
-			session.ui.learningFilter,
+			session.ui.learningFilter, Array.from(this.service.repository.unsavedGenerationErrors.get(session.id) ?? []),
 			session.ui.windows.map(({ scrollTop: _scroll, ...geometry }) => geometry), session.ui.collapsed] : null);
 		const signature = contentSignature + JSON.stringify([session?.ui.mode, session?.ui.selectedId, session?.ui.mainFocusId]);
 		if (!force && this.signature === signature) return; this.signature = signature;
@@ -499,7 +510,8 @@ export class ReadingWorkspaceView extends ItemView {
 		}
 		const content = element(article, "div", "reading-answer-content");
 		const placeholder = node.status === "failed" || node.status === "interrupted" ? "本单元尚未完成，可在下方重试。" : "正在准备讲解…";
-		try { void MarkdownRenderer.render(this.app, safeReadingMarkdown(node.content || this.plugin.getReadingEngine().streamed(this.sessionId, node.id) || placeholder, node.evidence.map(e => e.id)), content, "", this.renderer).then(() => {
+		const active = node.status === "pending" || node.status === "running";
+		try { void MarkdownRenderer.render(this.app, safeReadingMarkdown(node.content || (active && this.plugin.getReadingEngine().streamed(this.sessionId, node.id)) || placeholder, node.evidence.map(e => e.id)), content, "", this.renderer).then(() => {
 			const first = content.firstElementChild;
 			if (first && /^H[1-6]$/.test(first.tagName) && first.textContent?.trim() === node.title.trim()) first.remove();
 			this.renderCitations(content, node);
@@ -564,7 +576,9 @@ export class ReadingWorkspaceView extends ItemView {
 				if (source.content) element(details, "p", "reading-evidence-text", source.content);
 			}
 		}
-		if (node.error) element(article, "p", "reading-error", node.error);
+		if (node.error) element(article, "p", node.status === "interrupted" ? "reading-usage-unrecorded" : "reading-error", node.error);
+		const saveError = this.service.repository.unsavedGenerationErrors.get(this.sessionId)?.get(node.id);
+		if (saveError) element(article, "p", "reading-error", saveError);
 		const outcome = element(article, "details", "reading-sources reading-outcomes"); outcome.dataset.outcomeNode = node.id;
 		if (node.usage?.length) {
 			const usage = element(article, "details", "reading-sources reading-usage"); element(usage, "summary", "", "模型用量 · " + node.usage.filter(e => e.state !== "cached").length + " 次调用");
@@ -572,7 +586,7 @@ export class ReadingWorkspaceView extends ItemView {
 		} else if (node.status === "done" && !this.session!.demo) element(article, "small", "reading-usage-unrecorded", "此回答未记录模型用量");
 		if (node.status === "failed" || node.status === "interrupted") element(article, "small", "reading-usage-unrecorded", "重试会核对原文，匹配的证据选择可复用；讲解将重新请求，已完成的记忆摘要保留。");
 		if (node.status === "failed" && /模型|连接|CLI|超时|认证|凭据|API|network|timeout/i.test(node.error || "")) actionButton(tools,"settings","检查带读模型",()=>this.plugin.openModelSettings("reading"));
-		if (node.status === "failed" || node.status === "interrupted") actionButton(tools, "rotate-cw", "重试", () => this.handle(this.service.generate(this.sessionId, node.id)));
+		if (node.status === "failed" || node.status === "interrupted") actionButton(tools, "rotate-cw", "重试", () => { void this.service.generate(this.sessionId, node.id, "background"); });
 		if (node.status === "running" || node.status === "pending") actionButton(tools, "square", "停止", () => this.service.stop(this.sessionId, node.id));
 	}
 	private scheduleOutcomes(): void {

@@ -64,7 +64,10 @@ export class ReadingEngine {
 	constructor(private workspace: ReadingWorkspaceService, private backendFor: (session: ReadingSession) => ReadingBackend,
 		private vaultSearch?: (query: string, context?: { question: string; source: ReadingSession["source"]; signal: AbortSignal }) => Promise<ReadingEvidence[] | { evidence: ReadingEvidence[]; label: string; warnings: string[] }>) {
 		workspace.generateHandler = (sessionId, nodeId) => this.generate(sessionId, nodeId);
-		workspace.stopHandler = (sessionId, nodeId) => this.active.get(sessionId + ":" + nodeId)?.abort();
+		workspace.stopHandler = (sessionId, nodeId) => {
+			if (nodeId !== undefined) this.active.get(sessionId + ":" + nodeId)?.abort();
+			else for (const [key, controller] of this.active) if (key.startsWith(sessionId + ":")) controller.abort();
+		};
 		workspace.disposeHandler = () => { this.active.forEach((controller) => controller.abort()); };
 	}
 	subscribe(listener: (sessionId: string, nodeId: string, text: string) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
@@ -277,10 +280,9 @@ export class ReadingEngine {
 				target.web = webResult;
 				target.providedEvidenceIds = evidence.map(e => e.id); target.providedImageIds = images.map(i => i.evidenceId);
 				if (!node.branchId) { draft.outline = result.outline!; draft.mainSummary = result.mainSummary!; draft.completed = result.completed!; }
-			});
+			}).catch(error => { throw Object.assign(new Error("生成结果保存失败：" + String(error)), { cause: error }); });
 		} catch (error) {
-			await repository.transact(sessionId, (session) => { const node = readingNode(session, nodeId); node.status = controller.signal.aborted ? "interrupted" : "failed";
-				node.error = controller.signal.aborted ? "生成已停止或超时，可重试" : error instanceof Error ? error.message : String(error); }).catch(() => undefined);
+			await repository.saveGenerationFailure(sessionId, nodeId, controller.signal.aborted, error);
 			throw error;
 		} finally { clearTimeout(timer); this.active.delete(key); this.live.delete(key); }
 	}
