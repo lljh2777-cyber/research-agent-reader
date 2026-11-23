@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "r-00000000-0000-4000-8000-000000000001",
+  "title": "Legacy time fixture",
+  "source": {
+    "kind": "pdf",
+    "path": "paper.pdf",
+    "title": "Paper",
+    "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "nodes": [], "branches": [], "mainIds": [], "outline": [],
+  "mainSummary": "", "completed": false, "backend": "", "model": "",
+  "ui": { "windows": [], "collapsed": [], "drafts": {} }
+}

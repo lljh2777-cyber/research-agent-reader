@@ -8,6 +8,39 @@ import type { ReadingBranch, ReadingNode, ReadingQuote, ReadingSession, ReadingS
 import { validateStructuredEvidence, validateStructuredSource } from "./structured-source";
 
 export const newReadingId = (): string => "r-" + randomUUID();
+
+function readingTimestamp(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const match = /^(\d{4}-\d{2}-\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2}))?$/.exec(value);
+	if (!match || !Number.isFinite(Date.parse(value))) return undefined;
+	// Date.parse accepts impossible calendar dates by rolling into the following month.
+	return new Date(match[1]).toISOString().startsWith(match[1]) ? value : undefined;
+}
+
+export function decodeReadingSession(text: string, mtime: Date): { session: ReadingSession; repairedTimes: boolean } {
+	const session = validateReadingSession(JSON.parse(text));
+	const opened = session.lastOpenedAt, updated = readingTimestamp(session.updatedAt), created = readingTimestamp(session.createdAt);
+	if (opened && updated && created) return { session, repairedTimes: false };
+
+	const fileTime = mtime.toISOString();
+	let earliest = updated ?? opened;
+	if (opened && updated && Date.parse(opened) < Date.parse(updated)) earliest = opened;
+	let latestNode: string | undefined;
+	if (!created) {
+		for (const node of session.nodes) {
+			const time = readingTimestamp(node.createdAt);
+			if (!time) continue;
+			if (!earliest || Date.parse(time) < Date.parse(earliest)) earliest = time;
+			if (!latestNode || Date.parse(time) > Date.parse(latestNode)) latestNode = time;
+		}
+	}
+	// Only original timestamps are evidence for the other missing fields.
+	session.createdAt = created ?? earliest ?? fileTime;
+	session.updatedAt = updated ?? opened ?? created ?? latestNode ?? fileTime;
+	session.lastOpenedAt = opened ?? updated ?? created ?? latestNode ?? fileTime;
+	return { session, repairedTimes: true };
+}
+
 export function createReadingSession(source: ReadingSource, backend = source.kind === "code" ? "codex-cli" : "", model = ""): ReadingSession {
 	const now = new Date().toISOString();
 	return { version: 1, id: newReadingId(), title: source.title, source, createdAt: now, updatedAt: now, purpose: "reading", lastOpenedAt: now,
@@ -146,7 +179,7 @@ export function validateReadingSession(value: unknown): ReadingSession {
 	if (session.demo && session.purpose === "reading") session.purpose = undefined;
 	session.purpose = readingCategory(session);
 	session.archived = session.archived === true; session.pinned = session.pinned === true;
-	if (session.lastOpenedAt && !Number.isFinite(Date.parse(session.lastOpenedAt))) session.lastOpenedAt = undefined;
+	session.lastOpenedAt = readingTimestamp(session.lastOpenedAt);
 	session.ui.mode = session.ui.mode === "map" ? "map" : "split";
 	if (session.ui.webDrafts && (typeof session.ui.webDrafts !== "object" || Array.isArray(session.ui.webDrafts) || Object.values(session.ui.webDrafts).some(v => typeof v !== "boolean"))) throw new Error("联网草稿选项无效");
 	if (!["balanced", "foundations", "methods", "evidence"].includes(session.teachingStyle || "balanced")) session.teachingStyle = "balanced";

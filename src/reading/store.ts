@@ -1,11 +1,12 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { validateReadingSession } from "./session";
+import { decodeReadingSession, validateReadingSession } from "./session";
 import type { ReadingSession } from "./types";
 
 export interface ReadingStorage {
 	list(): Promise<string[]>;
 	read(id: string): Promise<string>;
+	readFile(id: string): Promise<{ text: string; mtime: Date }>;
 	write(id: string, text: string): Promise<void>;
 }
 const ID = /^r-[a-f0-9-]{36}$/;
@@ -25,12 +26,13 @@ export class FileReadingStorage implements ReadingStorage {
 		await this.prepare();
 		return (await fs.readdir(this.root)).filter((name) => name.endsWith(".json") && ID.test(name.slice(0, -5))).map((name) => name.slice(0, -5));
 	}
-	async read(id: string): Promise<string> {
+	async read(id: string): Promise<string> { return (await this.readFile(id)).text; }
+	async readFile(id: string): Promise<{ text: string; mtime: Date }> {
 		await this.prepare();
 		const filename = this.filename(id);
 		const stat = await fs.lstat(filename);
 		if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024 * 1024) throw new Error("阅读会话文件无效或过大");
-		return fs.readFile(filename, "utf8");
+		return { text: await fs.readFile(filename, "utf8"), mtime: stat.mtime };
 	}
 	async write(id: string, text: string): Promise<void> {
 		await this.prepare();
@@ -55,6 +57,7 @@ export class RoutedReadingStorage implements ReadingStorage {
 		return [...this.locations.keys()];
 	}
 	read(id: string): Promise<string> { return (this.locations.get(id) || this.regular).read(id); }
+	readFile(id: string): Promise<{ text: string; mtime: Date }> { return (this.locations.get(id) || this.regular).readFile(id); }
 	async write(id: string, text: string): Promise<void> {
 		const session = JSON.parse(text);
 		const storage = this.locations.get(id) || (session.purpose === "test" ? this.tests : session.source?.kind === "code" && this.code ? this.code : this.regular);
@@ -72,14 +75,15 @@ export class ReadingRepository {
 	async load(): Promise<void> {
 		for (const id of await this.storage.list()) {
 			try {
-				const session = validateReadingSession(JSON.parse(await this.storage.read(id)));
+				const file = await this.storage.readFile(id);
+				const { session, repairedTimes } = decodeReadingSession(file.text, file.mtime);
 				if (session.id !== id) throw new Error("会话标识与文件不一致");
 				let interrupted = false;
 				for (const node of session.nodes) for (const entry of node.usage || []) if (entry.state === "running") { entry.state = "interrupted"; interrupted = true; }
 				for (const node of session.nodes) if (node.status === "running" || node.status === "pending") {
 					node.status = "interrupted"; node.error = "上次生成已中断，可重试"; interrupted = true;
 				}
-				if (interrupted) await this.storage.write(id, JSON.stringify(session)).catch((error) => { this.errors.push(id + "：中断状态未能保存，历史仍可读取：" + String(error)); });
+				if (interrupted && !repairedTimes) await this.storage.write(id, JSON.stringify(session)).catch((error) => { this.errors.push(id + "：中断状态未能保存，历史仍可读取：" + String(error)); });
 				this.sessions.set(id, session);
 			} catch (error) { this.errors.push(id + ": " + String(error)); }
 		}

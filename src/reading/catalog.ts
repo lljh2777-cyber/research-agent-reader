@@ -18,14 +18,17 @@ export function readingTitle(session: ReadingSession): string {
 	return parts[parts.length - 1] || "未命名阅读";
 }
 export function readingSourceKey(source: ReadingSource): string { return [source.kind, source.path.replace(/\\/g, "/"), source.fingerprint].join("|"); }
+function byLastOpened(a: ReadingSession, b: ReadingSession): number {
+	return Date.parse(b.lastOpenedAt!) - Date.parse(a.lastOpenedAt!);
+}
 export function recentReading(sessions: Iterable<ReadingSession>, category: ReadingCategory = "reading", archived = false, domain?: ReadingDomain): ReadingSession[] {
 	return [...sessions].filter((s) => readingCategory(s) === category && Boolean(s.archived) === archived && (!domain || sourceReadingDomain(s.source) === domain))
-		.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || (b.lastOpenedAt || b.updatedAt || b.createdAt).localeCompare(a.lastOpenedAt || a.updatedAt || a.createdAt) || a.id.localeCompare(b.id));
+		.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || byLastOpened(a, b) || a.id.localeCompare(b.id));
 }
 export function latestReading(sessions: Iterable<ReadingSession>, domain: ReadingDomain): ReadingSession | undefined {
-	return recentReading(sessions, "reading", false, domain).sort((a, b) => (b.lastOpenedAt || b.updatedAt || b.createdAt).localeCompare(a.lastOpenedAt || a.updatedAt || a.createdAt))[0];
+	return recentReading(sessions, "reading", false, domain).sort(byLastOpened)[0];
 }
 export function matchingReading(sessions: Iterable<ReadingSession>, source: ReadingSource): ReadingSession | undefined {
 	return recentReading(sessions).filter((s) => readingSourceKey(s.source) === readingSourceKey(source))
-		.sort((a, b) => (b.lastOpenedAt || b.updatedAt).localeCompare(a.lastOpenedAt || a.updatedAt))[0];
+		.sort(byLastOpened)[0];
 }

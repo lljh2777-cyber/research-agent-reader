@@ -11,7 +11,9 @@ exports.loadReading = (file, mocks = {}) => {
 };
 exports.memoryStorage = () => {
 	const files = new Map();
-	return { files, fail: false, async list() { return [...files.keys()]; }, async read(id) { return files.get(id); }, async write(id, text) { if (this.fail) throw new Error("disk full"); files.set(id, text); } };
+	return { files, fail: false, async list() { return [...files.keys()]; }, async read(id) { return files.get(id); },
+		async readFile(id) { return { text: await this.read(id), mtime: new Date("2020-01-01T00:00:00Z") }; },
+		async write(id, text) { if (this.fail) throw new Error("disk full"); files.set(id, text); } };
 };
 
 // Use the production resolver and adapter with a caller-supplied provider transport.
