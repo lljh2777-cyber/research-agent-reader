@@ -89,7 +89,7 @@ interface DirectQueryDependencies {
 }
 
 export class DirectQueryService {
-	constructor(private readonly deps: DirectQueryDependencies) {}
+	constructor(private readonly deps: DirectQueryDependencies, private readonly shutdownSignal?: AbortSignal) {}
 
 	private loadVerifiedProfile(providerId: string): ProviderProfile {
 		const storedProfile = this.deps.getProviderProfile(providerId);
@@ -113,6 +113,11 @@ export class DirectQueryService {
 		token: DirectQueryRunToken,
 		hooks: DashboardProcessHooks,
 	): Promise<string> {
+		this.shutdownSignal?.throwIfAborted();
+		const registerCancel = (cancel: () => void) => {
+			token.abort = cancel;
+			if (this.shutdownSignal?.aborted) cancel();
+		};
 		let streamedText = "";
 		let response: Awaited<ReturnType<LLMProvider["complete"]>> | null = null;
 		const shouldStream = profile.capabilities?.streaming === true
@@ -125,11 +130,7 @@ export class DirectQueryService {
 						streamedText += delta;
 						hooks.onEvent?.({ type: "assistant-delta", delta });
 					},
-					{
-						registerCancel: (cancel) => {
-							token.abort = cancel;
-						},
-					},
+					{ registerCancel },
 				);
 			} catch (error) {
 				if (
@@ -151,11 +152,8 @@ export class DirectQueryService {
 			}
 		}
 		if (!response || !String(response.text || streamedText).trim()) {
-			response = await provider.complete(request, {
-				registerCancel: (cancel) => {
-					token.abort = cancel;
-				},
-			});
+			this.shutdownSignal?.throwIfAborted();
+			response = await provider.complete(request, { registerCancel });
 			token.abort = undefined;
 		}
 		if (token.cancelled) {
@@ -583,7 +581,8 @@ export class DirectQueryService {
 		profile: ProviderProfile,
 		question: string,
 	): Promise<string[]> {
-		const response = await provider.complete({
+		this.shutdownSignal?.throwIfAborted();
+		const request: ProviderChatRequest = {
 			model: profile.model,
 			messages: [
 				{
@@ -601,7 +600,20 @@ export class DirectQueryService {
 				},
 			],
 			maxTokens: 256,
-		});
+		};
+		let cancel: (() => void) | undefined;
+		let response;
+		try {
+			response = await provider.complete(request, {
+				registerCancel: fn => {
+					cancel = fn;
+					if (this.shutdownSignal?.aborted) fn();
+					else this.shutdownSignal?.addEventListener("abort", fn, { once: true });
+				},
+			});
+		} finally {
+			if (cancel) this.shutdownSignal?.removeEventListener("abort", cancel);
+		}
 		const raw = String(response?.text || "").trim();
 		const jsonText = raw.match(/\{[\s\S]*\}/)?.[0]
 			|| raw.match(/\[[\s\S]*\]/)?.[0]

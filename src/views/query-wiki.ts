@@ -1,3 +1,4 @@
+import { backendSupportsImages, type QueryTaskChange, type QueryTaskService } from "../query/query-task-service";
 import { ROLE_LABELS } from "../retrieval/types";
 import {
 	ItemView,
@@ -9,9 +10,7 @@ import {
 } from "obsidian";
 
 import {
-	ACTIONS,
 	ACTION_BY_ID,
-	type DashboardAction,
 } from "../actions";
 import {
 	MAX_QUERY_IMAGE_ATTACHMENTS,
@@ -22,13 +21,9 @@ import {
 	isCliBackendId,
 	type CliBackendId,
 } from "../config";
-import {
-	type ExecutionOverrides,
-} from "../modals/action-input";
 import { VaultImagePickerModal } from "../modals/vault-image-picker";
 import {
 	normalizeQueryCitationValidation,
-	normalizeQueryRetrievalPath,
 	normalizeQueryVaultSources,
 	normalizeQueryWebSources,
 	normalizeVaultImageAttachments,
@@ -50,9 +45,6 @@ import {
 } from "../runtime/settings";
 import type {
 	CliModelDiscoveryResult,
-	DashboardProcessEvent,
-	DashboardProcessResult,
-	ExecutionConfig,
 	PluginHost,
 	QueryMessage as PersistedQueryMessage,
 	QueryRetrievalMode,
@@ -103,36 +95,12 @@ interface QueryExecutionOverrides {
 	serviceTier: ServiceTier;
 }
 
-interface QuestionImageResolution {
-	attachments: VaultImageAttachment[];
-	notePaths: string[];
-	discoveredCount: number;
-	totalBytes: number;
-}
-
-interface QueryRunnerHooks {
-	onEvent?: (event: DashboardProcessEvent) => void;
-}
-
 interface QueryViewHost extends PluginHost {
 	openModelSettings?(context:"query"):void;
 	lightPaperIngestAvailable(): { ready: boolean; reason: string };
 	lightAgentMineruReady(): boolean;
 	getActiveDirectProviderSummary(): { name: string; model: string } | null;
-	querySessions: QuerySession[];
-	isQueryExecutionActive(runId: string, backendId?: string): boolean;
-	appendQueryMessages(
-		sessionId: string,
-		messages: PersistedQueryMessage[],
-		firstQuestion?: string,
-	): Promise<void>;
-	updateQueryMessage(
-		sessionId: string,
-		messageId: string,
-		updates: Partial<PersistedQueryMessage>,
-		saveMode?: "immediate" | "debounced",
-	): Promise<PersistedQueryMessage | null>;
-	createQueryMessageId(): string;
+	readonly queryTasks: QueryTaskService;
 	setActiveQueryMode(mode: QueryRetrievalMode | string): Promise<void>;
 	setActiveQueryBackend(backendId: string): Promise<void>;
 	resolveQueryBackendId(backendId?: string): string;
@@ -142,56 +110,22 @@ interface QueryViewHost extends PluginHost {
 	buildVaultImageReferenceIndex(
 		files: TFile[],
 	): Map<string, Array<{ title: string; path: string; count: number }>>;
-	resolveDirectQueryExecutionConfig(profile: ProviderProfile): ExecutionConfig;
 	getCliModelDiscovery(backendId: CliBackendId): CliModelDiscoveryResult | null;
 	discoverCliModels(
 		backendId: CliBackendId,
 		force?: boolean,
 	): Promise<CliModelDiscoveryResult>;
 	invalidateCliModelDiscovery(backendId: CliBackendId): void;
-	resolveQuestionImageAttachments(
-		question: string,
-		existingAttachments?: VaultImageAttachment[],
-	): Promise<QuestionImageResolution>;
-	buildQueryActionInput(
-		question: string,
-		priorMessages: PersistedQueryMessage[],
-		mode?: QueryRetrievalMode,
-		attachments?: VaultImageAttachment[],
-	): string;
-	runDirectVaultQuery(
-		runId: string,
-		providerId: string,
-		question: string,
-		priorMessages: PersistedQueryMessage[],
-		mode?: QueryRetrievalMode,
-		hooks?: QueryRunnerHooks,
-		attachments?: VaultImageAttachment[],
-	): Promise<DashboardProcessResult>;
 	directProfileSupportsWebSearch(profileId: string): boolean;
 	saveQueryAnswerNote(sessionId: string, messageId: string): Promise<string>;
-	runVaultAction(
-		runId: string,
-		action: DashboardAction,
-		input: string,
-		executionConfig?: ExecutionConfig | null,
-		hooks?: QueryRunnerHooks,
-	): Promise<DashboardProcessResult>;
-	stopDirectVaultQuery(runId: string): boolean;
-	stopVaultAction(runId: string): boolean;
 	supportsFast(model: string): boolean;
-}
-
-function backendSupportsImages(backend: string, profile: unknown): boolean {
-	return backend === "claude-code" || profileSupportsQueryImage(profile);
 }
 
 export class QueryWikiView extends ItemView {
 	private readonly plugin: QueryViewHost;
 	private initialQuestion: string;
-	private activeRunId: string;
-	private activeMessageId: string;
-	private stopRequested: boolean;
+	private readonly composerId = Symbol();
+	private unsubscribe: (() => void) | null = null;
 	private renderVersion: number;
 	private inputEl: HTMLTextAreaElement | null;
 	private inputSessionId: string;
@@ -205,9 +139,6 @@ export class QueryWikiView extends ItemView {
 		super(leaf);
 		this.plugin = plugin;
 		this.initialQuestion = "";
-		this.activeRunId = "";
-		this.activeMessageId = "";
-		this.stopRequested = false;
 		this.renderVersion = 0;
 		this.inputEl = null;
 		this.inputSessionId = "";
@@ -247,12 +178,21 @@ export class QueryWikiView extends ItemView {
 	}
 
 	async onOpen(): Promise<void> {
-		this.syncActiveRunFromSession();
+		this.unsubscribe?.();
+		const unsubscribe = this.plugin.queryTasks.subscribe((id, change) => this.onTaskChange(id, change));
+		this.unsubscribe = unsubscribe;
 		await this.render();
-		window.requestAnimationFrame(() => this.activateComposerInput());
+		window.requestAnimationFrame(() => {
+			if (this.unsubscribe === unsubscribe) this.activateComposerInput();
+		});
 	}
 
 	async onClose(): Promise<void> {
+		this.unsubscribe?.();
+		this.unsubscribe = null;
+		this.renderVersion++;
+		this.inputEl = null;
+		this.statusEl = null;
 		if (this.navigatorFrame) window.cancelAnimationFrame(this.navigatorFrame);
 		this.navigatorFrame = 0;
 		this.contentEl.empty();
@@ -286,18 +226,13 @@ export class QueryWikiView extends ItemView {
 		return this.plugin.getActiveQuerySession();
 	}
 
-	syncActiveRunFromSession(): void {
-		const activeMessage = this.session.messages.find((message) => {
-			return ["pending", "stopping"].includes(message.status)
-				&& message.runId
-				&& this.plugin.isQueryExecutionActive(message.runId, message.queryBackendId);
-		});
-		this.activeRunId = activeMessage?.runId || "";
-		this.activeMessageId = activeMessage?.id || "";
-		this.stopRequested = activeMessage?.status === "stopping";
+	private get activeRunId(): string {
+		const task = this.plugin.queryTasks.forSession(this.session.id);
+		return task ? task.runId || "starting" : "";
 	}
 
 	async render(options: { scrollToBottom?: boolean } = {}): Promise<void> {
+		if (!this.unsubscribe) return;
 		const version = ++this.renderVersion;
 		const session = this.session;
 		const previousInput = this.inputEl;
@@ -354,7 +289,7 @@ export class QueryWikiView extends ItemView {
 		}
 		if (options.scrollToBottom) {
 			window.requestAnimationFrame(() => {
-				conversation.scrollTop = conversation.scrollHeight;
+				if (version === this.renderVersion) conversation.scrollTop = conversation.scrollHeight;
 			});
 		}
 	}
@@ -464,10 +399,7 @@ export class QueryWikiView extends ItemView {
 		sessions.disabled = Boolean(this.activeRunId);
 		sessions.addEventListener("change", () => {
 			this.pendingImages = [];
-			void this.plugin.setActiveQuerySession(sessions.value).then(() => {
-				this.syncActiveRunFromSession();
-				return this.render();
-			}).then(() => this.activateComposerInput(true));
+			void this.plugin.setActiveQuerySession(sessions.value).then(() => this.render()).then(() => this.activateComposerInput(true));
 		});
 		const create = this.createIconButton(tools, "message-square-plus", "新建对话");
 		create.disabled = Boolean(this.activeRunId);
@@ -494,10 +426,7 @@ export class QueryWikiView extends ItemView {
 				? this.plugin.deleteActiveQuerySession()
 				: this.plugin.clearActiveQuerySession();
 			void operation
-				.then(() => {
-					this.syncActiveRunFromSession();
-					return this.render();
-				})
+				.then(() => this.render())
 				.then(() => this.inputEl?.focus());
 		});
 	}
@@ -648,7 +577,9 @@ export class QueryWikiView extends ItemView {
 			}
 		} else if (message.content) {
 			const markdown = body.createDiv({ cls: "query-wiki-markdown markdown-rendered" });
+			const version = this.renderVersion;
 			await MarkdownRenderer.render(this.app, message.content, markdown, "", this);
+			if (version !== this.renderVersion) return;
 		}
 		if (
 			(message.vaultSources && message.vaultSources.length)
@@ -953,8 +884,9 @@ export class QueryWikiView extends ItemView {
 		input.readOnly = false;
 		input.removeAttribute("disabled");
 		input.removeAttribute("readonly");
+		const version = this.renderVersion;
 		window.requestAnimationFrame(() => {
-			if (!input.isConnected) return;
+			if (version !== this.renderVersion || !input.isConnected) return;
 			input.style.height = "auto";
 			input.style.height = `${Math.min(Math.max(input.scrollHeight, 92), 220)}px`;
 		});
@@ -1030,7 +962,7 @@ export class QueryWikiView extends ItemView {
 		});
 		const stop = this.createIconButton(controls, "square", "停止生成");
 		stop.addClass("query-wiki-stop");
-		stop.disabled = !this.activeRunId || this.activeRunId === "starting" || this.stopRequested;
+		stop.disabled = !this.activeRunId || this.activeRunId === "starting" || Boolean(this.plugin.queryTasks.forSession(sessionId)?.stopping);
 		stop.addEventListener("click", () => this.stopQuery());
 		const send = controls.createEl("button", {
 			cls: "query-wiki-send mod-cta",
@@ -1041,7 +973,8 @@ export class QueryWikiView extends ItemView {
 		send.disabled = Boolean(this.activeRunId) || !input.value.trim();
 		const submit = () => {
 			if (send.disabled) return;
-			void this.submitQuestion(input.value.trim());
+			void this.submitQuestion(input.value.trim()).catch(error => new Notice(`知识库查询失败：${String(error)}`));
+			if (this.activeRunId) send.disabled = true;
 		};
 		input.addEventListener("input", () => {
 			this.queryDrafts.set(sessionId, input.value);
@@ -1452,9 +1385,10 @@ export class QueryWikiView extends ItemView {
 		openCodeReasoning.addEventListener("change", sync);
 		sync();
 		if (isCliBackendId(backendId)) {
+			const version = this.renderVersion;
 			void this.plugin.discoverCliModels(backendId)
 				.then((discovery) => {
-					if (backend.value !== backendId) return;
+					if (version !== this.renderVersion || backend.value !== backendId) return;
 					if (backendId === "claude-code") {
 						claudeDiscovery = discovery;
 						renderClaudeModels();
@@ -1468,7 +1402,7 @@ export class QueryWikiView extends ItemView {
 					sync();
 				})
 				.catch((error) => {
-					if (backend.value !== backendId) return;
+					if (version !== this.renderVersion || backend.value !== backendId) return;
 					modelStatus.setText(`模型识别失败：${String(error)}`);
 				});
 		}
@@ -1493,348 +1427,42 @@ export class QueryWikiView extends ItemView {
 		return button;
 	}
 
-	async submitQuestion(question: string): Promise<void> {
-		if (!question || this.activeRunId || this.plugin.isActionRunning("vault-retrieval")) return;
-		const action = ACTION_BY_ID.get("vault-retrieval");
-		if (!action) {
-			new Notice("知识库检索操作未注册");
+	submitQuestion(question: string): Promise<void> {
+		return this.plugin.queryTasks.submit(this.session, question, this.pendingImages, this.executionOverridesByBackend, this.composerId);
+	}
+
+	private onTaskChange(sessionId: string, change: QueryTaskChange): void {
+		if (sessionId !== this.session.id) return;
+		if (change.type === "progress") {
+			if (this.statusEl?.isConnected) this.statusEl.setText(change.text);
 			return;
 		}
-		const session = this.session;
-		const backendId = this.plugin.resolveQueryBackendId(session.queryBackendId);
-		const directProfile = isCliBackendId(backendId)
-			? null
-			: this.plugin.getProviderProfile(backendId);
-		if (!isCliBackendId(backendId) && !directProfile) {
-			new Notice("所选 Direct API 配置不可用，请重新选择执行后端");
-			return;
-		}
-		const selectedImages = normalizeVaultImageAttachments(this.pendingImages);
-		const canSendImages = backendSupportsImages(backendId, directProfile);
-		if (selectedImages.length && !canSendImages) {
-			new Notice("当前执行后端未启用视觉输入，无法发送图片");
-			return;
-		}
-		let linkedImageResult: QuestionImageResolution = {
-			attachments: [],
-			notePaths: [],
-			discoveredCount: 0,
-			totalBytes: 0,
-		};
-		if (canSendImages) {
-			try {
-				linkedImageResult = await this.plugin.resolveQuestionImageAttachments(question, selectedImages);
-			} catch (error) {
-				new Notice(
-					`未能解析链接笔记中的图片，将继续使用手动附件：${error instanceof Error ? error.message : String(error)}`,
-					8000,
-				);
+		if (change.type === "text") {
+			const article = this.contentEl.querySelector(`[data-message-id="${change.messageId}"]`);
+			const body = article?.querySelector(".query-wiki-message-body");
+			let stream = body?.querySelector(".query-wiki-stream-content");
+			if (body && !stream && change.content) stream = body.createDiv({ cls: "query-wiki-stream-content" });
+			stream?.setText(change.content);
+			if (change.content) {
+				const conversation = this.contentEl.querySelector(".query-wiki-conversation");
+				if (conversation) conversation.scrollTop = conversation.scrollHeight;
 			}
+			return;
 		}
-		const attachments = normalizeVaultImageAttachments([
-			...selectedImages,
-			...linkedImageResult.attachments,
-		]);
-		if (linkedImageResult.discoveredCount > 0) {
-			const addedCount = attachments.filter((attachment) => attachment.sourceNotePath).length;
-			new Notice(
-				linkedImageResult.discoveredCount > addedCount
-					? `从链接笔记发现 ${linkedImageResult.discoveredCount} 张图片，本轮按限制附加 ${addedCount} 张`
-					: `已从链接笔记附加 ${addedCount} 张图片`,
-			);
-		}
-		const retrievalMode: QueryRetrievalMode = session.retrievalMode === "web"
-			&& isCliBackendId(backendId)
-			? "web"
-			: "vault";
-		const priorMessages = session.messages.filter((message) => message.status === "done");
-		const now = new Date().toISOString();
-		const userMessage: PersistedQueryMessage = {
-			id: this.plugin.createQueryMessageId(),
-			role: "user",
-			content: question,
-			attachments,
-			status: "done",
-			createdAt: now,
-			retrievalMode,
-		};
-		const assistantMessage: PersistedQueryMessage = {
-			id: this.plugin.createQueryMessageId(),
-			role: "assistant",
-			content: "",
-			status: "pending",
-			progress: "正在准备检索",
-			createdAt: new Date(Date.now() + 1).toISOString(),
-			runId: "",
-			retrievalTrace: null,
-			vaultSources: [],
-			webSources: [],
-			citationValidation: normalizeQueryCitationValidation(null),
-			retrievalPath: normalizeQueryRetrievalPath(null),
-			error: "",
-			retrievalMode,
-			queryBackendId: backendId,
-			providerName: directProfile?.name || getCliBackendLabel(backendId),
-			model: directProfile?.model || (
-				backendId === "claude-code"
-					? this.plugin.resolveCliActionExecutionConfig(
-						action,
-						"claude-code",
-						this.executionOverridesByBackend["claude-code"],
-						).model
-						|| this.plugin.getCliModelDiscovery("claude-code")?.effectiveModel
-						|| getClaudeDefaultModelLabel(this.plugin.settings.claudeConfigSource)
-					: backendId === "opencode"
-						? this.plugin.resolveCliActionExecutionConfig(
-							action,
-							"opencode",
-							this.executionOverridesByBackend["opencode"],
-						).model
-							|| this.plugin.getCliModelDiscovery("opencode")?.effectiveModel
-							|| getOpenCodeDefaultModelLabel(this.plugin.settings.openCodeConfigSource)
-					: ""
-			),
-		};
-		this.activeRunId = "starting";
-		this.activeMessageId = assistantMessage.id;
-		this.stopRequested = false;
-		const executionConfig: ExecutionConfig = directProfile
-			? this.plugin.resolveDirectQueryExecutionConfig(directProfile)
-			: backendId === "claude-code"
-				? this.plugin.resolveCliActionExecutionConfig(
-					action,
-					"claude-code",
-					this.executionOverridesByBackend["claude-code"],
-				)
-			: backendId === "opencode"
-				? this.plugin.resolveCliActionExecutionConfig(
-					action,
-					"opencode",
-					this.executionOverridesByBackend["opencode"],
-				)
-			: {
-				backend: "codex-cli" as const,
-				...this.plugin.resolveActionExecutionConfig(
-					action,
-					this.executionOverridesByBackend["codex-cli"],
-				),
-			};
-		assistantMessage.model = executionConfig.model;
-		const input = this.plugin.buildQueryActionInput(
-			question,
-			priorMessages,
-			retrievalMode,
-			attachments,
-		);
-		let run = null;
-		let completedRun = null;
-		let restoreQuestion = false;
-		try {
-			await this.plugin.appendQueryMessages(session.id, [userMessage, assistantMessage], question);
-			this.queryDrafts.delete(session.id);
+		if (change.type === "accepted" && change.composer === this.composerId) {
+			this.queryDrafts.delete(sessionId);
 			if (this.inputEl?.isConnected) this.inputEl.value = "";
 			this.pendingImages = [];
-			await this.render({ scrollToBottom: true });
-			run = await this.plugin.startTaskRun(action, question.slice(0, 160), executionConfig);
-			this.activeRunId = run.id;
-			await this.plugin.updateQueryMessage(session.id, assistantMessage.id, { runId: run.id });
-			await this.render({ scrollToBottom: true });
-			const hooks: QueryRunnerHooks = {
-				onEvent: (event: DashboardProcessEvent) => {
-					this.handleRunnerEvent(session.id, assistantMessage.id, event);
-				},
-			};
-			const result = directProfile
-				? await this.plugin.runDirectVaultQuery(
-					run.id,
-					directProfile.id,
-					question,
-					priorMessages,
-					"vault",
-					hooks,
-					userMessage.attachments || [],
-				)
-				: await this.plugin.runVaultAction(
-					run.id,
-					action,
-					input,
-					executionConfig,
-					hooks,
-				);
-			const stopped = this.stopRequested
-				|| result.exitCode === 130
-				|| (result.events || []).some((event) => event.type === "status" && event.stage === "stopped");
-			const status = result.exitCode === 0 ? "done" : stopped ? "interrupted" : "failed";
-			const resultEvent = [...(result.events || [])]
-				.reverse()
-				.find((event) => event.type === "retrieval-result");
-			const structuredResult = resultEvent?.payload && typeof resultEvent.payload === "object"
-				? resultEvent.payload
-				: null;
-			const response = String(structuredResult?.answer_markdown || result.stdout || "").trim();
-			const error = status === "done"
-				? ""
-				: stopped
-					? "已停止本轮查询。"
-					: result.stderr.trim() || `查询进程退出码：${result.exitCode}`;
-			const traceEvent = [...(result.events || [])].reverse().find((event) => event.type === "retrieval-preflight");
-			await this.plugin.updateQueryMessage(session.id, assistantMessage.id, {
-				status,
-				content: response || (status === "done" ? "本轮查询未返回文本。" : ""),
-				error,
-				progress: "",
-				retrievalTrace: traceEvent?.payload || assistantMessage.retrievalTrace || null,
-				vaultSources: this.normalizeVaultSourceEntries(structuredResult?.vault_sources),
-				webSources: normalizeQueryWebSources(structuredResult?.web_sources),
-				citationValidation: normalizeQueryCitationValidation(structuredResult?.citation_validation),
-				retrievalPath: normalizeQueryRetrievalPath(structuredResult?.retrieval_path),
-				retrievalMode: traceEvent?.mode === "vault"
-					? "vault"
-					: traceEvent?.mode === "web"
-						? "web"
-						: retrievalMode,
-				queryBackendId: backendId,
-				providerName: directProfile?.name || getCliBackendLabel(backendId),
-				model: executionConfig.model || (
-					backendId === "claude-code"
-						? getClaudeDefaultModelLabel(this.plugin.settings.claudeConfigSource)
-						: ""
-				),
-			});
-			const output = [
-				response,
-				result.stderr.trim() ? `运行日志\n${result.stderr.trim()}` : "",
-			].filter(Boolean).join("\n\n").slice(0, 120000) || error;
-			restoreQuestion = status === "failed";
-			completedRun = await this.plugin.finishTaskRun(run.id, {
-				status,
-				exitCode: result.exitCode,
-				output,
-				error,
-			});
-			new Notice(status === "done" ? "知识库回答已完成" : stopped ? "知识库查询已停止" : "知识库查询失败");
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			const interrupted = this.stopRequested || /cancelled|canceled|已停止|正在停止/i.test(message);
-			restoreQuestion = !interrupted;
-			await this.plugin.updateQueryMessage(session.id, assistantMessage.id, {
-				status: interrupted ? "interrupted" : "failed",
-				error: interrupted ? "已停止本轮查询。" : message,
-				progress: "",
-			});
-			if (run) {
-				completedRun = await this.plugin.finishTaskRun(run.id, {
-					status: interrupted ? "interrupted" : "failed",
-					exitCode: null,
-					output: "",
-					error: message,
-				});
-			}
-			new Notice(interrupted ? "知识库查询已停止" : `知识库查询失败：${message}`);
-		} finally {
-			this.activeRunId = "";
-			this.activeMessageId = "";
-			this.stopRequested = false;
-			if (restoreQuestion && !this.queryDrafts.get(session.id)) {
-				this.queryDrafts.set(session.id, question);
-				if (this.session.id === session.id) this.pendingImages = attachments;
-			}
-			await this.render({ scrollToBottom: true });
-			if (!completedRun) console.warn("Query run completed without a persisted task record");
 		}
-	}
-
-	handleRunnerEvent(sessionId: string, messageId: string, event: DashboardProcessEvent): void {
-		if (!event || typeof event !== "object") return;
-		if (event.type === "retrieval-preflight") {
-			const trace = (event.payload || {}) as RetrievalTrace;
-			void this.plugin.updateQueryMessage(sessionId, messageId, {
-				retrievalTrace: event.payload || null,
-				retrievalMode: event.mode === "vault" ? "vault" : "web",
-				progress: this.progressFromTrace(trace),
-			}, "debounced").then(() => this.render({ scrollToBottom: true }));
-			this.updateProgressText(this.progressFromTrace(trace));
-			return;
+		if (change.type === "finished" && change.composer === this.composerId && change.retry && !this.queryDrafts.get(sessionId)) {
+			this.queryDrafts.set(sessionId, change.retry.question);
+			this.pendingImages = change.retry.attachments;
 		}
-		if (event.type === "assistant-reset") {
-			const session = this.plugin.querySessions.find((item) => item.id === sessionId);
-			const message = session?.messages.find((item) => item.id === messageId);
-			if (message) message.content = "";
-			const streamEl = this.contentEl.querySelector(
-				`[data-message-id="${messageId}"] .query-wiki-stream-content`,
-			);
-			if (streamEl) streamEl.setText("");
-			return;
-		}
-		if (event.type === "retrieval-result" && event.payload && typeof event.payload === "object") {
-			const payload = event.payload;
-			void this.plugin.updateQueryMessage(sessionId, messageId, {
-				content: String(payload.answer_markdown || "").slice(0, 20000),
-				vaultSources: this.normalizeVaultSourceEntries(payload.vault_sources),
-				webSources: normalizeQueryWebSources(payload.web_sources),
-				citationValidation: normalizeQueryCitationValidation(payload.citation_validation),
-				retrievalPath: normalizeQueryRetrievalPath(payload.retrieval_path),
-				progress: "回答与来源校验完成",
-			}).then(() => this.render({ scrollToBottom: true }));
-			this.updateProgressText("回答与来源校验完成");
-			return;
-		}
-		if (event.type === "assistant-delta" && event.delta) {
-			const session = this.plugin.querySessions.find((item) => item.id === sessionId);
-			const message = session?.messages.find((item) => item.id === messageId);
-			if (!message) return;
-			message.content = `${message.content || ""}${String(event.delta)}`.slice(0, 20000);
-			const article = this.contentEl.querySelector(`[data-message-id="${messageId}"]`);
-			const body = article?.querySelector(".query-wiki-message-body");
-			let streamEl = body?.querySelector(".query-wiki-stream-content");
-			if (body && !streamEl) {
-				streamEl = body.createDiv({ cls: "query-wiki-stream-content" });
-			}
-			if (streamEl) streamEl.setText(message.content);
-			const conversation = this.contentEl.querySelector(".query-wiki-conversation");
-			if (conversation) conversation.scrollTop = conversation.scrollHeight;
-			return;
-		}
-		if (event.type === "status" && event.label) {
-			void this.plugin.updateQueryMessage(
-				sessionId,
-				messageId,
-				{ progress: String(event.label) },
-				"debounced",
-			);
-			this.updateProgressText(String(event.label));
-		}
-	}
-
-	updateProgressText(value: unknown): void {
-		if (this.statusEl?.isConnected) this.statusEl.setText(String(value || ""));
-	}
-
-	progressFromTrace(trace: RetrievalTrace): string {
-		if (!trace || typeof trace !== "object") return "已完成检索预检";
-		if (trace.fallback?.used) return "未找到可靠种子，正在检查方向索引";
-		const seedCount = Array.isArray(trace.lexical_seeds) ? trace.lexical_seeds.length : 0;
-		const graphCount = Array.isArray(trace.graph_expansion) ? trace.graph_expansion.length : 0;
-		return `${trace.retrieval_label || "检索完成"}：${seedCount} 个种子，${graphCount} 个关联页面`;
+		void this.render({ scrollToBottom: true }).catch(error => new Notice(`无法显示查询会话：${String(error)}`));
 	}
 
 	stopQuery(): void {
-		if (!this.activeRunId || this.activeRunId === "starting" || this.stopRequested) return;
-		const message = this.session.messages.find((item) => item.id === this.activeMessageId);
-		this.stopRequested = message?.queryBackendId && !isCliBackendId(message.queryBackendId)
-			? this.plugin.stopDirectVaultQuery(this.activeRunId)
-			: this.plugin.stopVaultAction(this.activeRunId);
-		if (!this.stopRequested) {
-			new Notice("当前查询进程已经结束");
-			return;
-		}
-		this.updateProgressText("正在停止任务");
-		if (message) {
-			void this.plugin.updateQueryMessage(this.session.id, message.id, {
-				status: "stopping",
-				progress: "正在停止任务",
-			});
-		}
+		void this.plugin.queryTasks.stop(this.session.id).catch(error => new Notice(`无法停止知识库查询：${String(error)}`));
 	}
 
 	displayRetrieverName(value: unknown): string {

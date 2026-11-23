@@ -152,6 +152,7 @@ import { CLIPPER_READER, ClipperReaderView } from "./views/clipper-reader";
 import { DashboardView } from "./views/dashboard";
 import { MineruReaderView } from "./views/mineru-reader";
 import { QueryWikiView } from "./views/query-wiki";
+import { QueryTaskService } from "./query/query-task-service";
 import { ReadingWorkspaceView } from "./views/reading-workspace";
 import { ReadingWorkspaceService } from "./reading/workspace";
 import { ReadingEngine } from "./reading/engine";
@@ -327,6 +328,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	taskRuns: TaskRun[] = [];
 	querySessions: QuerySession[] = [];
 	activeQuerySessionId = "";
+	readonly queryTasks = new QueryTaskService(this);
 	latestLintReport: LintReport | null = null;
 	lastContextFile: TFile | null = null;
 
@@ -347,7 +349,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		readEvidencePacket: (trace) => this.readVaultEvidencePacket(trace),
 		readVaultImageData: (attachment) => this.readVaultImageData(attachment),
 		resolveWebSearchBackend: (profile) => this.resolveWebSearchBackend(profile),
-	});
+	}, this.queryTasks.shutdownSignal);
 	private readonly agentLoopService = new AgentLoopService({
 		app: this.app,
 		getSettings: () => this.settings,
@@ -630,6 +632,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		const queryCompletion = this.queryTasks.shutdown();
 		this.clipperChanges.stop();
 		await this.annotationCliDiscovery.dispose();
 		this.answerExcerptBrowser?.dispose();
@@ -659,6 +662,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			console.error("Light-agent shutdown barrier failed", error);
 		});
 		this.processExecution.shutdown();
+		await queryCompletion;
 	}
 
 	getDashboardAction(actionId: string): DashboardAction | null {
