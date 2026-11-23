@@ -115,7 +115,15 @@ export class ReadingDocumentLoader {
 	private async clippedArticle(sourcePath: string): Promise<ReadingDocument> {
 		const dir = requireClipper(this.app), paper = await dir.paper(sourcePath.split("/")[1]);
 		const text = await dir.text(sourcePath), parsed = parseBilingualMarkdown(text);
-		const fingerprint = readingHash(text), evidence: ReadingEvidence[] = [], figures = new Map<string, string>();
+		const fingerprint = readingHash(text), evidence: ReadingEvidence[] = [], figures = new Map<string, string | null>();
+		const readFigure = async (asset: string): Promise<Uint8Array | null> => {
+			try {
+				return await dir.read(asset, 12 * 1024 * 1024);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+				throw error;
+			}
+		};
 		let section = "正文";
 		for (const block of parsed.blocks) {
 			const raw = text.slice(block.start, block.end);
@@ -127,8 +135,8 @@ export class ReadingDocumentLoader {
 			}
 			for (const match of raw.matchAll(markdownImagePattern())) {
 				const asset = imagePath(sourcePath.slice(0,sourcePath.lastIndexOf("/")), match[2] || match[3] || match[4]);
-				const bytes = await dir.read(asset,12*1024*1024); if (!bytes) continue;
-				figures.set(asset, readingHash(bytes));
+				const bytes = await readFigure(asset);
+				if (!figures.has(asset)) figures.set(asset, bytes ? readingHash(bytes) : null);
 				const imageId = "figure-" + evidence.length;
 				const chunk = evidence[firstChunk + Math.floor(match.index! / 4000)];
 				(chunk.relatedIds ??= []).push(imageId);
@@ -139,8 +147,13 @@ export class ReadingDocumentLoader {
 		return { source:{kind:"article",path:sourcePath,title:paper.title,fingerprint}, evidence, catalog: readingCatalog(evidence),
 			verify: async () => { if (readingHash(await dir.text(sourcePath)) !== fingerprint) throw new Error("原文已更新，请重新打开核对"); },
 			image: async (item,signal) => { signal?.throwIfAborted(); if (!item.asset || !figures.has(item.asset)) return null;
-				const bytes = await dir.read(item.asset,12*1024*1024); signal?.throwIfAborted();
-				if (!bytes || readingHash(bytes)!==figures.get(item.asset)) throw new Error("配图已更新，请重新打开核对");
+				const bytes = await readFigure(item.asset);
+				signal?.throwIfAborted();
+				if (!bytes) throw new Error("缺少原图，请恢复图片文件后在本轮重试");
+				const digest = readingHash(bytes);
+				const original = figures.get(item.asset);
+				if (original && digest !== original) throw new Error("配图已更新，请重新打开论文核对图像版本");
+				if (!original) figures.set(item.asset, digest);
 				const ext = item.asset.split(".").pop()!.toLowerCase();
 				return {evidenceId:item.id, dataUrl:"data:image/"+(ext==="jpg"?"jpeg":ext)+";base64,"+Buffer.from(bytes).toString("base64")}; }, destroy:async()=>{} };
 	}

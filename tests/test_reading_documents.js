@@ -1,7 +1,15 @@
 const assert = require("node:assert/strict");
 const { loadReading } = require("./reading-test-helpers");
 let bytes = Buffer.from("%PDF synthetic immutable bytes"); let destroyed = 0; let renderCancelled = false;
+let figureBytes = Buffer.from("original");
+let figureReadError;
+const clipper = {
+	paper: async () => ({ title: "Fixture" }),
+	text: async () => "# Results\n\n![Figure 2](images/example.webp)",
+	read: async () => { if (figureReadError) throw figureReadError; return figureBytes; },
+};
 const mocks = {
+	"../library/clipper": { isClipperPath: (p) => p.startsWith("@paper-clipper/"), requireClipper: () => clipper },
 	"obsidian": { TFile: class {}, loadPdfJs: async () => ({ getDocument: () => ({ promise: Promise.resolve({ numPages: 3,
 		getPage: async (n) => ({ getTextContent: async () => ({ items: n === 3 ? [] : [{ str: n === 1 ? "Introduction study rationale" : "Results sample size comparison", hasEOL: true }] }),
 			getViewport: ({ scale }) => ({ width: 800 * scale, height: 1200 * scale }), render: (options) => {
@@ -31,5 +39,25 @@ const { ReadingDocumentLoader, textEvidence, selectReadingEvidence, readingHash,
 	bytes = Buffer.from("%PDF changed"); await assert.rejects(document.verify(), /已变化/);
 	await document.destroy(); assert.equal(destroyed, 1);
 	await assert.rejects(new ReadingDocumentLoader({}, "E:/vault").open("article", "../other.md"), /已验证/);
+	const loader = new ReadingDocumentLoader({}, "E:/vault");
+	const paperPath = "@paper-clipper/fixture/paper.md";
+	const clipped = await loader.open("article", paperPath);
+	const figure = clipped.evidence.find(e => e.asset);
+	assert.equal((await clipped.image(figure)).evidenceId, figure.id);
+	figureBytes = null;
+	await assert.rejects(clipped.image(figure), /缺少原图/);
+	const initiallyMissing = await loader.open("article", paperPath);
+	assert.ok(initiallyMissing.evidence.some(e => e.id === figure.id && e.asset === figure.asset));
+	await assert.rejects(initiallyMissing.image(figure), /缺少原图/);
+	figureReadError = Object.assign(new Error("open failed"), { code: "ENOENT" });
+	await assert.rejects(clipped.image(figure), /缺少原图/);
+	figureReadError.code = "EACCES";
+	await assert.rejects(clipped.image(figure), err => err === figureReadError);
+	figureReadError = undefined;
+	figureBytes = Buffer.from("original");
+	assert.deepEqual(await initiallyMissing.image(figure), await clipped.image(figure));
+	figureBytes = Buffer.from("modified");
+	await assert.rejects(clipped.image(figure), /配图已更新/);
+	await assert.rejects(initiallyMissing.image(figure), /配图已更新/);
 	console.log("READING_DOCUMENTS_OK");
 })().catch((e) => { console.error(e); process.exitCode = 1; });
