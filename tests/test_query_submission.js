@@ -5,10 +5,13 @@ const { test } = require("node:test");
 const { loadReading } = require("./reading-test-helpers");
 
 const notices = [];
-const { QueryWikiView } = loadReading("views/query-wiki.ts", { obsidian: {
-	ItemView: class {}, Modal: class {}, setIcon() {},
+const mocks = { electron: {}, obsidian: {
+	ItemView: class {}, Modal: class {}, Plugin: class {}, PluginSettingTab: class {}, Component: class {},
+	setIcon() {}, MarkdownRenderer: { async render(_app, value, el) { el.setText(value); } },
 	Notice: class { constructor(message) { notices.push(message); } },
-} });
+} };
+const { QueryWikiView } = loadReading("views/query-wiki.ts", mocks);
+const Plugin = loadReading("plugin.ts", mocks).default;
 
 const noImages = { attachments: [], notePaths: [], discoveredCount: 0, totalBytes: 0 };
 const result = { exitCode: 0, stdout: "answer", stderr: "", events: [] };
@@ -18,8 +21,10 @@ function fixture() {
 	const session = { id: "session", queryBackendId: profile.id, retrievalMode: "vault", messages: [] };
 	const runs = [];
 	let messageId = 0;
-	const host = {
-		querySubmissionActive: false,
+	const snapshots = [];
+	const host = Object.assign(new Plugin(), {
+		querySessions: [session],
+		saveData: async snapshot => { snapshots.push(snapshot); },
 		getActiveQuerySession: () => session,
 		resolveQueryBackendId: id => id,
 		getProviderProfile: () => profile,
@@ -28,8 +33,6 @@ function fixture() {
 		resolveDirectQueryExecutionConfig: () => ({ model: profile.model }),
 		buildQueryActionInput: question => question,
 		createQueryMessageId: () => String(++messageId),
-		appendQueryMessages: async (_id, messages) => { session.messages.push(...messages); },
-		updateQueryMessage: async (_id, id, update) => Object.assign(session.messages.find(m => m.id === id), update),
 		startTaskRun: async () => {
 			const run = { id: String(runs.length + 1) };
 			runs.push(run);
@@ -37,13 +40,13 @@ function fixture() {
 		},
 		runDirectVaultQuery: async () => result,
 		finishTaskRun: async (id, outcome) => Object.assign(runs.find(run => run.id === id), outcome),
-	};
+	});
 	const makeView = () => {
 		const view = new QueryWikiView({}, host);
 		view.render = async () => {};
 		return view;
 	};
-	return { host, session, runs, view: makeView(), makeView };
+	return { host, session, runs, snapshots, view: makeView(), makeView };
 }
 
 function pauseImageResolution(host) {
@@ -152,3 +155,219 @@ test("a cancelled query releases the submission", async () => {
 	await f.view.submitQuestion("next");
 	assert.deepEqual(f.runs.map(run => run.status), ["interrupted", "done"]);
 });
+
+function deferred() {
+	let resolve, reject;
+	const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+	return { promise, resolve, reject };
+}
+
+const tick = () => new Promise(resolve => setImmediate(resolve));
+
+function lifecycleFixture(t, cli = false) {
+	const f = fixture();
+	const started = deferred(), answer = deferred();
+	let executions = 0, stops = 0;
+	function run(hooks) {
+		executions++;
+		started.resolve(hooks);
+		return answer.promise;
+	}
+	f.host.runDirectVaultQuery = (_run, _provider, _question, _prior, _mode, hooks) => run(hooks);
+	f.host.runVaultAction = (_run, _action, _input, _config, hooks) => run(hooks);
+	if (cli) f.session.queryBackendId = "codex-cli";
+	f.host.isQueryExecutionActive = () => true;
+	f.host[cli ? "stopVaultAction" : "stopDirectVaultQuery"] = () => {
+		stops++;
+		answer.resolve({ ...result, exitCode: 130, stdout: "" });
+		return true;
+	};
+	const previousWindow = globalThis.window;
+	const frames = new Map();
+	let nextFrame = 0;
+	globalThis.window = {
+		requestAnimationFrame(fn) { frames.set(++nextFrame, fn); return nextFrame; },
+		cancelAnimationFrame(id) { frames.delete(id); },
+		setTimeout, clearTimeout,
+	};
+	t.after(() => { globalThis.window = previousWindow; });
+	return { ...f, started: started.promise, answer, executions: () => executions, stops: () => stops,
+		flushFrames() { for (const [id, fn] of frames) { frames.delete(id); fn(); } } };
+}
+
+function screen(f) {
+	const view = f.makeView(), ops = [], labels = [];
+	class Element {
+		createEl(tag, options = {}) {
+			ops.push(tag);
+			if (options.text) labels.push(options.text);
+			return new Element();
+		}
+		createDiv(options) { return this.createEl("div", options); }
+		createSpan(options) { return this.createEl("span", options); }
+		setText(value) { labels.push(value); ops.push("setText"); }
+		addClass() {}
+		addEventListener() {}
+		empty() { ops.push("empty"); labels.length = 0; }
+		querySelector() { ops.push("querySelector"); return null; }
+		set scrollTop(value) { ops.push("scroll"); }
+		get isConnected() { return true; }
+	}
+	view.contentEl = new Element();
+	view.render = QueryWikiView.prototype.render;
+	view.renderHeader = view.renderComposer = view.renderEmptyState = () => {};
+	return { view, ops, labels, renders: () => ops.filter(op => op === "empty").length };
+}
+
+for (const failed of [false, true]) {
+	test("closed query saves " + (failed ? "server failure" : "answer") + " without touching the old DOM", async t => {
+		const f = lifecycleFixture(t), old = screen(f);
+		await old.view.onOpen();
+		const task = old.view.submitQuestion("inspect");
+		const hooks = await f.started;
+		await old.view.onClose();
+		const before = old.ops.length;
+		hooks.onEvent({ type: "assistant-delta", delta: "partial" });
+		hooks.onEvent({ type: "assistant-reset" });
+		if (failed) f.answer.reject(new Error("server rejected query"));
+		else f.answer.resolve(result);
+		await task;
+		f.flushFrames();
+		const saved = f.snapshots.at(-1).querySessions[0].messages[1];
+		assert.equal(saved.status, failed ? "failed" : "done");
+		assert.equal(f.stops(), 0);
+		const fresh = screen(f);
+		await fresh.view.onOpen();
+		assert.ok(fresh.labels.includes(failed ? "server rejected query" : result.stdout));
+		assert.deepEqual(old.ops.slice(before), []);
+	});
+}
+
+test("immediate reopen delivers one render per retrieval event only to the open view", async t => {
+	const f = lifecycleFixture(t), old = screen(f), fresh = screen(f);
+	const service = f.host.queryTasks;
+	const subscribe = service.subscribe.bind(service);
+	let subscriptions = 0;
+	t.mock.method(service, "subscribe", listener => {
+		const off = subscribe(listener);
+		subscriptions++;
+		return () => { off(); subscriptions--; };
+	});
+	await old.view.onOpen();
+	const task = old.view.submitQuestion("inspect");
+	const hooks = await f.started;
+	const closing = old.view.onClose();
+	assert.equal(subscriptions, 0);
+	const closedRenders = old.renders();
+	await Promise.all([closing, fresh.view.onOpen()]);
+	assert.equal(subscriptions, 1);
+	assert.ok(fresh.labels.includes("正在准备检索"));
+	const openRenders = fresh.renders();
+	hooks.onEvent({ type: "retrieval-result", payload: { answer_markdown: "live answer" } });
+	await tick();
+	assert.deepEqual([old.renders() - closedRenders, fresh.renders() - openRenders], [0, 1]);
+	assert.ok(fresh.labels.includes("live answer"));
+	f.answer.resolve(result);
+	await task;
+	await fresh.view.onClose();
+	assert.equal(subscriptions, 0);
+});
+
+test("close, reopen, close during one CLI execution saves one assistant reply", async t => {
+	const f = lifecycleFixture(t, true), first = screen(f), second = screen(f);
+	await first.view.onOpen();
+	const task = first.view.submitQuestion("inspect");
+	const hooks = await f.started;
+	await first.view.onClose();
+	await second.view.onOpen();
+	const refreshes = second.renders();
+	hooks.onEvent({ type: "retrieval-result", payload: { answer_markdown: "still running" } });
+	await tick();
+	assert.equal(second.renders() - refreshes, 1);
+	await second.view.onClose();
+	const before = second.ops.length;
+	f.answer.resolve(result);
+	await task;
+	f.flushFrames();
+	assert.deepEqual(second.ops.slice(before), []);
+	assert.equal(f.executions(), 1);
+	assert.equal(f.stops(), 0);
+	assert.deepEqual(counts(f), oneTurn);
+	assert.deepEqual(f.snapshots.at(-1).querySessions[0].messages.map(m => m.role), ["user", "assistant"]);
+});
+
+for (const cli of [false, true]) {
+	test("plugin unload cancels a detached " + (cli ? "CLI" : "Direct API") + " task and persists interruption", async t => {
+		const f = lifecycleFixture(t, cli), old = screen(f);
+		await old.view.onOpen();
+		const task = old.view.submitQuestion("inspect");
+		await f.started;
+		await old.view.onClose();
+		const unloading = f.host.onunload();
+		await tick();
+		f.answer.resolve(result);
+		await Promise.all([unloading, task]);
+		assert.equal(f.stops(), 1);
+		assert.equal(f.snapshots.at(-1).querySessions[0].messages[1].status, "interrupted");
+	});
+}
+
+test("unload during image resolution prevents a later backend start", async t => {
+	const f = lifecycleFixture(t);
+	const release = pauseImageResolution(f.host);
+	const task = f.view.submitQuestion("inspect");
+	const unloading = f.host.onunload();
+	release();
+	f.answer.resolve(result);
+	await Promise.all([unloading, task]);
+	assert.deepEqual(counts(f), noTurn);
+});
+
+test("closing during asynchronous Markdown rendering invalidates the pending view update", async t => {
+	const f = lifecycleFixture(t), old = screen(f), drawing = deferred(), resume = deferred();
+	f.session.messages.push({ id: "previous", role: "assistant", status: "done", content: "answer",
+		createdAt: new Date().toISOString(), retrievalTrace: { retrieval_label: "ready" } });
+	t.mock.method(mocks.obsidian.MarkdownRenderer, "render", async () => { drawing.resolve(); await resume.promise; });
+	const opening = old.view.onOpen();
+	await drawing.promise;
+	await old.view.onClose();
+	const before = old.ops.length;
+	resume.resolve();
+	await opening;
+	f.flushFrames();
+	assert.deepEqual(old.ops.slice(before), []);
+});
+
+for (const phase of ["keywords", "evidence"]) {
+	test("unload during Direct API " + phase + " cancels model work before the answer", async t => {
+		const f = lifecycleFixture(t), paused = deferred(), resume = deferred();
+		const profile = { ...f.host.getProviderProfile(), lastTest: { ok: true } };
+		f.host.getProviderProfile = () => profile;
+		f.host.runDirectVaultQuery = Plugin.prototype.runDirectVaultQuery;
+		f.host.stopDirectVaultQuery = Plugin.prototype.stopDirectVaultQuery;
+		f.host.runVaultRetrievalPreflight = async () => ({ candidate_paths: phase === "keywords" ? [] : ["paper.md"] });
+		f.host.readVaultEvidencePacket = async () => {
+			if (phase === "evidence") { paused.resolve(); await resume.promise; }
+			return [];
+		};
+		let aborts = 0, answers = 0;
+		f.host.createLLMProvider = () => ({ async complete(request, options) {
+			if (request.maxTokens === 256) {
+				options?.registerCancel?.(() => { aborts++; resume.reject(new Error("cancelled")); });
+				paused.resolve();
+				await resume.promise;
+				return { text: '{"keywords":[]}' };
+			}
+			answers++;
+			return { text: "unexpected answer" };
+		} });
+		const task = f.view.submitQuestion("inspect");
+		await paused.promise;
+		const unloading = f.host.onunload();
+		await tick();
+		resume.resolve();
+		await Promise.all([task, unloading]);
+		assert.deepEqual({ aborts, answers }, { aborts: phase === "keywords" ? 1 : 0, answers: 0 });
+		assert.equal(f.snapshots.at(-1).querySessions[0].messages[1].status, "interrupted");
+	});
+}
