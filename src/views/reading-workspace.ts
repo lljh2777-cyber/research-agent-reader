@@ -42,7 +42,6 @@ function actionButton(parent: HTMLElement, name: string, label: string, action: 
 export class ReadingWorkspaceView extends ItemView {
 	private service!: ReadingWorkspaceService;
 	private sessionId = "";
-	private closing = false;
 	private domain: ReadingDomain = "paper";
 	private tabTitle = "";
 	private unsubscribe?: () => void;
@@ -80,7 +79,6 @@ export class ReadingWorkspaceView extends ItemView {
 		if (changed) this.selectSession(id); else this.render(true);
 	}
 	async onOpen(): Promise<void> {
-		this.closing = false;
 		this.service = this.plugin.getReadingWorkspace(); await this.service.ready();
 		this.evidencePanel = new ReadingEvidencePanel(this.app, this.service, this.plugin);
 		this.outcomeUnsubscribe = this.plugin.getCurationService().subscribe(() => this.scheduleOutcomes());
@@ -114,11 +112,6 @@ export class ReadingWorkspaceView extends ItemView {
 		if (errors.length) new Notice(errors.join("\n") + "\n详情见阅读会话库。", 10000);
 	}
 	async onClose(): Promise<void> {
-		this.closing = true;
-		if (this.sessionId && !this.app.workspace.getLeavesOfType(READING_VIEW_TYPE).some(({ view }) =>
-			view instanceof ReadingWorkspaceView && !view.closing && view.sessionId === this.sessionId)) {
-			this.service.stop(this.sessionId);
-		}
 		this.outcomeSequence++; clearTimeout(this.outcomeTimer); this.outcomeUnsubscribe?.(); this.outcomeEvents.forEach(ref => this.app.vault.offref(ref));
 		this.evidencePanel?.dispose();
 		this.modeMotion.stop();
@@ -202,7 +195,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const session = this.session;
 		const contentSignature = JSON.stringify(session ? [session.id, session.title, session.archived, session.pinned, session.nodes, session.outline, session.completed, session.backend, session.model,
 			session.ui.split, session.ui.pendingQuote, session.ui.mainComposerExpanded, session.ui.zoom,
-			session.ui.learningFilter, Array.from(this.service.repository.unsavedGenerationErrors.get(session.id) ?? []),
+			session.ui.learningFilter, Array.from(this.service.repository.unsavedGenerationErrors.get(session) ?? []),
 			session.ui.windows.map(({ scrollTop: _scroll, ...geometry }) => geometry), session.ui.collapsed] : null);
 		const signature = contentSignature + JSON.stringify([session?.ui.mode, session?.ui.selectedId, session?.ui.mainFocusId]);
 		if (!force && this.signature === signature) return; this.signature = signature;
@@ -577,7 +570,7 @@ export class ReadingWorkspaceView extends ItemView {
 			}
 		}
 		if (node.error) element(article, "p", node.status === "interrupted" ? "reading-usage-unrecorded" : "reading-error", node.error);
-		const saveError = this.service.repository.unsavedGenerationErrors.get(this.sessionId)?.get(node.id);
+		const saveError = this.service.repository.unsavedGenerationErrors.get(this.session!)?.get(node.id);
 		if (saveError) element(article, "p", "reading-error", saveError);
 		const outcome = element(article, "details", "reading-sources reading-outcomes"); outcome.dataset.outcomeNode = node.id;
 		if (node.usage?.length) {

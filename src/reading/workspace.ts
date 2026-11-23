@@ -15,7 +15,7 @@ export class ReadingWorkspaceService {
 	private tasks = new Set<Promise<void>>();
 	private openings: Promise<unknown> = Promise.resolve();
 	generateHandler?: (sessionId: string, nodeId: string) => Promise<void>;
-	stopHandler?: (sessionId: string, nodeId?: string) => void;
+	stopHandler?: (sessionId: string, nodeId: string) => void;
 	disposeHandler?: () => void;
 	constructor(app: App, vaultRoot: string, pluginDirectory: string) {
 		this.repository = new ReadingRepository(new RoutedReadingStorage(new FileReadingStorage(pluginDirectory), new FileReadingStorage(pluginDirectory, "reading-test-sessions"), new FileReadingStorage(pluginDirectory, "code-reading-sessions")));
@@ -180,7 +180,7 @@ export class ReadingWorkspaceService {
 		}
 		await this.generateHandler(sessionId, id);
 	}
-	stop(sessionId: string, id?: string): void { this.stopHandler?.(sessionId, id); }
+	stop(sessionId: string, id: string): void { this.stopHandler?.(sessionId, id); }
 	async dispose(): Promise<void> {
 		this.disposeHandler?.(); await Promise.allSettled([...this.tasks]); await this.repository.flush();
 		await Promise.allSettled([...this.documents.values()].map((document) => document.destroy())); this.documents.clear();

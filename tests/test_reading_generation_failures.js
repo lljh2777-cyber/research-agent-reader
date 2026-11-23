@@ -11,7 +11,7 @@ const { openCodeProject } = loadReading("code-reading/source.ts");
 class Base {}
 const { ReadingWorkspaceView } = loadReading("views/reading-workspace.ts", { electron: {}, obsidian: {
 	ItemView: Base, Component: Base, Modal: Base, SuggestModal: Base, FuzzySuggestModal: Base,
-	Notice: Base, setIcon() {}, MarkdownRenderer: { render: async () => {} },
+	Notice: Base, setIcon() {}, MarkdownRenderer: { render: async (_app, text, el) => { el.textContent = text; } },
 } });
 const paper = { kind: "article", title: "Paper", path: "paper.md", fingerprint: "a".repeat(64) };
 const evidence = { id: "text-1-0", kind: "paper", path: paper.path, label: "Intro", text: "Evidence" };
@@ -54,7 +54,7 @@ function render(f, view = viewFor(f)) {
 		const el = { tag, dataset: {}, appendChild() {}, setAttribute() {} };
 		elements.push(el); return el;
 	} };
-	try { view.renderAnswer({ appendChild() {} }, f.current()); }
+	try { view.renderAnswer({ appendChild() {} }, view.session.nodes.find(node => node.id === f.id)); }
 	finally { global.document = previous; }
 	return { text: elements.map(e => e.textContent).join(" "), retry: elements.find(e => e.title === "重试") };
 }
@@ -177,7 +177,72 @@ test("a background handler that rejects before marking running leaves a retryabl
 	assert.deepEqual(events, [{ nodeId, error: modelError }]);
 });
 
-for (const action of ["stop", "close last view"]) {
+function holdAnswer(f) {
+	let enter, release;
+	const started = new Promise(resolve => { enter = resolve; });
+	const gate = new Promise(resolve => { release = resolve; });
+	const calls = { selection: 0, answer: 0 };
+	f.backend.complete = async request => {
+		if (!JSON.parse(request.prompt).output) { calls.selection++; return '{"action":"ready"}'; }
+		calls.answer++; enter(request.signal);
+		await gate;
+		request.signal.throwIfAborted();
+		return answer;
+	};
+	return { started, release, calls };
+}
+
+test("closing the last view lets the answer finish on disk and reopen without regeneration", async () => {
+	const f = await fixture(), pending = holdAnswer(f);
+	const task = f.service.generate(f.session.id, f.id, "background");
+	const signal = await pending.started;
+	try {
+		await viewFor(f).onClose();
+		assert.equal(signal.aborted, false, "closing the last view aborted the answer");
+	} finally { pending.release(); await task; }
+	const restored = new ReadingRepository(f.storage);
+	await restored.load();
+	assert.equal(restored.get(f.session.id).nodes[0].status, "done");
+	f.service.repository = restored;
+	assert.match(render(f).text, /Answer \[text-1-0\]/);
+	assert.deepEqual(pending.calls, { selection: 1, answer: 1 });
+});
+
+test("two retry clicks on the same failed node run one generation", async () => {
+	const f = await fixture();
+	await assert.rejects(f.service.generate(f.session.id, f.id), e => e === modelError);
+	const { retry } = render(f), pending = holdAnswer(f), tasks = [];
+	const generate = f.service.generate.bind(f.service);
+	f.service.generate = (...args) => { const task = generate(...args); tasks.push(task); return task; };
+	retry.onclick(); retry.onclick();
+	await pending.started;
+	pending.release(); await Promise.all(tasks);
+	assert.equal(tasks.length, 2);
+	assert.deepEqual(pending.calls, { selection: 1, answer: 1 });
+	assert.equal(f.current().status, "done");
+});
+
+test("a reloaded or quarantined session discards warnings from its previous in-memory snapshot", async () => {
+	const f = await fixture();
+	for (const quarantine of [false, true]) {
+		f.storage.fail = true;
+		await assert.rejects(f.service.generate(f.session.id, f.id), /disk full/);
+		assert.match(render(f).text, /终态尚未保存/);
+		f.storage.fail = false;
+		const original = f.storage.files.get(f.session.id);
+		if (quarantine) f.storage.files.set(f.session.id, "{broken");
+		await f.repo.load();
+		if (quarantine) {
+			assert.equal(f.repo.sessions.has(f.session.id), false);
+			assert.equal(f.storage.files.get(f.session.id), "{broken");
+			f.storage.files.set(f.session.id, original);
+			await f.repo.load();
+		}
+		assert.doesNotMatch(render(f).text, /终态尚未保存/);
+	}
+});
+
+for (const action of ["stop", "unload workspace"]) {
 	test(action + " interrupts the node without a failure event", async () => {
 		const f = await fixture(), events = [];
 		let begin, signal;
@@ -191,14 +256,8 @@ for (const action of ["stop", "close last view"]) {
 		await started;
 		try {
 			if (action === "stop") f.service.stop(f.session.id, f.id);
-			else {
-				const first = viewFor(f), last = viewFor(f);
-				first.app.workspace.getLeavesOfType = () => [{ view: first }, { view: last }];
-				await first.onClose();
-				assert.equal(signal.aborted, false, "closing a secondary view cancelled generation");
-				await last.onClose();
-			}
-			assert.ok(signal.aborted, "last view closed with an active request");
+			else await f.service.dispose();
+			assert.ok(signal.aborted);
 		} finally { if (!signal.aborted) f.service.stop(f.session.id, f.id); await task; }
 		assert.equal(f.current().status, "interrupted");
 		assert.deepEqual(events, []);

@@ -81,7 +81,7 @@ export class ReadingRepository {
 	readonly loadIssues = new Map<string, { kind: "unreadable" | "interruption-save"; reason: string }>();
 	get errors(): string[] { return Array.from(this.loadIssues, ([id, issue]) => id + ".json：" + issue.reason); }
 	private queue: Promise<unknown> = Promise.resolve();
-	readonly unsavedGenerationErrors = new Map<string, Map<string, string>>();
+	readonly unsavedGenerationErrors = new WeakMap<ReadingSession, Map<string, string>>();
 	private listeners = new Set<ReadingChangeListener>();
 	constructor(private readonly storage: ReadingStorage) {}
 	subscribe(listener: ReadingChangeListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
@@ -135,9 +135,9 @@ export class ReadingRepository {
 			node.error = reason;
 		}, (draft, saveError) => {
 			const warning = "节点终态尚未保存：" + String(saveError);
-			const warnings = this.unsavedGenerationErrors.get(id) ?? new Map<string, string>();
+			const warnings = this.unsavedGenerationErrors.get(this.get(id)) ?? new Map<string, string>();
 			warnings.set(nodeId, warning);
-			this.unsavedGenerationErrors.set(id, warnings);
+			this.unsavedGenerationErrors.set(draft, warnings);
 			this.sessions.set(id, draft); this.emit(id);
 			throw Object.assign(new Error(reason + "\n" + warning), { cause: error, saveError });
 		});
@@ -153,7 +153,6 @@ export class ReadingRepository {
 			try { await this.storage.write(id, text); }
 			catch (error) { writeFailed?.(draft, error); throw error; }
 			this.loadIssues.delete(id);
-			this.unsavedGenerationErrors.delete(id);
 			this.sessions.set(id, draft); this.emit(id); return result;
 		});
 	}

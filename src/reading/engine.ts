@@ -64,10 +64,7 @@ export class ReadingEngine {
 	constructor(private workspace: ReadingWorkspaceService, private backendFor: (session: ReadingSession) => ReadingBackend,
 		private vaultSearch?: (query: string, context?: { question: string; source: ReadingSession["source"]; signal: AbortSignal }) => Promise<ReadingEvidence[] | { evidence: ReadingEvidence[]; label: string; warnings: string[] }>) {
 		workspace.generateHandler = (sessionId, nodeId) => this.generate(sessionId, nodeId);
-		workspace.stopHandler = (sessionId, nodeId) => {
-			if (nodeId !== undefined) this.active.get(sessionId + ":" + nodeId)?.abort();
-			else for (const [key, controller] of this.active) if (key.startsWith(sessionId + ":")) controller.abort();
-		};
+		workspace.stopHandler = (sessionId, nodeId) => this.active.get(sessionId + ":" + nodeId)?.abort();
 		workspace.disposeHandler = () => { this.active.forEach((controller) => controller.abort()); };
 	}
 	subscribe(listener: (sessionId: string, nodeId: string, text: string) => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
