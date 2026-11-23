@@ -376,7 +376,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private annotationService?: AnnotationService;
 	private annotationHighlights?: AnnotationHighlights;
 	private readonly annotationCliDiscovery = new AnnotationCliDiscoveryService();
-	private readingWorkspace?: ReadingWorkspaceService;
+	private readingWorkspace?: ReadingWorkspaceService | null;
 	private readingAssistant?: ReadingAssistantService;
 	private assistantModal?: ReadingAssistantModal;
 	private readingEngine?: ReadingEngine;
@@ -632,6 +632,9 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async onunload(): Promise<void> {
+		const readingWorkspace = this.readingWorkspace;
+		this.readingWorkspace = null;
+		readingWorkspace?.close();
 		const queryCompletion = this.queryTasks.shutdown();
 		this.clipperChanges.stop();
 		await this.annotationCliDiscovery.dispose();
@@ -652,7 +655,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.curationService?.dispose();
 		this.learningLibrary?.dispose();
 		this.knowledgeService?.dispose();
-		await this.readingWorkspace?.dispose();
+		await readingWorkspace?.dispose();
 		this.annotationPopover?.close();
 		await this.annotationService?.dispose();
 		this.excerptBrowser?.dispose();
@@ -3872,6 +3875,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	getReadingWorkspace(): ReadingWorkspaceService {
+		if (this.readingWorkspace === null) throw new Error("阅读工作区已关闭");
 		if (!this.readingWorkspace) {
 			const adapter = this.app.vault.adapter;
 			if (!(adapter instanceof FileSystemAdapter)) throw new Error("交互深读需要桌面文件系统");

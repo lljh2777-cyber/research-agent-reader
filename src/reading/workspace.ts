@@ -11,8 +11,11 @@ export class ReadingWorkspaceService {
 	readonly repository: ReadingRepository;
 	readonly loader: ReadingDocumentLoader;
 	private documents = new Map<string, ReadingDocument>();
+	private readonly loadingDocuments = new Map<string, Promise<ReadingDocument>>();
+	private closingError?: Error;
+	get closeReason(): Error | undefined { return this.closingError; }
 	private initialization: Promise<void> | null = null;
-	private tasks = new Set<Promise<void>>();
+	private tasks = new Set<Promise<unknown>>();
 	private openings: Promise<unknown> = Promise.resolve();
 	generateHandler?: (sessionId: string, nodeId: string) => Promise<void>;
 	stopHandler?: (sessionId: string, nodeId: string) => void;
@@ -22,15 +25,42 @@ export class ReadingWorkspaceService {
 		this.loader = new ReadingDocumentLoader(app, vaultRoot);
 	}
 	async ready(): Promise<void> { if (!this.initialization) this.initialization = this.repository.load(); return this.initialization; }
-	async create(kind: ReadingSource["kind"], filename: string, backend: string, model: string): Promise<string> {
-		await this.ready(); const document = await this.loader.open(kind, filename);
-		const session = createReadingSession(document.source, backend, model);
-		try { await this.repository.add(session); this.documents.set(session.id, document); return session.id; }
-		catch (error) { await document.destroy(); throw error; }
+	private assertOpen(): void {
+		if (this.closingError) throw this.closingError;
 	}
-	open(kind: ReadingSource["kind"], filename: string, backend: string, model: string, forceNew = false): Promise<{ id: string; created: boolean }> {
+	private async track<T>(operation: Promise<T>): Promise<T> {
+		this.tasks.add(operation);
+		try { return await operation; }
+		finally { this.tasks.delete(operation); }
+	}
+	private async openDocument(kind: ReadingSource["kind"], filename: string): Promise<ReadingDocument> {
+		this.assertOpen();
+		const document = await this.loader.open(kind, filename);
+		if (this.closingError) {
+			await document.destroy();
+			throw this.closingError;
+		}
+		return document;
+	}
+	async create(kind: ReadingSource["kind"], filename: string, backend: string, model: string): Promise<string> {
+		this.assertOpen();
+		await this.ready();
+		return this.track(this.openDocument(kind, filename).then(document =>
+			this.saveNewSession(document, createReadingSession(document.source, backend, model))));
+	}
+	private async saveNewSession(document: ReadingDocument, session: ReadingSession): Promise<string> {
+		try {
+			this.assertOpen();
+			await this.repository.add(session);
+			this.assertOpen();
+			this.documents.set(session.id, document);
+			return session.id;
+		} catch (error) { await document.destroy(); throw error; }
+	}
+	async open(kind: ReadingSource["kind"], filename: string, backend: string, model: string, forceNew = false): Promise<{ id: string; created: boolean }> {
+		this.assertOpen();
 		const operation = this.openings.then(async () => {
-			await this.ready(); const document = await this.loader.open(kind, filename);
+			await this.ready(); const document = await this.openDocument(kind, filename);
 			const sessions = [...this.repository.sessions.values()];
 			const samePaper = kind === "code" ? [] : sessions.filter(s => !s.demo && readingCategory(s) === "reading" &&
 				s.source.kind === document.source.kind && s.source.path === document.source.path);
@@ -40,34 +70,54 @@ export class ReadingWorkspaceService {
 			const existing = sameVersion[0] || (!forceNew || kind !== "code" ? matchingReading(sessions, document.source) : undefined) || samePaper[0];
 			if (existing) {
 				await document.destroy();
+				this.assertOpen();
 				if (kind !== "code" && existing.source.fingerprint === document.source.fingerprint && (!existing.paperSpace || existing.archived)) await this.repository.transact(existing.id, s => { s.paperSpace = true; s.archived = false; });
 				return { id: existing.id, created: false };
 			}
 			const session = createReadingSession(document.source, backend, model);
 			if (kind !== "code") session.paperSpace = true;
-			try { await this.repository.add(session); this.documents.set(session.id, document); return { id: session.id, created: true }; }
-			catch (error) { await document.destroy(); throw error; }
+			return { id: await this.saveNewSession(document, session), created: true };
 		}); this.openings = operation.catch(() => undefined); return operation;
 	}
-	async document(sessionId: string): Promise<ReadingDocument> {
-		const session = this.repository.get(sessionId);
-		if (session.demo) throw new Error("演示会话不读取论文或调用模型");
-		let loaded = this.documents.get(sessionId);
-		if (!loaded) {
-			loaded = await this.loader.open(session.source.kind, session.source.path);
-			if (loaded.source.fingerprint !== session.source.fingerprint) { await loaded.destroy(); throw new Error("来源版本已变化，历史回答已保留；请核对原文版本后继续"); }
-			this.documents.set(sessionId, loaded);
-		}
-		return loaded;
+	document(sessionId: string): Promise<ReadingDocument> {
+		let session: ReadingSession;
+		try {
+			this.assertOpen();
+			session = this.repository.get(sessionId);
+			if (session.demo) throw new Error("演示会话不读取论文或调用模型");
+		} catch (error) { return Promise.reject(error); }
+		const cached = this.documents.get(sessionId);
+		if (cached) return Promise.resolve(cached);
+		const pending = this.loadingDocuments.get(sessionId);
+		if (pending) return pending;
+		const loading = this.loadSessionDocument(session).finally(() => this.loadingDocuments.delete(sessionId));
+		this.loadingDocuments.set(sessionId, loading);
+		return loading;
+	}
+	private async loadSessionDocument(session: ReadingSession): Promise<ReadingDocument> {
+		const { source } = session;
+		const loaded = await this.openDocument(source.kind, source.path);
+		try {
+			this.assertOpen();
+			if (loaded.source.fingerprint !== source.fingerprint) throw new Error("来源版本已变化，历史回答已保留；请核对原文版本后继续");
+			this.documents.set(session.id, loaded);
+			return loaded;
+		} catch (error) { await loaded.destroy(); throw error; }
 	}
 	async relocate(sessionId: string, filename: string): Promise<void> {
+		this.assertOpen();
 		const original = structuredClone(this.repository.get(sessionId));
 		if (original.demo) throw new Error("演示会话无需重新定位原文");
-		const document = await this.loader.open(original.source.kind, filename);
+		return this.track(this.relocateDocument(original, filename));
+	}
+	private async relocateDocument(original: ReadingSession, filename: string): Promise<void> {
+		const sessionId = original.id;
+		const document = await this.openDocument(original.source.kind, filename);
 		try {
 			if (document.source.fingerprint !== original.source.fingerprint) throw new Error("文件内容不同，请创建新会话，旧证据不能重新绑定");
 			await document.verify();
 			await this.repository.transact(sessionId, session => {
+				this.assertOpen();
 				if (session.source.path !== original.source.path || session.source.fingerprint !== original.source.fingerprint || session.nodes.some(n => n.status === "running" || n.status === "pending")) throw new Error("来源已变化或正在生成，请稍后重新定位");
 				for (const node of session.nodes) for (const e of node.evidence.filter(e => e.kind === "paper" || e.kind === "code")) {
 					const match = document.evidence.find(item => item.id === e.id); if (!match) throw new Error("新位置无法匹配既有证据"); e.path = match.path; e.asset = match.asset;
@@ -76,17 +126,19 @@ export class ReadingWorkspaceService {
 				session.source.path = document.source.path;
 				if (document.source.code) session.source.code = document.source.code;
 			});
+			this.assertOpen();
 		} catch (error) { await document.destroy(); throw error; }
 		const previous = this.documents.get(sessionId); this.documents.set(sessionId, document); await previous?.destroy();
 	}
 	async correct(sessionId: string, originalId: string, reason: string, quote?: ReadingQuote): Promise<string> {
+		this.assertOpen();
 		if (!reason.trim() || reason.length > 4000) throw new Error("请用 4000 字符以内描述要核对的问题"); let id = "";
 		await this.repository.transact(sessionId, session => {
 			const original = readingNode(session, originalId); const branch = addReadingBranch(session, original.id);
 			const node = addReadingNode(session, branch.id, "核对并重新解释：" + reason.trim(), quote);
 			node.correction = { of: originalId, originalHash: answerHash(original.content), reason: reason.trim() }; id = node.id;
 		});
-		void this.generate(sessionId, id, "background"); return id;
+		await this.generatePrepared(sessionId, id, "background"); return id;
 	}
 	async demo(purpose: "demo" | "test" = "demo"): Promise<string> {
 		await this.ready();
@@ -100,6 +152,7 @@ export class ReadingWorkspaceService {
 		await this.repository.add(session); return session.id;
 	}
 	async advance(sessionId: string, tracking?: { expectedParentId: string | undefined; prepared(nodeId: string): Promise<void> }): Promise<void> {
+		this.assertOpen();
 		let id = "";
 		await this.repository.transact(sessionId, (session) => {
 			if (tracking && session.mainIds[session.mainIds.length - 1] !== tracking.expectedParentId) throw new Error("主线起点已变化，请重新准备操作");
@@ -107,7 +160,7 @@ export class ReadingWorkspaceService {
 		});
 		try { await tracking?.prepared(id); }
 		catch (error) { await this.repository.transact(sessionId, session => { const node = readingNode(session, id); node.status = "failed"; node.error = "助手执行关联保存失败，尚未调用模型，可在此节点重试：" + String(error); }); throw error; }
-		await this.generate(sessionId, id);
+		await this.generatePrepared(sessionId, id, "foreground");
 	}
 	async attachAnnotation(path: string, origin: AnnotationOrigin, signal: AbortSignal, profileId?: string) {
 		const kind = /^papers\/[^/]+--jats--[^/]+\/article\.md$/.test(path) ? "structured" : "article";
@@ -130,10 +183,11 @@ export class ReadingWorkspaceService {
 			session.ui.hideMap = false;
 			session.ui.selectedId = nodeId;
 		});
-		if (created) void this.generate(id, nodeId, "background");
+		if (created) await this.generatePrepared(id, nodeId, "background");
 		return { sessionId: id, nodeId };
 	}
 	async ask(sessionId: string, parentId: string, question: string, branchId?: string, quote?: ReadingQuote, requestWeb = false, target?: ReadingNode["paperTarget"]): Promise<string> {
+		this.assertOpen();
 		if (!question.trim()) throw new Error("请输入问题");
 		let id = "";
 		await this.repository.transact(sessionId, (session) => {
@@ -144,15 +198,23 @@ export class ReadingWorkspaceService {
 			if (target) readingNode(session, id).paperTarget = target;
 			if (requestWeb) readingNode(session, id).requestWeb = true;
 		});
-		void this.generate(sessionId, id, "background");
+		await this.generatePrepared(sessionId, id, "background");
 		return id;
 	}
-	generate(sessionId: string, id: string, delivery: "foreground" | "background" = "foreground"): Promise<void> {
+	private async generatePrepared(sessionId: string, id: string, delivery: "foreground" | "background"): Promise<void> {
+		// The node may already be on disk when unloading wins the race with preparation.
+		if (this.closingError) {
+			await this.repository.saveGenerationFailure(sessionId, id, true, this.closingError);
+			throw this.closingError;
+		}
+		const task = this.generate(sessionId, id, delivery);
+		if (delivery === "foreground") await task;
+	}
+	async generate(sessionId: string, id: string, delivery: "foreground" | "background" = "foreground"): Promise<void> {
+		this.assertOpen();
 		const generation = this.runGeneration(sessionId, id);
 		const reported = delivery === "background" ? generation.catch(error => this.repository.reportGenerationError(sessionId, id, error)) : generation;
-		const task = reported.finally(() => this.tasks.delete(task));
-		this.tasks.add(task);
-		return task;
+		return this.track(reported);
 	}
 	/** start/end are relative to the catalog block. The host binds the immutable quote. */
 	async askCode(sessionId: string, parentId: string, evidenceId: string, start: number, end: number, question: string): Promise<string> {
@@ -166,7 +228,7 @@ export class ReadingWorkspaceService {
 			const node = addReadingNode(session, addReadingBranch(session, parentId).id, question.trim());
 			node.codeQuote = quote; node.evidence = [structuredClone(evidence)]; id = node.id;
 		});
-		void this.generate(sessionId, id, "background"); return id;
+		await this.generatePrepared(sessionId, id, "background"); return id;
 	}
 	private async runGeneration(sessionId: string, id: string): Promise<void> {
 		if (this.repository.get(sessionId).demo) {
@@ -181,8 +243,14 @@ export class ReadingWorkspaceService {
 		await this.generateHandler(sessionId, id);
 	}
 	stop(sessionId: string, id: string): void { this.stopHandler?.(sessionId, id); }
+	close(): void {
+		this.closingError ??= new Error("阅读工作区已关闭");
+	}
 	async dispose(): Promise<void> {
-		this.disposeHandler?.(); await Promise.allSettled([...this.tasks]); await this.repository.flush();
+		this.close();
+		this.disposeHandler?.();
+		await Promise.allSettled([this.openings, ...this.loadingDocuments.values(), ...this.tasks]);
+		await this.repository.flush();
 		await Promise.allSettled([...this.documents.values()].map((document) => document.destroy())); this.documents.clear();
 	}
 }
