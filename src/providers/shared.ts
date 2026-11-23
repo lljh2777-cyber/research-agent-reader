@@ -45,6 +45,14 @@ export function providerErrorMessage(payload: unknown, fallback = ""): string {
 	return String(candidates.find((value) => typeof value === "string" && value.trim()) || fallback);
 }
 
+export function outputLimitReached(raw?: Record<string, unknown>): boolean {
+	const choices = Array.isArray(raw?.choices) ? raw.choices : [];
+	return raw?.stop_reason === "max_tokens" || choices.some(choice => asRecord(choice).finish_reason === "length")
+		|| raw?.status === "incomplete" && asRecord(raw.incomplete_details).reason === "max_output_tokens";
+}
+
+export class OutputLimitError extends Error {}
+
 export function extractOpenAIText(payload: unknown): string {
 	const source = asRecord(payload);
 	if (typeof source.output_text === "string") return source.output_text;

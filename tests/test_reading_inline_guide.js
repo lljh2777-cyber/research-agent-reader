@@ -20,6 +20,16 @@ assert.equal(links[2].block.kind,"table");
 assert.deepEqual(index.forTurn({...main,evidence:[{...e,start:e.start+1}]},["paper.md"]),[]);
 assert.deepEqual(index.forTurn(main,["another.md"]),[]);
 
+// Cell places the numbered caption after a blank-alt image, without a colon.
+const cell = "![](<images/a.jpg>)\n\nFigure 1 Main results\n\n(B) Measurements\n\n![](<images/b.jpg>)\n\nFigure S1 Additional results";
+const cellIndex = new GuideEvidenceIndex({text:cell,blocks:parseBilingualMarkdown(cell).blocks});
+for (const [asset,number] of [["a","图 1"],["b","图 S1"]]) {
+	const tag = "![](<images/" + asset + ".jpg>)";
+	const hit = cellIndex.forTurn({...main, evidence:[{...e,label:"Results",text:tag,start:cell.indexOf(tag),asset:asset+".jpg"}]},["paper.md"]);
+	assert.equal(hit[0].figureNumber,number);
+	assert.equal(cell.slice(hit[0].start,hit[0].end).trim(),tag);
+}
+
 const session = {mainIds:["m"],nodes:[main,...["question","annotation","nested"].map(id=>({id,branchId:id,content:"",question:id}))],
 branches:[
 	{id:"question",parentNodeId:"m",nodeIds:["question"]},

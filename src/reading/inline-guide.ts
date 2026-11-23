@@ -5,7 +5,7 @@ import { readingTrail } from "./navigation";
 
 export const MAIN_GUIDE = "paper-guide-main";
 export interface GuideTarget {
-	id: string; label: string; kind: "figure" | "table" | "text"; start: number; end: number; block: BilingualBlock;
+	id: string; label: string; figureNumber?: string; kind: "figure" | "table" | "text"; start: number; end: number; block: BilingualBlock;
 }
 export function guideParent(session: ReadingSession, id: string): ReadingNode | undefined {
 	const trail = readingTrail(session, id);
@@ -19,14 +19,26 @@ export function conclusionTitle(node: ReadingNode): string {
 
 /** Resolve only saved paper evidence against the exact English text currently displayed. */
 export class GuideEvidenceIndex {
+	private figureNumbers = new Map<string, string>();
 	private images = new Map<string, BilingualBlock | null>();
 	private captionImages = new Map<string,BilingualBlock>();
 	private captions = new Map<string, BilingualBlock | null>();
 	constructor(private file: BilingualFile) {
-		for (const b of file.blocks.filter(b => b.kind === "image")) {
+		for (const [i, b] of file.blocks.entries()) {
+			if (b.kind !== "image") continue;
 			const m = markdownImagePattern().exec(file.text.slice(b.start, b.end));
 			const path = m && (m[2] || m[3] || m[4]);
 			if (path) this.images.set(path, this.images.has(path) ? null : b);
+			const next = file.blocks[i + 1];
+			const caption = next && (next.kind === "paragraph" || next.kind === "heading") ? file.text.slice(next.start, next.end) : "";
+			for (const title of [m?.[1], caption]) {
+				const number = /^\s*[#*_\s]*(?:(Extended Data|Supplementary)\s+)?(?:Fig(?:ure)?\.?|图)\s*(S?\d+[a-z]?)\b/i.exec(title || "");
+				if (number) {
+					const prefix = !number[1] ? "" : /^extended/i.test(number[1]) ? "扩展数据" : "补充";
+					this.figureNumbers.set(b.id, prefix + "图 " + number[2]);
+					break;
+				}
+			}
 		}
 		for (const [i,b] of file.blocks.entries()) {
 			const raw = file.text.slice(b.start,b.end);
@@ -63,7 +75,9 @@ export class GuideEvidenceIndex {
 				const alt = markdownImagePattern().exec(text.slice(b.start,b.end))?.[1];
 				if (alt) label = alt;
 			}
-			if (!found.has(id)) found.set(id, { id, label, kind, start, end, block: b });
+			const figureNumber = kind === "figure" ? this.figureNumbers.get(b.id) : undefined;
+			if (figureNumber && !label.includes(figureNumber)) label = figureNumber + " · " + label;
+			if (!found.has(id)) found.set(id, { id, label, kind, start, end, block: b, figureNumber });
 		};
 		const citationOrder = (id: string) => {
 			const index = node.content.indexOf("[" + id + "]");

@@ -1,3 +1,4 @@
+import { renderReadingCitations } from "./reading-citations";
 import { Component, ItemView, MarkdownRenderer, Menu, Modal, Notice, setIcon, type WorkspaceLeaf, type EventRef } from "obsidian";
 import { setTimeout, clearTimeout } from "node:timers";
 import type AgentDashboardPlugin from "../plugin";
@@ -588,18 +589,11 @@ export class ReadingWorkspaceView extends ItemView {
 		});
 	}
 	private renderCitations(content: HTMLElement, node: ReadingNode): void {
-		const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT); const texts: Text[] = []; let current: Node | null;
-		while ((current = walker.nextNode())) if (!current.parentElement?.closest("a, button, pre, .math, .math-inline, .math-block")) texts.push(current as Text);
-		for (const text of texts) {
-			const matches = readingCitations(text.data, node.evidence.map((e) => e.id), node.content); if (!matches.length) continue;
-			const fragment = document.createDocumentFragment(); let offset = 0;
-			for (const match of matches) {
-				fragment.append(text.data.slice(offset, match.start)); const group = document.createElement("span"); group.className = "reading-citation"; group.dataset.readingCitation = match.raw;
-				for (const id of match.ids) { const index = node.evidence.findIndex((e) => e.id === id); button(group, String(index + 1), () => this.showEvidence(node.id, id), "依据 " + (index + 1) + " · " + node.evidence[index].label); }
-				fragment.append(group); offset = match.end;
-			}
-			fragment.append(text.data.slice(offset)); text.parentElement?.closest("code")?.classList.add("reading-citation-code"); text.replaceWith(fragment);
-		}
+		renderReadingCitations(content, node.evidence.map(e => e.id), node.content, (group, id) => {
+			const index = node.evidence.findIndex(e => e.id === id);
+			button(group, String(index + 1), () => this.showEvidence(node.id, id), "依据 " + (index + 1) + " · " + node.evidence[index].label);
+			return true;
+		});
 	}
 	private hideSelectionActions(): void { this.selectionBar?.remove(); this.selectionBar = undefined; }
 	private showSelectionActions(node: ReadingNode, content: HTMLElement, excerptAnswer?: AnswerSnapshot): void {

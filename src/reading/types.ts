@@ -149,6 +149,7 @@ export interface ReadingResult {
 }
 export interface ReadingImage { evidenceId: string; dataUrl: string }
 export interface ReadingBackendRequest {
+	rejectTruncated?: boolean;
 	webSearch?: import("../types/contracts").NativeWebSearchProtocol;
 	disableReasoning?: boolean;
 	schema?: Record<string, unknown>;

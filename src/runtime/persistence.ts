@@ -1,3 +1,6 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { DashboardSettings } from "./settings";
 import { decodeSavedPdfRef } from "../papers/saved-pdf";
 import type {
@@ -229,6 +232,41 @@ export function createPersistenceSnapshot(state: DashboardPersistenceState): Das
 	})) as DashboardStoredData;
 }
 
+/** Leave the last complete configuration readable until its replacement is durable. */
+export function desktopSettingsFile(directory: string) {
+	const filename = path.join(directory, "data.json");
+	let readyToSave = false;
+	return {
+		async load(): Promise<unknown> {
+			try {
+				const saved: unknown = JSON.parse(await fs.readFile(filename, "utf8"));
+				if (!saved || typeof saved !== "object" || Array.isArray(saved)) throw new Error("无效的设置格式");
+				readyToSave = true;
+				return saved;
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+					readyToSave = true;
+					return null;
+				}
+				readyToSave = false;
+				throw new Error("Reader 无法读取已有设置，已保留原文件。");
+			}
+		},
+		async save(data: unknown): Promise<void> {
+			if (!readyToSave) throw new Error("Reader 尚未读入设置。");
+			const pending = path.join(directory, ".data-" + randomUUID() + ".pending");
+			const handle = await fs.open(pending, "wx", 0o600);
+			try {
+				await handle.writeFile(JSON.stringify(data, null, 2), "utf8");
+				await handle.sync();
+			} finally {
+				await handle.close();
+			}
+			await fs.rename(pending, filename);
+		},
+	};
+}
+
 export class DashboardPersistence {
 	private saveQueue: Promise<void> = Promise.resolve();
 	private saveTimer: number | null = null;
@@ -269,7 +307,7 @@ export class DashboardPersistence {
 			this.saveTimer = null;
 		}
 		const waiters = this.saveWaiters.splice(0);
-		if (!waiters.length) return;
+		if (!waiters.length) return this.saveQueue;
 		try {
 			await this.save();
 			waiters.forEach(({ resolve }) => resolve());

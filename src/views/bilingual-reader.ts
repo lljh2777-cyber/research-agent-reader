@@ -30,8 +30,17 @@ export class BilingualReader extends Component {
 	private readonly programmatic = new Set<BilingualLanguage>();
 	private frame = 0;
 	private resizeFrame = 0;
-	private readyFrame = 0;
+	private checkLayout?: () => void;
 	private restoring = true;
+	private onLayoutReady?: () => void;
+	private navigated = false;
+	restoreDiscussion(callback: () => void): void {
+		if (this.navigated) return;
+		if (this.restoring) {
+			this.onLayoutReady = callback;
+			this.checkLayout?.();
+		} else callback();
+	}
 	private linkedInput?: HTMLInputElement;
 	private paragraphHover?: BilingualParagraphHover;
 	private message?: HTMLElement;
@@ -147,38 +156,35 @@ export class BilingualReader extends Component {
 		applyRatio();
 		for (const language of ["en", "zh-CN"] as const) this.restore(language);
 		this.options.discussions?.mountPaperDiscussions?.(this, toolbar);
+		// Electron can suspend animation frames while reopening a vault. Restore as soon as the panes have measurable layout.
+		const ready = () => {
+			if (!this.restoring || signal.aborted || [...this.panes.values()].some(p =>
+				!p.article.isConnected || p.scroller.clientHeight <= 0 || p.article.getBoundingClientRect().height <= 0)) return;
+			for (const language of ["en", "zh-CN"] as const) this.restore(language);
+			this.restoring = false;
+			if (outlineLeaf && outlineButton && !this.invalidated) {
+				const reader = this;
+				detachOutline = bindSplitOutline(outlineLeaf, {
+					get active() { return reader.state.active; },
+					headings,
+					jump: (language, id) => { if (language !== "markdown") this.jumpToHeading(language, id, headings); },
+				}, signal);
+				outlineButton.disabled = false;
+			}
+			this.publish();
+			if (!this.navigated) this.onLayoutReady?.();
+			this.onLayoutReady = undefined;
+		};
+		this.checkLayout = ready;
 		const resize = new ResizeObserver(() => {
 			this.paragraphHover?.clear();
+			if (this.restoring) { ready(); return; }
 			if (this.resizeFrame) cancelAnimationFrame(this.resizeFrame);
 			this.resizeFrame = requestAnimationFrame(() => { this.resizeFrame = 0; if (signal.aborted) return; for (const language of ["en", "zh-CN"] as const) this.restore(language); });
 		});
 		for (const pane of this.panes.values()) { resize.observe(pane.article); resize.observe(pane.scroller); }
-		// Obsidian requests view state while rendering/visibility is still settling.
-		// Keep saved anchors until the mounted layout can actually restore them.
-		const ready = (): void => {
-			if (signal.aborted) return;
-			if ([...this.panes.values()].some(p => !p.article.isConnected || p.scroller.clientHeight <= 0 || p.article.getBoundingClientRect().height <= 0)) {
-				this.readyFrame = requestAnimationFrame(ready);
-				return;
-			}
-			for (const language of ["en", "zh-CN"] as const) this.restore(language);
-			this.readyFrame = requestAnimationFrame(() => {
-				if (signal.aborted) return;
-				this.restoring = false;
-				if (outlineLeaf && outlineButton && !this.invalidated) {
-					const reader = this;
-					detachOutline = bindSplitOutline(outlineLeaf, {
-						get active() { return reader.state.active; },
-						headings,
-						jump: (language, id) => { if (language !== "markdown") this.jumpToHeading(language, id, headings); },
-					}, signal);
-					outlineButton.disabled = false;
-				}
-				this.publish();
-			});
-		};
-		this.readyFrame = requestAnimationFrame(ready);
-		signal.addEventListener("abort", () => { resize.disconnect(); cancelAnimationFrame(this.frame); cancelAnimationFrame(this.resizeFrame); cancelAnimationFrame(this.readyFrame); }, { once: true });
+		ready();
+		signal.addEventListener("abort", () => { resize.disconnect(); cancelAnimationFrame(this.frame); cancelAnimationFrame(this.resizeFrame); this.onLayoutReady = undefined; this.checkLayout = undefined; }, { once: true });
 		const changed = (path: string): void => {
 			if (signal.aborted) return;
 			if (![doc.files.en.path, doc.files["zh-CN"].path, doc.metadataPath].includes(path)) return;
@@ -206,6 +212,7 @@ export class BilingualReader extends Component {
 	}
 	get stale(): boolean { return this.invalidated || this.options.signal.aborted; }
 	private activate(language: BilingualLanguage): void {
+		this.navigated = true;
 		const changed = this.state.active !== language;
 		this.state.active = language;
 		this.programmatic.delete(language);

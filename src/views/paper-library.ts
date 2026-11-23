@@ -156,8 +156,15 @@ export class PaperLibraryView extends ItemView {
 		if (this.message) this.status.createDiv({ text: this.message });
 		if (data?.readIssues.length) {
 			const issues = this.status.createEl("details"); issues.createEl("summary", { text: `查看 ${data.readIssues.length} 条读取提示` });
-			for (const issue of data.readIssues.slice(0, 100)) issues.createEl("p", { text: `${issue.path}：${issue.message}` });
-			if (data.readIssues.length > 100) issues.createEl("p", { text: "仅展示前 100 条提示。请按记录检查其余缺口。" });
+			const list = issues.createDiv();
+			let shown = 0;
+			const more = this.button(issues, "显示更多读取提示", showIssues);
+			function showIssues() {
+				for (const issue of data!.readIssues.slice(shown, shown + 100)) list.createEl("p", { text: issue.path + "：" + issue.message });
+				shown += 100;
+				more.hidden = shown >= data!.readIssues.length;
+			}
+			showIssues();
 		}
 		const papers = filterLibrary(data?.papers || [], this.query, this.filter);
 		this.summary.setText(`${papers.length} 条匹配记录`); this.list.empty();

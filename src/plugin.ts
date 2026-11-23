@@ -113,6 +113,7 @@ import {
 import { DashboardLifecycleState } from "./runtime/lifecycle-state";
 import {
 	DashboardPersistence,
+	desktopSettingsFile,
 	hasPlaintextCredentialFields,
 	normalizeTaskRunArtifacts,
 	normalizeStoredTaskRuns,
@@ -434,9 +435,11 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	private getPersistence(): DashboardPersistence {
 		if (this.persistence) return this.persistence;
+		const storage = this.manifest?.dir && this.app?.vault?.adapter instanceof FileSystemAdapter
+			? desktopSettingsFile(this.readingPluginDirectory())
+			: { load: () => this.loadData(), save: (data: unknown) => this.saveData(data) };
 		this.persistence = new DashboardPersistence({
-			load: () => this.loadData(),
-			save: (data) => this.saveData(data),
+			...storage,
 			getState: () => ({
 				settings: this.settings,
 				taskRuns: this.taskRuns,

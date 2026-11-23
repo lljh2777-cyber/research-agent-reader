@@ -37,20 +37,35 @@ async function productionEntries() {
  Object.assign(plugin,{app:{vault:{adapter:new FileSystemAdapter()}},manifest:{},settings:{...settings,providerProfiles:profiles},
   openPaperBody:async()=>false,activateReadingWorkspace:async()=>{},createReadingBackend:()=>{audit.cliConstructions++;throw Error("unexpected CLI backend");}});
  const invoked=[];
- let timeout=false;
+ let timeout=false, planningResponses=0;
  plugin.createLLMProvider = profile=>fakeProvider(p=>{
   invoked.push({model:profile.model,stage:p.action || (p.materials?"read":"answer")});
   if(timeout)throw Error("API timeout");
+  if(p.action==="规划全文路线")planningResponses++;
   if(p.action==="规划全文路线")return {modules:[{title:"Design",question:"Design?",evidenceIds:[design.id]},{title:"Results",question:"Results?",evidenceIds:[results.id]}]};
   if(p.materials)return {action:"ready"};
   const id=p.evidence[0].id;
   return {title:"Answer",content:"Observed ["+id+"]",evidenceIds:[id],mainSummary:"Study design"};
  });
+ const createProvider=plugin.createLLMProvider;
+ plugin.createLLMProvider=profile=>{
+  const provider=createProvider(profile), complete=provider.complete;
+  provider.complete=async payload=>{
+   const response=await complete(payload);
+   if(planningResponses===1 && JSON.parse(response.text).modules){
+    response.text='{"modules":[';
+    response.raw={status:"incomplete",incomplete_details:{reason:"max_output_tokens"}};
+   }
+   return response;
+  };
+  return provider;
+ };
  const workspace=plugin.getReadingWorkspace();
  workspace.repository=new ReadingRepository(memoryStorage());
  workspace.loader.open=async()=>({...document,destroy:async()=>{}});
  await plugin.startClippedReading(source.path);
  const session=[...workspace.repository.sessions.values()][0];
+ assert.equal(planningResponses,2);assert.equal(session.nodes.length,1);
  assert.equal(session.mainIds.length,1);assert.equal(session.nodes[0].status,"done");
  const anchor={id:"fixture-note",path:source.path,digest:source.fingerprint,at:0,chinese:false,selected:design.text,englishStart:0,englishDigest:source.fingerprint,question:"Design?",note:"",quotes:[]};
  const annotation=await workspace.attachAnnotation(source.path,anchor,new AbortController().signal,"B");await Promise.all([...workspace.tasks]);

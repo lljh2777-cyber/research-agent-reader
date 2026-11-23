@@ -1,3 +1,4 @@
+import { renderReadingCitations } from "./reading-citations";
 import { Component, MarkdownRenderer, Notice } from "obsidian";
 import { type AnnotationService, readAnnotationRecords } from "../annotations/annotation-service";
 import type { AnnotationRecord, AnnotationSelection } from "../annotations/types";
@@ -78,7 +79,7 @@ export class InlinePaperReading {
 	private get signal() { return this.reader.options.signal; }
 	private get session() {
 		const digest = this.doc.files.en.revision.digest;
-		return [...this.workspace.repository.sessions.values()].filter(s => !s.demo && !s.archived && s.source.path === this.key &&
+		return [...this.workspace.repository.sessions.values()].filter(s => !s.demo && s.purpose !== "test" && !s.archived && s.source.path === this.key &&
 			(s.source.fingerprint === digest || (/^papers\/[^/]+\/article\.md$/.test(this.key) && s.branches.some(b => b.annotation?.englishDigest === digest))))
 			.sort((a,b) => Number(!!b.paperSpace)-Number(!!a.paperSpace) || b.updatedAt.localeCompare(a.updatedAt))[0];
 	}
@@ -124,7 +125,14 @@ export class InlinePaperReading {
 		const changed = (f: {path:string}) => { if(f.path.startsWith("wiki/annotations/")) {window.clearTimeout(timer); timer=window.setTimeout(reload,200);} };
 		const refs = [app.vault.on("create",changed),app.vault.on("modify",changed),app.vault.on("delete",changed)];
 		this.signal.addEventListener("abort",()=>{unsub();window.clearTimeout(timer);refs.forEach(r=>app.vault.offref(r));},{once:true});
-		this.render(true); reload();
+		this.render(true);
+		await loadNotes();
+		if (current?.ui.inlineFocusId && this.selected === current.ui.inlineFocusId) {
+			const resumeId = this.selected;
+			this.reader.restoreDiscussion(() => {
+				if (this.selected === resumeId && !this.inspecting && !this.composer && !this.reader.stale && this.turns.has(resumeId)) this.reveal(current.id, resumeId);
+			});
+		}
 	}
 	contains(el: Element) { return [...this.reader.panes.values()].some(p=>p.article.contains(el)); }
 	private place(p: Passage | undefined): Place | undefined {
@@ -249,6 +257,7 @@ export class InlinePaperReading {
 			const turn = this.turns.get(nodeId);
 			if (this.inspecting || this.selected !== nodeId || this.reader.stale || !turn?.isConnected) return;
 			if (place) this.reader.focusDiscussion(place.passage.lang, turn);
+			else turn.scrollIntoView({block:"nearest"});
 		};
 		this.turns.get(nodeId)?.focus({preventScroll: true});
 		focusTurn();
@@ -343,10 +352,22 @@ export class InlinePaperReading {
 			if (this.selected === id) heading.classList.add("is-current-turn");
 			this.turns.set(id, heading);
 			if(n.status==="done") {
-				this.answerLayouts.push(MarkdownRenderer.render(this.reader.options.app, safeReadingMarkdown(n.content,n.evidence.map(e=>e.id)), body.createDiv(), s.source.path, this.renderer)
+				const links = this.guideLinks.get(id) || this.guideIndex.forTurn(n,this.paths).filter(link=>this.evidencePlace(link));
+				const answer = body.createDiv();
+				const ids = n.evidence.map(e => e.id);
+				this.answerLayouts.push(MarkdownRenderer.render(this.reader.options.app, safeReadingMarkdown(n.content,ids), answer, s.source.path, this.renderer)
+					.then(() => renderReadingCitations(answer, ids, n.content, (group, evidenceId) => {
+						const e = n.evidence.find(item => item.id === evidenceId)!;
+						if (e.kind !== "paper" || e.start === undefined || !this.paths.includes(e.path) || !this.doc.files.en.text.startsWith(e.text,e.start)) return false;
+						const link = links.find(l => l.start >= e.start! && l.start < e.start! + e.text.length && (e.asset ? l.kind === "figure" && l.block.kind === "image" : l.kind !== "figure"));
+						if (!link) return false;
+						const label = link.figureNumber || (link.kind === "figure" ? "原图" : link.kind === "table" ? "表格" : "原文");
+						const control = button(group, label, () => this.showEvidence(id,link));
+						control.title = link.label;
+						return true;
+					}))
 					.catch(error => { if (!this.signal.aborted) new Notice(String(error)); }));
 				{
-					const links = this.guideLinks.get(id) || this.guideIndex.forTurn(n,this.paths).filter(link=>this.evidencePlace(link));
 					if (!links.length) body.createEl("p",{text:"本轮没有可核对的正文位置。"});
 					for (const link of links) button(body,(link.kind === "text" ? "原文" : link.kind === "figure" ? "图" : "表")+" · "+link.label.slice(0,70),()=>this.showEvidence(id,link),"rar-guide-link");
 				}

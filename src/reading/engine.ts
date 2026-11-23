@@ -1,3 +1,4 @@
+import { OutputLimitError } from "../providers/shared";
 import { firstPaperPassage, investigatePaper, type PaperTrace } from "./paper-agent";
 import { readingAnnotationOrigin } from "./navigation";
 import { readingCitationMarkers } from "./presentation";
@@ -132,20 +133,46 @@ export class ReadingEngine {
 					if (!pages.length || pages.length > 3) throw new Error("原文没有可提取文字，超过一次可查看的 3 张图像；请提供带文字层的 PDF，或另选已验证 article.md 后规划");
 					for (const page of pages) { const image = await document.image(page, controller.signal); if (!image) throw new Error("规划所需的扫描页无法读取"); planningImages.push(image); }
 				}
-				const raw = await measuredReadingCall(repository, sessionId, nodeId, "planning", backend, {
-					system: skill + "\n" + (isCode ? CODE_PLAN_RULES : READING_PLAN_RULES), images: planningImages, signal: controller.signal, maxTokens: 4000,
-					prompt: JSON.stringify({ action: "规划全文路线", title: session.title, teachingPreference: teachingPreference(session), catalog: document.catalog,
-						images: planningImages.map((image, index) => ({ index: index + 1, evidenceId: image.evidenceId })),
-						output: { modules: [{ title: "短标题", question: "本模块的中心问题", evidenceIds: ["目录中的候选 ID"] }] } }),
-					schema: readingPlanSchema(document.evidence.map(e => e.id)),
-				});
-				const response = parseReadingJson(raw);
-				const planFields = !isCode && Object.keys(response).length === 1 && response.output && typeof response.output === "object" && !Array.isArray(response.output) ? response.output : response;
-				const plan = validateModulePlan({ ...planFields, version: 1 }, undefined, new Set(document.evidence.map(e => e.id)));
+				const requestPlan = async (recovering: boolean) => {
+					const raw = await measuredReadingCall(repository, sessionId, nodeId, "planning", backend, {
+						system: skill + "\n" + (isCode ? CODE_PLAN_RULES : READING_PLAN_RULES) + (recovering ? "\n上次路线未完整返回。请重新生成完整的精简路线，只列 2 至 6 个主要结论，每项最多 3 个关键证据 ID。" : ""), images: planningImages, signal: controller.signal, maxTokens: recovering ? 8000 : 4000, rejectTruncated: !isCode,
+						prompt: JSON.stringify({ action: "规划全文路线", title: session.title, teachingPreference: teachingPreference(session), catalog: document.catalog,
+							images: planningImages.map((image, index) => ({ index: index + 1, evidenceId: image.evidenceId })),
+							output: { modules: [{ title: "短标题", question: "本模块的中心问题", evidenceIds: ["目录中的候选 ID"] }] } }),
+						schema: readingPlanSchema(document.evidence.map(e => e.id)),
+					});
+					let response;
+					try { response = parseReadingJson(raw); }
+					catch (error) {
+						const json = raw.trim().replace(/^```(?:json)?\s*/, "").trimEnd();
+						if (!isCode && error instanceof SyntaxError && json.startsWith("{")
+							&& (/unterminated|end of (?:json|data)|end of input/i.test(error.message)
+								|| Number(/at position (\d+)/.exec(error.message)?.[1]) === json.length)) throw new OutputLimitError("阅读路线未完整返回");
+						throw error;
+					}
+					const planFields = !isCode && Object.keys(response).length === 1 && response.output && typeof response.output === "object" && !Array.isArray(response.output) ? response.output : response;
+					return validateModulePlan({ ...planFields, version: 1 }, undefined, new Set(document.evidence.map(e => e.id)));
+				};
+				let plan;
+				try {
+					plan = await requestPlan(false);
+				} catch (error) {
+					if (isCode || !(error instanceof OutputLimitError)) throw error;
+					controller.signal.throwIfAborted();
+					const message = "阅读路线被截断，正在本轮重新规划";
+					this.emit(sessionId, nodeId, message);
+					await repository.transact(sessionId, draft => { readingNode(draft, nodeId).title = message; });
+					try { plan = await requestPlan(true); }
+					catch (retryError) {
+						if (retryError instanceof OutputLimitError) throw new Error("阅读路线再次被截断，请在本轮点「重试」重新规划");
+						throw retryError;
+					}
+				}
 				await document.verify(); controller.signal.throwIfAborted();
 				await repository.transact(sessionId, draft => {
 					if (draft.outline.length || draft.source.fingerprint !== session.source.fingerprint) throw new Error("阅读路线或来源已变化，请重试");
 					draft.modulePlan = plan; draft.outline = plan.modules.map(m => m.title);
+					if (!isCode) readingNode(draft, nodeId).title = plan.modules[0].title;
 				});
 				session = structuredClone(repository.get(sessionId));
 			}

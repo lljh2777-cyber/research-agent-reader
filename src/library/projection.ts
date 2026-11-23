@@ -7,7 +7,7 @@ import type { ReadingSession } from "../reading/types";
 import type {
 	LibraryDiagnostic, LibraryDiagnosticCode, LibraryIdentifiers, LibraryObject, LibraryObjectRef,
 	LibraryObjectSummary, LibraryPaper, LibraryProjection, LibraryReadingProgress,
-	LibraryRecordObject, LibrarySourceCapabilities, LibrarySourceDescription,
+	LibraryRecordObject, LibrarySourceCapabilities, LibrarySourceDescription, LibraryAnnotationObject, LibrarySourceObject,
 } from "./types";
 
 const ID_KINDS = ["doi", "pmid", "pmcid"] as const;
@@ -31,6 +31,26 @@ function checkObject(item: LibraryObject): void {
 	if (item.kind === "record" && item.readingState !== undefined && !["unmarked", "not_started", "reading", "completed", "revisit"].includes(item.readingState)) throw new Error("文献人工阅读状态无效");
 	if (item.kind === "note" && (!/^[a-f0-9]{64}$/.test(item.contentHash) || item.review && (!/^[a-f0-9]{64}$/.test(item.review.reviewedHash) || !Number.isFinite(Date.parse(item.review.reviewedAt))))) throw new Error("论文笔记审阅记录缺少有效内容指纹或时间");
 	if (item.kind === "session" && item.id !== item.session.id) throw new Error("阅读会话引用不一致");
+}
+
+export function excerptBindingMatches(item: LibraryAnnotationObject, source?: LibrarySourceObject): boolean {
+	const receipt = item.provenance, binding = item.binding, target = source?.source;
+	if (!receipt || !binding || !target || target.verification.state !== "verified"
+		|| binding.sourceId !== source.id || target.verification.fingerprint !== binding.fingerprint) return false;
+	if (receipt.format === "dashboard-pdf-excerpt-1") {
+		return target.format === "pdf" && target.path === receipt.sourcePath && binding.fingerprint === receipt.sourceRevision;
+	}
+	if (target.format === "pdf") return false;
+	if (target.path === receipt.sourcePath) return true;
+	const pair = receipt.bilingual;
+	return !!pair && !pair.files && pair.language === "zh-CN" && isClipperPath(target.path)
+		&& target.path === pair.root + "/paper.md" && receipt.sourcePath === pair.root + "/paper.zh-CN.md"
+		&& pair.digests.en === binding.fingerprint && pair.digests["zh-CN"] === receipt.sourceRevision;
+}
+
+export function libraryReadingKind(source: LibrarySourceDescription) {
+	if (source.format === "markdown" && isClipperPath(source.path)) return "article";
+	return ({ pdf: "pdf", mineru: "article", jats: "structured", markdown: "markdown", unknown: "unknown" } as const)[source.format];
 }
 
 /** No IO here. The action owner must revalidate the source immediately before opening it. */
@@ -146,16 +166,13 @@ export function projectLibrary(input: readonly LibraryObject[]): LibraryProjecti
 		const target = sources.get(refKey({ kind: "source", id: item.binding.sourceId || "" }));
 		if (!target || target.item.kind !== "source" || target.item.source.verification.state !== "verified"
 			|| target.item.source.verification.fingerprint !== item.session.source.fingerprint || item.binding.fingerprint !== item.session.source.fingerprint
-			|| ({ pdf: "pdf", mineru: "article", jats: "structured", markdown: "markdown", unknown: "unknown" }[target.item.source.format]) !== item.session.source.kind) throw new Error("阅读会话与已核验来源绑定不一致");
+			|| libraryReadingKind(target.item.source) !== item.session.source.kind) throw new Error("阅读会话与已核验来源绑定不一致");
 		parents[root(i)] = root(target.i);
 	}
 	for (let i = 0; i < items.length; i++) {
 		const item = items[i]; if (item.kind !== "annotation" || !item.provenance || !["dashboard-excerpt-1", "dashboard-pdf-excerpt-1"].includes(item.provenance.format) || item.binding?.state !== "matched") continue;
 		const target = sources.get(refKey({ kind: "source", id: item.binding.sourceId || "" }));
-		if (!target || target.item.kind !== "source" || target.item.source.verification.state !== "verified" || target.item.source.path !== item.provenance.sourcePath
-			|| (target.item.source.format === "pdf") !== (item.provenance.format === "dashboard-pdf-excerpt-1")
-			|| item.provenance.format === "dashboard-pdf-excerpt-1" && item.provenance.sourceRevision !== item.binding.fingerprint
-			|| target.item.source.verification.fingerprint !== item.binding.fingerprint) throw new Error("摘录与当前已核验来源绑定不一致");
+		if (!target || target.item.kind !== "source" || !excerptBindingMatches(item, target.item)) throw new Error("摘录与当前已核验来源绑定不一致");
 		parents[root(i)] = root(target.i);
 	}
 	const groups = new Map<number, LibraryObject[]>();

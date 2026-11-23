@@ -14,6 +14,7 @@ const commands = [
 	[process.execPath, ["tests/test_qoder_annotations.js"]],
 	[process.execPath, ["tests/test_opencode_annotations.js"]],
 	[process.execPath, ["tests/test_settings_navigation.js"]],
+	[process.execPath, ["tests/test_settings_file.js"]],
 	[process.execPath, ["tests/test_reader_preferences.js"]],
 	[process.execPath, ["tests/test_manual_split_reading.js"]],
 	[process.execPath, ["tests/test_reading_file_tree.js"]],

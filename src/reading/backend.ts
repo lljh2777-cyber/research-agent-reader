@@ -1,3 +1,4 @@
+import { OutputLimitError, outputLimitReached } from "../providers/shared";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -35,6 +36,7 @@ export class DirectReadingBackend implements ReadingBackend {
 			const result = this.streaming && !this.gptOptions ? await this.provider.stream(payload, (delta) => request.onDelta?.(delta), options) : await this.provider.complete(payload, options);
 			request.signal.throwIfAborted();
 			const usage = readingUsage(result.raw?.usage); if (usage) request.onUsage?.(usage);
+			if (request.rejectTruncated && outputLimitReached(result.raw)) throw new OutputLimitError("模型输出达到上限");
 			if (!result.text?.trim()) throw new Error("模型返回空结果"); return result.text;
 		} finally { request.signal.removeEventListener("abort", abort); }
 	}

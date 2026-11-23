@@ -12,10 +12,10 @@ import { validateReadingSession } from "../reading/session";
 import { structuredFingerprint } from "../reading/structured-source";
 import { readingCategory } from "../reading/catalog";
 import type { ReadingSession } from "../reading/types";
-import { projectLibrary } from "./projection";
+import { excerptBindingMatches, libraryReadingKind, projectLibrary } from "./projection";
 import { matchMineruOrigin, pdfOriginKey, type LibraryPdfCandidate } from "./mineru-origin";
 import { listPaperRecordIds, readPaperRecord, type PaperRecordStatus } from "./record-store";
-import type { LibraryIdentifiers, LibraryObject, LibraryProjection, LibrarySourceObject, LibrarySourceBinding } from "./types";
+import type { LibraryAnnotationObject, LibraryIdentifiers, LibraryObject, LibraryProjection, LibrarySourceObject, LibrarySourceBinding } from "./types";
 
 export type LibraryReadStorage = Pick<SourceStorage, "read" | "list">;
 export interface LibraryReadIssue { area: "sources" | "notes" | "annotations" | "sessions" | "records"; path: string; message: string; blocksRecords?: boolean; }
@@ -178,47 +178,58 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 		const parsed = readLibraryAnnotations(decode(bytes), name, options.parseYaml);
 		for (const error of parsed.errors) issue("annotations", name, error);
 		for (const record of parsed.records) {
-			const sourcePath = canonicalPath(record.sourcePath);
-			// External Vault identity/revision semantics are unknown. Even the same local path
-			// is not sufficient to compare its anchor or report that historical text changed.
-			const external = sourcePath && isClipperPath(sourcePath) ? options.clipper : undefined;
-			const source = record.provenance.format === "annotation-schema-2" ? undefined : sourcePath && sources.get(external ? sourcePath.replace(/paper\.zh-CN\.md$/, "paper.md") : sourcePath);
-			// Dashboard anchors lack an immutable fingerprint; their path is only a hint.
-			const binding: LibrarySourceBinding = { state: "unresolved", ...(source ? { sourceId: source.id } : {}), reason: "旧批注没有固定来源指纹，需核对后确认关联" };
-			const text = external && sourcePath && source ? await external.text(sourcePath) : source && markdown.get(source.source.path), anchor = record.anchor;
-			if (text && anchor && text.slice(anchor.start, anchor.end) !== record.selectedText) { binding.state = "changed"; binding.reason = "旧批注位置与当前原文不同，未重新绑定"; }
-			if (record.provenance.format === "dashboard-excerpt-1") {
-				if (text === undefined || !anchor) binding.reason = "本次未取得可核对的原文文本或位置，保留历史摘录，需复查";
-				else if (bytesDigest(new TextEncoder().encode(text)) !== record.provenance.sourceRevision || text.slice(anchor.start, anchor.end) !== record.selectedText) {
-					binding.state = "changed"; binding.reason = "摘录对应的 Markdown 文本版本已变化，保留历史内容，需复查";
-				} else if (source && source.source.verification.state === "verified") {
-					binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "摘录的文本版本与选区一致；科学证据仍需审阅";
-				} else binding.reason = "摘录文本版本一致，原文包尚未通过本次完整核验";
-			} else if (record.provenance.format === "dashboard-pdf-excerpt-1") {
-				if (!source || source.source.format !== "pdf" || source.source.verification.state !== "verified") binding.reason = "PDF 摘录保留独立文件与页内凭据；本次目录未取得已核验的 PDF 来源，需复查关联";
-				else if (source.source.verification.fingerprint !== record.provenance.sourceRevision) {
-					binding.state = "changed"; binding.reason = "摘录对应的 PDF 文件版本已变化，保留历史内容，需复查";
-				} else {
-					binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "PDF 文件版本一致；页内位置可回到原文核对，科学证据仍需审阅";
+			const id = name + "#" + record.id;
+			try {
+				const sourcePath = canonicalPath(record.sourcePath);
+				// External Vault identity/revision semantics are unknown. Even the same local path
+				// is not sufficient to compare its anchor or report that historical text changed.
+				const external = sourcePath && isClipperPath(sourcePath) ? options.clipper : undefined;
+				const source = record.provenance.format === "annotation-schema-2" ? undefined : sourcePath && sources.get(external ? sourcePath.replace(/paper\.zh-CN\.md$/, "paper.md") : sourcePath);
+				// Dashboard anchors lack an immutable fingerprint; their path is only a hint.
+				const binding: LibrarySourceBinding = { state: "unresolved", ...(source ? { sourceId: source.id } : {}), reason: "旧批注没有固定来源指纹，需核对后确认关联" };
+				const text = external && sourcePath && source ? await external.text(sourcePath) : source && markdown.get(source.source.path), anchor = record.anchor;
+				if (text && anchor && text.slice(anchor.start, anchor.end) !== record.selectedText) { binding.state = "changed"; binding.reason = "旧批注位置与当前原文不同，未重新绑定"; }
+				if (record.provenance.format === "dashboard-excerpt-1") {
+					if (text === undefined || !anchor) binding.reason = "本次未取得可核对的原文文本或位置，保留历史摘录，需复查";
+					else if (bytesDigest(new TextEncoder().encode(text)) !== record.provenance.sourceRevision || text.slice(anchor.start, anchor.end) !== record.selectedText) {
+						binding.state = "changed"; binding.reason = "摘录对应的 Markdown 文本版本已变化，保留历史内容，需复查";
+					} else if (source && source.source.verification.state === "verified") {
+						binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "摘录的文本版本与选区一致；科学证据仍需审阅";
+					} else binding.reason = "摘录文本版本一致，原文包尚未通过本次完整核验";
+				} else if (record.provenance.format === "dashboard-pdf-excerpt-1") {
+					if (!source || source.source.format !== "pdf" || source.source.verification.state !== "verified") binding.reason = "PDF 摘录保留独立文件与页内凭据；本次目录未取得已核验的 PDF 来源，需复查关联";
+					else if (source.source.verification.fingerprint !== record.provenance.sourceRevision) {
+						binding.state = "changed"; binding.reason = "摘录对应的 PDF 文件版本已变化，保留历史内容，需复查";
+					} else {
+						binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "PDF 文件版本一致；页内位置可回到原文核对，科学证据仍需审阅";
+					}
+				} else if (record.provenance.sourceRevision) {
+					if (binding.state !== "changed") binding.reason = "旧批注保留来源版本；仓库标识及版本算法尚未确认，保持独立";
 				}
-			} else if (record.provenance.sourceRevision) {
-				if (binding.state !== "changed") binding.reason = "旧批注保留来源版本；仓库标识及版本算法尚未确认，保持独立";
-			}
-			const bilingual = record.provenance.bilingual;
-			if (bilingual) {
-				const selected = bilingual.files;
-				const io = external || v;
-				const enBytes = selected ? await v.read(selected.en, 16 * 1024 * 1024) : undefined, zhBytes = selected ? await v.read(selected.zh, 16 * 1024 * 1024) : undefined;
-				const en = selected ? enBytes ? decode(enBytes) : undefined : external && source ? await external.text(bilingual.root + "/paper.md") : markdown.get(bilingual.root + "/paper.md"), zh = selected ? zhBytes ? decode(zhBytes) : undefined : external && source ? await external.read(bilingual.root + "/paper.zh-CN.md", 16 * 1024 * 1024).then(b => b ? decode(b) : undefined) : markdown.get(bilingual.root + "/paper.zh-CN.md");
-				const metadata = selected && !selected.metadata ? undefined : await io.read(selected?.metadata || bilingual.root + "/translation.json", 256 * 1024);
-				const metadataDigest = selected && !selected.metadata ? objectDigest(selected) : metadata ? bytesDigest(metadata) : "";
-				const selectedText = bilingual.language === "en" ? en : zh;
-				if (en === undefined || zh === undefined || !anchor || selectedText?.slice(anchor.start, anchor.end) !== record.selectedText || bytesDigest(new TextEncoder().encode(en)) !== bilingual.digests.en || bytesDigest(new TextEncoder().encode(zh)) !== bilingual.digests["zh-CN"] || metadataDigest !== bilingual.digests.metadata || bilingual.english && en.slice(bilingual.english.start, bilingual.english.end) !== bilingual.english.text) { binding.state = "changed"; binding.reason = "双语资料缺失或版本已变化；保留历史内容，需复查"; }
-				else if (source && source.source.verification.state === "verified") { binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "双语文字与保存版本一致；结构对应与译文含义仍需核对"; }
-				else if (selected) { binding.state = "unresolved"; binding.reason = "手动配对的文件版本与选区一致；论文身份及译文对应仍需核对"; }
-			} else if (isTranslationPath(record.sourcePath)) { binding.state = "unresolved"; binding.reason = "历史译文摘录缺少双语配对凭据，未推断来源"; }
-			objects.push({ kind: "annotation", id: name + "#" + record.id, annotationPath: name, title: (record.roles.includes("translation_quote") ? "译文 · " : "") + (record.section || record.selectedText.slice(0, 80)), identifiers: {},
-				roles: record.roles, provenance: record.provenance, binding });
+				const bilingual = record.provenance.bilingual;
+				if (bilingual) {
+					const selected = bilingual.files;
+					const io = external || v;
+					const enBytes = selected ? await v.read(selected.en, 16 * 1024 * 1024) : undefined, zhBytes = selected ? await v.read(selected.zh, 16 * 1024 * 1024) : undefined;
+					const en = selected ? enBytes ? decode(enBytes) : undefined : external && source ? await external.text(bilingual.root + "/paper.md") : markdown.get(bilingual.root + "/paper.md"), zh = selected ? zhBytes ? decode(zhBytes) : undefined : external && source ? await external.read(bilingual.root + "/paper.zh-CN.md", 16 * 1024 * 1024).then(b => b ? decode(b) : undefined) : markdown.get(bilingual.root + "/paper.zh-CN.md");
+					const metadata = selected && !selected.metadata ? undefined : await io.read(selected?.metadata || bilingual.root + "/translation.json", 256 * 1024);
+					const metadataDigest = selected && !selected.metadata ? objectDigest(selected) : metadata ? bytesDigest(metadata) : "";
+					const selectedText = bilingual.language === "en" ? en : zh;
+					if (en === undefined || zh === undefined || !anchor || selectedText?.slice(anchor.start, anchor.end) !== record.selectedText || bytesDigest(new TextEncoder().encode(en)) !== bilingual.digests.en || bytesDigest(new TextEncoder().encode(zh)) !== bilingual.digests["zh-CN"] || metadataDigest !== bilingual.digests.metadata || bilingual.english && en.slice(bilingual.english.start, bilingual.english.end) !== bilingual.english.text) { binding.state = "changed"; binding.reason = "双语资料缺失或版本已变化；保留历史内容，需复查"; }
+					else if (binding.state !== "changed" && source && source.source.verification.state === "verified") { binding.state = "matched"; binding.fingerprint = source.source.verification.fingerprint; binding.reason = "双语文字与保存版本一致；结构对应与译文含义仍需核对"; }
+					else if (selected) { binding.state = "unresolved"; binding.reason = "手动配对的文件版本与选区一致；论文身份及译文对应仍需核对"; }
+				} else if (isTranslationPath(record.sourcePath)) { binding.state = "unresolved"; binding.reason = "历史译文摘录缺少双语配对凭据，未推断来源"; }
+				const item: LibraryAnnotationObject = { kind: "annotation", id, annotationPath: name, title: (record.roles.includes("translation_quote") ? "译文 · " : "") + (record.section || record.selectedText.slice(0, 80)), identifiers: {},
+					roles: record.roles, provenance: record.provenance, binding };
+				if (binding.state === "matched" && (record.provenance.format === "dashboard-excerpt-1" || record.provenance.format === "dashboard-pdf-excerpt-1")
+					&& !excerptBindingMatches(item, source || undefined)) {
+					binding.state = "changed";
+					delete binding.fingerprint;
+					binding.reason = "摘录与当前已核验来源绑定不一致，保留历史摘录";
+				}
+				if (binding.state === "changed") issue("annotations", id, binding.reason, false);
+				objects.push(item);
+			} catch (error) { issue("annotations", id, error, false); }
 		}
 	});
 	const sessionIds = new Set<string>();
@@ -243,7 +254,7 @@ export async function readPaperLibrary(vault: LibraryReadStorage, plugin: Librar
 						const key = canonicalPath(session.source.path), source = key && sources.get(key);
 						binding = { state: "unresolved", ...(source ? { sourceId: source.id } : {}), reason: "来源未进入已核验目录，历史会话保持独立" };
 						if (source && source.source.verification.state === "verified") {
-							const kind = { pdf: "pdf", mineru: "article", jats: "structured", markdown: "markdown", unknown: "unknown" }[source.source.format];
+							const kind = libraryReadingKind(source.source);
 							if (kind === session.source.kind && source.source.verification.fingerprint === session.source.fingerprint) binding = { state: "matched", sourceId: source.id, fingerprint: session.source.fingerprint, reason: "来源类型与固定指纹一致" };
 							else binding = { state: "changed", sourceId: source.id, reason: "当前路径的来源类型或指纹与历史不同，未重新绑定" };
 						}
