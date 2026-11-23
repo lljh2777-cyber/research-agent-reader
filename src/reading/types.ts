@@ -67,6 +67,7 @@ export interface ReadingNode {
 	createdAt: string;
 	evidence: ReadingEvidence[];
 	quote?: ReadingQuote;
+	quoteIssue?: string;
 	codeQuote?: ReadingCodeQuote;
 	provider?: string;
 	model?: string;

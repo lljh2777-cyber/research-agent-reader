@@ -7,7 +7,7 @@ import codeSkill from "../../skills/code-guided-reading/SKILL.md";
 import { verifyCodeQuote, readingQuestionContext } from "../code-reading/quote";
 import { CODE_HOST_RULES, CODE_PLAN_RULES, CODE_SELECTION_RULES, CODE_ANSWER_FORMAT_ERROR, validateCodeExplanation } from "../code-reading/teaching";
 import { setTimeout, clearTimeout } from "node:timers";
-import { readingNode, completedMainContext } from "./session";
+import { readingNode, completedMainContext, validReadingQuote } from "./session";
 import { selectReadingEvidence } from "./document";
 import { READING_HOST_RULES, stableReadingResult, teachingPreference } from "./teaching";
 import { measuredReadingCall } from "./usage";
@@ -179,6 +179,7 @@ export class ReadingEngine {
 			if (session.modulePlan) validateModulePlan(session.modulePlan, session.outline, new Set(document.evidence.map(e => e.id)));
 			this.emit(sessionId, nodeId, "正在选择本单元所需的原文证据…");
 			const context = readingContext(session, nodeId);
+			const quote = validReadingQuote(node)?.text;
 			const completedCount = session.mainIds.filter((id) => readingNode(session, id).status === "done").length;
 			const currentModule = node.branchId ? undefined : currentReadingModule(session);
 			const annotation = origin && { selected: origin.selected, question: origin.question, note: origin.note, verifiedQuotes: origin.quotes };
@@ -200,7 +201,7 @@ export class ReadingEngine {
 				});
 				({ evidence, images, trace: paperTrace } = collected);
 			} else {
-				const selectionPrompt = JSON.stringify({ annotation, action: node.branchId ? "追问" : "下一步主线", question: node.question, quote: node.quote?.text, codeQuote: node.codeQuote,
+				const selectionPrompt = JSON.stringify({ annotation, action: node.branchId ? "追问" : "下一步主线", question: node.question, quote, codeQuote: node.codeQuote,
 					outline: node.branchId ? undefined : session.outline, currentUnit: node.branchId ? undefined : session.outline[completedCount], currentModule, teachingPreference: teachingPreference(session), completedUnits: node.branchId ? undefined : completedCount, context: context.slice(-24_000), catalog: document.catalog });
 				const selectionSystem = CODE_SELECTION_RULES;
 				const selectionKey = contentHash(JSON.stringify([session.source.fingerprint, session.backend, backend.name, backend.model, backend.images, selectionSystem, selectionPrompt]));
@@ -246,7 +247,7 @@ export class ReadingEngine {
 				webEvidence: web ? { mode: web.mode, query: web.query, sources: web.sources.map((s, i) => ({ id: "W" + (i + 1), ...s })), instruction: readingWebInstruction(web) } : undefined,
 				correction: node.correction ? { reason: node.correction.reason, instruction: "对照本轮原文核对旧回答，说明哪些需要更正、哪些保持成立及证据缺口。用户的质疑也可能不成立，不盲从，不把重新解释写成事实已验证。" } : undefined,
 				validationFeedback: retryCodeFormat ? "上次讲解在代码处未写完。请完整写完正文，闭合行内代码和代码块，并将 JSON 字符串中的引号正确转义。" : retryCitation ? "上次正文没有证据标记。请在关键结论旁写实际 [证据ID]，仅填写 evidenceIds 清单不够。" : retryEvidence ? "上次正文引用与 evidenceIds 不一致。仅使用本轮 evidence 中的实际 ID，正文每个本文引用都须列入 evidenceIds；网络链接单独标明，不用本文 ID 代替。" : undefined,
-				question: node.question, quote: node.quote?.text, codeQuote: node.codeQuote, context, outline: node.branchId ? undefined : session.outline, currentUnit: node.branchId ? undefined : session.outline[completedCount],
+				question: node.question, quote, codeQuote: node.codeQuote, context, outline: node.branchId ? undefined : session.outline, currentUnit: node.branchId ? undefined : session.outline[completedCount],
 				currentModule: currentModule ? { title: currentModule.title, question: currentModule.question, number: currentModule.number, purpose: currentModule.purpose } : undefined,
 				teachingPreference: teachingPreference(session), completedUnits: node.branchId ? undefined : completedCount,
 				retrieval: retrieval ? { query: retrieval.query, found: retrieval.paths.length, error: retrieval.error, instruction: "若没有足够补充依据，明确写 Vault 中未找到足够依据" } : null,

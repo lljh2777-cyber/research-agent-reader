@@ -5,6 +5,7 @@ import { contentHash, inKnowledgeScope } from "../retrieval/chunks";
 import type { ReadingSession } from "./types";
 import { codeFence } from "../code-reading/quote";
 import { readingCitations } from "./presentation";
+import { validReadingQuote } from "./session";
 
 export function safeReadingMarkdown(text: string, evidenceIds: string[] = []): string {
 	// Adjacent evidence markers otherwise look like Markdown reference links.
@@ -26,7 +27,7 @@ export interface ReadingExportOptions { related?: string[]; revisionOf?: string;
 export interface ReadingExportRecord { path: string; hash: string; text: string; created: string; }
 export interface ReadingExportReview { key: string; hash: string; text: string; history: ReadingExportRecord[]; duplicate?: ReadingExportRecord; revisionOf?: string; }
 export const safeRelatedPath = (path: string): boolean => inKnowledgeScope(path) && !/[\\[\]|#%<>:\r\n]/.test(path) && !path.split("/").some(part => !part);
-export function readingNodeContentHash(node: ReadingSession["nodes"][number]): string { return contentHash(JSON.stringify([node.title, node.question, node.content, node.quote, node.evidence, ...(node.acceptedCorrectionId || node.correction ? [node.acceptedCorrectionId, node.correction] : []), ...(node.web ? [node.web] : []), ...(node.codeQuote ? [node.codeQuote] : [])])); }
+export function readingNodeContentHash(node: ReadingSession["nodes"][number]): string { return contentHash(JSON.stringify([node.title, node.question, node.content, validReadingQuote(node), node.evidence, ...(node.acceptedCorrectionId || node.correction ? [node.acceptedCorrectionId, node.correction] : []), ...(node.web ? [node.web] : []), ...(node.codeQuote ? [node.codeQuote] : [])])); }
 const relatedPaths = (options: ReadingExportOptions): string[] => [...new Set((options.related || []).filter(safeRelatedPath))].sort();
 const wikiLink = (path: string): string => "[[" + path.replace(/\.md$/i, "") + "]]";
 export function readingExportNodes(session: ReadingSession, scope: ReadingExportScope, nodeId: string): ReadingSession["nodes"] {
@@ -61,7 +62,8 @@ function exportBody(session: ReadingSession, scope: ReadingExportScope, nodeId: 
 		if (!current.branchId) trail.unshift("主线第 " + (session.mainIds.indexOf(current.id) + 1) + " 单元");
 		body.push("学习位置：" + trail.join(" → "), "");
 		if (node.question) body.push("问题：" + safeReadingMarkdown(node.question), "");
-		if (node.quote) body.push("引用：" + safeReadingMarkdown(node.quote.text), "");
+		const quote = validReadingQuote(node);
+		if (quote) body.push("引用：" + safeReadingMarkdown(quote.text), "");
 		if (node.codeQuote) body.push("源码选区：" + readingPathCode(node.codeQuote.path) + "，第 " + node.codeQuote.startLine + "–" + node.codeQuote.endLine + " 行；文件版本 " + readingPathCode(node.codeQuote.sourceHash), "", codeFence(node.codeQuote.text, node.evidence.find(e => e.id === node.codeQuote!.evidenceId)?.language), "");
 		if (node.correction) body.push("核对版本：对应原回答 " + readingPathCode(node.correction.of) + "；" + (session.nodes.some(n => n.acceptedCorrectionId === node.id) ? "用户已选为后续背景" : "尚未选为后续背景") + "。", "");
 		if (node.acceptedCorrectionId) body.push("此处保留历史回答；用户已选用后续核对节点 " + readingPathCode(node.acceptedCorrectionId) + " 作为背景，请同时查阅该节点。", "");

@@ -483,7 +483,13 @@ export class ReadingWorkspaceView extends ItemView {
 		element(kicker, "span", "", node.branchId ? "一起理解" : "主线 " + String(this.session!.mainIds.indexOf(node.id) + 1).padStart(2, "0"));
 		if (node.evidence.length) element(kicker, "span", "reading-answer-source-count", node.evidence.length + " 处依据");
 		element(article, "h3", "", node.title);
-		if (node.quote) element(article, "blockquote", "reading-quote", node.quote.text);
+		if (node.quote) {
+			if (node.quoteIssue) {
+				const details = element(article, "details", "reading-quote");
+				element(details, "summary", "", "引文已失效 · " + node.quoteIssue);
+				element(details, "blockquote", "", node.quote.text);
+			} else element(article, "blockquote", "reading-quote", node.quote.text);
+		}
 		if (node.codeQuote) {
 			const quote = node.codeQuote, source = node.evidence.find(e => e.id === quote.evidenceId)!;
 			const block = element(article, "details", "reading-code-quote");

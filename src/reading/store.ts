@@ -64,6 +64,15 @@ export class RoutedReadingStorage implements ReadingStorage {
 		await storage.write(id, text); this.locations.set(id, storage);
 	}
 }
+function serializeReadingSession(session: ReadingSession): string {
+	const nodes = session.nodes.map(node => {
+		if (!node.quoteIssue) return node;
+		const { quoteIssue, ...stored } = node;
+		return stored;
+	});
+	return JSON.stringify({ ...session, nodes });
+}
+
 export class ReadingRepository {
 	readonly sessions = new Map<string, ReadingSession>();
 	readonly errors: string[] = [];
@@ -83,7 +92,7 @@ export class ReadingRepository {
 				for (const node of session.nodes) if (node.status === "running" || node.status === "pending") {
 					node.status = "interrupted"; node.error = "上次生成已中断，可重试"; interrupted = true;
 				}
-				if (interrupted && !repairedTimes) await this.storage.write(id, JSON.stringify(session)).catch((error) => { this.errors.push(id + "：中断状态未能保存，历史仍可读取：" + String(error)); });
+				if (interrupted && !repairedTimes) await this.storage.write(id, serializeReadingSession(session)).catch((error) => { this.errors.push(id + "：中断状态未能保存，历史仍可读取：" + String(error)); });
 				this.sessions.set(id, session);
 			} catch (error) { this.errors.push(id + ": " + String(error)); }
 		}
@@ -93,7 +102,7 @@ export class ReadingRepository {
 		return this.serial(async () => {
 			if (this.sessions.has(session.id)) throw new Error("阅读会话已存在");
 			validateReadingSession(session);
-			await this.storage.write(session.id, JSON.stringify(session));
+			await this.storage.write(session.id, serializeReadingSession(session));
 			this.sessions.set(session.id, structuredClone(session)); this.emit(session.id);
 		});
 	}
@@ -101,7 +110,7 @@ export class ReadingRepository {
 		return this.serial(async () => {
 			const draft = structuredClone(this.get(id));
 			const result = edit(draft); draft.updatedAt = new Date().toISOString(); validateReadingSession(draft);
-			await this.storage.write(id, JSON.stringify(draft));
+			await this.storage.write(id, serializeReadingSession(draft));
 			this.sessions.set(id, draft); this.emit(id); return result;
 		});
 	}

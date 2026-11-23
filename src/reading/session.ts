@@ -78,6 +78,18 @@ export function addReadingBranch(session: ReadingSession, parentId: string | nul
 	session.branches.push(branch);
 	return branch;
 }
+function readingQuoteIssue(quote: ReadingQuote, source: ReadingNode | undefined): string | undefined {
+	if (!source) return "来源节点不存在";
+	if (source.status !== "done") return "来源回答尚未完成";
+	if (!Number.isSafeInteger(quote.start) || !Number.isSafeInteger(quote.end) ||
+		quote.start < 0 || quote.end <= quote.start || quote.end > source.content.length) return "选区位置无效";
+	if (typeof quote.text !== "string" || !quote.text.trim() || source.content.slice(quote.start, quote.end) !== quote.text) return "引文与来源正文不符";
+}
+
+export function validReadingQuote(node: ReadingNode): ReadingQuote | undefined {
+	return node.quoteIssue ? undefined : node.quote;
+}
+
 export function addReadingNode(session: ReadingSession, branchId: string | null, question = "", quote?: ReadingQuote): ReadingNode {
 	const branch = branchId ? session.branches.find((item) => item.id === branchId) : null;
 	if (branchId && !branch) throw new Error("阅读支线不存在");
@@ -86,10 +98,8 @@ export function addReadingNode(session: ReadingSession, branchId: string | null,
 	if (last && last.status !== "done") throw new Error("请先重试或完成当前回答");
 	if (!branch && session.completed) throw new Error("主线讲解已完成，可从已有节点继续提问");
 	if (quote) {
-		const source = readingNode(session, quote.nodeId);
-		if (source.status !== "done" || source.content.slice(quote.start, quote.end) !== quote.text || !quote.text.trim()) {
-			throw new Error("引用选区已失效，请重新选择");
-		}
+		const issue = readingQuoteIssue(quote, session.nodes.find(node => node.id === quote.nodeId));
+		if (issue) throw new Error("引用选区已失效：" + issue + "，请重新选择");
 	}
 	const node: ReadingNode = { id: newReadingId(), parentId: last?.id || branch?.parentNodeId || null,
 		branchId, question, title: question.slice(0, 36) || "准备讲解", content: "", status: "pending", error: "",
@@ -157,6 +167,9 @@ export function validateReadingSession(value: unknown): ReadingSession {
 	if (session.modulePlan !== undefined) session.modulePlan = validateModulePlan(session.modulePlan, session.outline);
 	if (session.sourceRelocations !== undefined && (!Array.isArray(session.sourceRelocations) || session.sourceRelocations.some(r => !r || typeof r.from !== "string" || typeof r.to !== "string" || !Number.isFinite(Date.parse(r.date)) || r.fingerprint !== session.source.fingerprint))) throw new Error("原文位置历史无效");
 	for (const node of session.nodes) {
+		const issue = node.quote && readingQuoteIssue(node.quote, nodes.get(node.quote.nodeId));
+		if (issue) node.quoteIssue = issue;
+		else delete node.quoteIssue;
 		if (node.requestWeb !== undefined && (typeof node.requestWeb !== "boolean" || node.requestWeb && !node.branchId)) throw new Error("联网只能由问题支线发起");
 		if (node.web && (!node.requestWeb || !["native", "tavily"].includes(node.web.mode) || typeof node.web.query !== "string" || node.web.query.length > 400 || typeof node.web.warning !== "string" || !Array.isArray(node.web.sources) || node.web.sources.length > 3 || node.web.sources.some(s => !s || typeof s.title !== "string" || typeof s.url !== "string" || !/^https?:\/\//.test(s.url) || s.content !== undefined && (typeof s.content !== "string" || s.content.length > 1200)))) throw new Error("联网来源记录无效");
 		if (node.correction) { const original = nodes.get(node.correction.of); if (!original || !node.branchId || session.nodes.indexOf(original) >= session.nodes.indexOf(node) || node.correction.originalHash !== answerHash(original.content) || typeof node.correction.reason !== "string" || node.correction.reason.length > 4000) throw new Error("核对版本关系无效"); }
