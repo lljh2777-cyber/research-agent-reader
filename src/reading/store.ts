@@ -45,6 +45,7 @@ export class FileReadingStorage implements ReadingStorage {
 		if (Buffer.byteLength(text) > 64 * 1024 * 1024) throw new Error("阅读会话超过存储上限，历史已保留");
 		const handle = await fs.open(pending, "w", 0o600);
 		try { await handle.writeFile(text, "utf8"); await handle.sync(); } finally { await handle.close(); }
+		// Sealing stops new writes at admission; it cannot retract an accepted write already entering rename.
 		await fs.rename(pending, filename);
 	}
 }
@@ -81,19 +82,29 @@ export class ReadingRepository {
 	readonly loadIssues = new Map<string, { kind: "unreadable" | "interruption-save"; reason: string }>();
 	get errors(): string[] { return Array.from(this.loadIssues, ([id, issue]) => id + ".json：" + issue.reason); }
 	private queue: Promise<unknown> = Promise.resolve();
+	private storageClosedError?: Error;
 	readonly unsavedGenerationErrors = new WeakMap<ReadingSession, Map<string, string>>();
 	private listeners = new Set<ReadingChangeListener>();
 	constructor(private readonly storage: ReadingStorage) {}
+	closeStorage(): Promise<void> {
+		this.storageClosedError ??= new Error("阅读会话存储已关闭");
+		return this.flush();
+	}
+	isCloseError(error: unknown, workspaceCloseReason?: Error): boolean {
+		if (!(error instanceof Error)) return false;
+		return error === workspaceCloseReason || error === this.storageClosedError ||
+			(this.storageClosedError !== undefined && "saveError" in error && error.saveError === this.storageClosedError);
+	}
 	subscribe(listener: ReadingChangeListener): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener); }
 	private emit(id: string, failure?: GenerationFailure): void { this.listeners.forEach((listener) => { try { listener(id, failure); } catch (error) { console.error("Reading view update failed", error); } }); }
-	async reportGenerationError(id: string, nodeId: string, error: unknown): Promise<void> {
+	async reportGenerationError(id: string, nodeId: string, error: unknown, workspaceCloseReason?: Error): Promise<void> {
 		const { status } = readingNode(this.get(id), nodeId);
 		if (status === "interrupted") return;
 		if (status === "pending" || status === "running") {
-			try { await this.saveGenerationFailure(id, nodeId, false, error); }
+			try { await this.saveGenerationFailure(id, nodeId, this.isCloseError(error, workspaceCloseReason), error); }
 			catch (saveError) { error = saveError; }
 		}
-		this.emit(id, { nodeId, error });
+		if (!this.isCloseError(error, workspaceCloseReason)) this.emit(id, { nodeId, error });
 	}
 	async load(): Promise<void> {
 		for (const id of await this.storage.list()) {
@@ -107,11 +118,13 @@ export class ReadingRepository {
 				for (const node of session.nodes) if (node.status === "running" || node.status === "pending") {
 					node.status = "interrupted"; node.error = "上次生成已中断，可重试"; interrupted = true;
 				}
-				if (interrupted && !repairedTimes) await this.storage.write(id, serializeReadingSession(session)).catch(error => {
+				if (interrupted && !repairedTimes) await this.serial(() => this.storage.write(id, serializeReadingSession(session))).catch(error => {
+					if (this.isCloseError(error)) throw error;
 					this.loadIssues.set(id, { kind: "interruption-save", reason: "已加载，但中断状态未能保存：" + String(error) });
 				});
 				this.sessions.set(id, session);
 			} catch (error) {
+				if (this.isCloseError(error)) throw error;
 				this.sessions.delete(id);
 				this.loadIssues.set(id, { kind: "unreadable", reason: "无法加载：" + String(error) });
 			}
@@ -126,9 +139,20 @@ export class ReadingRepository {
 			this.sessions.set(session.id, structuredClone(session)); this.emit(session.id);
 		});
 	}
-	saveGenerationFailure(id: string, nodeId: string, interrupted: boolean, error: unknown): Promise<void> {
+	async saveGenerationFailure(id: string, nodeId: string, interrupted: boolean, error: unknown): Promise<void> {
 		const message = error instanceof Error ? error.message : String(error);
 		const reason = interrupted ? "生成已停止或超时，可重试。" + message : message;
+		const saveFailure = (saveError: unknown, warning: string) => Object.assign(new Error(reason + "\n" + warning), { cause: error, saveError });
+		if (this.storageClosedError) {
+			const session = this.sessions.get(id);
+			if (session?.nodes.some(n => n.id === nodeId && (n.status === "pending" || n.status === "running"))) {
+				const draft = structuredClone(session);
+				const node = readingNode(draft, nodeId);
+				node.status = "interrupted"; node.error = reason;
+				this.sessions.set(id, draft);
+			}
+			throw saveFailure(this.storageClosedError, this.storageClosedError.message);
+		}
 		return this.editSession(id, draft => {
 			const node = readingNode(draft, nodeId);
 			node.status = interrupted ? "interrupted" : "failed";
@@ -139,7 +163,7 @@ export class ReadingRepository {
 			warnings.set(nodeId, warning);
 			this.unsavedGenerationErrors.set(draft, warnings);
 			this.sessions.set(id, draft); this.emit(id);
-			throw Object.assign(new Error(reason + "\n" + warning), { cause: error, saveError });
+			throw saveFailure(saveError, warning);
 		});
 	}
 	transact<T>(id: string, edit: (session: ReadingSession) => T): Promise<T> {
@@ -157,6 +181,7 @@ export class ReadingRepository {
 		});
 	}
 	private serial<T>(operation: () => Promise<T>): Promise<T> {
+		if (this.storageClosedError) return Promise.reject(this.storageClosedError);
 		const result = this.queue.then(operation); this.queue = result.catch(() => undefined); return result;
 	}
 	async flush(): Promise<void> { await this.queue; }

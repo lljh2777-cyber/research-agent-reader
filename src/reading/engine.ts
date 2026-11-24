@@ -279,7 +279,8 @@ export class ReadingEngine {
 				if (!node.branchId) { draft.outline = result.outline!; draft.mainSummary = result.mainSummary!; draft.completed = result.completed!; }
 			}).catch(error => { throw Object.assign(new Error("生成结果保存失败：" + String(error)), { cause: error }); });
 		} catch (error) {
-			await repository.saveGenerationFailure(sessionId, nodeId, controller.signal.aborted, error);
+			const interrupted = controller.signal.aborted || repository.isCloseError(error, this.workspace.closeReason);
+			await repository.saveGenerationFailure(sessionId, nodeId, interrupted, error);
 			throw error;
 		} finally { clearTimeout(timer); this.active.delete(key); this.live.delete(key); }
 	}

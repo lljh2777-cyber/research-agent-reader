@@ -45,6 +45,7 @@ export class SplitPdfPane extends Component {
 		smaller.addEventListener("click", () => void magnify(-0.2), { signal: this.signal }); larger.addEventListener("click", () => void magnify(0.2), { signal: this.signal });
 		this.register(() => this.dispose());
 		await this.showPage(page, progress);
+		if (this.disposed) return;
 		this.resize = new ResizeObserver(() => { window.clearTimeout(this.resizeTimer); this.resizeTimer = window.setTimeout(() => { if (!this.signal.aborted) void this.showPage(this.page, this.progress); }, 150); });
 		this.resize.observe(this.scroller);
 	}

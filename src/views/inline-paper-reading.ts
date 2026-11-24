@@ -60,7 +60,7 @@ export class InlinePaperReading {
 		toolbar.after(this.guideFallback);
 		this.map = new PaperDiscussionMap(toolbar, body, (id, kind, link) => {
 			if (link) { this.showEvidence(id, link); return; }
-			if (kind === "guide") { void this.openGuide().catch(e => new Notice(String(e))); return; }
+			if (kind === "guide") { void this.openGuide().catch(error => this.showGuideError(error)); return; }
 			if (kind === "turn" && this.session) this.reveal(this.session.id, id);
 			if (kind === "passage") this.revealPassage(id);
 		});
@@ -208,6 +208,10 @@ export class InlinePaperReading {
 			const zh = this.doc.syncAvailable && this.doc.pairs.find(p => p.en.id === link.block.id)?.["zh-CN"];
 			return zh && this.place({lang:"zh-CN",start:zh.start,end:zh.end,digest:this.doc.files["zh-CN"].revision.digest}) || en;
 		}
+	}
+	private showGuideError(error: unknown): void {
+		if (this.workspace.repository.isCloseError(error, this.workspace.closeReason)) return;
+		new Notice(String(error));
 	}
 	async openGuide() {
 		if (this.reader.stale || !this.key) throw new Error("请重新打开论文后开始带读");
@@ -382,7 +386,7 @@ export class InlinePaperReading {
 		if (!b) {
 			const id = main!.id, next = s.mainIds[s.mainIds.indexOf(id)+1];
 			if (next) button(actions,"下一轮",()=>this.reveal(s.id,next));
-			else if (main!.status === "done" && !s.completed) button(actions,"继续主线",()=>void this.advanceGuide(id).catch(e=>new Notice(String(e))));
+			else if (main!.status === "done" && !s.completed) button(actions,"继续主线",()=>void this.advanceGuide(id).catch(error => this.showGuideError(error)));
 			for (const child of s.branches.filter(x=>x.parentNodeId===id && !x.annotation)) {
 				const first = s.nodes.find(n=>n.id===child.nodeIds[0]);
 				if (first) button(actions,"↳ "+first.question,()=>this.reveal(s.id,first.id));

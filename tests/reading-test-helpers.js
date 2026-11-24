@@ -16,6 +16,12 @@ exports.memoryStorage = () => {
 		async write(id, text) { if (this.fail) throw new Error("disk full"); files.set(id, text); } };
 };
 
+exports.temporaryFileStorage = async () => {
+	const { FileReadingStorage } = exports.loadReading("reading/store.ts");
+	const directory = await require("node:fs/promises").mkdtemp(path.join(require("node:os").tmpdir(), "reading-dispose-"));
+	return new FileReadingStorage(directory);
+};
+
 // Use the production resolver and adapter with a caller-supplied provider transport.
 exports.paperPlugin = plugin => {
 	const { resolvePaperProfileId } = exports.loadReading("reading/paper-agent.ts");

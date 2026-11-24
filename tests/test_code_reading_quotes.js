@@ -27,14 +27,14 @@ const { validateCodeExplanation, CODE_ANSWER_FORMAT_ERROR } = loadReading("code-
 	assert.throws(() => validateCodeExplanation("```python\nx = 1"), /代码标记未闭合/);
 	const storage = memoryStorage(), repo = new ReadingRepository(storage); const session = createReadingSession(doc.source); const main = addReadingNode(session, null); main.status = "done"; main.content = "背景";
 	await repo.add(session); let calls = 0; let malformed = false;
-	const workspace = { repository: repo, document: async () => doc, generate: async () => {} };
+	const workspace = Object.assign(new ReadingWorkspaceService({}, ".", "."), { repository: repo, document: async () => doc, generate: async () => {} });
 	const engine = new ReadingEngine(workspace, () => ({ name: "test", model: "test", images: false, async complete(req) {
 		calls++; const input = JSON.parse(req.prompt);
 		if (req.system.includes("代码证据选择器")) { assert.deepEqual(input.codeQuote, quote); return JSON.stringify({ ids: [second.id], query: "value_name", needsVisual: false }); }
 		assert.deepEqual(input.codeQuote, quote); assert(input.evidence.some(e => e.id === evidence.id), "host includes quoted code when selector omits it");
 		return JSON.stringify({ title: "选区说明", content: "这段是赋值，未运行。[" + second.id + "]" + (malformed ? " 返回 `" : ""), evidenceIds: [second.id] });
 	} }));
-	const ask = (...args) => ReadingWorkspaceService.prototype.askCode.call(workspace, session.id, main.id, evidence.id, offsets.start, offsets.end, ...args);
+	const ask = (...args) => workspace.askCode(session.id, main.id, evidence.id, offsets.start, offsets.end, ...args);
 	const id = await ask("这段是什么意思"); assert.deepEqual(repo.get(session.id).nodes.at(-1).codeQuote, quote);
 	await engine.generate(session.id, id); assert.equal(calls, 2); assert.equal(repo.get(session.id).nodes.at(-1).status, "done");
 	malformed = true; const broken = await ask("检查未写完的回答"); await assert.rejects(engine.generate(session.id, broken), /代码标记未闭合/);

@@ -2,17 +2,21 @@
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const { test } = require("node:test");
-const { loadReading, memoryStorage } = require("./reading-test-helpers");
+const { loadReading, memoryStorage, temporaryFileStorage } = require("./reading-test-helpers");
 const { ReadingRepository } = loadReading("reading/store.ts");
 const { ReadingEngine } = loadReading("reading/engine.ts");
 const { ReadingWorkspaceService } = loadReading("reading/workspace.ts");
 const { createReadingSession, addReadingNode } = loadReading("reading/session.ts");
 const { openCodeProject } = loadReading("code-reading/source.ts");
 class Base {}
-const { ReadingWorkspaceView } = loadReading("views/reading-workspace.ts", { electron: {}, obsidian: {
-	ItemView: Base, Component: Base, Modal: Base, SuggestModal: Base, FuzzySuggestModal: Base,
+const obsidian = {
+	ItemView: Base, Component: class { load() {} unload() {} }, Modal: Base, SuggestModal: Base, FuzzySuggestModal: Base,
 	Notice: Base, setIcon() {}, MarkdownRenderer: { render: async (_app, text, el) => { el.textContent = text; } },
-} });
+};
+const { ReadingWorkspaceView } = loadReading("views/reading-workspace.ts", { electron: {}, obsidian });
+const { InlinePaperReading } = loadReading("views/inline-paper-reading.ts", {
+	obsidian, "./reading-citations": { renderReadingCitations() {} },
+});
 const paper = { kind: "article", title: "Paper", path: "paper.md", fingerprint: "a".repeat(64) };
 const evidence = { id: "text-1-0", kind: "paper", path: paper.path, label: "Intro", text: "Evidence" };
 const paperDoc = { source: paper, evidence: [evidence], catalog: "text-1-0 Intro", verify: async () => {} };
@@ -21,8 +25,8 @@ const answer = JSON.stringify({ title: "Intro", content: "Answer [text-1-0]", ev
 const modelError = new Error("provider response truncated");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function fixture(doc = paperDoc, completed = false) {
-	const storage = memoryStorage(), repo = new ReadingRepository(storage);
+async function fixture(doc = paperDoc, completed = false, storage = memoryStorage()) {
+	const repo = new ReadingRepository(storage);
 	const service = new ReadingWorkspaceService({}, ".", ".");
 	service.repository = repo;
 	service.document = async () => doc;
@@ -58,6 +62,279 @@ function render(f, view = viewFor(f)) {
 	finally { global.document = previous; }
 	return { text: elements.map(e => e.textContent).join(" "), retry: elements.find(e => e.title === "重试") };
 }
+
+async function foregroundView(storage, session, lifecycleTest) {
+	const service = new ReadingWorkspaceService({}, ".", ".");
+	service.repository = new ReadingRepository(storage);
+	await service.ready();
+	const view = viewFor({ service, session });
+	view.service = undefined;
+	view.plugin.getReadingWorkspace = () => service;
+	const buttons = [];
+	function element(tag) {
+		const el = Object.assign(new EventTarget(), { dataset: {}, style: { setProperty() {} }, classList: { add() {}, toggle() {} },
+			setAttribute() {}, appendChild() {}, replaceChildren() {}, contains: () => false, querySelector: () => null, querySelectorAll: () => [] });
+		if (tag === "button") buttons.push(el);
+		return el;
+	}
+	Object.assign(view, { leaf: {}, domain: "paper", contentEl: element("div"),
+		renderHeader() {}, renderAnswer() {}, renderMode() {}, renderOutcomes() {}, drag() {} });
+	const previous = global.document;
+	global.document = Object.assign(new EventTarget(), { createElement: element, createElementNS: (_ns, tag) => element(tag) });
+	if (lifecycleTest) {
+		const engine = new ReadingEngine(service, () => ({}));
+		view.plugin.getReadingEngine = () => engine;
+		view.plugin.getCurationService = () => ({ subscribe: () => () => {} });
+		view.app.vault = { on() {}, offref() {} };
+		view.renderer.load = () => {};
+		view.scheduleOutcomes = () => {};
+		const state = lifecycleTest.mock.method(view, "render");
+		const stream = lifecycleTest.mock.method(view.contentEl, "querySelectorAll");
+		await view.onOpen();
+		return { service, engine, view, buttons, stateCalls: () => state.mock.callCount(),
+			streamCalls: () => stream.mock.calls.filter(call => call.arguments[0] === "[data-answer-id]").length };
+	}
+	try { await view.setState({ sessionId: session.id, domain: "paper" }); }
+	finally { global.document = previous; }
+	return { service, buttons };
+}
+
+for (const orderly of [true, false]) {
+	test("real onOpen isolates repository and stream updates after " + (orderly ? "onClose" : "abnormal close"), async t => {
+		const previousDocument = global.document;
+		t.after(() => { global.document = previousDocument; });
+		const notices = t.mock.method(obsidian, "Notice");
+		const storage = memoryStorage(), session = createReadingSession(paper);
+		const node = addReadingNode(session, null); node.status = "done";
+		await new ReadingRepository(storage).add(session);
+		const old = await foregroundView(storage, session, t);
+		const publish = (mount, text) => {
+			const repo = mount.service.repository;
+			const update = structuredClone(repo.get(session.id));
+			update.nodes[0].title = text;
+			repo.sessions.set(session.id, update);
+			repo.emit(session.id);
+			mount.engine.emit(session.id, node.id, text);
+		};
+		const before = old.stateCalls();
+		publish(old, "before unload");
+		assert.equal(old.stateCalls(), before + 1);
+		assert.equal(old.streamCalls(), 1);
+		if (orderly) await old.view.onClose();
+		await old.service.dispose();
+		const fresh = await foregroundView(storage, session, t);
+		const freshBefore = fresh.stateCalls();
+		const writes = t.mock.method(storage, "write");
+		publish(old, "late old update");
+		assert.equal(fresh.stateCalls(), freshBefore);
+		assert.equal(fresh.streamCalls(), 0);
+		if (orderly) {
+			assert.equal(old.stateCalls(), before + 1);
+			assert.equal(old.streamCalls(), 1);
+		}
+		const oldState = old.stateCalls(), oldStream = old.streamCalls();
+		publish(fresh, "new update");
+		assert.equal(fresh.stateCalls(), freshBefore + 1);
+		assert.equal(fresh.streamCalls(), 1);
+		assert.equal(old.stateCalls(), oldState);
+		assert.equal(old.streamCalls(), oldStream);
+		await tick();
+		assert.equal(writes.mock.callCount(), 0);
+		assert.equal(notices.mock.callCount(), 0);
+		await fresh.view.onClose();
+		if (!orderly) await old.view.onClose();
+		await fresh.service.dispose();
+	});
+}
+
+test("foreground and background recognize the old storage rejection, including a terminal save error", async t => {
+	const notices = t.mock.method(obsidian, "Notice");
+	const f = await fixture(paperDoc, true);
+	const { service, buttons } = await foregroundView(f.storage, f.session);
+	const advance = buttons.find(button => button.title === "继续下一步主线");
+	await service.dispose();
+	const [closed] = await Promise.allSettled([service.repository.transact(f.session.id, () => {})]);
+	assert.equal(closed.status, "rejected");
+	assert.match(closed.reason.message, /存储已关闭/);
+	const failures = [];
+	service.repository.subscribe((_, failure) => { if (failure) failures.push(failure); });
+	for (const error of [closed.reason, Object.assign(new Error("terminal save failed"), { saveError: closed.reason })]) {
+		service.advance = async () => { throw error; };
+		advance.onclick();
+		await service.repository.reportGenerationError(f.session.id, f.id, error);
+		await tick();
+		assert.equal(notices.mock.callCount(), 0);
+		assert.deepEqual(failures, []);
+	}
+	const diskError = Object.assign(new Error("terminal save failed: disk full"), { saveError: new Error(closed.reason.message) });
+	service.advance = async () => { throw diskError; };
+	advance.onclick();
+	await tick();
+	assert.deepEqual(notices.mock.calls.map(call => call.arguments), [[diskError.message]]);
+});
+
+for (const delivery of ["foreground", "background"]) {
+	test("a timed-out " + delivery + " generation stays silent even with the old view still subscribed", async t => {
+		t.mock.timers.enable({ apis: ["setTimeout"] });
+		t.mock.method(console, "warn", () => {});
+		const notices = t.mock.method(obsidian, "Notice");
+		const previousDocument = global.document;
+		t.after(() => { global.document = previousDocument; });
+		const storage = memoryStorage(), session = createReadingSession({ ...paper, kind: "pdf", path: "paper.pdf" });
+		await new ReadingRepository(storage).add(session);
+		const { service, view, buttons } = await foregroundView(storage, session, t);
+		let started, finish;
+		const opening = new Promise(resolve => { started = resolve; });
+		const pdf = new Promise(resolve => { finish = resolve; });
+		service.loader.open = () => { started(); return pdf; };
+		const failureEvents = [];
+		service.repository.subscribe((_, failure) => { if (failure) failureEvents.push(failure); });
+		let task;
+		if (delivery === "foreground") {
+			const advance = t.mock.method(service, "advance");
+			buttons.find(button => button.title === "开始讲解 →").onclick();
+			task = advance.mock.calls[0].result;
+		} else {
+			const id = await service.repository.transact(session.id, draft => addReadingNode(draft, null).id);
+			task = service.generate(session.id, id, "background");
+		}
+		const outcome = Promise.allSettled([task]);
+		await opening;
+		const disposal = service.dispose();
+		t.mock.timers.tick(5000);
+		await disposal;
+		const reopened = new ReadingRepository(storage);
+		await reopened.load();
+		const writes = t.mock.method(storage, "write");
+		finish({ destroy: async () => {} });
+		const [result] = await outcome;
+		await tick();
+		if (delivery === "foreground") {
+			assert.equal(result.status, "rejected");
+			assert.equal(result.reason.cause, service.closeReason);
+			assert.match(result.reason.saveError.message, /存储已关闭/);
+		} else assert.equal(result.status, "fulfilled");
+		assert.equal(service.repository.get(session.id).nodes.at(-1).status, "interrupted");
+		assert.equal(reopened.get(session.id).nodes.at(-1).status, "interrupted");
+		assert.deepEqual(failureEvents, []);
+		assert.equal(notices.mock.callCount(), 0);
+		assert.equal(writes.mock.callCount(), 0);
+		await view.onClose();
+	});
+}
+
+for (const entry of ["chat start", "map start", "continue"]) {
+	test(entry + " stores an interrupted node without a foreground close Notice", async t => {
+		const notices = t.mock.method(obsidian, "Notice");
+		const session = createReadingSession(paper);
+		if (entry === "continue") addReadingNode(session, null).status = "done";
+		const storage = memoryStorage();
+		await new ReadingRepository(storage).add(session);
+		const { service, buttons } = await foregroundView(storage, session);
+		const advance = t.mock.method(service, "advance");
+		const start = buttons.filter(button => button.title === "开始讲解 →");
+		const button = entry === "continue" ? buttons.find(button => button.title === "继续下一步主线")
+			: start[entry === "chat start" ? 0 : 1];
+		button.onclick();
+		const unloading = service.dispose();
+		await assert.rejects(advance.mock.calls[0].result, error => error === service.closeReason);
+		await unloading;
+		assert.equal(JSON.parse(await storage.read(session.id)).nodes.at(-1).status, "interrupted");
+		assert.equal(notices.mock.callCount(), 0);
+	});
+}
+
+test("a distinct foreground error with the same text still produces one Notice", async t => {
+	const notices = t.mock.method(obsidian, "Notice");
+	const f = await fixture(paperDoc, true);
+	const { service, buttons } = await foregroundView(f.storage, f.session);
+	// The write can fail after shutdown has started, independently of the close rejection.
+	const write = t.mock.method(f.storage, "write", async () => {
+		service.close();
+		throw new Error(service.closeReason.message);
+	});
+	buttons.find(button => button.title === "继续下一步主线").onclick();
+	await tick();
+	assert.equal(write.mock.callCount(), 1);
+	assert.deepEqual(notices.mock.calls.map(call => call.arguments), [[service.closeReason.message]]);
+});
+
+test("a real terminal disk error still produces one foreground Notice during normal unload", async t => {
+	const notices = t.mock.method(obsidian, "Notice");
+	const f = await fixture(paperDoc, true);
+	const { service, buttons } = await foregroundView(f.storage, f.session);
+	const write = f.storage.write.bind(f.storage), diskError = new Error("interruption write denied");
+	f.storage.write = (id, text) => {
+		if (JSON.parse(text).nodes.at(-1).status === "interrupted") throw diskError;
+		return write(id, text);
+	};
+	const advance = t.mock.method(service, "advance");
+	buttons.find(button => button.title === "继续下一步主线").onclick();
+	const disposal = service.dispose();
+	await assert.rejects(advance.mock.calls[0].result, error => error.saveError === diskError);
+	await disposal;
+	await tick();
+	assert.equal(notices.mock.callCount(), 1);
+	assert.match(notices.mock.calls[0].arguments[0], /interruption write denied/);
+});
+
+test("a new view after re-enable can advance and reports its own foreground errors", async t => {
+	const notices = t.mock.method(obsidian, "Notice");
+	const f = await fixture(paperDoc, true);
+	const old = await foregroundView(f.storage, f.session);
+	const unloading = old.service.dispose();
+	old.buttons.find(button => button.title === "继续下一步主线").onclick();
+	await unloading;
+	await tick();
+	assert.equal(notices.mock.callCount(), 0);
+	const reopened = await foregroundView(f.storage, f.session);
+	const { service, buttons } = reopened;
+	const advance = t.mock.method(service, "advance");
+	service.generateHandler = (id, nodeId) => service.repository.transact(id, session => {
+		const node = session.nodes.find(node => node.id === nodeId);
+		node.status = "done"; node.content = "Answer after re-enable";
+	});
+	const next = buttons.find(button => button.title === "继续下一步主线");
+	next.onclick();
+	await advance.mock.calls[0].result;
+	assert.equal(JSON.parse(await f.storage.read(f.session.id)).nodes.at(-1).content, "Answer after re-enable");
+	assert.equal(notices.mock.callCount(), 0);
+	service.generateHandler = async () => { throw modelError; };
+	next.onclick();
+	await assert.rejects(advance.mock.calls[1].result, error => error === modelError);
+	assert.deepEqual(notices.mock.calls.map(call => call.arguments), [[modelError.message]]);
+	await service.dispose();
+});
+
+test("inline continue suppresses only its own workspace close Notice", async t => {
+	const notices = t.mock.method(obsidian, "Notice");
+	const f = await fixture(paperDoc, true);
+	const buttons = new Map();
+	function element() {
+		return { dataset: {}, createDiv: element, createEl(tag, options) {
+			const child = element();
+			if (tag === "button") buttons.set(options.text, child);
+			return child;
+		} };
+	}
+	const pane = Object.assign(Object.create(InlinePaperReading.prototype), {
+		workspace: f.service, key: paper.path, profileSelect: { value: "" },
+		reader: { options: { document: { files: { en: { revision: { digest: paper.fingerprint } } } } } },
+		turns: new Map(), guideLinks: new Map([[f.id, []]]), answerLayouts: [],
+	});
+	pane.renderThread(element(), undefined, f.session, undefined, undefined, f.current());
+	await Promise.all(pane.answerLayouts);
+	f.service.open = async () => ({ id: f.session.id, created: false });
+	const next = buttons.get("继续主线");
+	next.onclick();
+	await f.service.dispose();
+	await tick();
+	assert.equal(notices.mock.callCount(), 0);
+	f.service.open = async () => { throw modelError; };
+	next.onclick();
+	await tick();
+	assert.deepEqual(notices.mock.calls.map(call => call.arguments), [[String(modelError)]]);
+});
 
 test("a persisted generation failure exposes the model reason and retry", async () => {
 	const f = await fixture();
@@ -260,6 +537,71 @@ for (const action of ["stop", "unload workspace"]) {
 			assert.ok(signal.aborted);
 		} finally { if (!signal.aborted) f.service.stop(f.session.id, f.id); await task; }
 		assert.equal(f.current().status, "interrupted");
+		const saved = JSON.parse(await f.storage.read(f.session.id)).nodes[0];
+		assert.equal(saved.status, "interrupted");
+		assert.equal(saved.usage.at(-1).state, "interrupted");
 		assert.deepEqual(events, []);
 	});
 }
+
+test("a closing view flushes its draft to disk while dispose waits", async t => {
+	const storage = await temporaryFileStorage(), f = await fixture(paperDoc, true, storage);
+	const view = viewFor(f);
+	view.localDrafts = new Map([[f.session.id + "|main", "尚未防抖保存"]]);
+	const notices = t.mock.method(obsidian, "Notice");
+	let finish;
+	const pending = new Promise(resolve => { finish = resolve; });
+	f.service.generateHandler = () => pending;
+	const task = f.service.generate(f.session.id, f.id);
+	let disposed = false;
+	const disposal = f.service.dispose().then(() => { disposed = true; });
+	try {
+		await view.onClose();
+		assert.equal(disposed, false);
+		assert.equal(JSON.parse(await storage.read(f.session.id)).ui.drafts.main, "尚未防抖保存");
+		assert.equal(notices.mock.callCount(), 0);
+	} finally { finish(); await Promise.all([task, disposal]); }
+});
+
+test("已知边界：onClose after dispose rejects the draft flush with a Notice and preserves the saved file", async t => {
+	const storage = await temporaryFileStorage(), f = await fixture(paperDoc, true, storage);
+	await f.repo.transact(f.session.id, s => { s.ui.drafts.main = "已保存"; });
+	const saved = await storage.read(f.session.id);
+	const view = viewFor(f);
+	view.localDrafts = new Map([[f.session.id + "|main", "尚未保存"]]);
+	await f.service.dispose();
+	const notices = t.mock.method(obsidian, "Notice"), writes = t.mock.method(storage, "write");
+	const transact = t.mock.method(f.repo, "transact");
+	const unhandled = t.mock.fn();
+	process.on("unhandledRejection", unhandled);
+	t.after(() => process.off("unhandledRejection", unhandled));
+	await view.onClose();
+	await tick();
+	assert.equal(unhandled.mock.callCount(), 0);
+	assert.equal(transact.mock.callCount(), 1);
+	await assert.rejects(transact.mock.calls[0].result, e => f.repo.isCloseError(e));
+	assert.deepEqual(notices.mock.calls.map(c => c.arguments), [["Error: 阅读会话存储已关闭"]]);
+	assert.equal(writes.mock.callCount(), 0);
+	assert.equal(await storage.read(f.session.id), saved);
+	assert.equal(JSON.parse(saved).ui.drafts.main, "已保存");
+});
+
+test("sealed startup recovery rejects without Notices, logs, failure records or corruption reports", async t => {
+	const f = await fixture();
+	await f.service.dispose();
+	const view = viewFor(f);
+	view.plugin.getReadingWorkspace = () => f.service;
+	const notices = t.mock.method(obsidian, "Notice");
+	const logs = ["log", "info", "debug", "warn", "error"].map(name => t.mock.method(console, name, () => {}));
+	const failures = [];
+	f.repo.subscribe((id, failure) => { if (failure) failures.push(failure); });
+	const writes = t.mock.method(f.storage, "write");
+	await assert.rejects(view.onOpen(), e => f.repo.isCloseError(e));
+	assert.equal(notices.mock.callCount(), 0);
+	for (const log of logs) assert.equal(log.mock.callCount(), 0);
+	assert.deepEqual(failures, []);
+	assert.equal(f.repo.unsavedGenerationErrors.has(f.repo.get(f.session.id)), false);
+	assert.equal(f.repo.loadIssues.size, 0);
+	assert.deepEqual(f.repo.errors, []);
+	assert.equal(writes.mock.callCount(), 0);
+});

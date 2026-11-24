@@ -125,6 +125,14 @@ export class ReadingWorkspaceView extends ItemView {
 	}
 	private get session(): ReadingSession | undefined { return this.service?.repository.sessions.get(this.sessionId); }
 	private handle(operation: Promise<unknown>): void { void operation.catch((error) => new Notice(error instanceof Error ? error.message : String(error))); }
+	private async advanceMain(sessionId: string): Promise<void> {
+		const service = this.service;
+		try { await service.advance(sessionId); }
+		catch (error) {
+			if (service.repository.isCloseError(error, service.closeReason)) return;
+			throw error;
+		}
+	}
 	private updateUI(edit: (ui: ReadingSession["ui"]) => void): void {
 		const id = this.sessionId; this.handle(this.service.repository.transact(id, (session) => edit(session.ui)));
 	}
@@ -242,7 +250,7 @@ export class ReadingWorkspaceView extends ItemView {
 					const question = session.modulePlan?.modules[i]?.question; if (question) element(label, "small", "", question); });
 			}
 			for (const id of session.mainIds) this.renderAnswer(messages, readingNode(session, id));
-			if (!session.mainIds.length) button(messages, "开始讲解 →", () => this.handle(this.service.advance(session.id)));
+			if (!session.mainIds.length) button(messages, "开始讲解 →", () => this.handle(this.advanceMain(session.id)));
 			const divider = element(body, "div", "reading-divider"); divider.setAttribute("role", "separator"); divider.setAttribute("aria-label", "调整对话与导图宽度");
 			divider.tabIndex = 0; divider.setAttribute("aria-orientation", "vertical"); divider.setAttribute("aria-valuemin", "25"); divider.setAttribute("aria-valuemax", "75"); divider.setAttribute("aria-valuenow", String(Math.round(session.ui.split * 100)));
 			divider.onkeydown = (event) => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); this.updateUI((ui) => { ui.split = Math.max(0.25, Math.min(0.75, ui.split + (event.key === "ArrowLeft" ? -0.05 : 0.05))); }); } };
@@ -276,7 +284,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const focus = actionButton(controls, "focus", "定位选中节点", () => this.revealMapNode(this.session!.ui.selectedId), true); focus.classList.add("reading-focus-node"); focus.disabled = !session.ui.selectedId;
 		element(mapArea, "div", "reading-map-composer");
 		this.renderMode(session, false);
-		if (!session.mainIds.length) button(mapArea, "开始讲解 →", () => this.handle(this.service.advance(session.id)));
+		if (!session.mainIds.length) button(mapArea, "开始讲解 →", () => this.handle(this.advanceMain(session.id)));
 		const windows = element(this.contentEl, "div", "reading-windows");
 		for (const floating of session.ui.windows) this.renderWindow(windows, floating);
 		this.contentEl.querySelectorAll<HTMLElement>("[data-scroll-key]").forEach((node) => {
@@ -355,7 +363,7 @@ export class ReadingWorkspaceView extends ItemView {
 			if (questions) element(meta, "span", "reading-node-questions", questions + " 条追问");
 			if (node.branchId) { const collapsed = session.ui.collapsed.includes(node.branchId); const toggle = actionButton(meta, collapsed ? "chevrons-down" : "chevrons-up", collapsed ? "展开" : "折叠", () => this.updateUI((ui) => { ui.collapsed = ui.collapsed.includes(node.branchId!) ? ui.collapsed.filter((id) => id !== node.branchId) : [...ui.collapsed, node.branchId!]; }), true); if (point.hiddenCount) toggle.title += " · " + point.hiddenCount + " 轮"; }
 			if (node.id === session.mainIds[session.mainIds.length - 1] && node.status === "done" && !session.completed) {
-				const next = actionButton(card, "arrow-right", "继续下一步主线", () => this.handle(this.service.advance(session.id)), true); next.classList.add("reading-advance");
+				const next = actionButton(card, "arrow-right", "继续下一步主线", () => this.handle(this.advanceMain(session.id)), true); next.classList.add("reading-advance");
 			}
 		}
 	}
@@ -808,7 +816,7 @@ export class ReadingWorkspaceView extends ItemView {
 				.then(async ({ id }) => { if (!code && changedBackend) {
 					await (await this.service.document(id)).verify();
 					await this.service.repository.transact(id,draft=>{draft.backend=backend.value; draft.model="";});
-				} modal.close(); this.selectSession(id); if (generate && !this.service.repository.get(id).mainIds.length) return this.service.advance(id); }).finally(() => { submit.disabled = false; preview.disabled = false; }));
+				} modal.close(); this.selectSession(id); if (generate && !this.service.repository.get(id).mainIds.length) return this.advanceMain(id); }).finally(() => { submit.disabled = false; preview.disabled = false; }));
 		};
 		const submit = button(modal.contentEl, "打开并继续阅读", () => open(true)); const preview = button(modal.contentEl, "仅打开来源，不调用模型", () => open(false)); submit.classList.add("mod-cta"); modal.open();
 	}
