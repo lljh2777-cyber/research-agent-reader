@@ -1,7 +1,7 @@
 "use strict";
 const assert = require("node:assert/strict");
 const { test } = require("node:test");
-const { loadReading, memoryStorage } = require("./reading-test-helpers");
+const { loadReading, memoryStorage, temporaryFileStorage } = require("./reading-test-helpers");
 const { ReadingWorkspaceService } = loadReading("reading/workspace.ts");
 const { ReadingRepository } = loadReading("reading/store.ts");
 const { ReadingEngine } = loadReading("reading/engine.ts");
@@ -17,9 +17,8 @@ function gate() {
 	return { promise, release };
 }
 
-async function fixture(secondRelease) {
+async function fixture(secondRelease, storage = memoryStorage()) {
 	const workspace = new ReadingWorkspaceService({}, ".", ".");
-	const storage = memoryStorage();
 	workspace.repository = new ReadingRepository(storage);
 	const sessions = ["a.pdf", "b.pdf"].map(path => createReadingSession({
 		kind: "pdf", path, title: path, fingerprint: "a".repeat(64),
@@ -393,4 +392,97 @@ test("unload waits for a startup recovery write already in flight", async t => {
 	assert.equal(returnedBeforeWrite, false);
 	assert.equal(JSON.parse(await storage.read(s.id)).nodes[0].status, "interrupted");
 	await assert.rejects(workspace.repository.transact(s.id, s => { s.title = "late"; }), /存储已关闭/);
+});
+
+for (const reject of [false, true]) {
+	test("dispose shares the first " + (reject ? "rejection" : "success") + " across concurrent, reentrant and later callers", async t => {
+		const { workspace, sessions: [, session] } = await fixture();
+		const doc = await workspace.document(session.id);
+		const release = gate(), started = gate(), error = new Error("flush failed");
+		const destroy = t.mock.method(doc, "destroy");
+		const seal = t.mock.method(workspace.repository, "closeStorage");
+		const flush = workspace.repository.flush.bind(workspace.repository);
+		const flushing = t.mock.method(workspace.repository, "flush", flush);
+		// Fail after the cached document has been destroyed, while closeStorage drains the queue.
+		const closeFlush = async () => { started.release(); await release.promise; if (reject) throw error; };
+		flushing.mock.mockImplementationOnce(flush);
+		flushing.mock.mockImplementation(closeFlush);
+		let reentrant, entered = false;
+		workspace.disposeHandler = t.mock.fn(() => {
+			if (entered) return;
+			entered = true;
+			reentrant = workspace.dispose();
+		});
+		const first = workspace.dispose(), concurrent = workspace.dispose();
+		const results = Promise.allSettled([first, concurrent, reentrant]);
+		await started.promise;
+		release.release();
+		const outcomes = await results;
+		const later = workspace.dispose();
+		const [last] = await Promise.allSettled([later]);
+		assert.deepEqual([workspace.disposeHandler.mock.callCount(), destroy.mock.callCount(), seal.mock.callCount()], [1, 1, 1]);
+		for (const promise of [reentrant, concurrent, later]) assert.equal(promise, first);
+		for (const outcome of [...outcomes, last]) {
+			assert.equal(outcome.status, reject ? "rejected" : "fulfilled");
+			if (reject) assert.equal(outcome.reason, error);
+		}
+	});
+}
+
+test("a throwing unload callback still seals the repository", async t => {
+	const { workspace, storage, sessions: [session] } = await fixture();
+	const error = new Error("unload callback failed");
+	workspace.disposeHandler = () => { throw error; };
+	const writes = t.mock.method(storage, "write");
+	await assert.rejects(workspace.dispose(), e => e === error);
+	await assert.rejects(workspace.repository.transact(session.id, () => {}), e => workspace.repository.isCloseError(e));
+	assert.equal(writes.mock.callCount(), 0);
+});
+
+test("a write queued before sealing runs after sealing and reaches disk before dispose resolves", async t => {
+	const storage = await temporaryFileStorage();
+	const { workspace, sessions: [, session] } = await fixture(undefined, storage);
+	const doc = await workspace.document(session.id);
+	const destroying = gate(), finishDestroy = gate(), sealed = gate();
+	t.mock.method(doc, "destroy", () => { destroying.release(); return finishDestroy.promise; });
+	const close = workspace.repository.closeStorage.bind(workspace.repository);
+	t.mock.method(workspace.repository, "closeStorage", () => {
+		const drained = close();
+		sealed.release();
+		return drained;
+	});
+	const write = storage.write.bind(storage), firstStarted = gate(), finishFirst = gate();
+	const writes = t.mock.method(storage, "write");
+	writes.mock.mockImplementationOnce(async (id, text) => { firstStarted.release(); await finishFirst.promise; await write(id, text); });
+	const order = [];
+	const disposal = workspace.dispose().then(() => { order.push("disposed"); });
+	await destroying.promise;
+	const first = workspace.repository.transact(session.id, s => { s.title = "first"; });
+	await firstStarted.promise;
+	const second = workspace.repository.transact(session.id, s => { s.title = "second"; }).then(() => order.push("saved"));
+	finishDestroy.release();
+	await sealed.promise;
+	assert.equal(writes.mock.callCount(), 1);
+	assert.deepEqual(order, []);
+	finishFirst.release();
+	await Promise.all([first, second, disposal]);
+	assert.deepEqual(order, ["saved", "disposed"]);
+	assert.equal(JSON.parse(await storage.read(session.id)).title, "second");
+	assert.equal(writes.mock.callCount(), 2);
+	await assert.rejects(workspace.repository.transact(session.id, s => { s.title = "late"; }), /存储已关闭/);
+	await workspace.repository.flush();
+	assert.equal(writes.mock.callCount(), 2);
+});
+
+test("successful startup recovery matches the UTF-8 bytes written by commit D (7d1ac9b)", async () => {
+	const legacy = require("./fixtures/reading-sessions/r-00000000-0000-4000-8000-000000000001.json");
+	const time = "2024-02-03T04:05:06.000Z", id = "r-00000000-0000-4000-8000-000000000002";
+	const node = { id, parentId: null, branchId: null, question: "", title: "草稿", content: "", status: "pending", error: "",
+		createdAt: time, evidence: [], usage: [{ id: "call-1", model: "mock", started: time, estimatedInput: 4, stage: "answer", state: "running" }] };
+	const input = { ...legacy, createdAt: time, updatedAt: time, lastOpenedAt: time, nodes: [node], mainIds: [id] };
+	const storage = memoryStorage();
+	await storage.write(input.id, JSON.stringify(input));
+	await new ReadingRepository(storage).load();
+	const expected = '{"version":1,"id":"r-00000000-0000-4000-8000-000000000001","title":"Legacy time fixture","source":{"kind":"pdf","path":"paper.pdf","title":"Paper","fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"nodes":[{"id":"r-00000000-0000-4000-8000-000000000002","parentId":null,"branchId":null,"question":"","title":"草稿","content":"","status":"interrupted","error":"上次生成已中断，可重试","createdAt":"2024-02-03T04:05:06.000Z","evidence":[],"usage":[{"id":"call-1","model":"mock","started":"2024-02-03T04:05:06.000Z","estimatedInput":4,"stage":"answer","state":"interrupted"}]}],"branches":[],"mainIds":["r-00000000-0000-4000-8000-000000000002"],"outline":[],"mainSummary":"","completed":false,"backend":"","model":"","ui":{"windows":[],"collapsed":[],"drafts":{},"mode":"split","split":0.5,"zoom":1,"scrollX":0,"scrollY":0,"mainScroll":0,"selectedId":"r-00000000-0000-4000-8000-000000000002","mainFocusId":"r-00000000-0000-4000-8000-000000000002"},"createdAt":"2024-02-03T04:05:06.000Z","updatedAt":"2024-02-03T04:05:06.000Z","lastOpenedAt":"2024-02-03T04:05:06.000Z","purpose":"reading","archived":false,"pinned":false}';
+	assert.deepEqual(Buffer.from(await storage.read(input.id)), Buffer.from(expected));
 });

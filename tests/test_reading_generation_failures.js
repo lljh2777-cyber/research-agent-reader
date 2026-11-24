@@ -2,7 +2,7 @@
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const { test } = require("node:test");
-const { loadReading, memoryStorage } = require("./reading-test-helpers");
+const { loadReading, memoryStorage, temporaryFileStorage } = require("./reading-test-helpers");
 const { ReadingRepository } = loadReading("reading/store.ts");
 const { ReadingEngine } = loadReading("reading/engine.ts");
 const { ReadingWorkspaceService } = loadReading("reading/workspace.ts");
@@ -25,8 +25,8 @@ const answer = JSON.stringify({ title: "Intro", content: "Answer [text-1-0]", ev
 const modelError = new Error("provider response truncated");
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
-async function fixture(doc = paperDoc, completed = false) {
-	const storage = memoryStorage(), repo = new ReadingRepository(storage);
+async function fixture(doc = paperDoc, completed = false, storage = memoryStorage()) {
+	const repo = new ReadingRepository(storage);
 	const service = new ReadingWorkspaceService({}, ".", ".");
 	service.repository = repo;
 	service.document = async () => doc;
@@ -543,3 +543,65 @@ for (const action of ["stop", "unload workspace"]) {
 		assert.deepEqual(events, []);
 	});
 }
+
+test("a closing view flushes its draft to disk while dispose waits", async t => {
+	const storage = await temporaryFileStorage(), f = await fixture(paperDoc, true, storage);
+	const view = viewFor(f);
+	view.localDrafts = new Map([[f.session.id + "|main", "尚未防抖保存"]]);
+	const notices = t.mock.method(obsidian, "Notice");
+	let finish;
+	const pending = new Promise(resolve => { finish = resolve; });
+	f.service.generateHandler = () => pending;
+	const task = f.service.generate(f.session.id, f.id);
+	let disposed = false;
+	const disposal = f.service.dispose().then(() => { disposed = true; });
+	try {
+		await view.onClose();
+		assert.equal(disposed, false);
+		assert.equal(JSON.parse(await storage.read(f.session.id)).ui.drafts.main, "尚未防抖保存");
+		assert.equal(notices.mock.callCount(), 0);
+	} finally { finish(); await Promise.all([task, disposal]); }
+});
+
+test("已知边界：onClose after dispose rejects the draft flush with a Notice and preserves the saved file", async t => {
+	const storage = await temporaryFileStorage(), f = await fixture(paperDoc, true, storage);
+	await f.repo.transact(f.session.id, s => { s.ui.drafts.main = "已保存"; });
+	const saved = await storage.read(f.session.id);
+	const view = viewFor(f);
+	view.localDrafts = new Map([[f.session.id + "|main", "尚未保存"]]);
+	await f.service.dispose();
+	const notices = t.mock.method(obsidian, "Notice"), writes = t.mock.method(storage, "write");
+	const transact = t.mock.method(f.repo, "transact");
+	const unhandled = t.mock.fn();
+	process.on("unhandledRejection", unhandled);
+	t.after(() => process.off("unhandledRejection", unhandled));
+	await view.onClose();
+	await tick();
+	assert.equal(unhandled.mock.callCount(), 0);
+	assert.equal(transact.mock.callCount(), 1);
+	await assert.rejects(transact.mock.calls[0].result, e => f.repo.isCloseError(e));
+	assert.deepEqual(notices.mock.calls.map(c => c.arguments), [["Error: 阅读会话存储已关闭"]]);
+	assert.equal(writes.mock.callCount(), 0);
+	assert.equal(await storage.read(f.session.id), saved);
+	assert.equal(JSON.parse(saved).ui.drafts.main, "已保存");
+});
+
+test("sealed startup recovery rejects without Notices, logs, failure records or corruption reports", async t => {
+	const f = await fixture();
+	await f.service.dispose();
+	const view = viewFor(f);
+	view.plugin.getReadingWorkspace = () => f.service;
+	const notices = t.mock.method(obsidian, "Notice");
+	const logs = ["log", "info", "debug", "warn", "error"].map(name => t.mock.method(console, name, () => {}));
+	const failures = [];
+	f.repo.subscribe((id, failure) => { if (failure) failures.push(failure); });
+	const writes = t.mock.method(f.storage, "write");
+	await assert.rejects(view.onOpen(), e => f.repo.isCloseError(e));
+	assert.equal(notices.mock.callCount(), 0);
+	for (const log of logs) assert.equal(log.mock.callCount(), 0);
+	assert.deepEqual(failures, []);
+	assert.equal(f.repo.unsavedGenerationErrors.has(f.repo.get(f.session.id)), false);
+	assert.equal(f.repo.loadIssues.size, 0);
+	assert.deepEqual(f.repo.errors, []);
+	assert.equal(writes.mock.callCount(), 0);
+});

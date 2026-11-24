@@ -45,6 +45,7 @@ export class FileReadingStorage implements ReadingStorage {
 		if (Buffer.byteLength(text) > 64 * 1024 * 1024) throw new Error("阅读会话超过存储上限，历史已保留");
 		const handle = await fs.open(pending, "w", 0o600);
 		try { await handle.writeFile(text, "utf8"); await handle.sync(); } finally { await handle.close(); }
+		// Sealing stops new writes at admission; it cannot retract an accepted write already entering rename.
 		await fs.rename(pending, filename);
 	}
 }

@@ -17,6 +17,7 @@ export class ReadingWorkspaceService {
 	private readonly loadingDocuments = new Map<string, Promise<ReadingDocument>>();
 	private readonly pendingOpens = new Map<string | symbol, string>();
 	private closingError?: Error;
+	private disposal?: Promise<void>;
 	get closeReason(): Error | undefined { return this.closingError; }
 	private initialization: Promise<void> | null = null;
 	private tasks = new Map<Promise<unknown>, string | symbol>();
@@ -256,7 +257,13 @@ export class ReadingWorkspaceService {
 		this.closingError ??= new Error("阅读工作区已关闭");
 	}
 	dispose(): Promise<void> {
-		return this.drainBeforeClose().finally(() => this.repository.closeStorage());
+		if (!this.disposal) {
+			// Publish the promise before the synchronous unload callback can reenter dispose().
+			let settle!: (draining: Promise<void>) => void;
+			this.disposal = new Promise<void>(resolve => { settle = resolve; }).finally(() => this.repository.closeStorage());
+			settle(this.drainBeforeClose());
+		}
+		return this.disposal;
 	}
 	private async drainBeforeClose(): Promise<void> {
 		this.close();
