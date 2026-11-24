@@ -9,10 +9,14 @@ const { ReadingWorkspaceService } = loadReading("reading/workspace.ts");
 const { createReadingSession, addReadingNode } = loadReading("reading/session.ts");
 const { openCodeProject } = loadReading("code-reading/source.ts");
 class Base {}
-const { ReadingWorkspaceView } = loadReading("views/reading-workspace.ts", { electron: {}, obsidian: {
-	ItemView: Base, Component: Base, Modal: Base, SuggestModal: Base, FuzzySuggestModal: Base,
+const obsidian = {
+	ItemView: Base, Component: class { load() {} unload() {} }, Modal: Base, SuggestModal: Base, FuzzySuggestModal: Base,
 	Notice: Base, setIcon() {}, MarkdownRenderer: { render: async (_app, text, el) => { el.textContent = text; } },
-} });
+};
+const { ReadingWorkspaceView } = loadReading("views/reading-workspace.ts", { electron: {}, obsidian });
+const { InlinePaperReading } = loadReading("views/inline-paper-reading.ts", {
+	obsidian, "./reading-citations": { renderReadingCitations() {} },
+});
 const paper = { kind: "article", title: "Paper", path: "paper.md", fingerprint: "a".repeat(64) };
 const evidence = { id: "text-1-0", kind: "paper", path: paper.path, label: "Intro", text: "Evidence" };
 const paperDoc = { source: paper, evidence: [evidence], catalog: "text-1-0 Intro", verify: async () => {} };
@@ -58,6 +62,123 @@ function render(f, view = viewFor(f)) {
 	finally { global.document = previous; }
 	return { text: elements.map(e => e.textContent).join(" "), retry: elements.find(e => e.title === "重试") };
 }
+
+async function foregroundView(storage, session) {
+	const service = new ReadingWorkspaceService({}, ".", ".");
+	service.repository = new ReadingRepository(storage);
+	await service.ready();
+	const view = viewFor({ service, session });
+	view.service = undefined;
+	view.plugin.getReadingWorkspace = () => service;
+	const buttons = [];
+	function element(tag) {
+		const el = { dataset: {}, style: { setProperty() {} }, classList: { add() {}, toggle() {} },
+			setAttribute() {}, appendChild() {}, replaceChildren() {}, contains: () => false, querySelectorAll: () => [] };
+		if (tag === "button") buttons.push(el);
+		return el;
+	}
+	Object.assign(view, { leaf: {}, domain: "paper", contentEl: element("div"),
+		renderHeader() {}, renderAnswer() {}, renderMode() {}, renderOutcomes() {}, drag() {} });
+	const previous = global.document;
+	global.document = { createElement: element, createElementNS: (_ns, tag) => element(tag) };
+	try { await view.setState({ sessionId: session.id, domain: "paper" }); }
+	finally { global.document = previous; }
+	return { service, buttons };
+}
+
+for (const entry of ["chat start", "map start", "continue"]) {
+	test(entry + " stores an interrupted node without a foreground close Notice", async t => {
+		const notices = t.mock.method(obsidian, "Notice");
+		const session = createReadingSession(paper);
+		if (entry === "continue") addReadingNode(session, null).status = "done";
+		const storage = memoryStorage();
+		await new ReadingRepository(storage).add(session);
+		const { service, buttons } = await foregroundView(storage, session);
+		const advance = t.mock.method(service, "advance");
+		const start = buttons.filter(button => button.title === "开始讲解 →");
+		const button = entry === "continue" ? buttons.find(button => button.title === "继续下一步主线")
+			: start[entry === "chat start" ? 0 : 1];
+		button.onclick();
+		const unloading = service.dispose();
+		await assert.rejects(advance.mock.calls[0].result, error => error === service.closeReason);
+		await unloading;
+		assert.equal(JSON.parse(await storage.read(session.id)).nodes.at(-1).status, "interrupted");
+		assert.equal(notices.mock.callCount(), 0);
+	});
+}
+
+test("a distinct foreground error with the same text still produces one Notice", async t => {
+	const notices = t.mock.method(obsidian, "Notice");
+	const f = await fixture(paperDoc, true);
+	const { service, buttons } = await foregroundView(f.storage, f.session);
+	// The write can fail after shutdown has started, independently of the close rejection.
+	const write = t.mock.method(f.storage, "write", async () => {
+		service.close();
+		throw new Error(service.closeReason.message);
+	});
+	buttons.find(button => button.title === "继续下一步主线").onclick();
+	await tick();
+	assert.equal(write.mock.callCount(), 1);
+	assert.deepEqual(notices.mock.calls.map(call => call.arguments), [[service.closeReason.message]]);
+});
+
+test("a new view after re-enable can advance and reports its own foreground errors", async t => {
+	const notices = t.mock.method(obsidian, "Notice");
+	const f = await fixture(paperDoc, true);
+	const old = await foregroundView(f.storage, f.session);
+	const unloading = old.service.dispose();
+	old.buttons.find(button => button.title === "继续下一步主线").onclick();
+	await unloading;
+	await tick();
+	assert.equal(notices.mock.callCount(), 0);
+	const reopened = await foregroundView(f.storage, f.session);
+	const { service, buttons } = reopened;
+	const advance = t.mock.method(service, "advance");
+	service.generateHandler = (id, nodeId) => service.repository.transact(id, session => {
+		const node = session.nodes.find(node => node.id === nodeId);
+		node.status = "done"; node.content = "Answer after re-enable";
+	});
+	const next = buttons.find(button => button.title === "继续下一步主线");
+	next.onclick();
+	await advance.mock.calls[0].result;
+	assert.equal(JSON.parse(await f.storage.read(f.session.id)).nodes.at(-1).content, "Answer after re-enable");
+	assert.equal(notices.mock.callCount(), 0);
+	service.generateHandler = async () => { throw modelError; };
+	next.onclick();
+	await assert.rejects(advance.mock.calls[1].result, error => error === modelError);
+	assert.deepEqual(notices.mock.calls.map(call => call.arguments), [[modelError.message]]);
+	await service.dispose();
+});
+
+test("inline continue suppresses only its own workspace close Notice", async t => {
+	const notices = t.mock.method(obsidian, "Notice");
+	const f = await fixture(paperDoc, true);
+	const buttons = new Map();
+	function element() {
+		return { dataset: {}, createDiv: element, createEl(tag, options) {
+			const child = element();
+			if (tag === "button") buttons.set(options.text, child);
+			return child;
+		} };
+	}
+	const pane = Object.assign(Object.create(InlinePaperReading.prototype), {
+		workspace: f.service, key: paper.path, profileSelect: { value: "" },
+		reader: { options: { document: { files: { en: { revision: { digest: paper.fingerprint } } } } } },
+		turns: new Map(), guideLinks: new Map([[f.id, []]]), answerLayouts: [],
+	});
+	pane.renderThread(element(), undefined, f.session, undefined, undefined, f.current());
+	await Promise.all(pane.answerLayouts);
+	f.service.open = async () => ({ id: f.session.id, created: false });
+	const next = buttons.get("继续主线");
+	next.onclick();
+	await f.service.dispose();
+	await tick();
+	assert.equal(notices.mock.callCount(), 0);
+	f.service.open = async () => { throw modelError; };
+	next.onclick();
+	await tick();
+	assert.deepEqual(notices.mock.calls.map(call => call.arguments), [[String(modelError)]]);
+});
 
 test("a persisted generation failure exposes the model reason and retry", async () => {
 	const f = await fixture();
