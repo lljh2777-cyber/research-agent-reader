@@ -129,7 +129,7 @@ export class ReadingWorkspaceView extends ItemView {
 		const service = this.service;
 		try { await service.advance(sessionId); }
 		catch (error) {
-			if (error instanceof Error && error === service.closeReason) return;
+			if (service.repository.isCloseError(error, service.closeReason)) return;
 			throw error;
 		}
 	}

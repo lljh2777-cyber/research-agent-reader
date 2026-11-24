@@ -210,7 +210,7 @@ export class InlinePaperReading {
 		}
 	}
 	private showGuideError(error: unknown): void {
-		if (error instanceof Error && error === this.workspace.closeReason) return;
+		if (this.workspace.repository.isCloseError(error, this.workspace.closeReason)) return;
 		new Notice(String(error));
 	}
 	async openGuide() {

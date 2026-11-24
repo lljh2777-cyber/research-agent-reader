@@ -222,7 +222,7 @@ export class ReadingWorkspaceService {
 	async generate(sessionId: string, id: string, delivery: "foreground" | "background" = "foreground"): Promise<void> {
 		this.assertOpen();
 		const generation = this.runGeneration(sessionId, id);
-		const reported = delivery === "background" ? generation.catch(error => this.repository.reportGenerationError(sessionId, id, error)) : generation;
+		const reported = delivery === "background" ? generation.catch(error => this.repository.reportGenerationError(sessionId, id, error, this.closeReason)) : generation;
 		return this.track(reported, sessionId);
 	}
 	/** start/end are relative to the catalog block. The host binds the immutable quote. */
@@ -255,7 +255,10 @@ export class ReadingWorkspaceService {
 	close(): void {
 		this.closingError ??= new Error("阅读工作区已关闭");
 	}
-	async dispose(): Promise<void> {
+	dispose(): Promise<void> {
+		return this.drainBeforeClose().finally(() => this.repository.closeStorage());
+	}
+	private async drainBeforeClose(): Promise<void> {
 		this.close();
 		this.disposeHandler?.();
 		const tasks = new Map(this.tasks);

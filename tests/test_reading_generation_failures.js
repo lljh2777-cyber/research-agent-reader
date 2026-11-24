@@ -63,7 +63,7 @@ function render(f, view = viewFor(f)) {
 	return { text: elements.map(e => e.textContent).join(" "), retry: elements.find(e => e.title === "重试") };
 }
 
-async function foregroundView(storage, session) {
+async function foregroundView(storage, session, lifecycleTest) {
 	const service = new ReadingWorkspaceService({}, ".", ".");
 	service.repository = new ReadingRepository(storage);
 	await service.ready();
@@ -72,18 +72,155 @@ async function foregroundView(storage, session) {
 	view.plugin.getReadingWorkspace = () => service;
 	const buttons = [];
 	function element(tag) {
-		const el = { dataset: {}, style: { setProperty() {} }, classList: { add() {}, toggle() {} },
-			setAttribute() {}, appendChild() {}, replaceChildren() {}, contains: () => false, querySelectorAll: () => [] };
+		const el = Object.assign(new EventTarget(), { dataset: {}, style: { setProperty() {} }, classList: { add() {}, toggle() {} },
+			setAttribute() {}, appendChild() {}, replaceChildren() {}, contains: () => false, querySelector: () => null, querySelectorAll: () => [] });
 		if (tag === "button") buttons.push(el);
 		return el;
 	}
 	Object.assign(view, { leaf: {}, domain: "paper", contentEl: element("div"),
 		renderHeader() {}, renderAnswer() {}, renderMode() {}, renderOutcomes() {}, drag() {} });
 	const previous = global.document;
-	global.document = { createElement: element, createElementNS: (_ns, tag) => element(tag) };
+	global.document = Object.assign(new EventTarget(), { createElement: element, createElementNS: (_ns, tag) => element(tag) });
+	if (lifecycleTest) {
+		const engine = new ReadingEngine(service, () => ({}));
+		view.plugin.getReadingEngine = () => engine;
+		view.plugin.getCurationService = () => ({ subscribe: () => () => {} });
+		view.app.vault = { on() {}, offref() {} };
+		view.renderer.load = () => {};
+		view.scheduleOutcomes = () => {};
+		const state = lifecycleTest.mock.method(view, "render");
+		const stream = lifecycleTest.mock.method(view.contentEl, "querySelectorAll");
+		await view.onOpen();
+		return { service, engine, view, buttons, stateCalls: () => state.mock.callCount(),
+			streamCalls: () => stream.mock.calls.filter(call => call.arguments[0] === "[data-answer-id]").length };
+	}
 	try { await view.setState({ sessionId: session.id, domain: "paper" }); }
 	finally { global.document = previous; }
 	return { service, buttons };
+}
+
+for (const orderly of [true, false]) {
+	test("real onOpen isolates repository and stream updates after " + (orderly ? "onClose" : "abnormal close"), async t => {
+		const previousDocument = global.document;
+		t.after(() => { global.document = previousDocument; });
+		const notices = t.mock.method(obsidian, "Notice");
+		const storage = memoryStorage(), session = createReadingSession(paper);
+		const node = addReadingNode(session, null); node.status = "done";
+		await new ReadingRepository(storage).add(session);
+		const old = await foregroundView(storage, session, t);
+		const publish = (mount, text) => {
+			const repo = mount.service.repository;
+			const update = structuredClone(repo.get(session.id));
+			update.nodes[0].title = text;
+			repo.sessions.set(session.id, update);
+			repo.emit(session.id);
+			mount.engine.emit(session.id, node.id, text);
+		};
+		const before = old.stateCalls();
+		publish(old, "before unload");
+		assert.equal(old.stateCalls(), before + 1);
+		assert.equal(old.streamCalls(), 1);
+		if (orderly) await old.view.onClose();
+		await old.service.dispose();
+		const fresh = await foregroundView(storage, session, t);
+		const freshBefore = fresh.stateCalls();
+		const writes = t.mock.method(storage, "write");
+		publish(old, "late old update");
+		assert.equal(fresh.stateCalls(), freshBefore);
+		assert.equal(fresh.streamCalls(), 0);
+		if (orderly) {
+			assert.equal(old.stateCalls(), before + 1);
+			assert.equal(old.streamCalls(), 1);
+		}
+		const oldState = old.stateCalls(), oldStream = old.streamCalls();
+		publish(fresh, "new update");
+		assert.equal(fresh.stateCalls(), freshBefore + 1);
+		assert.equal(fresh.streamCalls(), 1);
+		assert.equal(old.stateCalls(), oldState);
+		assert.equal(old.streamCalls(), oldStream);
+		await tick();
+		assert.equal(writes.mock.callCount(), 0);
+		assert.equal(notices.mock.callCount(), 0);
+		await fresh.view.onClose();
+		if (!orderly) await old.view.onClose();
+		await fresh.service.dispose();
+	});
+}
+
+test("foreground and background recognize the old storage rejection, including a terminal save error", async t => {
+	const notices = t.mock.method(obsidian, "Notice");
+	const f = await fixture(paperDoc, true);
+	const { service, buttons } = await foregroundView(f.storage, f.session);
+	const advance = buttons.find(button => button.title === "继续下一步主线");
+	await service.dispose();
+	const [closed] = await Promise.allSettled([service.repository.transact(f.session.id, () => {})]);
+	assert.equal(closed.status, "rejected");
+	assert.match(closed.reason.message, /存储已关闭/);
+	const failures = [];
+	service.repository.subscribe((_, failure) => { if (failure) failures.push(failure); });
+	for (const error of [closed.reason, Object.assign(new Error("terminal save failed"), { saveError: closed.reason })]) {
+		service.advance = async () => { throw error; };
+		advance.onclick();
+		await service.repository.reportGenerationError(f.session.id, f.id, error);
+		await tick();
+		assert.equal(notices.mock.callCount(), 0);
+		assert.deepEqual(failures, []);
+	}
+	const diskError = Object.assign(new Error("terminal save failed: disk full"), { saveError: new Error(closed.reason.message) });
+	service.advance = async () => { throw diskError; };
+	advance.onclick();
+	await tick();
+	assert.deepEqual(notices.mock.calls.map(call => call.arguments), [[diskError.message]]);
+});
+
+for (const delivery of ["foreground", "background"]) {
+	test("a timed-out " + delivery + " generation stays silent even with the old view still subscribed", async t => {
+		t.mock.timers.enable({ apis: ["setTimeout"] });
+		t.mock.method(console, "warn", () => {});
+		const notices = t.mock.method(obsidian, "Notice");
+		const previousDocument = global.document;
+		t.after(() => { global.document = previousDocument; });
+		const storage = memoryStorage(), session = createReadingSession({ ...paper, kind: "pdf", path: "paper.pdf" });
+		await new ReadingRepository(storage).add(session);
+		const { service, view, buttons } = await foregroundView(storage, session, t);
+		let started, finish;
+		const opening = new Promise(resolve => { started = resolve; });
+		const pdf = new Promise(resolve => { finish = resolve; });
+		service.loader.open = () => { started(); return pdf; };
+		const failureEvents = [];
+		service.repository.subscribe((_, failure) => { if (failure) failureEvents.push(failure); });
+		let task;
+		if (delivery === "foreground") {
+			const advance = t.mock.method(service, "advance");
+			buttons.find(button => button.title === "开始讲解 →").onclick();
+			task = advance.mock.calls[0].result;
+		} else {
+			const id = await service.repository.transact(session.id, draft => addReadingNode(draft, null).id);
+			task = service.generate(session.id, id, "background");
+		}
+		const outcome = Promise.allSettled([task]);
+		await opening;
+		const disposal = service.dispose();
+		t.mock.timers.tick(5000);
+		await disposal;
+		const reopened = new ReadingRepository(storage);
+		await reopened.load();
+		const writes = t.mock.method(storage, "write");
+		finish({ destroy: async () => {} });
+		const [result] = await outcome;
+		await tick();
+		if (delivery === "foreground") {
+			assert.equal(result.status, "rejected");
+			assert.equal(result.reason.cause, service.closeReason);
+			assert.match(result.reason.saveError.message, /存储已关闭/);
+		} else assert.equal(result.status, "fulfilled");
+		assert.equal(service.repository.get(session.id).nodes.at(-1).status, "interrupted");
+		assert.equal(reopened.get(session.id).nodes.at(-1).status, "interrupted");
+		assert.deepEqual(failureEvents, []);
+		assert.equal(notices.mock.callCount(), 0);
+		assert.equal(writes.mock.callCount(), 0);
+		await view.onClose();
+	});
 }
 
 for (const entry of ["chat start", "map start", "continue"]) {
@@ -120,6 +257,25 @@ test("a distinct foreground error with the same text still produces one Notice",
 	await tick();
 	assert.equal(write.mock.callCount(), 1);
 	assert.deepEqual(notices.mock.calls.map(call => call.arguments), [[service.closeReason.message]]);
+});
+
+test("a real terminal disk error still produces one foreground Notice during normal unload", async t => {
+	const notices = t.mock.method(obsidian, "Notice");
+	const f = await fixture(paperDoc, true);
+	const { service, buttons } = await foregroundView(f.storage, f.session);
+	const write = f.storage.write.bind(f.storage), diskError = new Error("interruption write denied");
+	f.storage.write = (id, text) => {
+		if (JSON.parse(text).nodes.at(-1).status === "interrupted") throw diskError;
+		return write(id, text);
+	};
+	const advance = t.mock.method(service, "advance");
+	buttons.find(button => button.title === "继续下一步主线").onclick();
+	const disposal = service.dispose();
+	await assert.rejects(advance.mock.calls[0].result, error => error.saveError === diskError);
+	await disposal;
+	await tick();
+	assert.equal(notices.mock.callCount(), 1);
+	assert.match(notices.mock.calls[0].arguments[0], /interruption write denied/);
 });
 
 test("a new view after re-enable can advance and reports its own foreground errors", async t => {
@@ -381,6 +537,9 @@ for (const action of ["stop", "unload workspace"]) {
 			assert.ok(signal.aborted);
 		} finally { if (!signal.aborted) f.service.stop(f.session.id, f.id); await task; }
 		assert.equal(f.current().status, "interrupted");
+		const saved = JSON.parse(await f.storage.read(f.session.id)).nodes[0];
+		assert.equal(saved.status, "interrupted");
+		assert.equal(saved.usage.at(-1).state, "interrupted");
 		assert.deepEqual(events, []);
 	});
 }

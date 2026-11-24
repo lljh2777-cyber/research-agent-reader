@@ -19,7 +19,8 @@ function gate() {
 
 async function fixture(secondRelease) {
 	const workspace = new ReadingWorkspaceService({}, ".", ".");
-	workspace.repository = new ReadingRepository(memoryStorage());
+	const storage = memoryStorage();
+	workspace.repository = new ReadingRepository(storage);
 	const sessions = ["a.pdf", "b.pdf"].map(path => createReadingSession({
 		kind: "pdf", path, title: path, fingerprint: "a".repeat(64),
 	}));
@@ -35,7 +36,7 @@ async function fixture(secondRelease) {
 		return { source: sessions.find(s => s.source.path === path).source, verify: async () => {},
 			destroy: async () => { count.destroyed++; } };
 	};
-	return { workspace, sessions, count, release, started };
+	return { workspace, storage, sessions, count, release, started };
 }
 
 test("concurrent cold loads and a later cache hit have one PDF owner", async () => {
@@ -318,4 +319,78 @@ test("unload also seals a workspace that was never opened", async () => {
 		blocker.release();
 		await unloading;
 	}
+});
+
+for (const delivery of ["foreground", "background"]) {
+	test("a late " + delivery + " interruption preserves the reopened session's edits", async t => {
+		const clock = unloadClock(t);
+		const { workspace, storage, sessions: [s], started, release } = await fixture();
+		const id = await workspace.repository.transact(s.id, draft => addReadingNode(draft, null).id);
+		new ReadingEngine(workspace, () => ({}));
+		const failureEvents = [];
+		workspace.repository.subscribe((_, failure) => { if (failure) failureEvents.push(failure); });
+		const task = Promise.allSettled([workspace.generate(s.id, id, delivery)]);
+		await started.promise;
+		const disposal = clock.dispose(workspace);
+		await clock.tick(5000);
+		await disposal;
+
+		const reopened = new ReadingRepository(storage);
+		await reopened.load();
+		await reopened.transact(s.id, session => { session.title = "saved by the new workspace"; });
+		const saved = await storage.read(s.id);
+		const writes = t.mock.method(storage, "write");
+		release.release();
+		const [result] = await task;
+		assert.equal(JSON.parse(await storage.read(s.id)).title, "saved by the new workspace");
+		assert.equal(await storage.read(s.id), saved);
+		assert.equal(writes.mock.callCount(), 0);
+		assert.equal(workspace.repository.get(s.id).nodes[0].status, "interrupted");
+		assert.deepEqual(failureEvents, []);
+		assert.equal(result.status, delivery === "foreground" ? "rejected" : "fulfilled");
+		await assert.rejects(workspace.repository.saveGenerationFailure(s.id, id, true, workspace.closeReason), /存储已关闭/);
+		assert.equal(writes.mock.callCount(), 0);
+	});
+}
+
+test("a reopened repository recovers pending and running nodes; the sealed one cannot save recovery or create sessions", async t => {
+	const { workspace, storage, sessions: [pending, running] } = await fixture();
+	await workspace.repository.transact(pending.id, session => addReadingNode(session, null));
+	await workspace.repository.transact(running.id, session => { addReadingNode(session, null).status = "running"; });
+	await workspace.dispose();
+	const writes = t.mock.method(storage, "write");
+	await assert.rejects(workspace.repository.add(createReadingSession(pending.source)), /存储已关闭/);
+	await assert.rejects(workspace.repository.load(), /存储已关闭/);
+	assert.equal(writes.mock.callCount(), 0);
+	const savedStatus = async id => JSON.parse(await storage.read(id)).nodes[0].status;
+	assert.deepEqual(await Promise.all([savedStatus(pending.id), savedStatus(running.id)]), ["pending", "running"]);
+	const reopened = new ReadingRepository(storage);
+	await reopened.load();
+	for (const { id } of [pending, running]) {
+		assert.equal(reopened.get(id).nodes[0].status, "interrupted");
+		assert.equal(await savedStatus(id), "interrupted");
+	}
+});
+
+test("unload waits for a startup recovery write already in flight", async t => {
+	const { workspace, storage, sessions: [s] } = await fixture();
+	await workspace.repository.transact(s.id, session => addReadingNode(session, null));
+	const started = gate(), release = gate();
+	const write = storage.write.bind(storage);
+	t.mock.method(storage, "write", async (id, text) => {
+		started.release();
+		await release.promise;
+		await write(id, text);
+	});
+	const recovery = workspace.ready();
+	await started.promise;
+	let disposed = false;
+	const unload = workspace.dispose().then(() => { disposed = true; });
+	await new Promise(resolve => setImmediate(resolve));
+	const returnedBeforeWrite = disposed;
+	release.release();
+	await Promise.all([recovery, unload]);
+	assert.equal(returnedBeforeWrite, false);
+	assert.equal(JSON.parse(await storage.read(s.id)).nodes[0].status, "interrupted");
+	await assert.rejects(workspace.repository.transact(s.id, s => { s.title = "late"; }), /存储已关闭/);
 });
