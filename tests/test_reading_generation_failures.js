@@ -67,22 +67,36 @@ async function foregroundView(storage, session, lifecycleTest) {
 	const service = new ReadingWorkspaceService({}, ".", ".");
 	service.repository = new ReadingRepository(storage);
 	await service.ready();
+	return mountForegroundView(service, session, lifecycleTest);
+}
+
+async function mountForegroundView(service, session, lifecycleTest, runningEngine) {
 	const view = viewFor({ service, session });
 	view.service = undefined;
 	view.plugin.getReadingWorkspace = () => service;
 	const buttons = [];
 	function element(tag) {
-		const el = Object.assign(new EventTarget(), { dataset: {}, style: { setProperty() {} }, classList: { add() {}, toggle() {} },
-			setAttribute() {}, appendChild() {}, replaceChildren() {}, contains: () => false, querySelector: () => null, querySelectorAll: () => [] });
+		const children = [];
+		const el = Object.assign(new EventTarget(), { dataset: {}, isConnected: true, style: { setProperty() {} }, classList: { add() {}, toggle() {} },
+			setAttribute() {}, appendChild(child) { children.push(child); }, replaceChildren() { children.length = 0; }, contains: () => false,
+			querySelector(selector) { return this.querySelectorAll(selector)[0] || null; },
+			querySelectorAll(selector) {
+				if (selector !== "[data-answer-id]" && selector !== ".reading-answer-content") return [];
+				return children.flatMap(child => {
+					const matches = selector === "[data-answer-id]" ? child.dataset.answerId : child.className === "reading-answer-content";
+					return matches ? [child] : child.querySelectorAll(selector);
+				});
+			} });
 		if (tag === "button") buttons.push(el);
 		return el;
 	}
 	Object.assign(view, { leaf: {}, domain: "paper", contentEl: element("div"),
-		renderHeader() {}, renderAnswer() {}, renderMode() {}, renderOutcomes() {}, drag() {} });
+		renderHeader() {}, renderMode() {}, renderOutcomes() {}, drag() {} });
+	if (!runningEngine) view.renderAnswer = () => {};
 	const previous = global.document;
 	global.document = Object.assign(new EventTarget(), { createElement: element, createElementNS: (_ns, tag) => element(tag) });
 	if (lifecycleTest) {
-		const engine = new ReadingEngine(service, () => ({}));
+		const engine = runningEngine ?? new ReadingEngine(service, () => ({}));
 		view.plugin.getReadingEngine = () => engine;
 		view.plugin.getCurationService = () => ({ subscribe: () => () => {} });
 		view.app.vault = { on() {}, offref() {} };
@@ -468,6 +482,64 @@ function holdAnswer(f) {
 	};
 	return { started, release, calls };
 }
+
+async function startAnswerWithOpenView(t) {
+	const previousDocument = global.document;
+	t.after(() => { global.document = previousDocument; });
+	const storage = await temporaryFileStorage();
+	const service = new ReadingWorkspaceService({}, ".", ".");
+	const repo = service.repository = new ReadingRepository(storage);
+	await service.ready();
+	const loads = t.mock.method(repo, "load");
+	const session = createReadingSession(paper);
+	session.outline = ["Intro"];
+	await repo.add(session);
+	service.document = async () => paperDoc;
+	const backend = { name: "test", model: "mock", images: false };
+	const engine = new ReadingEngine(service, () => backend);
+	const pending = holdAnswer({ backend });
+	const openView = async () => (await mountForegroundView(service, session, t, engine)).view;
+	const old = await openView();
+	const generation = service.advance(session.id);
+	const finish = async () => { pending.release(); await generation; };
+	t.after(finish);
+	await Promise.race([pending.started, generation.then(() => { throw new Error("Generation ended before the answer request"); })]);
+	const nodeId = repo.get(session.id).mainIds[0];
+	assert.equal(repo.get(session.id).nodes[0].status, "running");
+	assert.equal(old.contentEl.querySelector("[data-answer-id]").dataset.answerId, nodeId);
+	return { old, openView, nodeId, finish, calls: pending.calls, loads, storage, session };
+}
+
+test("reopening during generation displays progress and the same node's final answer through its subscription", async t => {
+	const { old, openView, nodeId, finish, loads } = await startAnswerWithOpenView(t);
+	await old.onClose();
+	const reopened = await openView();
+	const displayed = () => reopened.contentEl.querySelector("[data-answer-id]");
+	assert.equal(displayed().dataset.answerId, nodeId);
+	assert.match(displayed().querySelector(".reading-answer-content").textContent, /正在生成讲解/);
+	await finish();
+	assert.equal(displayed().dataset.answerId, nodeId);
+	assert.match(displayed().querySelector(".reading-answer-content").textContent, /^Answer \[text-1-0\]\s*$/);
+	assert.equal(loads.mock.callCount(), 0);
+	await reopened.onClose();
+});
+
+test("closing, reopening and closing during generation saves exactly one answer with its original node ID", async t => {
+	const { old, openView, nodeId, finish, calls, loads, storage, session } = await startAnswerWithOpenView(t);
+	await old.onClose();
+	const reopened = await openView();
+	assert.equal(reopened.contentEl.querySelector("[data-answer-id]").dataset.answerId, nodeId);
+	await reopened.onClose();
+	await finish();
+	const saved = JSON.parse(await storage.read(session.id));
+	assert.equal(calls.answer, 1);
+	assert.deepEqual(saved.mainIds, [nodeId]);
+	assert.equal(saved.nodes.length, 1);
+	assert.equal(saved.nodes[0].id, nodeId);
+	assert.equal(saved.nodes[0].status, "done");
+	assert.equal(saved.nodes[0].content, "Answer [text-1-0]");
+	assert.equal(loads.mock.callCount(), 0);
+});
 
 test("closing the last view lets the answer finish on disk and reopen without regeneration", async () => {
 	const f = await fixture(), pending = holdAnswer(f);
