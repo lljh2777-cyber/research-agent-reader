@@ -360,16 +360,19 @@ export class InlinePaperReading {
 				const answer = body.createDiv();
 				const ids = n.evidence.map(e => e.id);
 				this.answerLayouts.push(MarkdownRenderer.render(this.reader.options.app, safeReadingMarkdown(n.content,ids), answer, s.source.path, this.renderer)
-					.then(() => renderReadingCitations(answer, ids, n.content, (group, evidenceId) => {
-						const e = n.evidence.find(item => item.id === evidenceId)!;
-						if (e.kind !== "paper" || e.start === undefined || !this.paths.includes(e.path) || !this.doc.files.en.text.startsWith(e.text,e.start)) return false;
-						const link = links.find(l => l.start >= e.start! && l.start < e.start! + e.text.length && (e.asset ? l.kind === "figure" && l.block.kind === "image" : l.kind !== "figure"));
-						if (!link) return false;
-						const label = link.figureNumber || (link.kind === "figure" ? "原图" : link.kind === "table" ? "表格" : "原文");
-						const control = button(group, label, () => this.showEvidence(id,link));
-						control.title = link.label;
-						return true;
-					}))
+					.then(() => {
+						if (!answer.isConnected) return;
+						renderReadingCitations(answer, ids, n.content, (group, evidenceId) => {
+							const e = n.evidence.find(item => item.id === evidenceId)!;
+							if (e.kind !== "paper" || e.start === undefined || !this.paths.includes(e.path) || !this.doc.files.en.text.startsWith(e.text,e.start)) return false;
+							const link = links.find(l => l.start >= e.start! && l.start < e.start! + e.text.length && (e.asset ? l.kind === "figure" && l.block.kind === "image" : l.kind !== "figure"));
+							if (!link) return false;
+							const label = link.figureNumber || (link.kind === "figure" ? "原图" : link.kind === "table" ? "表格" : "原文");
+							const control = button(group, label, () => this.showEvidence(id,link));
+							control.title = link.label;
+							return true;
+						});
+					})
 					.catch(error => { if (!this.signal.aborted) new Notice(String(error)); }));
 				{
 					if (!links.length) body.createEl("p",{text:"本轮没有可核对的正文位置。"});

@@ -111,7 +111,7 @@ for (const valid of [false, true]) test("evidence selection and answer generatio
 test("the answer view labels stale text and keeps valid text as a quotation", async t => {
 	const elements = [];
 	function element(tag) {
-		const item = { tag, dataset: {}, children: [], appendChild(child) { this.children.push(child); }, setAttribute() {} };
+		const item = { tag, isConnected: true, dataset: {}, children: [], appendChild(child) { this.children.push(child); }, setAttribute() {} };
 		elements.push(item);
 		return item;
 	}

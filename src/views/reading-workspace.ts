@@ -513,10 +513,14 @@ export class ReadingWorkspaceView extends ItemView {
 		const placeholder = node.status === "failed" || node.status === "interrupted" ? "本单元尚未完成，可在下方重试。" : "正在准备讲解…";
 		const active = node.status === "pending" || node.status === "running";
 		try { void MarkdownRenderer.render(this.app, safeReadingMarkdown(node.content || (active && this.plugin.getReadingEngine().streamed(this.sessionId, node.id)) || placeholder, node.evidence.map(e => e.id)), content, "", this.renderer).then(() => {
+			if (!content.isConnected) return;
 			const first = content.firstElementChild;
 			if (first && /^H[1-6]$/.test(first.tagName) && first.textContent?.trim() === node.title.trim()) first.remove();
 			this.renderCitations(content, node);
-		}).catch(() => { content.textContent = node.content; }); }
+		}).catch(() => {
+			if (!content.isConnected) return;
+			content.textContent = node.content;
+		}); }
 		catch { content.textContent = node.content; }
 		if (this.session?.source.kind !== "code" && node.status === "done") {
 			const cited = new Set(readingCitations(node.content, node.evidence.map(e => e.id)).flatMap(match => match.ids));
