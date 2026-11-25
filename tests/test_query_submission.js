@@ -7,6 +7,7 @@ const { loadReading } = require("./reading-test-helpers");
 
 const notices = [];
 const mocks = { electron: {}, obsidian: {
+	FileSystemAdapter: class {},
 	ItemView: class {}, Modal: class {}, Plugin: class {}, PluginSettingTab: class {}, Component: class {},
 	setIcon() {}, MarkdownRenderer: { async render(_app, value, el) { el.setText(value); } },
 	Notice: class { constructor(message) { notices.push(message); } },
@@ -222,6 +223,92 @@ function screen(f) {
 	view.renderHeader = view.renderComposer = view.renderEmptyState = () => {};
 	return { view, ops, labels, renders: () => ops.filter(op => op === "empty").length };
 }
+
+async function reloadHistory(snapshot) {
+	const host = new Plugin();
+	host.app = { vault: { adapter: {} } };
+	const bytes = JSON.stringify(snapshot);
+	host.loadData = async () => JSON.parse(bytes);
+	let saved;
+	host.saveData = async next => { saved = next; };
+	await host.loadSettings();
+	await host.saveSettings();
+	return { host, messages: host.getActiveQuerySession().messages, saved: saved.querySessions[0].messages };
+}
+
+async function truncationHints(host, message) {
+	const ui = screen({ makeView: () => new QueryWikiView({}, host) });
+	await ui.view.renderMessage(ui.view.contentEl, message);
+	return ui.labels.filter(label => label.startsWith("内容已截短"));
+}
+
+test("contentLength counts the trimmed final answer once and survives a history round trip", async t => {
+	const f = lifecycleFixture(t);
+	const answer = "📖".repeat(12500);
+	const task = f.view.submitQuestion("inspect");
+	const hooks = await f.started;
+	hooks.onEvent({ type: "assistant-delta", delta: answer + "discarded partial" });
+	const partial = f.session.messages[1];
+	assert.equal(partial.content.length, 20000);
+	assert.equal(partial.contentLength, undefined);
+	const event = { type: "retrieval-result", payload: { answer_markdown: "  " + answer + "\n" } };
+	hooks.onEvent(event);
+	f.answer.resolve({ ...result, events: [event] });
+	await task;
+
+	const live = f.session.messages[1];
+	assert.equal(live.content, answer.slice(0, 20000));
+	assert.equal(live.contentLength, 25000);
+	assert.deepEqual(await truncationHints(f.host, live), ["内容已截短（原文 25000 字符，当前保留 20000 字符）"]);
+	const snapshot = f.snapshots.at(-1);
+	const stored = snapshot.querySessions[0].messages[1];
+	assert.equal(stored.content, answer.slice(0, 8000));
+	assert.equal(stored.contentLength, 25000);
+	const reload = await reloadHistory(snapshot);
+	assert.deepEqual(await truncationHints(reload.host, reload.messages[1]), ["内容已截短（原文 25000 字符，当前保留 8000 字符）"]);
+	assert.equal(reload.saved[1].content, stored.content);
+	assert.equal(reload.saved[1].contentLength, 25000);
+});
+
+test("contentLength uses the pre-snapshot assistant length and omits it for users", async () => {
+	const f = fixture();
+	const content = "a".repeat(9000);
+	f.session.messages.push(
+		{ role: "user", content, contentLength: 12000, status: "done" },
+		{ role: "assistant", content, status: "done" },
+	);
+	await f.host.saveSettings();
+	const snapshot = f.snapshots.at(-1);
+	const [user, answer] = snapshot.querySessions[0].messages;
+	assert.equal(answer.content.length, 8000);
+	assert.equal(answer.contentLength, 9000);
+	assert.equal(user.content.length, 8000);
+	assert.equal(Object.hasOwn(user, "contentLength"), false);
+	const reload = await reloadHistory(snapshot);
+	assert.deepEqual(await truncationHints(reload.host, reload.messages[1]), ["内容已截短（原文 9000 字符，当前保留 8000 字符）"]);
+});
+
+test("contentLength is optional for old and short answers and ignores invalid lengths on load", async () => {
+	const messages = [undefined, -1, "9000", NaN, 9999.5, 2, 5].map(contentLength =>
+		({ role: "assistant", status: "done", content: "short", contentLength }));
+	const reload = await reloadHistory({ settings: {}, querySessions: [{ id: "short", messages }] });
+	for (const [index, message] of reload.messages.entries()) {
+		assert.equal(message.contentLength ?? message.content.length, 5);
+		assert.deepEqual(await truncationHints(reload.host, message), []);
+		assert.equal(Object.hasOwn(reload.saved[index], "contentLength"), false);
+	}
+});
+
+test("contentLength only shows a hint for a completed assistant answer", async () => {
+	const f = fixture();
+	await f.view.submitQuestion("short reply");
+	assert.deepEqual(await truncationHints(f.host, f.session.messages[1]), []);
+	assert.equal(Object.hasOwn(f.snapshots.at(-1).querySessions[0].messages[1], "contentLength"), false);
+	for (const status of ["pending", "stopping", "failed", "interrupted", "done"]) {
+		const role = status === "done" ? "user" : "assistant";
+		assert.deepEqual(await truncationHints(f.host, { role, status, content: "part", contentLength: 9000 }), []);
+	}
+});
 
 for (const failed of [false, true]) {
 	test("closed query saves " + (failed ? "server failure" : "answer") + " without touching the old DOM", async t => {

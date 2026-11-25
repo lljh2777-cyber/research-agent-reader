@@ -581,6 +581,10 @@ export class QueryWikiView extends ItemView {
 			await MarkdownRenderer.render(this.app, message.content, markdown, "", this);
 			if (version !== this.renderVersion) return;
 		}
+		const contentLength = message.contentLength ?? message.content.length;
+		if (message.status === "done" && contentLength > message.content.length) {
+			body.createEl("p", { text: `内容已截短（原文 ${contentLength} 字符，当前保留 ${message.content.length} 字符）` });
+		}
 		if (
 			(message.vaultSources && message.vaultSources.length)
 			|| (message.webSources && message.webSources.length)

@@ -323,6 +323,7 @@ export class QueryTaskService {
 			await this.saveMessageUpdate(session.id, assistantMessage.id, {
 				status,
 				content: response || (status === "done" ? "本轮查询未返回文本。" : ""),
+				...(status === "done" ? { contentLength: response.length } : {}),
 				error,
 				progress: "",
 				retrievalTrace: traceEvent?.payload || assistantMessage.retrievalTrace || null,

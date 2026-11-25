@@ -221,11 +221,17 @@ export function createPersistenceSnapshot(state: DashboardPersistenceState): Das
 		})),
 		querySessions: state.querySessions.slice(0, querySessionLimit).map((session) => ({
 			...session,
-			messages: session.messages.slice(-queryMessageLimit).map((message) => ({
-				...message,
-				content: String(message.content || "").slice(0, 8000),
-				error: String(message.error || "").slice(0, 4000),
-			})),
+			messages: session.messages.slice(-queryMessageLimit).map((message) => {
+				const text = String(message.content || "");
+				const content = text.slice(0, 8000);
+				const contentLength = Math.max(message.contentLength ?? 0, text.length);
+				return {
+					...message,
+					content,
+					contentLength: message.role === "assistant" && contentLength > content.length ? contentLength : undefined,
+					error: String(message.error || "").slice(0, 4000),
+				};
+			}),
 		})),
 		activeQuerySessionId: state.activeQuerySessionId,
 		latestLintReport: state.latestLintReport,
