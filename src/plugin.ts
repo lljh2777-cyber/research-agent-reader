@@ -1877,10 +1877,17 @@ export default class AgentDashboardPlugin extends Plugin {
 		const messages: QueryMessage[] = Array.isArray(source.messages)
 			? source.messages.slice(-(this.settings.queryMessageLimit || DEFAULT_SETTINGS.queryMessageLimit)).map((value) => {
 				const message = asRecord(value);
+				const role = message.role === "user" ? "user" : "assistant";
+				const text = String(message.content || "");
+				const content = text.slice(0, 20000);
+				const declaredLength = message.contentLength;
+				const contentLength = typeof declaredLength === "number" && Number.isInteger(declaredLength) && declaredLength > text.length
+					? declaredLength : text.length;
 				return {
 				id: String(message.id || this.createQueryMessageId()),
-				role: message.role === "user" ? "user" : "assistant",
-				content: String(message.content || "").slice(0, 20000),
+					role,
+					content,
+					...(role === "assistant" && contentLength > content.length ? { contentLength } : {}),
 				attachments: normalizeVaultImageAttachments(message.attachments),
 				status: normalizeQueryMessageStatus(message.status),
 				progress: String(message.progress || ""),
