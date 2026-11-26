@@ -121,9 +121,12 @@ import {
 } from "./runtime/persistence";
 import {
 	cleanupTaskRunStorage,
+	deleteQueryAnswerFiles,
 	deleteTaskRunOutput as deletePersistedTaskRunOutput,
+	listQueryAnswerFiles,
 	readTaskRunCompletion,
 	readTaskRunOutput,
+	resolvePluginStorageRoot,
 	resolveTaskRunOutputLocation,
 	writeQueryAnswerFile,
 	writeTaskRunOutput,
@@ -517,7 +520,10 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.annotationService = new AnnotationService(this.app, this);
 		this.annotationHighlights = this.addChild(new AnnotationHighlights(this.app));
 		this.lastContextFile = this.app.workspace.getActiveFile();
-		await this.loadSettings();
+		const rawSessions = await this.loadSettings();
+		if (Array.isArray(rawSessions) && rawSessions.length) {
+			await this.cleanupQueryAnswerFiles(rawSessions);
+		}
 		this.registerObsidianProtocolHandler("rar-paper-evidence",params=>{ void this.openFinderCitation(params).catch(e=>new Notice(String(e))); });
 		this.registerView(KNOWLEDGE_FINDER, leaf => new KnowledgeFinder(leaf, this));
 		this.registerView(CLIPPER_READER, leaf => new ClipperReaderView(leaf, this));
@@ -1074,7 +1080,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		}
 	}
 
-	async loadSettings(): Promise<void> {
+	async loadSettings(): Promise<unknown[] | undefined> {
 		const stored = await this.getPersistence().load();
 		const rawStoredSettings = stored.settings && typeof stored.settings === "object" ? stored.settings : stored;
 		const { settings: storedSettings, changed: migratedLegacyKeys } = migrateLegacySettingsKeys(
@@ -1482,6 +1488,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		if (changed || !stored.settings) {
 			await this.saveSettings();
 		}
+		return stored.querySessions;
 	}
 
 	async saveSettings(): Promise<void> {
@@ -1827,10 +1834,12 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async resetQueryHistory(): Promise<void> {
+		const removedIds = new Set(this.querySessions.map(session => session.id));
 		const session = this.makeQuerySession();
 		this.querySessions = [session];
 		this.activeQuerySessionId = session.id;
 		await this.saveSettings();
+		await this.cleanupQueryAnswerFiles([], removedIds);
 	}
 
 	buildDiagnosticsSummary(): string {
@@ -1971,6 +1980,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		session.title = "新对话";
 		session.updatedAt = new Date().toISOString();
 		await this.saveSettings();
+		await this.cleanupQueryAnswerFiles([], new Set([session.id]));
 	}
 
 	async deleteActiveQuerySession(): Promise<QuerySession | null> {
@@ -1984,7 +1994,35 @@ export default class AgentDashboardPlugin extends Plugin {
 		const nextSession = this.getQuerySessions()[0] || this.querySessions[0];
 		this.activeQuerySessionId = nextSession.id;
 		await this.saveSettings();
+		await this.cleanupQueryAnswerFiles([], new Set([session.id]));
 		return nextSession;
+	}
+
+	private async cleanupQueryAnswerFiles(rawSessions: unknown[], removedIds?: ReadonlySet<string>): Promise<void> {
+		try {
+			const root = resolvePluginStorageRoot();
+			if (!root) throw new Error("插件目录不可用");
+			const files = await listQueryAnswerFiles(root, removedIds);
+			const keep = new Map<string, Set<string>>();
+			for (const value of [...rawSessions, ...this.querySessions]) {
+				const session = asRecord(value);
+				if (typeof session.id !== "string") continue;
+				const ids = keep.get(session.id) ?? new Set<string>();
+				keep.set(session.id, ids);
+				if (!Array.isArray(session.messages)) continue;
+				for (const message of session.messages) {
+					const id = asRecord(message).id;
+					if (typeof id === "string") ids.add(id);
+				}
+			}
+			for (const [id, messages] of files) {
+				const referenced = keep.get(id);
+				const obsolete = messages.filter(message => !referenced?.has(message));
+				await deleteQueryAnswerFiles(root, id, obsolete, Boolean(removedIds) || !referenced);
+			}
+		} catch (error) {
+			new Notice(`完整回答文件清理失败：${error instanceof Error ? error.message : String(error)}`);
+		}
 	}
 
 	async setActiveQueryMode(mode: QueryRetrievalMode | string): Promise<void> {

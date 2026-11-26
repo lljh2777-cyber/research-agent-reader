@@ -10,6 +10,9 @@ import { QUERY_OUTPUT_MAX_CHARS } from "./query-output-limit";
 // bundle. Keep complete outputs beside data.json instead of coupling public
 // Direct API users to an optional Toolkit checkout.
 const TASK_OUTPUT_DIRECTORY = "task-output";
+const QUERY_ANSWERS_DIRECTORY = "query-answers";
+const QUERY_SESSION_ID = /^query-[a-z0-9-]{1,64}$/;
+const QUERY_MESSAGE_ID = /^message-[a-z0-9-]{1,64}$/;
 const PLUGIN_OUTPUT_DIRECTORY_SEGMENTS = [TASK_OUTPUT_DIRECTORY, "dashboard-runs"];
 const LEGACY_TOOLKIT_OUTPUT_DIRECTORY_SEGMENTS = ["tool-library", "output", "dashboard-runs"];
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
@@ -66,7 +69,7 @@ function resolveExistingDirectory(rawPath: string): string | null {
 	}
 }
 
-function resolvePluginStorageRoot(): string | null {
+export function resolvePluginStorageRoot(): string | null {
 	return resolveExistingDirectory(__dirname);
 }
 
@@ -153,10 +156,95 @@ export async function writeTaskRunOutput(
 }
 
 export async function writeQueryAnswerFile(root: string, sessionId: string, messageId: string, text: string): Promise<void> {
-	if (!/^query-[a-z0-9-]{1,64}$/.test(sessionId)) throw new Error("无效的查询会话 ID");
-	if (!/^message-[a-z0-9-]{1,64}$/.test(messageId)) throw new Error("无效的查询消息 ID");
-	const targetPath = path.join(root, TASK_OUTPUT_DIRECTORY, "query-answers", sessionId, `${messageId}.md`);
+	if (!QUERY_SESSION_ID.test(sessionId)) throw new Error("无效的查询会话 ID");
+	if (!QUERY_MESSAGE_ID.test(messageId)) throw new Error("无效的查询消息 ID");
+	const targetPath = path.join(root, TASK_OUTPUT_DIRECTORY, QUERY_ANSWERS_DIRECTORY, sessionId, `${messageId}.md`);
 	await writeContainedTextFile(root, targetPath, () => text.slice(0, QUERY_OUTPUT_MAX_CHARS));
+}
+
+async function queryAnswerStat(file: string): Promise<fs.Stats | undefined> {
+	try {
+		return await fs.promises.lstat(file);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+async function queryAnswerDirectory(root: string, sessionId?: string): Promise<string | null> {
+	const segments = [TASK_OUTPUT_DIRECTORY, QUERY_ANSWERS_DIRECTORY];
+	if (sessionId !== undefined) {
+		if (!QUERY_SESSION_ID.test(sessionId)) throw new Error("无效的查询会话 ID");
+		segments.push(sessionId);
+	}
+	let directory = root;
+	for (const segment of segments) {
+		directory = path.join(directory, segment);
+		if (!isPathInside(root, directory)) throw new Error("查询回答目录超出插件存储目录");
+		const stats = await queryAnswerStat(directory);
+		if (!stats) return null;
+		if (!stats.isDirectory() || stats.isSymbolicLink()) {
+			if (segment === sessionId) return null;
+			throw new Error("查询回答目录不是可信普通目录");
+		}
+	}
+	return directory;
+}
+
+export async function listQueryAnswerFiles(
+	root: string,
+	selectedSessions?: ReadonlySet<string>,
+): Promise<Map<string, string[]>> {
+	const files = new Map<string, string[]>();
+	const base = await queryAnswerDirectory(root);
+	if (!base) return files;
+	for (const sessionId of await fs.promises.readdir(base)) {
+		if (!QUERY_SESSION_ID.test(sessionId) || (selectedSessions && !selectedSessions.has(sessionId))) continue;
+		const directory = await queryAnswerDirectory(root, sessionId);
+		if (!directory) continue;
+		const ids: string[] = [];
+		for (const name of await fs.promises.readdir(directory)) {
+			if (!name.endsWith(".md")) continue;
+			const id = name.slice(0, -3);
+			if (!QUERY_MESSAGE_ID.test(id)) continue;
+			const stats = await queryAnswerStat(path.join(directory, name));
+			if (stats?.isFile()) ids.push(id);
+		}
+		files.set(sessionId, ids);
+	}
+	return files;
+}
+
+async function queryRemovalPath(root: string, candidate: string): Promise<string> {
+	const resolved = await fs.promises.realpath(candidate);
+	if (!isPathInside(root, resolved) || path.relative(candidate, resolved) !== "") {
+		throw new Error("查询回答清理目标已不在原目录位置");
+	}
+	return resolved;
+}
+
+export async function deleteQueryAnswerFiles(
+	root: string, sessionId: string, messageIds: readonly string[], removeEmptyDirectory: boolean,
+): Promise<void> {
+	for (const id of messageIds) {
+		if (!QUERY_MESSAGE_ID.test(id)) throw new Error("无效的查询消息 ID");
+		// Recheck the directory chain after enumeration, immediately before each removal.
+		const directory = await queryAnswerDirectory(root, sessionId);
+		if (!directory) return;
+		const file = path.join(directory, id + ".md");
+		const stats = await queryAnswerStat(file);
+		if (stats?.isFile()) await fs.promises.unlink(await queryRemovalPath(root, file));
+	}
+	if (!removeEmptyDirectory) return;
+	const directory = await queryAnswerDirectory(root, sessionId);
+	if (!directory || (await fs.promises.readdir(directory)).length) return;
+	try {
+		await fs.promises.rmdir(await queryRemovalPath(root, directory));
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		// Unmanaged entries and files arriving after the listing keep the directory alive.
+		if (code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "ENOENT") throw error;
+	}
 }
 
 function readPayload(
