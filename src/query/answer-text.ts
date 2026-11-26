@@ -6,6 +6,13 @@ export interface AnswerText {
 	problem?: string;
 }
 
+export function queryAnswerErrorDetail(error: unknown): string {
+	const detail = (error instanceof Error ? error.message : String(error)).trim().split(/[\r\n]/, 1)[0];
+	if (/^(EACCES|EPERM)\b/.test(detail)) return `权限不足（${detail}）`;
+	if (/^[A-Z][A-Z0-9_]+$/.test(detail)) return `系统错误（${detail}）`;
+	return detail;
+}
+
 export async function chooseAnswerText(
 	message: { content: string; contentLength?: number },
 	readFile: () => Promise<string | null>,
@@ -18,7 +25,7 @@ export async function chooseAnswerText(
 	try {
 		file = await readFile();
 	} catch (error) {
-		return { ...memory, complete: false, problem: `回答文件读取失败：${error instanceof Error ? error.message : String(error)}` };
+		return { ...memory, complete: false, problem: `回答文件读取失败：${queryAnswerErrorDetail(error)}` };
 	}
 
 	if (file === null) return { ...memory, complete: false, problem: "回答文件不存在" };

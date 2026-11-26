@@ -7,6 +7,7 @@ export interface QueryNoteInput {
 	folder: string;
 	question: string;
 	answer: string;
+	truncation?: { originalLength: number; keptLength: number };
 	sources: string[];
 	sessionTitle: string;
 	createdAt?: string;
@@ -97,8 +98,12 @@ export async function saveQueryAnswerNote(app: App, input: QueryNoteInput): Prom
 	const body = [
 		`# ${String(input.question || "").trim().slice(0, 500) || "知识库问答"}`,
 		"",
-		`${String(input.answer || "").trim()}`,
+		input.truncation ? input.answer : String(input.answer || "").trim(),
 		"",
+		...(input.truncation ? [
+			`> 注意：聊天记录中的回答已被截短（原文 ${input.truncation.originalLength} 字符，本笔记保留 ${input.truncation.keptLength} 字符）`,
+			"",
+		] : []),
 		"## 来源",
 		sourceLinks,
 		"",

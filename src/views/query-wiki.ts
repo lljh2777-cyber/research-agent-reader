@@ -1,4 +1,5 @@
 import { backendSupportsImages, type QueryTaskChange, type QueryTaskService } from "../query/query-task-service";
+import { queryAnswerErrorDetail, type AnswerText } from "../query/answer-text";
 import { ROLE_LABELS } from "../retrieval/types";
 import {
 	ItemView,
@@ -118,6 +119,8 @@ interface QueryViewHost extends PluginHost {
 	invalidateCliModelDiscovery(backendId: CliBackendId): void;
 	directProfileSupportsWebSearch(profileId: string): boolean;
 	saveQueryAnswerNote(sessionId: string, messageId: string): Promise<string>;
+	saveQueryAnswerNoteWithStatus(sessionId: string, messageId: string): Promise<{ path: string; problem?: string }>;
+	getQueryMessageText(sessionId: string, messageId: string): Promise<AnswerText>;
 	supportsFast(model: string): boolean;
 }
 
@@ -268,7 +271,7 @@ export class QueryWikiView extends ItemView {
 		} else {
 			for (const message of session.messages) {
 				if (version !== this.renderVersion) return;
-				await this.renderMessage(conversation, message);
+				await this.renderMessage(conversation, message, session.id);
 			}
 		}
 		if (version !== this.renderVersion) return;
@@ -441,7 +444,8 @@ export class QueryWikiView extends ItemView {
 		});
 	}
 
-	async renderMessage(parent: HTMLElement, message: PersistedQueryMessage): Promise<void> {
+	async renderMessage(parent: HTMLElement, message: PersistedQueryMessage, sessionId: string): Promise<void> {
+		const messageId = message.id;
 		const article = parent.createEl("article", {
 			cls: `query-wiki-message is-${message.role} is-${message.status || "done"}`,
 			attr: { "data-message-id": message.id },
@@ -504,7 +508,9 @@ export class QueryWikiView extends ItemView {
 			setIcon(copyButton, "copy");
 			copyButton.addEventListener("click", async () => {
 				try {
-					await navigator.clipboard.writeText(String(message.content || ""));
+					const answer = await this.plugin.getQueryMessageText(sessionId, messageId);
+					await navigator.clipboard.writeText(answer.text);
+					if (!answer.complete) new Notice(`已复制截短版本（原文 ${answer.originalLength} 字符，复制 ${answer.keptLength} 字符）：${answer.problem}`);
 					setIcon(copyButton, "check");
 					copyButton.title = "已复制";
 					window.setTimeout(() => {
@@ -513,7 +519,7 @@ export class QueryWikiView extends ItemView {
 						copyButton.title = "复制本条内容";
 					}, 1400);
 				} catch (error) {
-					new Notice(`复制失败：${error instanceof Error ? error.message : String(error)}`);
+					new Notice(`复制失败：${queryAnswerErrorDetail(error)}`);
 				}
 			});
 			if (message.role === "assistant" && message.status === "done") {
@@ -529,15 +535,13 @@ export class QueryWikiView extends ItemView {
 				noteButton.addEventListener("click", async () => {
 					noteButton.disabled = true;
 					try {
-						const savedPath = await this.plugin.saveQueryAnswerNote(
-							this.session.id,
-							message.id,
-						);
+						const saved = await this.plugin.saveQueryAnswerNoteWithStatus(sessionId, messageId);
 						setIcon(noteButton, "check");
 						noteButton.title = "已保存笔记";
-						new Notice(`已保存笔记：${savedPath}`);
+						const warning = saved.problem ? `。回答已截短：${saved.problem}` : "";
+						new Notice(`已保存笔记：${saved.path}${warning}`);
 					} catch (error) {
-						new Notice(`落笔记失败：${error instanceof Error ? error.message : String(error)}`);
+						new Notice(`落笔记失败：${queryAnswerErrorDetail(error)}`);
 					} finally {
 						window.setTimeout(() => {
 							if (!noteButton.isConnected) return;

@@ -203,17 +203,21 @@ function lifecycleFixture(t, cli = false) {
 
 function screen(f) {
 	const view = f.makeView(), ops = [], labels = [];
+	const buttons = new Map();
 	class Element {
+		constructor(messageId) { this.messageId = messageId; }
 		createEl(tag, options = {}) {
 			ops.push(tag);
 			if (options.text) labels.push(options.text);
-			return new Element();
+			const child = new Element(options.attr?.["data-message-id"] ?? this.messageId);
+			if (tag === "button") buttons.set(child.messageId + "/" + options.attr?.["aria-label"], child);
+			return child;
 		}
 		createDiv(options) { return this.createEl("div", options); }
 		createSpan(options) { return this.createEl("span", options); }
 		setText(value) { labels.push(value); ops.push("setText"); }
 		addClass() {}
-		addEventListener() {}
+		addEventListener(type, fn) { if (type === "click") this.click = fn; }
 		empty() { ops.push("empty"); labels.length = 0; }
 		querySelector() { ops.push("querySelector"); return null; }
 		set scrollTop(value) { ops.push("scroll"); }
@@ -222,7 +226,7 @@ function screen(f) {
 	view.contentEl = new Element();
 	view.render = QueryWikiView.prototype.render;
 	view.renderHeader = view.renderComposer = view.renderEmptyState = () => {};
-	return { view, ops, labels, renders: () => ops.filter(op => op === "empty").length };
+	return { view, ops, labels, buttons, renders: () => ops.filter(op => op === "empty").length };
 }
 
 async function reloadHistory(snapshot) {
@@ -237,9 +241,191 @@ async function reloadHistory(snapshot) {
 	return { host, messages: host.getActiveQuerySession().messages, saved: saved.querySessions[0].messages };
 }
 
+const fsPromises = require("node:fs/promises");
+const actionQuestion = { id: "message-first", role: "user", status: "done", content: "原问题" };
+const actionReply = { id: "message-reply", role: "assistant", status: "done", content: "原会话回答", createdAt: "2026-01-02T03:04:00.000Z" };
+
+async function answerButtons(t, reply = {}, fileText) {
+	const path = require("node:path");
+	const root = await fsPromises.mkdtemp(path.join(require("node:os").tmpdir(), "reader-answer-buttons-"));
+	const original = { id: "query-first", title: "原会话", messages: [actionQuestion, { ...actionReply, ...reply }] };
+	const other = { id: "query-second", title: "第二会话", messages: [actionQuestion, { ...actionReply, content: "其他会话回答" }] };
+	const { host } = await reloadHistory({ settings: {}, querySessions: [original, other], activeQuerySessionId: original.id });
+	const session = host.getActiveQuerySession();
+	const rootAccess = t.mock.method(host, "readingPluginDirectory", () => root);
+	if (fileText !== undefined) {
+		const dir = path.join(root, "task-output", "query-answers", original.id);
+		await fsPromises.mkdir(dir, { recursive: true });
+		await fsPromises.writeFile(path.join(dir, actionReply.id + ".md"), fileText);
+	}
+	const notes = new Map();
+	Object.assign(host.app.vault, {
+		getAbstractFileByPath: file => notes.has(file) ? { path: file } : null,
+		createFolder: async () => {},
+		create: async (file, content) => notes.set(file, content),
+	});
+	const clipboard = [];
+	const oldNavigator = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+	Object.defineProperty(globalThis, "navigator", { configurable: true, value: {
+		clipboard: { writeText: async text => { clipboard.push(text); } },
+	} });
+	const oldWindow = globalThis.window;
+	globalThis.window = { requestAnimationFrame() {}, setTimeout() {} };
+	t.after(() => {
+		if (oldNavigator) Object.defineProperty(globalThis, "navigator", oldNavigator);
+		else Reflect.deleteProperty(globalThis, "navigator");
+		globalThis.window = oldWindow;
+	});
+	const ui = screen({ makeView: () => new QueryWikiView({}, host) });
+	await ui.view.onOpen();
+	const start = notices.length;
+	return {
+		host, session, rootAccess, notes, clipboard, notices: () => notices.slice(start),
+		copy: (id = actionReply.id) => ui.buttons.get(id + "/复制本条内容").click(),
+		note: () => ui.buttons.get(actionReply.id + "/将本回答保存为笔记").click(),
+	};
+}
+
+test("answer buttons: the old note button saves the rendered session after switching sessions", async t => {
+	const f = await answerButtons(t);
+	f.host.activeQuerySessionId = "query-second";
+	await f.note();
+	const [note] = f.notes.values();
+	assert.equal(note.split("\n\n")[1], "原会话回答");
+	await f.copy();
+	assert.deepEqual(f.clipboard, ["原会话回答"]);
+});
+
+test("answer buttons: copy the full 25000 units after restart without a Notice", async t => {
+	const answer = "📖".repeat(12500);
+	const f = await answerButtons(t, { content: answer.slice(0, 8000), contentLength: answer.length }, answer);
+	await f.copy();
+	assert.equal(f.clipboard.length, 1);
+	assert.equal(f.clipboard[0].length, 25000);
+	assert.equal(f.clipboard[0], answer);
+	assert.deepEqual(f.notices(), []);
+});
+
+test("answer buttons: a missing file copies only the preview and explains it once", async t => {
+	const preview = "答".repeat(8000);
+	const f = await answerButtons(t, { content: preview, contentLength: 25000 });
+	await f.copy();
+	assert.deepEqual(f.clipboard, [preview]);
+	assert.equal(f.notices().length, 1);
+	assert.match(f.notices()[0], /截短/);
+	assert.match(f.notices()[0], /回答文件不存在/);
+});
+
+test("answer buttons: a complete file produces exactly the original note format", async t => {
+	const f = await answerButtons(t, { content: "前缀", contentLength: 6 }, "前缀完整正文");
+	await f.note();
+	const [note] = f.notes.values();
+	const expected = [
+		"---", 'title: "原问题"', "created: 2026-01-02T03:04:00.000Z", "type: qa", "tags:", "  - qa",
+		'source: "原会话"', "---", "# 原问题", "", "前缀完整正文", "", "## 来源", "- 无", "",
+	].join("\n");
+	assert.deepEqual(Buffer.from(note), Buffer.from(expected));
+	assert.deepEqual(f.notices(), ["已保存笔记：" + [...f.notes.keys()][0]]);
+});
+
+test("answer buttons: longer partial file supplies note text and exact UTF-16 counts", async t => {
+	const part = "📖".repeat(59999) + "  ";
+	const f = await answerButtons(t, { content: part.slice(0, 8000), contentLength: 130000 }, part);
+	await f.note();
+	const [note] = f.notes.values();
+	const block = "> 注意：聊天记录中的回答已被截短（原文 130000 字符，本笔记保留 120000 字符）";
+	assert.ok(note.includes("\n\n" + part + "\n\n" + block + "\n\n## 来源"));
+	assert.equal(f.notices().length, 1);
+	assert.match(f.notices()[0], /部分原文/);
+});
+
+test("answer buttons: direct note callers still get a path and the first message cannot be saved", async t => {
+	const f = await answerButtons(t);
+	const saved = await f.host.saveQueryAnswerNote(f.session.id, actionReply.id);
+	assert.ok(f.notes.has(saved));
+	assert.deepEqual(f.notices(), []);
+	f.session.messages.shift();
+	await f.note();
+	assert.equal(f.notes.size, 1);
+	assert.deepEqual(f.notices(), ["落笔记失败：找不到要落笔记的回答"]);
+});
+
+test("answer buttons: clipboard error shows a Chinese reason without stack frames", async t => {
+	const f = await answerButtons(t);
+	t.mock.method(globalThis.navigator.clipboard, "writeText", async () => { throw new Error("EIO\n    at writeText (clipboard.js:1:2)"); });
+	await f.copy();
+	assert.deepEqual(f.notices(), ["复制失败：系统错误（EIO）"]);
+});
+
+test("answer buttons: failed read saves a marked note and gives one readable Notice", async t => {
+	const f = await answerButtons(t, { content: "预览", contentLength: 9000 }, "更长正文");
+	t.mock.method(fsPromises, "open", async () => { throw new Error("EACCES\n    at open (reader.js:1:2)"); });
+	await f.note();
+	const [note] = f.notes.values();
+	assert.match(note, /\n\n预览\n\n> 注意：聊天记录中的回答已被截短（原文 9000 字符，本笔记保留 2 字符）\n\n## 来源/);
+	assert.equal(f.notices().length, 1);
+	assert.match(f.notices()[0], /已保存笔记/);
+	assert.match(f.notices()[0], /权限/);
+	assert.doesNotMatch(f.notices()[0], /at open|reader\.js/);
+});
+
+test("answer buttons: both actions use the updated message at click time", async t => {
+	const f = await answerButtons(t);
+	f.session.messages[1] = { ...f.session.messages[1], content: "更新后的回答" };
+	await f.copy();
+	await f.note();
+	assert.deepEqual(f.clipboard, ["更新后的回答"]);
+	assert.ok([...f.notes.values()][0].includes("\n\n更新后的回答\n\n"));
+	assert.equal(f.rootAccess.mock.callCount(), 0);
+});
+
+for (const removed of ["message", "session"]) {
+	test("answer buttons: deleted " + removed + " preserves clipboard and does not create a note", async t => {
+		const f = await answerButtons(t);
+		f.clipboard.push("原剪贴板");
+		if (removed === "session") f.host.querySessions = [];
+		else f.session.messages.pop();
+		await f.copy();
+		await f.note();
+		assert.deepEqual(f.clipboard, ["原剪贴板"]);
+		assert.equal(f.notes.size, 0);
+		assert.deepEqual(f.notices(), ["复制失败：找不到要复制的消息", "落笔记失败：找不到要落笔记的回答"]);
+	});
+}
+
+test("answer buttons: first user message and unfinished answers copy from memory", async t => {
+	const f = await answerButtons(t);
+	await f.copy(actionQuestion.id);
+	for (const status of ["pending", "stopping", "failed", "interrupted"]) {
+		f.session.messages[1] = { ...f.session.messages[1], status, content: status, contentLength: 9000 };
+		await f.copy();
+	}
+	assert.deepEqual(f.clipboard, ["原问题", "pending", "stopping", "failed", "interrupted"]);
+	assert.equal(f.rootAccess.mock.callCount(), 0);
+	assert.deepEqual(f.notices(), []);
+});
+
+test("answer buttons: a pending file read keeps the content and length from the click", async t => {
+	const f = await answerButtons(t, { content: "原", contentLength: 9 }, "原文的片段");
+	const opened = deferred(), release = deferred();
+	const actualOpen = fsPromises.open;
+	t.mock.method(fsPromises, "open", async (...args) => {
+		opened.resolve();
+		await release.promise;
+		return actualOpen(...args);
+	});
+	const click = f.note();
+	await Promise.race([opened.promise, click]);
+	f.session.messages[1].content = "之后的内容";
+	f.session.messages[1].contentLength = 10000;
+	release.resolve();
+	await click;
+	assert.ok([...f.notes.values()][0].includes("原文的片段\n\n> 注意：聊天记录中的回答已被截短（原文 9 字符，本笔记保留 5 字符）"));
+});
+
 async function truncationHints(host, message) {
 	const ui = screen({ makeView: () => new QueryWikiView({}, host) });
-	await ui.view.renderMessage(ui.view.contentEl, message);
+	await ui.view.renderMessage(ui.view.contentEl, message, host.getActiveQuerySession().id);
 	return ui.labels.filter(label => label.startsWith("内容已截短"));
 }
 
