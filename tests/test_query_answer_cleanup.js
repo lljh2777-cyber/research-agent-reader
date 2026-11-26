@@ -96,23 +96,47 @@ test("write, startup cleanup and manual deletion use the vault plugin root while
 	assert.deepEqual(f.notices, []);
 });
 
-for (const kind of ["missing", "file", "linked directory"]) {
+async function linkForTest(t, target, link, type = process.platform === "win32" ? "junction" : "dir") {
+	try {
+		await fs.symlink(target, link, type);
+		return true;
+	} catch (error) {
+		if (!["EPERM", "EACCES", "ENOTSUP", "ENOSYS"].includes(error.code)) throw error;
+		t.skip(type + " unavailable: " + error.code);
+		return false;
+	}
+}
+
+test("a linked root uses its real directory for write, list and delete", async t => {
+	const { writeQueryAnswerFile, listQueryAnswerFiles, deleteQueryAnswerFiles } = loadReading("runtime/task-output-persistence.ts");
+	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "reader-query-linked-root-")));
+	const target = path.join(parent, "repo"), root = path.join(parent, "plugin");
+	await fs.mkdir(target);
+	if (!await linkForTest(t, target, root)) return;
+
+	const sessionDir = path.join(target, "task-output", "query-answers", "query-a");
+	await writeQueryAnswerFile(root, "query-a", "message-one", "saved in repo");
+	assert.equal(await fs.readFile(path.join(sessionDir, "message-one.md"), "utf8"), "saved in repo");
+	assert.deepEqual(await listQueryAnswerFiles(root), new Map([["query-a", ["message-one"]]]));
+	assert.deepEqual((await fs.readdir(parent)).sort(), ["plugin", "repo"]);
+	await deleteQueryAnswerFiles(root, "query-a", ["message-one"], true);
+	await absent(sessionDir);
+	assert.ok((await fs.lstat(root)).isSymbolicLink());
+	assert.equal(await fs.realpath(root), target);
+	assert.deepEqual((await fs.readdir(parent)).sort(), ["plugin", "repo"]);
+});
+
+for (const kind of ["missing", "file", "dangling link", "link to a file"]) {
 	test("query answer write, list and delete reject a root (" + kind + ")", async t => {
 		const { writeQueryAnswerFile, listQueryAnswerFiles, deleteQueryAnswerFiles } = loadReading("runtime/task-output-persistence.ts");
 		const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "reader-query-invalid-root-")));
 		const root = path.join(parent, "plugin");
 		if (kind === "file") await fs.writeFile(root, "keep");
-		if (kind === "linked directory") {
-			const outside = path.join(parent, "outside");
-			const session = path.join(outside, "task-output", "query-answers", "query-a");
-			await fs.mkdir(session, { recursive: true });
-			await fs.writeFile(path.join(session, "message-one.md"), "keep");
-			try {
-				await fs.symlink(outside, root, process.platform === "win32" ? "junction" : "dir");
-			} catch (error) {
-				if (["EPERM", "EACCES", "ENOTSUP", "ENOSYS"].includes(error.code)) return t.skip(error.code);
-				throw error;
-			}
+		const target = path.join(parent, "target");
+		if (kind === "dangling link" && !await linkForTest(t, target, root)) return;
+		if (kind === "link to a file") {
+			await fs.writeFile(target, "keep");
+			if (!await linkForTest(t, target, root, "file")) return;
 		}
 		const inventory = async () => (await fs.readdir(parent, { recursive: true })).sort();
 		const beforeFiles = await inventory();
@@ -121,9 +145,46 @@ for (const kind of ["missing", "file", "linked directory"]) {
 		await assert.rejects(() => deleteQueryAnswerFiles(root, "query-a", ["message-one"], true), /插件.*目录/);
 		assert.deepEqual(await inventory(), beforeFiles);
 		if (kind === "file") assert.equal(await fs.readFile(root, "utf8"), "keep");
-		if (kind === "linked directory") {
-			assert.equal(await fs.readFile(path.join(parent, "outside", "task-output", "query-answers", "query-a", "message-one.md"), "utf8"), "keep");
-		}
+		if (kind === "link to a file") assert.equal(await fs.readFile(target, "utf8"), "keep");
+		if (kind === "dangling link") await absent(target);
+	});
+}
+
+test("a linked root still rejects a linked task-output directory", async t => {
+	const { writeQueryAnswerFile, listQueryAnswerFiles, deleteQueryAnswerFiles } = loadReading("runtime/task-output-persistence.ts");
+	const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "reader-query-nested-link-")));
+	const target = path.join(parent, "repo"), root = path.join(parent, "plugin");
+	const external = path.join(parent, "external");
+	const sessionDir = path.join(external, "query-answers", "query-a");
+	await fs.mkdir(target);
+	await fs.mkdir(sessionDir, { recursive: true });
+	await fs.writeFile(path.join(sessionDir, "message-one.md"), "keep");
+	if (!await linkForTest(t, target, root)) return;
+	if (!await linkForTest(t, external, path.join(target, "task-output"))) return;
+	await assert.rejects(() => writeQueryAnswerFile(root, "query-a", "message-new", "new"), /任务输出目录不能是符号链接/);
+	await assert.rejects(() => listQueryAnswerFiles(root), /查询回答目录不是可信普通目录/);
+	await assert.rejects(() => deleteQueryAnswerFiles(root, "query-a", ["message-one"], true), /查询回答目录不是可信普通目录/);
+	assert.deepEqual(await fs.readdir(sessionDir), ["message-one.md"]);
+	assert.equal(await fs.readFile(path.join(sessionDir, "message-one.md"), "utf8"), "keep");
+});
+
+for (const [name, stored] of [["missing data.json", undefined], ["empty querySessions", { settings: {}, querySessions: [] }], ["empty data.json", ""]]) {
+	test("startup through a linked root preserves all answers with " + name, async t => {
+		const f = await fixture(t, stored);
+		const root = path.join(path.dirname(f.root), "plugin-link");
+		if (!await linkForTest(t, f.root, root)) return;
+		// Use the same physical data.json without testing exclusive settings writes through a Windows junction.
+		f.host.getPersistence();
+		f.host.manifest.dir = "plugin-link";
+		const file = await f.write("query-orphan");
+		const cleanup = t.mock.method(f.host, "cleanupQueryAnswerFiles");
+		const unlink = t.mock.method(fs, "unlink");
+		if (stored === "") await assert.rejects(() => f.host.onload(), /无法读取已有设置/);
+		else await f.host.onload();
+		assert.equal(cleanup.mock.callCount(), 0);
+		assert.equal(unlink.mock.callCount(), 0);
+		assert.equal(await fs.readFile(file, "utf8"), "message-one.md");
+		assert.deepEqual(f.notices, []);
 	});
 }
 

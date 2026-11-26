@@ -157,12 +157,15 @@ export async function writeTaskRunOutput(
 
 async function resolveQueryAnswerRoot(pluginDirectory: string): Promise<string> {
 	if (!path.isAbsolute(pluginDirectory)) throw new Error("插件目录必须是绝对路径");
-	const directory = path.resolve(pluginDirectory);
-	const stats = await queryAnswerStat(directory);
-	if (!stats) throw new Error("插件目录不存在");
-	if (stats.isSymbolicLink()) throw new Error("插件目录不能是符号链接或 junction");
-	if (!stats.isDirectory()) throw new Error("插件目录不是文件夹");
-	return fs.promises.realpath(directory);
+	let directory: string;
+	try {
+		directory = await fs.promises.realpath(pluginDirectory);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("插件目录不存在或链接目标不存在");
+		throw error;
+	}
+	if (!(await fs.promises.stat(directory)).isDirectory()) throw new Error("插件目录不是文件夹");
+	return directory;
 }
 
 export async function writeQueryAnswerFile(pluginDirectory: string, sessionId: string, messageId: string, text: string): Promise<void> {
