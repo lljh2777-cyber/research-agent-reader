@@ -1,1 +1,2 @@
 export const QUERY_OUTPUT_MAX_CHARS = 120_000;
+export const QUERY_PREVIEW_MAX_CHARS = 8_000;

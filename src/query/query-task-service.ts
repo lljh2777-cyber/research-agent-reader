@@ -3,7 +3,7 @@ import { ACTION_BY_ID, type DashboardAction } from "../actions";
 import { getCliBackendLabel, isCliBackendId, type CliBackendId } from "../config";
 import { profileSupportsQueryImage, type ProviderProfile } from "../providers/profile";
 import { getClaudeDefaultModelLabel } from "../runtime/settings";
-import { QUERY_OUTPUT_MAX_CHARS } from "../runtime/query-output-limit";
+import { QUERY_OUTPUT_MAX_CHARS, QUERY_PREVIEW_MAX_CHARS } from "../runtime/query-output-limit";
 import { makeVaultSourcePathResolver } from "../services/vault-evidence";
 import type {
 	DashboardProcessEvent, DashboardProcessHooks, DashboardProcessResult, ExecutionConfig, ExecutionOverrides,
@@ -24,6 +24,7 @@ interface QuestionImageResolution {
 interface QueryTaskHost extends Pick<PluginHost, "app" | "settings" | "isActionRunning"
 	| "startTaskRun" | "finishTaskRun" | "resolveActionExecutionConfig" | "resolveCliActionExecutionConfig"> {
 	querySessions: QuerySession[];
+	saveFullAnswer(sessionId: string, messageId: string, text: string): Promise<void>;
 	appendQueryMessages(
 		sessionId: string,
 		messages: PersistedQueryMessage[],
@@ -315,6 +316,15 @@ export class QueryTaskService {
 				? resultEvent.payload
 				: null;
 			const response = String(structuredResult?.answer_markdown || result.stdout || "").trim();
+			let fullAnswerSaveFailed = false;
+			if (status === "done" && !stopped && response.length > QUERY_PREVIEW_MAX_CHARS) {
+				try {
+					await this.plugin.saveFullAnswer(session.id, assistantMessage.id, response);
+				} catch (error) {
+					fullAnswerSaveFailed = true;
+					new Notice(`完整回答未能保存，重启后复制和落笔记只能得到截短版本：${error instanceof Error ? error.message : String(error)}`);
+				}
+			}
 			const error = status === "done"
 				? ""
 				: status === "interrupted"
@@ -356,7 +366,9 @@ export class QueryTaskService {
 				output,
 				error,
 			});
-			new Notice(status === "done" ? "知识库回答已完成" : status === "interrupted" ? "知识库查询已停止" : "知识库查询失败");
+			if (!fullAnswerSaveFailed) {
+				new Notice(status === "done" ? "知识库回答已完成" : status === "interrupted" ? "知识库查询已停止" : "知识库查询失败");
+			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const interrupted = this.shutdownSignal.aborted || task.stopping || /cancelled|canceled|已停止|正在停止/i.test(message);

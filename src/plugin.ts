@@ -124,6 +124,8 @@ import {
 	deleteTaskRunOutput as deletePersistedTaskRunOutput,
 	readTaskRunCompletion,
 	readTaskRunOutput,
+	resolveTaskRunOutputLocation,
+	writeQueryAnswerFile,
 	writeTaskRunOutput,
 } from "./runtime/task-output-persistence";
 import { ProcessExecutionService } from "./runtime/process-execution";
@@ -2014,6 +2016,12 @@ export default class AgentDashboardPlugin extends Plugin {
 		}
 		session.updatedAt = new Date().toISOString();
 		await this.saveSettings();
+	}
+
+	async saveFullAnswer(sessionId: string, messageId: string, text: string): Promise<void> {
+		const location = resolveTaskRunOutputLocation(this.settings.toolkitRoot, messageId);
+		if (!location) throw new Error("无法确定完整回答的写入位置（插件目录不可用或消息 ID 无效）");
+		await writeQueryAnswerFile(location.rootPath, sessionId, messageId, text);
 	}
 
 	async updateQueryMessage(
