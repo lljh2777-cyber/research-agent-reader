@@ -5,6 +5,7 @@ import type { TaskRun, TaskRunArtifacts } from "../types/contracts";
 import { normalizeIngestProgress, type IngestProgress } from "../agent/ingest-progress";
 import { isPathInside, writeContainedTextFile } from "./contained-text-file";
 import { QUERY_OUTPUT_MAX_CHARS } from "./query-output-limit";
+import { readTrustedVaultFile } from "./trusted-vault-fs";
 
 // `__dirname` is the installed Obsidian plugin directory in the production
 // bundle. Keep complete outputs beside data.json instead of coupling public
@@ -203,6 +204,22 @@ async function queryAnswerDirectory(root: string, sessionId?: string): Promise<s
 		}
 	}
 	return directory;
+}
+
+export async function readQueryAnswerFile(pluginDirectory: string, sessionId: string, messageId: string): Promise<string | null> {
+	if (!QUERY_SESSION_ID.test(sessionId)) throw new Error("无效的查询会话 ID");
+	if (!QUERY_MESSAGE_ID.test(messageId)) throw new Error("无效的查询消息 ID");
+	const root = await resolveQueryAnswerRoot(pluginDirectory);
+	const base = await queryAnswerDirectory(root);
+	if (!base) return null;
+	const relativePath = path.relative(root, path.join(base, sessionId, messageId + ".md"));
+	try {
+		const bytes = await readTrustedVaultFile({}, relativePath, QUERY_OUTPUT_MAX_CHARS * 4, root);
+		return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+		throw error;
+	}
 }
 
 export async function listQueryAnswerFiles(

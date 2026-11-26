@@ -124,6 +124,7 @@ import {
 	deleteQueryAnswerFiles,
 	deleteTaskRunOutput as deletePersistedTaskRunOutput,
 	listQueryAnswerFiles,
+	readQueryAnswerFile,
 	readTaskRunCompletion,
 	readTaskRunOutput,
 	writeQueryAnswerFile,
@@ -145,6 +146,7 @@ import type { PaperIngestFlowOptions } from "./agent/paper-ingest-flow";
 import { VaultLintService } from "./services/vault-lint";
 import { makeVaultSourcePathResolver, readVaultEvidencePackets } from "./services/vault-evidence";
 import { saveQueryAnswerNote } from "./services/query-note";
+import { chooseAnswerText, type AnswerText } from "./query/answer-text";
 import { searchTavily, type WebSearchHttpDeps } from "./services/web-search";
 import { AgentDashboardSettingTab } from "./settings/settings-tab";
 import { requestHumanIdentityConfirmation } from "./modals/human-identity-confirmation";
@@ -3181,8 +3183,28 @@ export default class AgentDashboardPlugin extends Plugin {
 		return readVaultEvidencePackets(this.app, trace);
 	}
 
+	async getQueryMessageText(sessionId: string, messageId: string): Promise<AnswerText> {
+		const session = this.querySessions.find(item => item.id === sessionId);
+		const message = session?.messages.find(item => item.id === messageId);
+		if (!message) throw new Error("找不到要复制的消息");
+		return this.selectQueryMessageText(sessionId, message);
+	}
+
+	private async selectQueryMessageText(sessionId: string, message: QueryMessage): Promise<AnswerText> {
+		const { id, role, status, content, contentLength } = message;
+		if (role !== "assistant" || status !== "done") {
+			return { text: content, complete: true, originalLength: content.length, keptLength: content.length };
+		}
+		return chooseAnswerText({ content, contentLength }, () => readQueryAnswerFile(this.readingPluginDirectory(), sessionId, id));
+	}
+
 	/** Saves one query answer as a Markdown note and returns its Vault path. */
 	async saveQueryAnswerNote(sessionId: string, messageId: string): Promise<string> {
+		const saved = await this.saveQueryAnswerNoteWithStatus(sessionId, messageId);
+		return saved.path;
+	}
+
+	async saveQueryAnswerNoteWithStatus(sessionId: string, messageId: string) {
 		const session = this.querySessions.find((item) => item.id === sessionId);
 		const messageIndex = session?.messages.findIndex((item) => item.id === messageId) ?? -1;
 		if (!session || messageIndex < 1) throw new Error("找不到要落笔记的回答");
@@ -3198,14 +3220,20 @@ export default class AgentDashboardPlugin extends Plugin {
 				break;
 			}
 		}
-		return saveQueryAnswerNote(this.app, {
+		const note = {
 			folder: this.settings.queryNotesFolder,
 			question: question || session.title || "知识库问答",
-			answer: String(message.content),
 			sources: (message.vaultSources || []).map((source) => source.path),
 			sessionTitle: session.title,
 			createdAt: message.createdAt,
+		};
+		const answer = await this.selectQueryMessageText(sessionId, message);
+		const savedPath = await saveQueryAnswerNote(this.app, {
+			...note,
+			answer: answer.text,
+			truncation: answer.complete ? undefined : { originalLength: answer.originalLength, keptLength: answer.keptLength },
 		});
+		return { path: savedPath, problem: answer.problem };
 	}
 
 	/**
