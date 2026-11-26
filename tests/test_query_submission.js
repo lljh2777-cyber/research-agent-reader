@@ -603,18 +603,8 @@ test("full answer done update overwrites an existing longer contentLength", asyn
 
 test("full answer plugin host writes under its installation root and rejects a missing root", async () => {
 	const fs = require("node:fs/promises"), os = require("node:os"), path = require("node:path");
-	const Module = require("node:module");
-	const bundle = require("esbuild").buildSync({
-		entryPoints: [path.resolve(__dirname, "../src/plugin.ts")], bundle: true, format: "cjs",
-		platform: "node", external: Object.keys(mocks), loader: { ".md": "text" }, write: false,
-	}).outputFiles[0].text;
 	function installedPlugin(directory) {
-		const entry = path.join(directory, "main.cjs");
-		const installed = new Module(entry, module);
-		installed.filename = entry;
-		installed.require = name => Object.hasOwn(mocks, name) ? mocks[name] : require(name);
-		installed._compile(bundle, entry);
-		return new installed.exports.default();
+		return Object.assign(new Plugin(), { readingPluginDirectory: () => directory });
 	}
 	const root = await fs.mkdtemp(path.join(os.tmpdir(), "reader-full-answer-host-"));
 	const args = ["query-session", "message-reply", "正文\n"];

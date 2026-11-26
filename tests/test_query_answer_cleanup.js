@@ -5,11 +5,19 @@ const fs = require("node:fs/promises");
 const Module = require("node:module");
 const os = require("node:os");
 const path = require("node:path");
-const { test } = require("node:test");
+const { before, test } = require("node:test");
+const { loadReading } = require("./reading-test-helpers");
 const bundle = require("esbuild").buildSync({
 	entryPoints: [path.resolve(__dirname, "../src/plugin.ts")], bundle: true, format: "cjs",
 	platform: "node", external: ["obsidian", "electron"], loader: { ".md": "text" }, write: false,
 }).outputFiles[0].text;
+
+let moduleDirectory, entry;
+before(async () => {
+	moduleDirectory = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "reader-query-renderer-")));
+	entry = path.join(moduleDirectory, "main.cjs");
+	await fs.writeFile(entry, bundle);
+});
 
 function session(id, ids = []) {
 	return { id, title: id, messages: ids.map(id => ({ id, role: "assistant", status: "done", content: "answer" })) };
@@ -28,11 +36,9 @@ async function fixture(t, stored) {
 		FileSystemAdapter, ItemView: class {}, Modal: class {}, Plugin: class {}, PluginSettingTab: class {}, Component: class {},
 		Notice: class { constructor(text) { notices.push(text); } },
 	};
-	const entry = path.join(root, "main.cjs");
 	const installed = new Module(entry, module);
-	installed.filename = entry;
 	installed.require = name => name === "obsidian" ? obsidian : name === "electron" ? {} : require(name);
-	installed._compile(bundle, entry);
+	installed.load(entry);
 	const host = new installed.exports.default();
 	Object.assign(host, {
 		manifest: { dir: "plugin" }, app: {
@@ -60,6 +66,66 @@ async function fixture(t, stored) {
 
 const twoSessions = { settings: {}, querySessions: [session("query-a", ["message-one"]), session("query-b", ["message-one"])], activeQuerySessionId: "query-a" };
 const absent = file => assert.rejects(() => fs.lstat(file), { code: "ENOENT" });
+
+test("write, startup cleanup and manual deletion use the vault plugin root while the module directory stays intact", async t => {
+	const f = await fixture(t, twoSessions);
+	const moduleAnswers = path.join(moduleDirectory, "task-output", "query-answers");
+	for (const id of ["query-a", "query-orphan"]) {
+		await f.write(id);
+		const dir = path.join(moduleAnswers, id);
+		await fs.mkdir(dir, { recursive: true });
+		await fs.writeFile(path.join(dir, "message-one.md"), id);
+	}
+	const inventory = async () => (await fs.readdir(moduleDirectory, { recursive: true })).sort();
+	const beforeFiles = await inventory();
+	await f.host.onload();
+	await f.host.saveFullAnswer("query-b", "message-reply", "full answer");
+	await f.host.deleteActiveQuerySession();
+	const answer = path.join(f.dir("query-b"), "message-reply.md");
+	assert.deepEqual({
+		answerFiles: (await fs.readdir(f.answers, { recursive: true })).sort(),
+		moduleFiles: await inventory(),
+	}, {
+		answerFiles: ["query-b", path.join("query-b", "message-reply.md")],
+		moduleFiles: beforeFiles,
+	});
+	assert.equal(await fs.readFile(answer, "utf8"), "full answer");
+	for (const id of ["query-a", "query-orphan"]) {
+		assert.equal(await fs.readFile(path.join(moduleAnswers, id, "message-one.md"), "utf8"), id);
+	}
+	assert.deepEqual(f.notices, []);
+});
+
+for (const kind of ["missing", "file", "linked directory"]) {
+	test("query answer write, list and delete reject a root (" + kind + ")", async t => {
+		const { writeQueryAnswerFile, listQueryAnswerFiles, deleteQueryAnswerFiles } = loadReading("runtime/task-output-persistence.ts");
+		const parent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "reader-query-invalid-root-")));
+		const root = path.join(parent, "plugin");
+		if (kind === "file") await fs.writeFile(root, "keep");
+		if (kind === "linked directory") {
+			const outside = path.join(parent, "outside");
+			const session = path.join(outside, "task-output", "query-answers", "query-a");
+			await fs.mkdir(session, { recursive: true });
+			await fs.writeFile(path.join(session, "message-one.md"), "keep");
+			try {
+				await fs.symlink(outside, root, process.platform === "win32" ? "junction" : "dir");
+			} catch (error) {
+				if (["EPERM", "EACCES", "ENOTSUP", "ENOSYS"].includes(error.code)) return t.skip(error.code);
+				throw error;
+			}
+		}
+		const inventory = async () => (await fs.readdir(parent, { recursive: true })).sort();
+		const beforeFiles = await inventory();
+		await assert.rejects(() => writeQueryAnswerFile(root, "query-a", "message-new", "new"), /插件.*目录/);
+		await assert.rejects(() => listQueryAnswerFiles(root), /插件.*目录/);
+		await assert.rejects(() => deleteQueryAnswerFiles(root, "query-a", ["message-one"], true), /插件.*目录/);
+		assert.deepEqual(await inventory(), beforeFiles);
+		if (kind === "file") assert.equal(await fs.readFile(root, "utf8"), "keep");
+		if (kind === "linked directory") {
+			assert.equal(await fs.readFile(path.join(parent, "outside", "task-output", "query-answers", "query-a", "message-one.md"), "utf8"), "keep");
+		}
+	});
+}
 
 test("delete waits for a successful settings write before unlinking the selected session", async t => {
 	const f = await fixture(t, twoSessions);

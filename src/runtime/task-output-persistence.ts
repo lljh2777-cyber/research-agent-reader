@@ -155,9 +155,20 @@ export async function writeTaskRunOutput(
 	return location.relativePath;
 }
 
-export async function writeQueryAnswerFile(root: string, sessionId: string, messageId: string, text: string): Promise<void> {
+async function resolveQueryAnswerRoot(pluginDirectory: string): Promise<string> {
+	if (!path.isAbsolute(pluginDirectory)) throw new Error("插件目录必须是绝对路径");
+	const directory = path.resolve(pluginDirectory);
+	const stats = await queryAnswerStat(directory);
+	if (!stats) throw new Error("插件目录不存在");
+	if (stats.isSymbolicLink()) throw new Error("插件目录不能是符号链接或 junction");
+	if (!stats.isDirectory()) throw new Error("插件目录不是文件夹");
+	return fs.promises.realpath(directory);
+}
+
+export async function writeQueryAnswerFile(pluginDirectory: string, sessionId: string, messageId: string, text: string): Promise<void> {
 	if (!QUERY_SESSION_ID.test(sessionId)) throw new Error("无效的查询会话 ID");
 	if (!QUERY_MESSAGE_ID.test(messageId)) throw new Error("无效的查询消息 ID");
+	const root = await resolveQueryAnswerRoot(pluginDirectory);
 	const targetPath = path.join(root, TASK_OUTPUT_DIRECTORY, QUERY_ANSWERS_DIRECTORY, sessionId, `${messageId}.md`);
 	await writeContainedTextFile(root, targetPath, () => text.slice(0, QUERY_OUTPUT_MAX_CHARS));
 }
@@ -192,9 +203,10 @@ async function queryAnswerDirectory(root: string, sessionId?: string): Promise<s
 }
 
 export async function listQueryAnswerFiles(
-	root: string,
+	pluginDirectory: string,
 	selectedSessions?: ReadonlySet<string>,
 ): Promise<Map<string, string[]>> {
+	const root = await resolveQueryAnswerRoot(pluginDirectory);
 	const files = new Map<string, string[]>();
 	const base = await queryAnswerDirectory(root);
 	if (!base) return files;
@@ -224,8 +236,9 @@ async function queryRemovalPath(root: string, candidate: string): Promise<string
 }
 
 export async function deleteQueryAnswerFiles(
-	root: string, sessionId: string, messageIds: readonly string[], removeEmptyDirectory: boolean,
+	pluginDirectory: string, sessionId: string, messageIds: readonly string[], removeEmptyDirectory: boolean,
 ): Promise<void> {
+	const root = await resolveQueryAnswerRoot(pluginDirectory);
 	for (const id of messageIds) {
 		if (!QUERY_MESSAGE_ID.test(id)) throw new Error("无效的查询消息 ID");
 		// Recheck the directory chain after enumeration, immediately before each removal.

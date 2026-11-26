@@ -126,8 +126,6 @@ import {
 	listQueryAnswerFiles,
 	readTaskRunCompletion,
 	readTaskRunOutput,
-	resolvePluginStorageRoot,
-	resolveTaskRunOutputLocation,
 	writeQueryAnswerFile,
 	writeTaskRunOutput,
 } from "./runtime/task-output-persistence";
@@ -2000,8 +1998,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	private async cleanupQueryAnswerFiles(rawSessions: unknown[], removedIds?: ReadonlySet<string>): Promise<void> {
 		try {
-			const root = resolvePluginStorageRoot();
-			if (!root) throw new Error("插件目录不可用");
+			const root = this.readingPluginDirectory();
 			const files = await listQueryAnswerFiles(root, removedIds);
 			const keep = new Map<string, Set<string>>();
 			for (const value of [...rawSessions, ...this.querySessions]) {
@@ -2057,9 +2054,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async saveFullAnswer(sessionId: string, messageId: string, text: string): Promise<void> {
-		const location = resolveTaskRunOutputLocation(this.settings.toolkitRoot, messageId);
-		if (!location) throw new Error("无法确定完整回答的写入位置（插件目录不可用或消息 ID 无效）");
-		await writeQueryAnswerFile(location.rootPath, sessionId, messageId, text);
+		await writeQueryAnswerFile(this.readingPluginDirectory(), sessionId, messageId, text);
 	}
 
 	async updateQueryMessage(
