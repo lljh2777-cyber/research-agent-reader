@@ -51,6 +51,7 @@ const commands = [
 	[process.execPath, ["tests/test_mineru_package_limits.js"]],
 	[process.execPath, ["tests/test_mineru_pdf_limits.js"]],
 	[process.execPath, ["tests/test_task_output_persistence.js"]],
+	[process.execPath, ["tests/test_query_answer_file.js"]],
 	[process.execPath, ["tests/test_vault_tree_reconcile.js"]],
 	[process.execPath, ["tests/test_dashboard_vault_lint.js"]],
 	[process.execPath, ["tests/test_public_runtime_boundary.js"]],

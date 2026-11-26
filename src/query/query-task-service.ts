@@ -3,6 +3,7 @@ import { ACTION_BY_ID, type DashboardAction } from "../actions";
 import { getCliBackendLabel, isCliBackendId, type CliBackendId } from "../config";
 import { profileSupportsQueryImage, type ProviderProfile } from "../providers/profile";
 import { getClaudeDefaultModelLabel } from "../runtime/settings";
+import { QUERY_OUTPUT_MAX_CHARS } from "../runtime/query-output-limit";
 import { makeVaultSourcePathResolver } from "../services/vault-evidence";
 import type {
 	DashboardProcessEvent, DashboardProcessHooks, DashboardProcessResult, ExecutionConfig, ExecutionOverrides,
@@ -347,7 +348,7 @@ export class QueryTaskService {
 			const output = [
 				response,
 				result.stderr.trim() ? `运行日志\n${result.stderr.trim()}` : "",
-			].filter(Boolean).join("\n\n").slice(0, 120000) || error;
+			].filter(Boolean).join("\n\n").slice(0, QUERY_OUTPUT_MAX_CHARS) || error;
 			restoreQuestion = status === "failed";
 			completedRun = await this.plugin.finishTaskRun(run.id, {
 				status,
