@@ -27,6 +27,7 @@ function fixture() {
 	const host = Object.assign(new Plugin(), {
 		querySessions: [session],
 		saveData: async snapshot => { snapshots.push(snapshot); },
+		saveFullAnswer: async () => {},
 		getActiveQuerySession: () => session,
 		resolveQueryBackendId: id => id,
 		getProviderProfile: () => profile,
@@ -462,6 +463,158 @@ for (const phase of ["keywords", "evidence"]) {
 		assert.equal(f.snapshots.at(-1).querySessions[0].messages[1].status, "interrupted");
 	});
 }
+
+test("full answer writes the complete trimmed 25000-unit result before the done update", async t => {
+	const f = lifecycleFixture(t, true);
+	const answer = "📖".repeat(12500);
+	const order = [];
+	const save = t.mock.method(f.host, "saveFullAnswer", async () => {
+		order.push("write");
+		await tick();
+		order.push("written");
+	});
+	const update = f.host.updateQueryMessage.bind(f.host);
+	f.host.updateQueryMessage = (sessionId, messageId, patch, mode) => {
+		if (patch.status === "done") order.push("done");
+		return update(sessionId, messageId, patch, mode);
+	};
+	const task = f.view.submitQuestion("inspect");
+	const hooks = await f.started;
+	hooks.onEvent({ type: "assistant-delta", delta: answer });
+	assert.equal(f.session.messages[1].content.length, 20000);
+	const event = { type: "retrieval-result", payload: { answer_markdown: " \n" + answer + "\n" } };
+	hooks.onEvent(event);
+	f.answer.resolve({ ...result, stdout: "unused stdout", events: [event] });
+	await task;
+	assert.equal(save.mock.callCount(), 1);
+	assert.deepEqual(save.mock.calls[0].arguments, [f.session.id, f.session.messages[1].id, answer]);
+	assert.deepEqual(order, ["write", "written", "done"]);
+});
+
+for (const [length, writes] of [[0, 0], [8000, 0], [8001, 1]]) {
+	test("full answer write threshold at " + length + " UTF-16 units", async t => {
+		const f = fixture();
+		const save = t.mock.method(f.host, "saveFullAnswer");
+		f.host.runDirectVaultQuery = async () => ({ ...result, stdout: "x".repeat(length) });
+		await f.view.submitQuestion("inspect");
+		assert.equal(f.session.messages[1].status, "done");
+		assert.equal(save.mock.callCount(), writes);
+	});
+}
+
+for (const failHistory of [false, true]) {
+	test("full answer write failure preserves completion with " + (failHistory ? "failed" : "successful") + " history save", async t => {
+		const f = lifecycleFixture(t);
+		const answer = "x".repeat(9000);
+		const task = f.view.submitQuestion("inspect");
+		await f.started;
+		const before = notices.length;
+		const expected = ["完整回答未能保存，重启后复制和落笔记只能得到截短版本：answer file read-only"];
+		f.host.saveFullAnswer = async () => { throw new Error("answer file read-only"); };
+		if (failHistory) {
+			f.host.saveData = async () => { throw new Error("history read-only"); };
+			expected.push("查询记录保存失败：history read-only");
+		}
+		f.answer.resolve({ ...result, stdout: answer });
+		await assert.doesNotReject(task);
+		assert.equal(f.runs[0].status, "done");
+		assert.equal(f.session.messages[1].status, "done");
+		assert.equal(f.session.messages[1].content, answer);
+		assert.equal(f.session.messages[1].contentLength, answer.length);
+		assert.deepEqual(notices.slice(before), expected);
+	});
+}
+
+for (const [label, exitCode, events, status] of [
+	["backend failure", 1, [], "failed"],
+	["interrupted exit", 130, [], "interrupted"],
+	["stop event despite a zero exit", 0, [{ type: "status", stage: "stopped" }], "done"],
+]) {
+	test("full answer skips " + label + " even with long stdout", async t => {
+		const f = fixture();
+		const save = t.mock.method(f.host, "saveFullAnswer");
+		f.host.runDirectVaultQuery = async () => ({ ...result, exitCode, events, stdout: "x".repeat(9000) });
+		await f.view.submitQuestion("inspect");
+		assert.equal(f.session.messages[1].status, status);
+		assert.equal(save.mock.callCount(), 0);
+	});
+}
+
+for (const unloading of [false, true]) {
+	test("full answer skips a successful late reply after " + (unloading ? "unload" : "user cancellation"), async t => {
+		const f = lifecycleFixture(t);
+		const save = t.mock.method(f.host, "saveFullAnswer");
+		f.host.stopDirectVaultQuery = () => true;
+		const task = f.view.submitQuestion("inspect");
+		await f.started;
+		const shutdown = unloading ? f.host.queryTasks.shutdown() : null;
+		if (!unloading) {
+			await f.host.queryTasks.stop(f.session.id);
+			assert.equal(f.session.messages[1].status, "stopping");
+		}
+		f.answer.resolve({ ...result, stdout: "x".repeat(9000) });
+		await Promise.all([task, shutdown]);
+		assert.equal(f.session.messages[1].status, unloading ? "interrupted" : "done");
+		assert.equal(save.mock.callCount(), 0);
+	});
+}
+
+test("full answer Direct API streaming fallback saves only the final non-streaming reply", async t => {
+	const f = lifecycleFixture(t);
+	const profile = { ...f.host.getProviderProfile(), capabilities: { streaming: true }, lastTest: { ok: true, streamingVerified: true } };
+	f.host.getProviderProfile = () => profile;
+	f.host.runDirectVaultQuery = Plugin.prototype.runDirectVaultQuery;
+	f.host.runVaultRetrievalPreflight = async () => ({ candidate_paths: ["paper.md"] });
+	f.host.readVaultEvidencePacket = async () => [];
+	const answer = "最终回答".repeat(2300);
+	const calls = [];
+	f.host.createLLMProvider = () => ({
+		async stream(_request, onDelta) {
+			calls.push("stream");
+			onDelta("discarded partial".repeat(800));
+			throw new Error("stream disconnected");
+		},
+		async complete() {
+			calls.push("complete");
+			return { text: answer };
+		},
+	});
+	const save = t.mock.method(f.host, "saveFullAnswer");
+	await f.view.submitQuestion("inspect");
+	assert.deepEqual(calls, ["stream", "complete"]);
+	assert.equal(f.session.messages[1].content, answer);
+	assert.equal(save.mock.callCount(), 1);
+	assert.deepEqual(save.mock.calls[0].arguments, [f.session.id, f.session.messages[1].id, answer]);
+});
+
+test("full answer done update overwrites an existing longer contentLength", async t => {
+	const f = lifecycleFixture(t);
+	const task = f.view.submitQuestion("inspect");
+	await f.started;
+	const messageId = f.session.messages[1].id;
+	await f.host.updateQueryMessage(f.session.id, messageId, { contentLength: 40000 });
+	const answer = "x".repeat(9000);
+	f.answer.resolve({ ...result, stdout: answer });
+	await task;
+	assert.equal(f.session.messages[1].id, messageId);
+	assert.equal(f.session.messages[1].contentLength, answer.length);
+	assert.equal(f.snapshots.at(-1).querySessions[0].messages[1].contentLength, answer.length);
+});
+
+test("full answer plugin host writes under its installation root and rejects a missing root", async () => {
+	const fs = require("node:fs/promises"), os = require("node:os"), path = require("node:path");
+	function installedPlugin(directory) {
+		return Object.assign(new Plugin(), { readingPluginDirectory: () => directory });
+	}
+	const root = await fs.mkdtemp(path.join(os.tmpdir(), "reader-full-answer-host-"));
+	const args = ["query-session", "message-reply", "正文\n"];
+	await installedPlugin(root).saveFullAnswer(...args);
+	const file = path.join(root, "task-output", "query-answers", "query-session", "message-reply.md");
+	assert.equal(await fs.readFile(file, "utf8"), args[2]);
+	const missing = path.join(root, "missing");
+	await assert.rejects(() => installedPlugin(missing).saveFullAnswer(...args), /插件.*目录/);
+	await assert.rejects(() => fs.stat(missing), { code: "ENOENT" });
+});
 
 function useTaskHistory(f) {
 	f.host.startTaskRun = Plugin.prototype.startTaskRun;

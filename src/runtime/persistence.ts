@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { DashboardSettings } from "./settings";
+import { QUERY_PREVIEW_MAX_CHARS } from "./query-output-limit";
 import { decodeSavedPdfRef } from "../papers/saved-pdf";
 import type {
 	ExecutionConfig,
@@ -223,7 +224,7 @@ export function createPersistenceSnapshot(state: DashboardPersistenceState): Das
 			...session,
 			messages: session.messages.slice(-queryMessageLimit).map((message) => {
 				const text = String(message.content || "");
-				const content = text.slice(0, 8000);
+				const content = text.slice(0, QUERY_PREVIEW_MAX_CHARS);
 				const contentLength = Math.max(message.contentLength ?? 0, text.length);
 				return {
 					...message,

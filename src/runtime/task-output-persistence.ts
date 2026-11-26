@@ -1,14 +1,19 @@
-import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 import type { TaskRun, TaskRunArtifacts } from "../types/contracts";
 import { normalizeIngestProgress, type IngestProgress } from "../agent/ingest-progress";
+import { isPathInside, writeContainedTextFile } from "./contained-text-file";
+import { QUERY_OUTPUT_MAX_CHARS } from "./query-output-limit";
 
 // `__dirname` is the installed Obsidian plugin directory in the production
 // bundle. Keep complete outputs beside data.json instead of coupling public
 // Direct API users to an optional Toolkit checkout.
-const PLUGIN_OUTPUT_DIRECTORY_SEGMENTS = ["task-output", "dashboard-runs"];
+const TASK_OUTPUT_DIRECTORY = "task-output";
+const QUERY_ANSWERS_DIRECTORY = "query-answers";
+const QUERY_SESSION_ID = /^query-[a-z0-9-]{1,64}$/;
+const QUERY_MESSAGE_ID = /^message-[a-z0-9-]{1,64}$/;
+const PLUGIN_OUTPUT_DIRECTORY_SEGMENTS = [TASK_OUTPUT_DIRECTORY, "dashboard-runs"];
 const LEGACY_TOOLKIT_OUTPUT_DIRECTORY_SEGMENTS = ["tool-library", "output", "dashboard-runs"];
 const SAFE_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
 const STALE_TEMP_MAX_AGE_MS = 60 * 60 * 1000;
@@ -44,11 +49,6 @@ export interface TaskRunStorageCleanupResult {
 	failures: string[];
 }
 
-function isPathInside(rootPath: string, candidatePath: string): boolean {
-	const relative = path.relative(rootPath, candidatePath);
-	return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function realPathSync(targetPath: string): string {
 	return fs.realpathSync.native
 		? fs.realpathSync.native(targetPath)
@@ -69,7 +69,7 @@ function resolveExistingDirectory(rawPath: string): string | null {
 	}
 }
 
-function resolvePluginStorageRoot(): string | null {
+export function resolvePluginStorageRoot(): string | null {
 	return resolveExistingDirectory(__dirname);
 }
 
@@ -124,58 +124,6 @@ function resolveLegacyToolkitLocation(
 		: null;
 }
 
-async function ensureContainedOutputDirectory(location: TaskRunOutputLocation): Promise<string> {
-	const relativeDirectory = path.relative(location.rootPath, location.directoryPath);
-	if (
-		!relativeDirectory
-		|| relativeDirectory.startsWith("..")
-		|| path.isAbsolute(relativeDirectory)
-	) {
-		throw new Error("任务输出目录超出插件存储目录");
-	}
-	let currentPath = location.rootPath;
-	for (const segment of relativeDirectory.split(path.sep)) {
-		const nextPath = path.join(currentPath, segment);
-		try {
-			await fs.promises.mkdir(nextPath);
-		} catch (error) {
-			const code = error && typeof error === "object" && "code" in error
-				? String(error.code)
-				: "";
-			if (code !== "EEXIST") throw error;
-		}
-		const directStats = await fs.promises.lstat(nextPath);
-		if (directStats.isSymbolicLink()) throw new Error("任务输出目录不能是符号链接或 junction");
-		if (!directStats.isDirectory()) throw new Error("任务输出目录不是文件夹");
-		const resolvedPath = await fs.promises.realpath(nextPath);
-		if (!isPathInside(location.rootPath, resolvedPath)) {
-			throw new Error("任务输出目录超出插件存储目录");
-		}
-		currentPath = resolvedPath;
-	}
-	return currentPath;
-}
-
-async function assertSafeExistingTarget(
-	rootPath: string,
-	absolutePath: string,
-): Promise<void> {
-	try {
-		const existingStats = await fs.promises.lstat(absolutePath);
-		if (existingStats.isSymbolicLink()) throw new Error("任务输出文件不能是符号链接");
-		if (!existingStats.isFile()) throw new Error("任务输出目标不是普通文件");
-		const resolvedFile = await fs.promises.realpath(absolutePath);
-		if (!isPathInside(rootPath, resolvedFile)) {
-			throw new Error("任务输出文件超出插件存储目录");
-		}
-	} catch (error) {
-		const code = error && typeof error === "object" && "code" in error
-			? String(error.code)
-			: "";
-		if (code !== "ENOENT") throw error;
-	}
-}
-
 /** Writes the full task output into plugin-owned storage using an atomic rename. */
 export async function writeTaskRunOutput(
 	toolkitRoot: string,
@@ -184,57 +132,135 @@ export async function writeTaskRunOutput(
 	const output = String(run?.output || "");
 	const location = resolveTaskRunOutputLocation(toolkitRoot, run?.id);
 	if (!location) return "";
-	const directoryPath = await ensureContainedOutputDirectory(location);
-	const absolutePath = path.join(directoryPath, path.basename(location.absolutePath));
-	if (!isPathInside(location.rootPath, absolutePath)) {
-		throw new Error("任务输出文件超出插件存储目录");
-	}
-	await assertSafeExistingTarget(location.rootPath, absolutePath);
-	const temporaryPath = path.join(
-		directoryPath,
-		`.${path.basename(absolutePath)}.${process.pid}.${randomBytes(12).toString("hex")}.tmp`,
-	);
-	const payload = JSON.stringify({
-		schema_version: 2,
-		run_id: run.id,
-		action_id: run.actionId,
-		status: run.status,
-		exit_code: run.exitCode,
-		started_at: run.startedAt,
-		finished_at: run.finishedAt,
-		output,
-		error: run.error,
-		summary: run.summary,
-		artifacts: run.artifacts,
-		ingestProgress: run.ingestProgress,
-	}, null, 2);
-	if (Buffer.byteLength(payload, "utf8") > MAX_SIDECAR_BYTES) {
-		throw new Error("任务输出 sidecar 超过 16 MiB 安全上限");
-	}
-	let temporaryFileCreated = false;
-	try {
-		await fs.promises.writeFile(temporaryPath, payload, { encoding: "utf8", flag: "wx" });
-		temporaryFileCreated = true;
-		const temporaryStats = await fs.promises.lstat(temporaryPath);
-		const resolvedTemporary = await fs.promises.realpath(temporaryPath);
-		if (
-			temporaryStats.isSymbolicLink()
-			|| !temporaryStats.isFile()
-			|| !isPathInside(location.rootPath, resolvedTemporary)
-		) {
-			throw new Error("任务输出临时文件未落在可信目录内");
+	await writeContainedTextFile(location.rootPath, location.absolutePath, () => {
+		const payload = JSON.stringify({
+			schema_version: 2,
+			run_id: run.id,
+			action_id: run.actionId,
+			status: run.status,
+			exit_code: run.exitCode,
+			started_at: run.startedAt,
+			finished_at: run.finishedAt,
+			output,
+			error: run.error,
+			summary: run.summary,
+			artifacts: run.artifacts,
+			ingestProgress: run.ingestProgress,
+		}, null, 2);
+		if (Buffer.byteLength(payload, "utf8") > MAX_SIDECAR_BYTES) {
+			throw new Error("任务输出 sidecar 超过 16 MiB 安全上限");
 		}
-		// Re-check the destination immediately before replacement. Rename keeps
-		// readers on either the complete previous payload or the complete new one.
-		await assertSafeExistingTarget(location.rootPath, absolutePath);
-		await fs.promises.rename(temporaryPath, absolutePath);
-		temporaryFileCreated = false;
-	} finally {
-		if (temporaryFileCreated) {
-			await fs.promises.unlink(temporaryPath).catch(() => undefined);
-		}
-	}
+		return payload;
+	});
 	return location.relativePath;
+}
+
+async function resolveQueryAnswerRoot(pluginDirectory: string): Promise<string> {
+	if (!path.isAbsolute(pluginDirectory)) throw new Error("插件目录必须是绝对路径");
+	let directory: string;
+	try {
+		directory = await fs.promises.realpath(pluginDirectory);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("插件目录不存在或链接目标不存在");
+		throw error;
+	}
+	if (!(await fs.promises.stat(directory)).isDirectory()) throw new Error("插件目录不是文件夹");
+	return directory;
+}
+
+export async function writeQueryAnswerFile(pluginDirectory: string, sessionId: string, messageId: string, text: string): Promise<void> {
+	if (!QUERY_SESSION_ID.test(sessionId)) throw new Error("无效的查询会话 ID");
+	if (!QUERY_MESSAGE_ID.test(messageId)) throw new Error("无效的查询消息 ID");
+	const root = await resolveQueryAnswerRoot(pluginDirectory);
+	const targetPath = path.join(root, TASK_OUTPUT_DIRECTORY, QUERY_ANSWERS_DIRECTORY, sessionId, `${messageId}.md`);
+	await writeContainedTextFile(root, targetPath, () => text.slice(0, QUERY_OUTPUT_MAX_CHARS));
+}
+
+async function queryAnswerStat(file: string): Promise<fs.Stats | undefined> {
+	try {
+		return await fs.promises.lstat(file);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+		throw error;
+	}
+}
+
+async function queryAnswerDirectory(root: string, sessionId?: string): Promise<string | null> {
+	const segments = [TASK_OUTPUT_DIRECTORY, QUERY_ANSWERS_DIRECTORY];
+	if (sessionId !== undefined) {
+		if (!QUERY_SESSION_ID.test(sessionId)) throw new Error("无效的查询会话 ID");
+		segments.push(sessionId);
+	}
+	let directory = root;
+	for (const segment of segments) {
+		directory = path.join(directory, segment);
+		if (!isPathInside(root, directory)) throw new Error("查询回答目录超出插件存储目录");
+		const stats = await queryAnswerStat(directory);
+		if (!stats) return null;
+		if (!stats.isDirectory() || stats.isSymbolicLink()) {
+			if (segment === sessionId) return null;
+			throw new Error("查询回答目录不是可信普通目录");
+		}
+	}
+	return directory;
+}
+
+export async function listQueryAnswerFiles(
+	pluginDirectory: string,
+	selectedSessions?: ReadonlySet<string>,
+): Promise<Map<string, string[]>> {
+	const root = await resolveQueryAnswerRoot(pluginDirectory);
+	const files = new Map<string, string[]>();
+	const base = await queryAnswerDirectory(root);
+	if (!base) return files;
+	for (const sessionId of await fs.promises.readdir(base)) {
+		if (!QUERY_SESSION_ID.test(sessionId) || (selectedSessions && !selectedSessions.has(sessionId))) continue;
+		const directory = await queryAnswerDirectory(root, sessionId);
+		if (!directory) continue;
+		const ids: string[] = [];
+		for (const name of await fs.promises.readdir(directory)) {
+			if (!name.endsWith(".md")) continue;
+			const id = name.slice(0, -3);
+			if (!QUERY_MESSAGE_ID.test(id)) continue;
+			const stats = await queryAnswerStat(path.join(directory, name));
+			if (stats?.isFile()) ids.push(id);
+		}
+		files.set(sessionId, ids);
+	}
+	return files;
+}
+
+async function queryRemovalPath(root: string, candidate: string): Promise<string> {
+	const resolved = await fs.promises.realpath(candidate);
+	if (!isPathInside(root, resolved) || path.relative(candidate, resolved) !== "") {
+		throw new Error("查询回答清理目标已不在原目录位置");
+	}
+	return resolved;
+}
+
+export async function deleteQueryAnswerFiles(
+	pluginDirectory: string, sessionId: string, messageIds: readonly string[], removeEmptyDirectory: boolean,
+): Promise<void> {
+	const root = await resolveQueryAnswerRoot(pluginDirectory);
+	for (const id of messageIds) {
+		if (!QUERY_MESSAGE_ID.test(id)) throw new Error("无效的查询消息 ID");
+		// Recheck the directory chain after enumeration, immediately before each removal.
+		const directory = await queryAnswerDirectory(root, sessionId);
+		if (!directory) return;
+		const file = path.join(directory, id + ".md");
+		const stats = await queryAnswerStat(file);
+		if (stats?.isFile()) await fs.promises.unlink(await queryRemovalPath(root, file));
+	}
+	if (!removeEmptyDirectory) return;
+	const directory = await queryAnswerDirectory(root, sessionId);
+	if (!directory || (await fs.promises.readdir(directory)).length) return;
+	try {
+		await fs.promises.rmdir(await queryRemovalPath(root, directory));
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException).code;
+		// Unmanaged entries and files arriving after the listing keep the directory alive.
+		if (code !== "ENOTEMPTY" && code !== "EEXIST" && code !== "ENOENT") throw error;
+	}
 }
 
 function readPayload(
