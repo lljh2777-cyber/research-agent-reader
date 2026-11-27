@@ -413,7 +413,7 @@ export class QueryTaskService {
 			// Several progress events can receive the rejection from the same disk write.
 			if (!this.saveFailureNotified) {
 				this.saveFailureNotified = true;
-				new Notice(`查询记录保存失败：${error instanceof Error ? error.message : String(error)}`);
+				new Notice(`查询记录保存失败，重启后本轮内容可能丢失：${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
 	}

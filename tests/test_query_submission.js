@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const { createHash } = require("node:crypto");
 const { test } = require("node:test");
 const { loadReading } = require("./reading-test-helpers");
+const { QUERY_OUTPUT_MAX_CHARS } = loadReading("runtime/query-output-limit.ts");
 
 const notices = [];
 const mocks = { electron: {}, obsidian: {
@@ -426,7 +427,7 @@ test("answer buttons: a pending file read keeps the content and length from the 
 async function truncationHints(host, message) {
 	const ui = screen({ makeView: () => new QueryWikiView({}, host) });
 	await ui.view.renderMessage(ui.view.contentEl, message, host.getActiveQuerySession().id);
-	return ui.labels.filter(label => label.startsWith("内容已截短"));
+	return ui.labels.filter(label => label.startsWith("聊天内仅显示前"));
 }
 
 test("contentLength counts the trimmed final answer once and survives a history round trip", async t => {
@@ -446,13 +447,13 @@ test("contentLength counts the trimmed final answer once and survives a history 
 	const live = f.session.messages[1];
 	assert.equal(live.content, answer.slice(0, 20000));
 	assert.equal(live.contentLength, 25000);
-	assert.deepEqual(await truncationHints(f.host, live), ["内容已截短（原文 25000 字符，当前保留 20000 字符）"]);
+	assert.deepEqual(await truncationHints(f.host, live), ["聊天内仅显示前 20000 字符（原文 25000 字符）；复制和落笔记会尝试读取完整回答"]);
 	const snapshot = f.snapshots.at(-1);
 	const stored = snapshot.querySessions[0].messages[1];
 	assert.equal(stored.content, answer.slice(0, 8000));
 	assert.equal(stored.contentLength, 25000);
 	const reload = await reloadHistory(snapshot);
-	assert.deepEqual(await truncationHints(reload.host, reload.messages[1]), ["内容已截短（原文 25000 字符，当前保留 8000 字符）"]);
+	assert.deepEqual(await truncationHints(reload.host, reload.messages[1]), ["聊天内仅显示前 8000 字符（原文 25000 字符）；复制和落笔记会尝试读取完整回答"]);
 	assert.equal(reload.saved[1].content, stored.content);
 	assert.equal(reload.saved[1].contentLength, 25000);
 });
@@ -472,7 +473,7 @@ test("contentLength uses the pre-snapshot assistant length and omits it for user
 	assert.equal(user.content.length, 8000);
 	assert.equal(Object.hasOwn(user, "contentLength"), false);
 	const reload = await reloadHistory(snapshot);
-	assert.deepEqual(await truncationHints(reload.host, reload.messages[1]), ["内容已截短（原文 9000 字符，当前保留 8000 字符）"]);
+	assert.deepEqual(await truncationHints(reload.host, reload.messages[1]), ["聊天内仅显示前 8000 字符（原文 9000 字符）；复制和落笔记会尝试读取完整回答"]);
 });
 
 test("contentLength is optional for old and short answers and ignores invalid lengths on load", async () => {
@@ -699,7 +700,7 @@ for (const failHistory of [false, true]) {
 		f.host.saveFullAnswer = async () => { throw new Error("answer file read-only"); };
 		if (failHistory) {
 			f.host.saveData = async () => { throw new Error("history read-only"); };
-			expected.push("查询记录保存失败：history read-only");
+			expected.push("查询记录保存失败，重启后本轮内容可能丢失：history read-only");
 		}
 		f.answer.resolve({ ...result, stdout: answer });
 		await assert.doesNotReject(task);
@@ -1084,4 +1085,34 @@ test("model output limit: next done result clears the old flag and replaces cont
 	assert.equal(latest.outputLimitReached, undefined);
 	assert.equal(Object.hasOwn(latest, "outputLimitReached"), false);
 	assert.equal(Object.hasOwn(f.snapshots.at(-1).querySessions[0].messages[1], "outputLimitReached"), false);
+});
+
+for (const [length, suffix] of [
+	[QUERY_OUTPUT_MAX_CHARS, "复制和落笔记会尝试读取完整回答"],
+	[QUERY_OUTPUT_MAX_CHARS + 1, `复制和落笔记最多取得前 ${QUERY_OUTPUT_MAX_CHARS} 字符`],
+]) test("preview hint at original length " + length, async () => {
+	const f = fixture();
+	const message = { ...actionReply, content: "预览", contentLength: length };
+	assert.deepEqual(await truncationHints(f.host, message), [`聊天内仅显示前 2 字符（原文 ${length} 字符）；${suffix}`]);
+});
+
+for (const [name, flags, expectedBlocks] of [
+	["no warning", {}, []],
+	["model limit", { outputLimitReached: true }, ["> 注意：模型输出达到上限，回答可能不完整"]],
+	["partial preview", { contentLength: 9 }, ["> 注意：聊天记录中的回答已被截短（原文 9 字符，本笔记保留 2 字符）"]],
+	["model limit before partial preview", { outputLimitReached: true, contentLength: 9 }, [
+		"> 注意：模型输出达到上限，回答可能不完整",
+		"> 注意：聊天记录中的回答已被截短（原文 9 字符，本笔记保留 2 字符）",
+	]],
+]) test("answer note warnings: " + name, async t => {
+	const f = await answerButtons(t, { content: "正文", ...flags });
+	await f.note();
+	const expected = [
+		"---", 'title: "原问题"', "created: 2026-01-02T03:04:00.000Z", "type: qa", "tags:", "  - qa",
+		'source: "原会话"', "---", "# 原问题", "", "正文", "",
+		...expectedBlocks.flatMap(line => [line, ""]), "## 来源", "- 无", "",
+	].join("\n");
+	assert.deepEqual([...f.notes.values()], [expected]);
+	await f.copy();
+	assert.deepEqual(f.clipboard, ["正文"]);
 });

@@ -3230,6 +3230,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			sources: (message.vaultSources || []).map((source) => source.path),
 			sessionTitle: session.title,
 			createdAt: message.createdAt,
+			outputLimitReached: message.outputLimitReached,
 		};
 		const answer = await this.selectQueryMessageText(sessionId, message);
 		const savedPath = await saveQueryAnswerNote(this.app, {

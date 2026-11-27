@@ -7,6 +7,7 @@ export interface QueryNoteInput {
 	folder: string;
 	question: string;
 	answer: string;
+	outputLimitReached?: true;
 	truncation?: { originalLength: number; keptLength: number };
 	sources: string[];
 	sessionTitle: string;
@@ -100,6 +101,7 @@ export async function saveQueryAnswerNote(app: App, input: QueryNoteInput): Prom
 		"",
 		input.truncation ? input.answer : String(input.answer || "").trim(),
 		"",
+		...(input.outputLimitReached ? ["> 注意：模型输出达到上限，回答可能不完整", ""] : []),
 		...(input.truncation ? [
 			`> 注意：聊天记录中的回答已被截短（原文 ${input.truncation.originalLength} 字符，本笔记保留 ${input.truncation.keptLength} 字符）`,
 			"",
