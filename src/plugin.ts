@@ -1160,11 +1160,9 @@ export default class AgentDashboardPlugin extends Plugin {
 			}
 		}
 		this.taskRuns = retainedTaskRuns;
+		const pluginDirectory = this.taskOutputPluginDirectory();
 		try {
-			const cleanup = await cleanupTaskRunStorage(
-				this.settings.toolkitRoot,
-				new Set(this.taskRuns.map((run) => run.id)),
-			);
+			const cleanup = await cleanupTaskRunStorage(pluginDirectory);
 			if (cleanup.failures.length) {
 				console.warn("Could not reclaim some Dashboard task-output files", cleanup.failures);
 			}
@@ -1180,7 +1178,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				run.completionPending = undefined;
 				changed = true;
 			}
-			const completion = readTaskRunCompletion(this.settings.toolkitRoot, run.id);
+			const completion = readTaskRunCompletion(pluginDirectory, run.id);
 			const activeRun = run.status === "running" || run.status === "queued";
 			if (
 				!completion
@@ -2264,9 +2262,14 @@ export default class AgentDashboardPlugin extends Plugin {
 		)) || null;
 	}
 
+	private taskOutputPluginDirectory(): string {
+		return this.app?.vault?.adapter instanceof FileSystemAdapter ? this.readingPluginDirectory() : "";
+	}
+
 	getTaskRunOutput(run: TaskRun): string {
 		if (run?.outputPath) {
 			const output = readTaskRunOutput(
+				this.taskOutputPluginDirectory(),
 				this.settings.toolkitRoot,
 				run,
 				String(run.outputPath),
@@ -2277,11 +2280,11 @@ export default class AgentDashboardPlugin extends Plugin {
 	}
 
 	async deleteTaskRunOutput(runId: string, storedRelativePath = ""): Promise<boolean> {
-		return deletePersistedTaskRunOutput(this.settings.toolkitRoot, runId, storedRelativePath);
+		return deletePersistedTaskRunOutput(this.taskOutputPluginDirectory(), this.settings.toolkitRoot, runId, storedRelativePath);
 	}
 
 	async persistTaskRunOutput(run: TaskRun): Promise<string> {
-		return writeTaskRunOutput(this.settings.toolkitRoot, run);
+		return writeTaskRunOutput(this.taskOutputPluginDirectory(), run);
 	}
 
 	isActionRunning(actionId: string): boolean {

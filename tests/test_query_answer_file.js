@@ -18,12 +18,12 @@ const messageId = "message-456-xyz";
 
 async function fixture() {
 	const directory = await fs.mkdtemp(path.join(os.tmpdir(), "reader-query-answer-"));
-	const entry = path.join(directory, "main.cjs");
+	const root = await fs.realpath(directory);
+	const entry = path.join(root, "main.cjs");
 	const plugin = new Module(entry, module);
 	plugin.filename = entry;
 	plugin._compile(bundle, entry);
-	const { resolveTaskRunOutputLocation, writeQueryAnswerFile } = plugin.exports;
-	const root = resolveTaskRunOutputLocation("", "run-1").rootPath;
+	const { writeQueryAnswerFile } = plugin.exports;
 	const file = path.join(root, "task-output", "query-answers", sessionId, messageId + ".md");
 	return { root, file, writeQueryAnswerFile };
 }

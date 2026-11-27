@@ -41,8 +41,8 @@ const buildResult = esbuild.buildSync({
 });
 const pluginStorageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-plugin-storage-"));
 
-function loadPluginAt(storageRoot) {
-	const builtFile = path.join(storageRoot, "main.cjs");
+function loadRendererPlugin() {
+	const builtFile = path.join(pluginStorageRoot, "electron.asar", "renderer", "main.cjs");
 	const originalLoad = Module._load;
 	Module._load = function loadWithRuntimeStubs(request, parent, isMain) {
 		if (request === "obsidian") return obsidianStub;
@@ -60,7 +60,13 @@ function loadPluginAt(storageRoot) {
 	}
 }
 
-const AgentDashboardPlugin = loadPluginAt(pluginStorageRoot);
+const RendererPlugin = loadRendererPlugin();
+function pluginWithStorage(storageRoot) {
+	return class extends RendererPlugin {
+		taskOutputPluginDirectory() { return storageRoot; }
+	};
+}
+const AgentDashboardPlugin = pluginWithStorage(pluginStorageRoot);
 const pluginOutputPath = (runId) => path.join(
 	pluginStorageRoot,
 	"task-output",
@@ -157,6 +163,35 @@ async function persistTerminalRuns(plugin, runs) {
 	for (const run of runs) {
 		run.outputPath = await plugin.persistTaskRunOutput(run);
 	}
+}
+
+async function testRendererDirectoryIsIndependentOfPluginStorage() {
+	const vault = fs.mkdtempSync(path.join(os.tmpdir(), "reader-renderer-root-"));
+	const manifest = { dir: ".custom-obsidian/plugins/research-agent-reader" };
+	const installed = path.join(vault, manifest.dir);
+	fs.mkdirSync(installed, { recursive: true });
+	const adapter = new ObsidianFileSystemAdapter();
+	adapter.getBasePath = () => vault;
+	const load = async () => {
+		const plugin = new RendererPlugin();
+		plugin.app = { vault: { adapter } };
+		plugin.manifest = manifest;
+		await plugin.loadSettings();
+		return plugin;
+	};
+	const plugin = await load();
+	const run = makeRun("run-renderer-directory");
+	const output = "0123456789".repeat(2400);
+	plugin.taskRuns = [run];
+	const completed = await finishSuccessfully(plugin, run, output);
+	const snapshot = JSON.parse(fs.readFileSync(path.join(installed, "data.json"), "utf8")).taskRuns[0];
+	assert.equal(snapshot.status, "done");
+	assert.equal(snapshot.output.length, 12000);
+	assert.equal(completed.outputPath, "task-output/dashboard-runs/run-renderer-directory.json");
+	assert.equal(snapshot.outputPath, completed.outputPath);
+	assert.equal(JSON.parse(fs.readFileSync(path.join(installed, snapshot.outputPath), "utf8")).output, output);
+	const reloaded = await load();
+	assert.equal(reloaded.getTaskRunOutput(reloaded.getTaskRun(run.id)), output);
 }
 
 async function testNoToolkitDoesNotWriteToCwd() {
@@ -276,9 +311,7 @@ async function testExternalWriteFailureKeepsTrueOutcome() {
 	const run = makeRun("run-write-failure");
 	run.outputPath = "tool-library/output/dashboard-runs/run-write-failure.json";
 	const { plugin, snapshots } = makePlugin(toolkitRoot, run);
-	plugin.persistTaskRunOutput = async () => {
-		throw new Error("simulated side-write failure");
-	};
+	plugin.taskOutputPluginDirectory = () => path.join(toolkitRoot, "missing-plugin");
 	const warnings = [];
 	const originalWarn = console.warn;
 	console.warn = (...args) => warnings.push(args);
@@ -292,6 +325,7 @@ async function testExternalWriteFailureKeepsTrueOutcome() {
 		assert.equal(snapshots[0].taskRuns[0].output.length, 12000);
 		assert.ok(snapshots[0].taskRuns[0].artifacts);
 		assert.equal(warnings.length, 1);
+		assert.match(String(warnings[0][1]), /插件目录不存在/);
 	} finally {
 		console.warn = originalWarn;
 	}
@@ -402,7 +436,7 @@ async function testVaultLintCompletionAlsoRecovers() {
 
 async function testTerminalDataOutcomeCannotBeReversedByStaleSidecar() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-terminal-authority-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const committed = {
 		...makeTerminalRun("run-terminal-authority", "committed inline output"),
 		artifacts: { articlePath: "papers/committed/article.md", filesWritten: [] },
@@ -441,7 +475,7 @@ async function testJunctionOutputDirectoryIsRejected() {
 		path.join(isolatedPluginRoot, "task-output"),
 		process.platform === "win32" ? "junction" : "dir",
 	);
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const run = makeRun("run-junction");
 	const { plugin } = makePlugin("", run, IsolatedPlugin);
 	const warnings = [];
@@ -474,7 +508,7 @@ async function testSymlinkOutputFileIsRejected() {
 		if (error?.code === "EPERM") return;
 		throw error;
 	}
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const run = makeRun("run-symlink");
 	const { plugin } = makePlugin("", run, IsolatedPlugin);
 	const warnings = [];
@@ -582,7 +616,7 @@ async function testLegacyLongOutputMigratesAfterNormalization() {
 
 async function testLegacyRunningLongOutputSurvivesInterruptedMigrationAndReload() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-legacy-running-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const legacyOutput = "旧版运行中完整输出".repeat(2400);
 	const legacyRun = { ...makeRun("run-legacy-running"), output: legacyOutput };
 	const snapshots = [];
@@ -611,7 +645,7 @@ async function testLegacyRunningLongOutputSurvivesInterruptedMigrationAndReload(
 
 async function testLegacyVaultLintLongOutputMigratesAfterStatusNormalization() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-legacy-lint-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const legacyOutput = `Vault lint: score 91\n${"旧版体检完整输出".repeat(2400)}`;
 	const legacyRun = {
 		...makeTerminalRun("run-legacy-lint", legacyOutput),
@@ -692,7 +726,7 @@ async function testLegacyToolkitOutputRemainsReadable() {
 
 async function testCleanupPendingReloadDeletesCanonicalSidecarAndRecord() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-resume-cleanup-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const run = makeTerminalRun("run-resume-cleanup", "sensitive output");
 	const writer = makePlugin("", run, IsolatedPlugin).plugin;
 	run.outputPath = await writer.persistTaskRunOutput(run);
@@ -712,7 +746,7 @@ async function testCleanupPendingReloadDeletesCanonicalSidecarAndRecord() {
 
 async function testCleanupPendingReloadRemovesRecordWhenSidecarAlreadyMissing() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-resume-missing-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const run = {
 		...makeTerminalRun("run-resume-missing"),
 		outputPath: "task-output/dashboard-runs/run-resume-missing.json",
@@ -731,7 +765,7 @@ async function testCleanupPendingReloadRemovesRecordWhenSidecarAlreadyMissing() 
 async function testCleanupPendingReloadDeletesExactLegacyToolkitSidecar() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-resume-legacy-plugin-"));
 	const toolkitRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-resume-legacy-toolkit-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const run = {
 		...makeTerminalRun("run-resume-legacy"),
 		outputPath: "tool-library/output/dashboard-runs/run-resume-legacy.json",
@@ -776,7 +810,7 @@ async function testStartupKeepsUnreferencedCanonicalRecoveryAndOnlyRemovesStaleT
 	const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
 	fs.utimesSync(staleTemp, staleTime, staleTime);
 
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const plugin = new IsolatedPlugin();
 	plugin.app = { vault: { adapter: {} } };
 	plugin.loadData = async () => makeStoredState("", []);
@@ -831,7 +865,7 @@ async function testClearHistoryNeverFollowsSymlinkOutput() {
 		if (error?.code === "EPERM") return;
 		throw error;
 	}
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const run = { ...makeRun("run-delete-symlink"), status: "done" };
 	const { plugin } = makePlugin("", run, IsolatedPlugin);
 	const originalWarn = console.warn;
@@ -867,7 +901,7 @@ async function testHistoryLimitReclaimsTerminalSidecar() {
 
 async function testSettingHistoryLimitDeletesOverflowAndPersistsFiveRuns() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-limit-setting-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const runs = Array.from({ length: 6 }, (_, index) => (
 		makeTerminalRun(`run-limit-setting-${index}`, `output ${index}`)
 	));
@@ -925,7 +959,7 @@ async function testHistoryLimitDeletionFailureRetainsDurableCleanupMarker() {
 
 async function testStartSaveFailureNeverDeletesExistingHistoryOrSidecar() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-start-save-failure-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const runs = Array.from({ length: 5 }, (_, index) => makeTerminalRun(`run-start-save-${index}`));
 	const { plugin } = makePlugin("", runs[0], IsolatedPlugin);
 	plugin.taskRuns = runs;
@@ -949,7 +983,7 @@ async function testStartSaveFailureNeverDeletesExistingHistoryOrSidecar() {
 
 async function testFinalRetentionSaveFailureConvergesFromMarkerOnReload() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-finalize-reload-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const runs = Array.from({ length: 6 }, (_, index) => makeTerminalRun(`run-finalize-${index}`));
 	const { plugin } = makePlugin("", runs[0], IsolatedPlugin);
 	plugin.taskRuns = runs;
@@ -988,7 +1022,7 @@ async function testFinalRetentionSaveFailureConvergesFromMarkerOnReload() {
 
 async function testActiveOverflowIsPersistedThenSafelyRetiredOnReload() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-active-overflow-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const kept = Array.from({ length: 5 }, (_, index) => makeTerminalRun(`run-active-kept-${index}`));
 	const active = [makeRun("run-active-overflow-a"), makeRun("run-active-overflow-b")];
 	const { plugin, snapshots } = makePlugin("", kept[0], IsolatedPlugin);
@@ -1007,7 +1041,7 @@ async function testActiveOverflowIsPersistedThenSafelyRetiredOnReload() {
 
 async function testCompletingActiveOverflowReclaimsItsNewSidecar() {
 	const isolatedPluginRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-complete-overflow-"));
-	const IsolatedPlugin = loadPluginAt(isolatedPluginRoot);
+	const IsolatedPlugin = pluginWithStorage(isolatedPluginRoot);
 	const kept = Array.from({ length: 5 }, (_, index) => makeTerminalRun(`run-complete-kept-${index}`));
 	const active = makeRun("run-complete-overflow");
 	const { plugin } = makePlugin("", kept[0], IsolatedPlugin);
@@ -1109,6 +1143,7 @@ async function testConcurrentStartsAreSerialized() {
 }
 
 async function main() {
+	await testRendererDirectoryIsIndependentOfPluginStorage();
 	await testNoToolkitDoesNotWriteToCwd();
 	await testInvalidToolkitDoesNotCreateConfiguredPath();
 	await testNoToolkitReloadRestoresFullOutput();

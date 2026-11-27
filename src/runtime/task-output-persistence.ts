@@ -7,9 +7,6 @@ import { isPathInside, writeContainedTextFile } from "./contained-text-file";
 import { QUERY_OUTPUT_MAX_CHARS } from "./query-output-limit";
 import { readTrustedVaultFile } from "./trusted-vault-fs";
 
-// `__dirname` is the installed Obsidian plugin directory in the production
-// bundle. Keep complete outputs beside data.json instead of coupling public
-// Direct API users to an optional Toolkit checkout.
 const TASK_OUTPUT_DIRECTORY = "task-output";
 const QUERY_ANSWERS_DIRECTORY = "query-answers";
 const QUERY_SESSION_ID = /^query-[a-z0-9-]{1,64}$/;
@@ -70,14 +67,6 @@ function resolveExistingDirectory(rawPath: string): string | null {
 	}
 }
 
-export function resolvePluginStorageRoot(): string | null {
-	return resolveExistingDirectory(__dirname);
-}
-
-function resolveConfiguredToolkitRoot(toolkitRoot: string): string | null {
-	return resolveExistingDirectory(toolkitRoot);
-}
-
 function normalizeRunId(runId: string): string | null {
 	const rawRunId = String(runId || "");
 	const normalizedRunId = rawRunId.trim();
@@ -100,16 +89,11 @@ function buildLocation(
 	return { rootPath, relativePath, absolutePath, directoryPath };
 }
 
-/**
- * Resolves the canonical output location inside the installed plugin's own
- * data directory. `toolkitRoot` remains in the signature for source
- * compatibility with existing callers, but it is not a write destination.
- */
-export function resolveTaskRunOutputLocation(
-	_toolkitRoot: string,
+function resolveTaskRunOutputLocation(
+	pluginDirectory: string,
 	runId: string,
 ): TaskRunOutputLocation | null {
-	const rootPath = resolvePluginStorageRoot();
+	const rootPath = resolveExistingDirectory(pluginDirectory);
 	return rootPath
 		? buildLocation(rootPath, PLUGIN_OUTPUT_DIRECTORY_SEGMENTS, runId)
 		: null;
@@ -119,7 +103,7 @@ function resolveLegacyToolkitLocation(
 	toolkitRoot: string,
 	runId: string,
 ): TaskRunOutputLocation | null {
-	const rootPath = resolveConfiguredToolkitRoot(toolkitRoot);
+	const rootPath = resolveExistingDirectory(toolkitRoot);
 	return rootPath
 		? buildLocation(rootPath, LEGACY_TOOLKIT_OUTPUT_DIRECTORY_SEGMENTS, runId)
 		: null;
@@ -127,12 +111,13 @@ function resolveLegacyToolkitLocation(
 
 /** Writes the full task output into plugin-owned storage using an atomic rename. */
 export async function writeTaskRunOutput(
-	toolkitRoot: string,
+	pluginDirectory: string,
 	run: TaskRun,
 ): Promise<string> {
 	const output = String(run?.output || "");
-	const location = resolveTaskRunOutputLocation(toolkitRoot, run?.id);
-	if (!location) return "";
+	const root = await resolvePluginDirectory(pluginDirectory);
+	const location = buildLocation(root, PLUGIN_OUTPUT_DIRECTORY_SEGMENTS, run.id);
+	if (!location) throw new Error("无效的任务输出 run ID");
 	await writeContainedTextFile(location.rootPath, location.absolutePath, () => {
 		const payload = JSON.stringify({
 			schema_version: 2,
@@ -156,7 +141,7 @@ export async function writeTaskRunOutput(
 	return location.relativePath;
 }
 
-async function resolveQueryAnswerRoot(pluginDirectory: string): Promise<string> {
+async function resolvePluginDirectory(pluginDirectory: string): Promise<string> {
 	if (!path.isAbsolute(pluginDirectory)) throw new Error("插件目录必须是绝对路径");
 	let directory: string;
 	try {
@@ -172,7 +157,7 @@ async function resolveQueryAnswerRoot(pluginDirectory: string): Promise<string> 
 export async function writeQueryAnswerFile(pluginDirectory: string, sessionId: string, messageId: string, text: string): Promise<void> {
 	if (!QUERY_SESSION_ID.test(sessionId)) throw new Error("无效的查询会话 ID");
 	if (!QUERY_MESSAGE_ID.test(messageId)) throw new Error("无效的查询消息 ID");
-	const root = await resolveQueryAnswerRoot(pluginDirectory);
+	const root = await resolvePluginDirectory(pluginDirectory);
 	const targetPath = path.join(root, TASK_OUTPUT_DIRECTORY, QUERY_ANSWERS_DIRECTORY, sessionId, `${messageId}.md`);
 	await writeContainedTextFile(root, targetPath, () => text.slice(0, QUERY_OUTPUT_MAX_CHARS));
 }
@@ -209,7 +194,7 @@ async function queryAnswerDirectory(root: string, sessionId?: string): Promise<s
 export async function readQueryAnswerFile(pluginDirectory: string, sessionId: string, messageId: string): Promise<string | null> {
 	if (!QUERY_SESSION_ID.test(sessionId)) throw new Error("无效的查询会话 ID");
 	if (!QUERY_MESSAGE_ID.test(messageId)) throw new Error("无效的查询消息 ID");
-	const root = await resolveQueryAnswerRoot(pluginDirectory);
+	const root = await resolvePluginDirectory(pluginDirectory);
 	const base = await queryAnswerDirectory(root);
 	if (!base) return null;
 	const relativePath = path.relative(root, path.join(base, sessionId, messageId + ".md"));
@@ -226,7 +211,7 @@ export async function listQueryAnswerFiles(
 	pluginDirectory: string,
 	selectedSessions?: ReadonlySet<string>,
 ): Promise<Map<string, string[]>> {
-	const root = await resolveQueryAnswerRoot(pluginDirectory);
+	const root = await resolvePluginDirectory(pluginDirectory);
 	const files = new Map<string, string[]>();
 	const base = await queryAnswerDirectory(root);
 	if (!base) return files;
@@ -258,7 +243,7 @@ async function queryRemovalPath(root: string, candidate: string): Promise<string
 export async function deleteQueryAnswerFiles(
 	pluginDirectory: string, sessionId: string, messageIds: readonly string[], removeEmptyDirectory: boolean,
 ): Promise<void> {
-	const root = await resolveQueryAnswerRoot(pluginDirectory);
+	const root = await resolvePluginDirectory(pluginDirectory);
 	for (const id of messageIds) {
 		if (!QUERY_MESSAGE_ID.test(id)) throw new Error("无效的查询消息 ID");
 		// Recheck the directory chain after enumeration, immediately before each removal.
@@ -340,10 +325,10 @@ function readOutputPayload(location: TaskRunOutputLocation, run: TaskRun): strin
  * task outcome, so a failed final settings save can be reconciled exactly.
  */
 export function readTaskRunCompletion(
-	toolkitRoot: string,
+	pluginDirectory: string,
 	runId: string,
 ): TaskRunCompletionRecord | null {
-	const location = resolveTaskRunOutputLocation(toolkitRoot, runId);
+	const location = resolveTaskRunOutputLocation(pluginDirectory, runId);
 	if (!location) return null;
 	const payload = readPayload(location, runId);
 	if (!payload || Number(payload.schema_version) !== 2) return null;
@@ -377,11 +362,12 @@ export function readTaskRunCompletion(
  * fail closed so history cleanup never follows an attacker-controlled target.
  */
 export async function deleteTaskRunOutput(
+	pluginDirectory: string,
 	toolkitRoot: string,
 	runId: string,
 	storedRelativePath = "",
 ): Promise<boolean> {
-	const pluginLocation = resolveTaskRunOutputLocation(toolkitRoot, runId);
+	const pluginLocation = resolveTaskRunOutputLocation(pluginDirectory, runId);
 	const legacyLocation = resolveLegacyToolkitLocation(toolkitRoot, runId);
 	const location = storedRelativePath
 		? storedRelativePath === pluginLocation?.relativePath
@@ -421,15 +407,14 @@ export async function deleteTaskRunOutput(
  * recovery copy when data.json is temporarily incomplete or restored.
  */
 export async function cleanupTaskRunStorage(
-	_toolkitRoot: string,
-	_knownRunIds: ReadonlySet<string>,
+	pluginDirectory: string,
 	nowMs = Date.now(),
 ): Promise<TaskRunStorageCleanupResult> {
 	const result: TaskRunStorageCleanupResult = {
 		temporaryRemoved: 0,
 		failures: [],
 	};
-	const rootPath = resolvePluginStorageRoot();
+	const rootPath = resolveExistingDirectory(pluginDirectory);
 	if (!rootPath) return result;
 	const directoryPath = path.resolve(rootPath, ...PLUGIN_OUTPUT_DIRECTORY_SEGMENTS);
 	let directoryStats: fs.Stats;
@@ -491,11 +476,12 @@ export async function cleanupTaskRunStorage(
  * path remains read-only so histories created by an earlier beta keep working.
  */
 export function readTaskRunOutput(
+	pluginDirectory: string,
 	toolkitRoot: string,
 	run: TaskRun,
 	storedRelativePath: string,
 ): string | null {
-	const pluginLocation = resolveTaskRunOutputLocation(toolkitRoot, run.id);
+	const pluginLocation = resolveTaskRunOutputLocation(pluginDirectory, run.id);
 	if (pluginLocation && storedRelativePath === pluginLocation.relativePath) {
 		return readOutputPayload(pluginLocation, run);
 	}
