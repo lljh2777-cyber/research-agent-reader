@@ -14,6 +14,7 @@ import {
 } from "../providers/profile";
 import {
 	ProviderConnectionError,
+	outputLimitReached,
 	parseProviderJson,
 	type UnknownRecord,
 } from "../providers/shared";
@@ -112,7 +113,7 @@ export class DirectQueryService {
 		profile: ProviderProfile,
 		token: DirectQueryRunToken,
 		hooks: DashboardProcessHooks,
-	): Promise<string> {
+	): Promise<{ text: string; outputLimitReached: boolean }> {
 		this.shutdownSignal?.throwIfAborted();
 		const registerCancel = (cancel: () => void) => {
 			token.abort = cancel;
@@ -163,7 +164,7 @@ export class DirectQueryService {
 		if (!text) {
 			throw new ProviderConnectionError("protocol", "Direct API 返回了空回答");
 		}
-		return text;
+		return { text, outputLimitReached: outputLimitReached(response.raw) };
 	}
 
 	private throwIfCancelled(token: DirectQueryRunToken): void {
@@ -296,7 +297,7 @@ export class DirectQueryService {
 				),
 				maxTokens: 4096,
 			};
-			const text = await this.completeAnswer(provider, request, profile, token, hooks);
+			const { text, outputLimitReached } = await this.completeAnswer(provider, request, profile, token, hooks);
 			const retrievalResult = this.buildRetrievalResult(
 				text,
 				evidence,
@@ -305,7 +306,7 @@ export class DirectQueryService {
 			);
 			const resultEvent = {
 				type: "retrieval-result",
-				payload: retrievalResult,
+				payload: { ...retrievalResult, ...(outputLimitReached ? { output_limit_reached: true } : {}) },
 			};
 			hooks.onEvent?.(resultEvent);
 			return {
@@ -453,7 +454,7 @@ export class DirectQueryService {
 				stage: "direct-api-generation",
 				label: `正在由 ${profile.name} 汇总网络来源`,
 			});
-			const answer = await this.completeAnswer(provider, request, profile, token, hooks);
+			const { text: answer, outputLimitReached } = await this.completeAnswer(provider, request, profile, token, hooks);
 			if (backend.kind === "native") {
 				const linked = extractModelProvidedWebSources(answer).map((source) => ({
 					title: source.title,
@@ -488,7 +489,7 @@ export class DirectQueryService {
 			};
 			const resultEvent = {
 				type: "retrieval-result",
-				payload: retrievalResult,
+				payload: { ...retrievalResult, ...(outputLimitReached ? { output_limit_reached: true } : {}) },
 			};
 			hooks.onEvent?.(retrievalEvent);
 			hooks.onEvent?.(resultEvent);

@@ -331,10 +331,12 @@ export class QueryTaskService {
 					? "已停止本轮查询。"
 					: result.stderr.trim() || `查询进程退出码：${result.exitCode}`;
 			const traceEvent = [...(result.events || [])].reverse().find((event) => event.type === "retrieval-preflight");
+			const outputLimitReached = status === "done" && !stopped && structuredResult?.output_limit_reached === true;
 			await this.saveMessageUpdate(session.id, assistantMessage.id, {
 				status,
 				content: response || (status === "done" ? "本轮查询未返回文本。" : ""),
 				...(status === "done" ? { contentLength: response.length } : {}),
+				...(outputLimitReached ? { outputLimitReached: true } : {}),
 				error,
 				progress: "",
 				retrievalTrace: traceEvent?.payload || assistantMessage.retrievalTrace || null,
@@ -367,7 +369,8 @@ export class QueryTaskService {
 				error,
 			});
 			if (!fullAnswerSaveFailed) {
-				new Notice(status === "done" ? "知识库回答已完成" : status === "interrupted" ? "知识库查询已停止" : "知识库查询失败");
+				const completionNotice = outputLimitReached ? "知识库回答已完成，但模型输出达到上限，回答可能不完整" : "知识库回答已完成";
+				new Notice(status === "done" ? completionNotice : status === "interrupted" ? "知识库查询已停止" : "知识库查询失败");
 			}
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
@@ -410,7 +413,7 @@ export class QueryTaskService {
 			// Several progress events can receive the rejection from the same disk write.
 			if (!this.saveFailureNotified) {
 				this.saveFailureNotified = true;
-				new Notice(`查询记录保存失败：${error instanceof Error ? error.message : String(error)}`);
+				new Notice(`查询记录保存失败，重启后本轮内容可能丢失：${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
 	}

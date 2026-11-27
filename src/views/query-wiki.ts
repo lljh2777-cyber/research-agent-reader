@@ -1,6 +1,7 @@
 import { backendSupportsImages, type QueryTaskChange, type QueryTaskService } from "../query/query-task-service";
 import { queryAnswerErrorDetail, type AnswerText } from "../query/answer-text";
 import { ROLE_LABELS } from "../retrieval/types";
+import { QUERY_OUTPUT_MAX_CHARS } from "../runtime/query-output-limit";
 import {
 	ItemView,
 	MarkdownRenderer,
@@ -586,8 +587,14 @@ export class QueryWikiView extends ItemView {
 			if (version !== this.renderVersion) return;
 		}
 		const contentLength = message.contentLength ?? message.content.length;
+		if (message.status === "done" && message.outputLimitReached === true) {
+			body.createEl("p", { text: "模型输出达到上限，回答可能不完整" });
+		}
 		if (message.status === "done" && contentLength > message.content.length) {
-			body.createEl("p", { text: `内容已截短（原文 ${contentLength} 字符，当前保留 ${message.content.length} 字符）` });
+			const actionHint = contentLength > QUERY_OUTPUT_MAX_CHARS
+				? `复制和落笔记最多取得前 ${QUERY_OUTPUT_MAX_CHARS} 字符`
+				: "复制和落笔记会尝试读取完整回答";
+			body.createEl("p", { text: `聊天内仅显示前 ${message.content.length} 字符（原文 ${contentLength} 字符）；${actionHint}` });
 		}
 		if (
 			(message.vaultSources && message.vaultSources.length)
