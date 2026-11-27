@@ -230,6 +230,7 @@ export function createPersistenceSnapshot(state: DashboardPersistenceState): Das
 					...message,
 					content,
 					contentLength: message.role === "assistant" && contentLength > content.length ? contentLength : undefined,
+					outputLimitReached: message.outputLimitReached === true ? true : undefined,
 					error: String(message.error || "").slice(0, 4000),
 				};
 			}),

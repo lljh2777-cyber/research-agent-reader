@@ -1899,6 +1899,7 @@ export default class AgentDashboardPlugin extends Plugin {
 					role,
 					content,
 					...(role === "assistant" && contentLength > content.length ? { contentLength } : {}),
+					...(message.outputLimitReached === true ? { outputLimitReached: true as const } : {}),
 				attachments: normalizeVaultImageAttachments(message.attachments),
 				status: normalizeQueryMessageStatus(message.status),
 				progress: String(message.progress || ""),
@@ -2073,6 +2074,9 @@ export default class AgentDashboardPlugin extends Plugin {
 			...session.messages[index],
 			...updates,
 		};
+		if (updates.status === "done" && !updates.outputLimitReached) {
+			delete session.messages[index].outputLimitReached;
+		}
 		if (typeof session.messages[index].content === "string") {
 			session.messages[index].content = session.messages[index].content.slice(0, 20000);
 		}

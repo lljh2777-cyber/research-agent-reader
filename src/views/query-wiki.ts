@@ -586,6 +586,9 @@ export class QueryWikiView extends ItemView {
 			if (version !== this.renderVersion) return;
 		}
 		const contentLength = message.contentLength ?? message.content.length;
+		if (message.status === "done" && message.outputLimitReached === true) {
+			body.createEl("p", { text: "模型输出达到上限，回答可能不完整" });
+		}
 		if (message.status === "done" && contentLength > message.content.length) {
 			body.createEl("p", { text: `内容已截短（原文 ${contentLength} 字符，当前保留 ${message.content.length} 字符）` });
 		}

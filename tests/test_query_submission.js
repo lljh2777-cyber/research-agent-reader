@@ -921,3 +921,167 @@ for (const [backend, expectedHash] of [
 		await task;
 	}
 });
+
+const modelLimitHint = "模型输出达到上限，回答可能不完整";
+const limitedNotice = "知识库回答已完成，但模型输出达到上限，回答可能不完整";
+const replyText = "回答正文";
+
+function directLimitFixture(t, type, streaming, events, body) {
+	const f = lifecycleFixture(t);
+	const profile = { ...f.host.getProviderProfile(), type, secretId: "fixture",
+		capabilities: { streaming }, lastTest: { ok: true, streamingVerified: streaming } };
+	f.host.getProviderProfile = () => profile;
+	f.host.app = { secretStorage: { getSecret: () => "fixture" } };
+	f.host.runDirectVaultQuery = Plugin.prototype.runDirectVaultQuery;
+	f.host.runVaultRetrievalPreflight = async () => ({ candidate_paths: ["paper.md"] });
+	f.host.readVaultEvidencePacket = async () => [];
+	f.host.resolveWebSearchBackend = () => ({ kind: "native", protocol: "qwen" });
+	const calls = [];
+	f.host.providerHttpStream = async ({ onEvent }) => {
+		calls.push("stream");
+		for (const event of events) {
+			if (event instanceof Error) throw event;
+			onEvent(JSON.stringify(event));
+		}
+	};
+	f.host.providerHttpRequest = async () => {
+		calls.push("complete");
+		return { status: 200, json: body };
+	};
+	return { ...f, calls };
+}
+
+async function outputLimitHints(host, message) {
+	const ui = screen({ makeView: () => new QueryWikiView({}, host) });
+	await ui.view.renderMessage(ui.view.contentEl, message, host.getActiveQuerySession().id);
+	return ui.labels.filter(label => label === modelLimitHint);
+}
+
+const chatLimit = { choices: [{ delta: {}, finish_reason: "length" }] };
+const responseLimit = { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, output_text: replyText };
+const anthropicLimit = { content: [{ type: "text", text: replyText }], stop_reason: "max_tokens" };
+const chatReply = finish_reason => ({ choices: [{ message: { content: replyText }, finish_reason }] });
+const streamError = { type: "error", error: { message: "connection lost" } };
+for (const [name, type, events, body, expectedCalls, limited] of [
+	["Chat stream length", "openai-compatible", [{ choices: [{ delta: { content: replyText } }] }, chatLimit], null, ["stream"], true],
+	["Chat ordinary length", "openai-compatible", null, chatReply("length"), ["complete"], true],
+	["Responses stream limit", "openai", [{ type: "response.output_text.delta", delta: replyText },
+		{ type: "response.incomplete", response: responseLimit }], null, ["stream"], true],
+	["Responses ordinary limit", "openai", null, responseLimit, ["complete"], true],
+	["Anthropic ordinary max_tokens", "anthropic", null, anthropicLimit, ["complete"], true],
+	["Anthropic fallback max_tokens", "anthropic", [new Error("stream disconnected")], anthropicLimit, ["stream", "complete"], true],
+	["normal completion", "openai-compatible", null, chatReply("stop"), ["complete"], false],
+	["Responses incomplete content filter", "openai", null, { ...responseLimit, incomplete_details: { reason: "content_filter" } }, ["complete"], false],
+	["failed stream then ordinary length", "openai-compatible", [streamError], chatReply("length"), ["stream", "complete"], true],
+	["length in abandoned stream then ordinary stop", "openai-compatible", [{ choices: [{ delta: { content: "discarded" } }] },
+		chatLimit, streamError], chatReply("stop"), ["stream", "complete"], false],
+]) test("model output limit: " + name, async t => {
+	const f = directLimitFixture(t, type, events !== null, events, body);
+	const start = notices.length;
+	await f.view.submitQuestion("inspect");
+	const message = f.session.messages[1];
+	assert.deepEqual(f.calls, expectedCalls);
+	assert.equal(message.status, "done");
+	assert.equal(message.content, replyText);
+	assert.equal(message.contentLength, replyText.length);
+	assert.equal(f.runs[0].exitCode, 0);
+	assert.equal(message.outputLimitReached, limited ? true : undefined);
+	assert.equal(Object.hasOwn(message, "outputLimitReached"), limited);
+	assert.deepEqual(notices.slice(start), [limited ? limitedNotice : "知识库回答已完成"]);
+	assert.deepEqual(await outputLimitHints(f.host, message), limited ? [modelLimitHint] : []);
+	assert.equal(Object.hasOwn(f.snapshots.at(-1).querySessions[0].messages[1], "outputLimitReached"), limited);
+});
+
+for (const mode of ["vault", "web"]) {
+	for (const reason of ["length", "stop"]) test("model output limit: " + mode + " event " + reason, async t => {
+		const f = directLimitFixture(t, "openai-compatible", false, null, chatReply(reason));
+		const events = [];
+		const result = await f.host.runDirectVaultQuery("run", "vision", "inspect", [], mode, { onEvent: event => events.push(event) });
+		for (const source of [events, result.events]) {
+			const { payload } = source.find(event => event.type === "retrieval-result");
+			assert.equal(payload.answer_markdown, replyText);
+			assert.equal(Object.hasOwn(payload, "output_limit_reached"), reason === "length");
+			if (reason === "length") assert.equal(payload.output_limit_reached, true);
+		}
+	});
+}
+
+test("model output limit: flag survives save, restart and save", async t => {
+	const f = directLimitFixture(t, "openai", false, null, responseLimit);
+	await f.view.submitQuestion("inspect");
+	const reload = await reloadHistory(f.snapshots.at(-1));
+	assert.equal(reload.messages[1].outputLimitReached, true);
+	assert.deepEqual(await outputLimitHints(reload.host, reload.messages[1]), [modelLimitHint]);
+	assert.equal(reload.saved[1].outputLimitReached, true);
+});
+
+test("model output limit: invalid stored flags disappear on load and save", async () => {
+	const messages = [false, "true", 1].map(outputLimitReached => ({ ...actionReply, outputLimitReached }));
+	const reload = await reloadHistory({ settings: {}, querySessions: [{ id: "session", messages }] });
+	for (const [index, message] of reload.messages.entries()) {
+		assert.equal(Object.hasOwn(message, "outputLimitReached"), false);
+		assert.deepEqual(await outputLimitHints(reload.host, message), []);
+		assert.equal(Object.hasOwn(reload.saved[index], "outputLimitReached"), false);
+	}
+});
+
+test("model output limit: only literal true is serialized; normal done message bytes stay identical", async () => {
+	const f = fixture();
+	const base = { id: "a", role: "assistant", content: "ok", status: "done" };
+	for (const flag of [undefined, false, "true", 1, true]) {
+		f.session.messages = [{ ...base, ...(flag === undefined ? {} : { outputLimitReached: flag }) }];
+		await f.host.saveSettings();
+		const stored = f.snapshots.at(-1).querySessions[0].messages[0];
+		if (flag === true) assert.equal(stored.outputLimitReached, true);
+		else assert.equal(JSON.stringify(stored), '{"id":"a","role":"assistant","content":"ok","status":"done","error":""}');
+	}
+});
+
+test("model output limit: only completed assistant messages show the hint", async () => {
+	const f = fixture();
+	for (const status of ["pending", "stopping", "failed", "interrupted", "done"]) {
+		const role = status === "done" ? "user" : "assistant";
+		assert.deepEqual(await outputLimitHints(f.host, { ...actionReply, role, status, outputLimitReached: true }), []);
+	}
+});
+
+for (const flag of [undefined, "true", 1]) test("model output limit: CLI flag " + typeof flag + " is ignored", async t => {
+	const f = lifecycleFixture(t, true);
+	const task = f.view.submitQuestion("inspect");
+	await f.started;
+	const payload = { answer_markdown: replyText, ...(flag === undefined ? {} : { output_limit_reached: flag }) };
+	f.answer.resolve({ ...result, events: [{ type: "retrieval-result", payload }] });
+	await task;
+	assert.equal(f.session.messages[1].status, "done");
+	assert.equal(f.session.messages[1].outputLimitReached, undefined);
+	assert.equal(Object.hasOwn(f.snapshots.at(-1).querySessions[0].messages[1], "outputLimitReached"), false);
+});
+
+test("model output limit: a stopped request ignores a late limit event", async t => {
+	const f = lifecycleFixture(t);
+	f.host.stopDirectVaultQuery = () => true;
+	const task = f.view.submitQuestion("inspect");
+	await f.started;
+	await f.host.queryTasks.stop(f.session.id);
+	f.answer.resolve({ ...result, exitCode: 130, events: [{ type: "retrieval-result", payload: { output_limit_reached: true } }] });
+	await task;
+	assert.equal(f.session.messages[1].status, "interrupted");
+	assert.equal(f.session.messages[1].outputLimitReached, undefined);
+	assert.deepEqual(await outputLimitHints(f.host, f.session.messages[1]), []);
+});
+
+test("model output limit: next done result clears the old flag and replaces contentLength", async t => {
+	const f = lifecycleFixture(t);
+	const task = f.view.submitQuestion("inspect");
+	await f.started;
+	const message = f.session.messages[1];
+	await f.host.updateQueryMessage(f.session.id, message.id, { contentLength: 40000, outputLimitReached: true });
+	f.answer.resolve(result);
+	await task;
+	const latest = f.session.messages[1];
+	assert.equal(latest.id, message.id);
+	assert.equal(latest.contentLength, result.stdout.length);
+	assert.equal(latest.outputLimitReached, undefined);
+	assert.equal(Object.hasOwn(latest, "outputLimitReached"), false);
+	assert.equal(Object.hasOwn(f.snapshots.at(-1).querySessions[0].messages[1], "outputLimitReached"), false);
+});

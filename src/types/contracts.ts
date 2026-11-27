@@ -165,6 +165,7 @@ export interface QueryMessage {
 	role: QueryMessageRole;
 	content: string;
 	contentLength?: number;
+	outputLimitReached?: true;
 	attachments?: VaultImageAttachment[];
 	status: QueryMessageStatus;
 	progress?: string;
