@@ -3,6 +3,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const Module = require("module");
+const os = require("os");
 const path = require("path");
 
 const originalLoad = Module._load;
@@ -819,7 +820,15 @@ async function testClaudeCliModelDiscovery() {
 }
 
 async function testConfigurableDefaultsAndHistory() {
+	const vaultRoot = fs.mkdtempSync(path.join(os.tmpdir(), "reader-query-view-"));
+	const pluginDir = ".obsidian/plugins/research-agent-reader";
+	fs.mkdirSync(path.join(vaultRoot, pluginDir), { recursive: true });
+	const adapter = new ObsidianFileSystemAdapter();
+	adapter.getBasePath = () => vaultRoot;
 	const defaultsPlugin = new AgentDashboardPlugin();
+	defaultsPlugin.app = { vault: { adapter } };
+	defaultsPlugin.manifest = { dir: pluginDir };
+	await defaultsPlugin.loadSettings();
 	defaultsPlugin.settings.actionExecutionDefaults.synthesis = {
 		backend: "codex-cli",
 		model: "gpt-settings-test",
@@ -841,7 +850,6 @@ async function testConfigurableDefaultsAndHistory() {
 		{ id: "running", status: "running" },
 	];
 	defaultsPlugin.querySessions = [{ id: "old", messages: [{ id: "message" }] }];
-	defaultsPlugin.saveData = async () => {};
 	assert.strictEqual(await defaultsPlugin.clearCompletedTaskHistory(), 1);
 	assert.deepStrictEqual(defaultsPlugin.taskRuns.map((run) => run.id), ["running"]);
 	await defaultsPlugin.resetQueryHistory();
